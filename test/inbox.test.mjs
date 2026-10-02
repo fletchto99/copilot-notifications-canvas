@@ -1,0 +1,131 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { GitHubClient, POLL_MS } from "../.github/extensions/github-notifications/github.mjs";
+import { Inbox } from "../.github/extensions/github-notifications/inbox.mjs";
+import { http, next, thread } from "./fixtures.mjs";
+
+test("load-more preserves visible coverage, deduplicates boundary shifts, and refresh reconciles loaded pages", async () => {
+  let now = 0;
+  let calls = 0;
+  const client = new GitHubClient({ now: () => now, run: async args => {
+    calls++;
+    return args.at(-1).includes("page=1") ?
+      http([thread("1"), thread("2")], { link: next }) : http([thread("2"), thread("3")]);
+  } });
+  const inbox = new Inbox(client);
+  await inbox.refresh();
+  assert.equal(inbox.summary().loaded, 2);
+  assert.equal(inbox.summary().hasMore, true);
+  await inbox.more();
+  assert.equal(inbox.summary().loaded, 3);
+  assert.equal(inbox.summary().hasMore, false);
+  now = POLL_MS;
+  await inbox.refresh();
+  assert.equal(calls, 4);
+  assert.equal(inbox.summary().loaded, 3);
+  assert.equal(inbox.summary().status, "ready");
+});
+
+test("mode/query changes have separate semantics and summaries never contain personal content", async () => {
+  let calls = 0;
+  const client = new GitHubClient({ run: async args => {
+    calls++;
+    return http([thread(), ...(args.at(-1).includes("all=true") ? [thread("2", { unread: false })] : [])]);
+  } });
+  const inbox = new Inbox(client);
+  await inbox.refresh();
+  await inbox.setFilters({ query: "widgets" });
+  assert.equal(calls, 1);
+  assert.equal(inbox.summary().searchActive, true);
+  await inbox.setFilters({ mode: "all" });
+  assert.equal(calls, 2);
+  assert.equal(inbox.summary().loaded, 2);
+  assert.equal(inbox.summary().unread, 1);
+  const summary = JSON.stringify(inbox.summary());
+  assert.equal(summary.includes("widgets"), false);
+  assert.equal(summary.includes("Synthetic"), false);
+  assert.equal(summary.includes("https:"), false);
+});
+
+test("a failed refresh is atomic, stale is honest, and local search cannot erase a fetch error", async () => {
+  let now = 0;
+  let fail = false;
+  const client = new GitHubClient({ now: () => now, run: async args => {
+    if (fail && args.at(-1).includes("page=2")) return http({}, {}, 500);
+    return http([thread(args.at(-1).includes("page=1") ? "1" : "2")],
+      args.at(-1).includes("page=1") ? { link: next } : {});
+  } });
+  const inbox = new Inbox(client);
+  await inbox.refresh();
+  await inbox.more();
+  const before = inbox.snapshot().groups;
+  fail = true;
+  now = POLL_MS;
+  await assert.rejects(inbox.refresh(), { code: "github_http" });
+  assert.deepEqual(inbox.snapshot().groups, before);
+  assert.equal(inbox.summary().status, "stale");
+  await inbox.setFilters({ query: "Synthetic" });
+  assert.equal(inbox.summary().status, "stale");
+  assert.equal(inbox.summary().error.code, "github_http");
+  await assert.rejects(inbox.refresh(), { code: "github_http" });
+});
+
+test("initial errors and cross-panel rate blocks are never reported as a successful empty inbox", async () => {
+  const client = new GitHubClient({ now: () => 0, run: async () => http({}, {}, 401) });
+  await assert.rejects(new Inbox(client).refresh(), { code: "authentication" });
+  const other = new Inbox(client);
+  await assert.rejects(other.refresh(), { code: "authentication" });
+  assert.equal(other.summary().status, "error");
+  assert.equal(other.summary().lastFetchedAt, null);
+});
+
+test("a filter-mode failure clears the previous mode instead of showing mislabeled data", async () => {
+  const client = new GitHubClient({ run: async args =>
+    args.at(-1).includes("all=true") ? http({}, {}, 403) : http([thread()]) });
+  const inbox = new Inbox(client);
+  await inbox.refresh();
+  await assert.rejects(inbox.setFilters({ mode: "all" }), { code: "permission" });
+  assert.equal(inbox.summary().mode, "all");
+  assert.equal(inbox.summary().loaded, 0);
+  assert.equal(inbox.summary().status, "error");
+});
+
+test("concurrent actions fail explicitly and closing aborts outstanding gh work", async () => {
+  let launched;
+  const started = new Promise(resolve => { launched = resolve; });
+  const client = new GitHubClient({ run: async (_args, { signal }) => {
+    launched();
+    await new Promise(resolve => signal.addEventListener("abort", resolve, { once: true }));
+    const { InboxError } = await import("../.github/extensions/github-notifications/model.mjs");
+    throw new InboxError("closed", "Closed.", 410);
+  } });
+  const inbox = new Inbox(client);
+  const refresh = inbox.refresh();
+  await started;
+  await assert.rejects(inbox.refresh(), { code: "busy" });
+  await assert.rejects(inbox.setFilters({ mode: "all" }), { code: "busy" });
+  inbox.close();
+  await assert.rejects(refresh, { code: "closed" });
+  await assert.rejects(inbox.more(), { code: "closed" });
+  assert.equal(inbox.summary().loaded, 0);
+});
+
+test("loading an older page cannot hide a stale error on existing pages", async () => {
+  let now = 0;
+  let fail = false;
+  const client = new GitHubClient({ now: () => now, run: async args => {
+    if (fail && args.at(-1).includes("page=1")) return http({}, {}, 500);
+    return http([thread(args.at(-1).includes("page=1") ? "1" : "2")],
+      args.at(-1).includes("page=1") ? { link: next } : {});
+  } });
+  const inbox = new Inbox(client);
+  await inbox.refresh();
+  now = POLL_MS;
+  fail = true;
+  await assert.rejects(inbox.refresh());
+  now = 2 * POLL_MS;
+  await inbox.more();
+  assert.equal(inbox.summary().loaded, 2);
+  assert.equal(inbox.summary().status, "stale");
+  assert.equal(inbox.summary().error.code, "github_http");
+});

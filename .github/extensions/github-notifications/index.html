@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GitHub notifications</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/app.mjs"></script>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="heading">
+        <div>
+          <p class="eyebrow">YOUR GITHUB INBOX</p>
+          <h1>Notifications <span class="badge">Read-only</span></h1>
+        </div>
+        <button id="refresh" type="button">Refresh</button>
+      </div>
+      <p class="subtitle">A little less noise. One repository at a time.</p>
+      <div class="toolbar">
+        <div class="segmented" role="group" aria-label="Notifications to show">
+          <button id="all" type="button" aria-pressed="false" aria-describedby="api-limit">All</button>
+          <button id="unread" type="button" aria-pressed="true">Unread</button>
+        </div>
+        <label class="search">
+          <span class="sr-only">Search loaded notification titles and repositories</span>
+          <input id="search" type="search" maxlength="200" placeholder="Search titles or repositories" autocomplete="off" spellcheck="false">
+        </label>
+      </div>
+      <p id="api-limit" class="api-limit" hidden>GitHub's API does not expose Done status, so All can include Done notifications. Use the GitHub inbox link below for the exact Inbox view.</p>
+      <div class="status-line">
+        <span id="count" role="status" aria-live="polite">Waiting for inbox...</span>
+        <button id="collapse" class="text-button" type="button">Collapse all</button>
+      </div>
+    </header>
+    <div id="notice" class="notice" role="alert" hidden></div>
+    <section id="empty" class="empty" aria-live="polite">
+      <div class="empty-symbol" aria-hidden="true">/</div>
+      <h2 id="empty-title">Connecting to GitHub</h2>
+      <p id="empty-description">Using your existing GitHub CLI sign-in.</p>
+    </section>
+    <section id="groups" aria-label="Notifications by repository"></section>
+    <div class="pagination">
+      <p id="coverage"></p>
+      <button id="more" type="button" hidden>Load more</button>
+    </div>
+    <footer>
+      <p id="updated">Refresh runs only while this view is visible.</p>
+      <p>Viewing this canvas never marks anything read.
+        <a href="https://github.com/notifications" target="_blank" rel="noopener noreferrer">Open GitHub inbox</a>
+      </p>
+    </footer>
+  </main>
+</body>
+</html>
