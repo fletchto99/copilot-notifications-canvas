@@ -6,6 +6,8 @@ title/repository search, one-click row and repository **Mark as read** actions, 
 layout that follows the app's theme. A Settings dropdown provides opt-in sound
 and auto-open on new sessions.
 
+![Unread Notifications canvas showing a repository group, search, settings, and mark-as-read controls](docs/images/unread-notifications.png)
+
 ## Prerequisites
 
 - A GitHub Copilot app build with extension canvases enabled. The canvas API is experimental.
