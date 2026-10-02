@@ -4,6 +4,7 @@ import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 import { firstPage, GitHubClient, nextPage, parseResponse, POLL_MS, runGh } from "../.github/extensions/github-notifications/github.mjs";
 import { http, next, thread } from "./fixtures.mjs";
+import { Inbox } from "../.github/extensions/github-notifications/inbox.mjs";
 
 test("gh calls use explicit GET, fixed host, safe argument arrays and no auth token extraction", async () => {
   const calls = [];
@@ -171,4 +172,53 @@ test("aborted requests never repopulate cache even if a transport resolves after
 test("the API client rejects direct All requests before invoking gh", () => {
   const client = new GitHubClient({ run: async () => assert.fail("Must not invoke gh for All") });
   assert.throws(() => client.page("/notifications?all=true&per_page=50&page=1"), { code: "invalid_pagination" });
+});
+
+test("later-page failures back off exponentially despite earlier-page successes, then reset on recovery", async () => {
+  let now = 0;
+  let fail = false;
+  const client = new GitHubClient({ now: () => now, run: async args => {
+    if (args.at(-1).includes("page=1")) return http([thread("1")], { link: next });
+    return fail ? http({ message: "secondary rate limit" }, {}, 403) : http([thread("2")]);
+  } });
+  const inbox = new Inbox(client);
+  await inbox.refresh();
+  await inbox.more();
+  fail = true;
+  const delays = [];
+  for (let n = 0; n < 4; n++) {
+    now = Math.max(now + POLL_MS, client.blockedUntil);
+    await assert.rejects(inbox.refresh(), { code: "rate_limited" });
+    delays.push(client.blockedUntil - now);
+  }
+  assert.deepEqual(delays, [120_000, 240_000, 480_000, 960_000]);
+  assert.equal([...client.failures.values()][0], 4);
+  assert.equal(inbox.summary().error.code, "rate_limited");
+  fail = false;
+  now = client.blockedUntil;
+  await inbox.refresh();
+  assert.equal(client.failures.size, 0);
+  assert.equal(client.lastError, null);
+  fail = true;
+  now += POLL_MS;
+  await assert.rejects(inbox.refresh(), { code: "rate_limited" });
+  assert.equal(client.blockedUntil - now, POLL_MS);
+});
+
+test("a successful write does not reset another endpoint's failure history or bypass the global gate", async () => {
+  let now = 0;
+  let writes = 0;
+  const client = new GitHubClient({ now: () => now, run: async args => {
+    if (args.includes("PATCH")) { writes++; return "HTTP/2 205 Reset Content\r\n\r\n"; }
+    return http({}, {}, 500);
+  } });
+  await assert.rejects(client.page(firstPage()));
+  await assert.rejects(client.markRead("1"), { code: "github_http" });
+  assert.equal(writes, 0);
+  now = client.blockedUntil;
+  await client.markRead("1");
+  assert.equal(writes, 1);
+  assert.equal([...client.failures.values()][0], 1);
+  await assert.rejects(client.page(firstPage()));
+  assert.equal(client.blockedUntil - now, 2 * POLL_MS);
 });

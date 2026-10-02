@@ -104,7 +104,7 @@ export class GitHubClient {
     this.cache = new Map();
     this.queue = Promise.resolve();
     this.blockedUntil = 0;
-    this.failureCount = 0;
+    this.failures = new Map();
     this.lastError = null;
     this.sleep = sleep;
     this.writeAvailableAt = 0;
@@ -183,6 +183,11 @@ export class GitHubClient {
       new InboxError("rate_limited", "GitHub requests are paused until the rate limit resets.", 429);
     const cached = method === "GET" ? this.cache.get(endpoint) : undefined;
     if (cached && now < cached.nextRefreshAt) return cached;
+    const requestKey = `${method} ${endpoint}`;
+    const clearFailure = () => {
+      this.failures.delete(requestKey);
+      this.lastError = null;
+    };
     const args = ["api", "--hostname", "github.com", "--method", method, "--include",
       "-H", "Accept: application/vnd.github+json",
       "-H", "X-GitHub-Api-Version: 2022-11-28"];
@@ -214,8 +219,7 @@ export class GitHubClient {
       if (!(method === "PATCH" ? [205, 304] : [200, 304]).includes(status)) throw new InboxError("github_http",
         `GitHub returned HTTP ${status}. Check GitHub status and try again.`, 502);
       if (method === "PATCH") {
-        this.failureCount = 0;
-        this.lastError = null;
+        clearFailure();
         return;
       }
       if (status === 304 && !cached) throw new InboxError("invalid_response", "GitHub returned 304 without a cached inbox.");
@@ -237,15 +241,15 @@ export class GitHubClient {
         modified: headers["last-modified"] ?? (status === 304 ? cached?.modified : undefined),
       };
       this.cache.set(endpoint, page);
-      this.failureCount = 0;
-      this.lastError = null;
+      clearFailure();
       return page;
     } catch (error) {
       if (!(error instanceof InboxError)) throw error;
       if (error.code !== "closed") {
-        this.failureCount++;
+        const failureCount = (this.failures.get(requestKey) ?? 0) + 1;
+        this.failures.set(requestKey, failureCount);
         this.blockedUntil = Math.max(this.blockedUntil,
-          this.now() + Math.min(30 * 60_000, POLL_MS * 2 ** Math.min(this.failureCount - 1, 4)),
+          this.now() + Math.min(30 * 60_000, POLL_MS * 2 ** Math.min(failureCount - 1, 4)),
           this.now() + seconds(response?.headers["x-poll-interval"]));
         this.lastError = error;
       }

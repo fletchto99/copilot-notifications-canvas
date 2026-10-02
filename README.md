@@ -89,6 +89,18 @@ logs, caches, or credentials, and it never changes other extensions. Existing
 `artifacts/` settings and other user artifacts are preserved during upgrades;
 an artifacts-only folder created by the project extension is also supported.
 
+Upgrades leave the extension directory and `artifacts/` in place, including while
+older running providers save settings. Runtime files are staged, backed up, then
+replaced individually, with the entry point published after its supporting files.
+Wait for installation to finish before reloading extensions. A failed publication
+restores the previous runtime without rolling back settings changes. Unexpected
+concurrent runtime edits are never overwritten; an incomplete rollback reports
+where the remaining backup files were preserved for recovery.
+
+Concurrent installers use a separate directory lock outside the extension.
+Completed operations release it; a later installer can reclaim a lock belonging
+to a process that has exited. An active owner's or unrecognized lock is left alone.
+
 ## Inbox behavior
 
 - **Unread only:** the canvas requests `all=false` and shows only unread
@@ -110,13 +122,21 @@ an artifacts-only folder created by the project extension is also supported.
   respecting backoff; sign-in/scope errors require fixing `gh` authentication
   first. Reopen the canvas if its local connection does not recover.
 - **Rate limits:** serialized requests and a per-provider cache are shared between
-  panels. `Retry-After`, exhausted quota reset times, and exponential error backoff
-  pause requests. Authentication, scope, network and malformed-response errors
+  panels. Consecutive failures are tracked per method/endpoint, so a successful
+  earlier page does not reset a failing later page's exponential backoff.
+  `Retry-After` and exhausted quota reset times still pause all requests.
+  Authentication, scope, network and malformed-response errors
   remain visible; previously loaded items are labeled stale, not silently dropped.
 - **Visibility/lifecycle:** document visibility and intersection stop renderer
   polling when hidden; closing stops its server and aborts outstanding subprocess
   work. There is no background GitHub polling timer in the provider. Separate app
   sessions have separate providers/caches; avoid opening many simultaneous inboxes.
+- **Search and keyboard focus:** search edits wait through in-flight reads or
+  mutations, with the latest edit applied after settlement. Local status checks
+  do not disable focused read controls; a click during a status check waits for
+  its response rather than being ignored. Operations that change the loaded data
+  still disable conflicting controls, restoring focus after settlement without
+  taking focus away from a field the user moved to.
 - **Mark as read:** a row's button sends `PATCH /notifications/threads/{thread_id}`.
   Only known loaded unread IDs are accepted. The row is removed after GitHub's
   documented `205` or `304` confirmation, never optimistically. Failed requests

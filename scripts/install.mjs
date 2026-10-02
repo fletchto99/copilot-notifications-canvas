@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { copyFile, lstat, mkdir, mkdtemp, readFile, readdir, rename, rmdir, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -21,14 +21,14 @@ async function exists(path) {
 
 async function verifyOwned(target) {
   const stat = await exists(target);
-  if (!stat) return false;
+  if (!stat) return new Map();
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Refusing to replace a non-directory or symlink.");
   const entries = await readdir(target);
   if (entries.includes("artifacts") && !(await lstat(join(target, "artifacts"))).isDirectory()) {
     throw new Error("Refusing a symlink or non-directory artifacts location.");
   }
   const runtimeEntries = entries.filter(file => file !== "artifacts");
-  if (!runtimeEntries.length && entries.includes("artifacts")) return true;
+  if (!runtimeEntries.length) return new Map();
   const legacyAdditions = ["settings.mjs", "startup.mjs", ...(entries.includes("sound.mjs") ? [] : ["sound.mjs"])];
   const priorFiles = entries.includes("batch.mjs") ? files : files.filter(file => file !== "batch.mjs");
   const installedFiles = entries.includes("startup.mjs") ? priorFiles : priorFiles.filter(file => !legacyAdditions.includes(file));
@@ -39,8 +39,9 @@ async function verifyOwned(target) {
     if (!(await lstat(join(target, file))).isFile()) throw new Error("Refusing to overwrite non-regular files.");
   }
   let manifest;
+  const manifestText = await readFile(join(target, marker), "utf8");
   try {
-    manifest = JSON.parse(await readFile(join(target, marker), "utf8"));
+    manifest = JSON.parse(manifestText);
   } catch {
     throw new Error("Refusing to replace an extension without a valid installer ownership marker.");
   }
@@ -54,7 +55,7 @@ async function verifyOwned(target) {
       throw new Error("Installed files were modified. Preserve your changes and move that directory before reinstalling.");
     }
   }
-  return true;
+  return new Map([...installedFiles.map(file => [file, manifest.hashes[file]]), [marker, hash(manifestText)]]);
 }
 
 async function removeOwnedDirectory(path) {
@@ -62,41 +63,120 @@ async function removeOwnedDirectory(path) {
   await rmdir(path);
 }
 
+async function acquireInstallLock(parent) {
+  const lockPath = join(parent, ".github-notifications-install-lock");
+  const candidate = await mkdtemp(join(parent, ".github-notifications-lock-"));
+  const owner = `owner-${process.pid}-${randomUUID()}`;
+  let acquired = false;
+  try {
+    await writeFile(join(candidate, owner), "", { flag: "wx", mode: 0o600 });
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        // Publish a nonempty directory atomically, so even a crashed owner has an identity.
+        await rename(candidate, lockPath);
+        acquired = true;
+        return async () => {
+          await unlink(join(lockPath, owner));
+          try {
+            await rmdir(lockPath);
+          } catch (error) {
+            if (!["ENOENT", "ENOTEMPTY", "EEXIST"].includes(error.code)) throw error;
+          }
+        };
+      } catch (error) {
+        if (!["EEXIST", "ENOTEMPTY", "EPERM"].includes(error.code)) throw error;
+      }
+      const stat = await exists(lockPath);
+      if (!stat) continue;
+      if (!stat.isDirectory()) throw new Error("Refusing an unrecognized installer lock.");
+      const entries = await readdir(lockPath);
+      if (!entries.length) continue;
+      const match = entries.length === 1 && entries[0].match(/^owner-([1-9]\d*)-[a-f0-9-]{36}$/);
+      if (!match || !Number.isSafeInteger(Number(match[1]))) throw new Error("Refusing an unrecognized installer lock.");
+      try {
+        process.kill(Number(match[1]), 0);
+        throw new Error("Another notification installation is running. Retry when it finishes.");
+      } catch (error) {
+        if (error.code !== "ESRCH") throw error;
+      }
+      // Remove only the dead owner's unique file. A replacement owner's file is never touched.
+      try {
+        await unlink(join(lockPath, entries[0]));
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+    }
+    throw new Error("The installer lock changed concurrently. Retry installation.");
+  } finally {
+    if (!acquired) await removeOwnedDirectory(candidate);
+  }
+}
+
+async function fileHash(path) {
+  const stat = await exists(path);
+  if (!stat) return undefined;
+  if (!stat.isFile()) throw new Error("Refusing to replace a non-regular runtime file.");
+  return hash(await readFile(path));
+}
+
+function sameRuntime(left, right) {
+  return left.size === right.size && [...left].every(([file, digest]) => right.get(file) === digest);
+}
+
 export async function install(home = process.env.COPILOT_HOME || join(homedir(), ".copilot")) {
   const target = resolve(home, "extensions", name);
-  const owned = await verifyOwned(target);
   await mkdir(dirname(target), { recursive: true });
-  const stage = await mkdtemp(join(dirname(target), ".github-notifications-stage-"));
+  const release = await acquireInstallLock(dirname(target));
+  let stage;
   let backup;
-  let artifactsMoved = false;
+  let keepBackup = false;
   try {
+    const previous = await verifyOwned(target);
+    stage = await mkdtemp(join(dirname(target), ".github-notifications-stage-"));
+    backup = await mkdtemp(join(dirname(target), ".github-notifications-backup-"));
     const hashes = {};
     for (const file of files) {
       await copyFile(join(source, file), join(stage, file));
       hashes[file] = hash(await readFile(join(stage, file)));
     }
     await writeFile(join(stage, marker), `${JSON.stringify({ name, version: 1, hashes }, null, 2)}\n`);
-    // Recheck immediately before the directory swap; never merge into someone else's files.
-    if (await verifyOwned(target) !== owned) throw new Error("Install target changed during installation.");
-    if (owned) {
-      backup = `${stage}-previous`;
-      await rename(target, backup);
+    const staged = new Map([...Object.entries(hashes), [marker, await fileHash(join(stage, marker))]]);
+    for (const [file, digest] of previous) {
+      await copyFile(join(target, file), join(backup, file));
+      if (await fileHash(join(backup, file)) !== digest) throw new Error("Installed files changed during backup.");
     }
+    if (!sameRuntime(previous, await verifyOwned(target))) throw new Error("Installed files changed during installation.");
+    await mkdir(target, { recursive: true });
+    const touched = [];
     try {
-      if (backup && await exists(join(backup, "artifacts"))) {
-        await rename(join(backup, "artifacts"), join(stage, "artifacts"));
-        artifactsMoved = true;
+      // Keep target/artifacts stable for settings writers, including already-running older providers.
+      for (const file of [...files.filter(file => file !== "extension.mjs"), "extension.mjs", marker]) {
+        if (await fileHash(join(target, file)) !== previous.get(file)) throw new Error("Installed files changed during publication.");
+        touched.push(file);
+        await rename(join(stage, file), join(target, file));
       }
-      await rename(stage, target);
     } catch (error) {
-      if (artifactsMoved) await rename(join(stage, "artifacts"), join(backup, "artifacts"));
-      if (backup) await rename(backup, target);
-      backup = undefined;
+      for (const file of new Set([...touched].reverse().concat([...previous.keys()]))) {
+        try {
+          const current = await fileHash(join(target, file));
+          if (current === previous.get(file)) continue;
+          if (current !== undefined && current !== staged.get(file)) throw new Error("Runtime changed during rollback.");
+          if (previous.has(file)) await rename(join(backup, file), join(target, file));
+          else if (current !== undefined) await unlink(join(target, file));
+        } catch {
+          keepBackup = true;
+        }
+      }
+      if (keepBackup) throw new Error(`Installation failed and rollback needs attention. Unrestored runtime files remain in ${backup}.`, { cause: error });
       throw error;
     }
-    if (backup) await removeOwnedDirectory(backup);
   } finally {
-    if (await exists(stage)) await removeOwnedDirectory(stage);
+    try {
+      if (stage) await removeOwnedDirectory(stage);
+      if (backup && !keepBackup) await removeOwnedDirectory(backup);
+    } finally {
+      await release();
+    }
   }
   return target;
 }

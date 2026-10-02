@@ -13,6 +13,7 @@ let intersecting = true;
 let timer;
 let searchTimer;
 let pendingQuery;
+let pollPromise;
 const requestControllers = new Set();
 let connectionError = "";
 let preferences;
@@ -94,11 +95,13 @@ function closeSettings(focus = false) {
 }
 
 async function markRead(id) {
-  if (!visible() || busy || batchBusy || batchLocked() || markingRead.has(id)) return;
+  if (!visible() || busy || batchBusy || batchLocked() || markingRead.size) return;
   const findButton = key => [...$("groups").querySelectorAll("[data-focus-key]")]
     .find(node => node.dataset.focusKey === key);
   const key = `read:${id}`;
   const index = state.groups.flatMap(group => group.items).findIndex(item => item.id === id);
+  const previousFocus = document.activeElement;
+  let nextFocusKey = key;
   markingRead.add(id);
   renderControls();
   readError = "";
@@ -108,26 +111,26 @@ async function markRead(id) {
     button.textContent = "Marking...";
   }
   try {
+    await pollPromise;
+    if (!visible()) return;
     state = await api("read", { id });
     sound.observe(state.activity);
-    const moveFocus = document.activeElement?.dataset.focusKey === key;
-    render();
-    if (moveFocus && visible()) {
-      const remaining = state.groups.flatMap(group => group.items);
-      const next = remaining[Math.min(index, remaining.length - 1)];
-      (next ? findButton(`read:${next.id}`) : $("search"))?.focus();
-    }
+    const remaining = state.groups.flatMap(group => group.items);
+    const next = remaining[Math.min(index, remaining.length - 1)];
+    nextFocusKey = next ? `read:${next.id}` : null;
   } catch (error) {
     readError = `Could not mark the notification as read. ${error.message || "Try again."}`;
-    render();
   } finally {
     markingRead.delete(id);
-    renderControls();
+    render();
     const current = findButton(key);
     if (current) {
       current.disabled = false;
       current.textContent = "Mark as read";
     }
+    restoreFocus(previousFocus, nextFocusKey ? findButton(nextFocusKey) : $("search"));
+    void flushSearch();
+    schedule();
   }
 }
 
@@ -143,13 +146,26 @@ function focusKey(key) {
   return [...$("groups").querySelectorAll("[data-focus-key]")].find(node => node.dataset.focusKey === key);
 }
 
+function restoreFocus(previous, preferred) {
+  if (!visible() || !previous || (!previous.id && !previous.dataset?.focusKey)) return;
+  const current = document.activeElement;
+  const key = previous.dataset?.focusKey;
+  if (current && current !== previous && current !== document.body && current !== document.documentElement &&
+      !(key && current.dataset?.focusKey === key)) return;
+  const target = preferred ?? (key ? focusKey(key) : $(previous.id));
+  (target && !target.disabled && !target.hidden ? target : $("search")).focus({ preventScroll: true });
+}
+
 async function batchRequest(action, input) {
   if (!visible() || batchBusy || busy) return;
   if (["start", "retry"].includes(action) && (markingRead.size || batchLocked())) return;
   batchBusy = true;
   let failed = false;
+  const previousFocus = document.activeElement;
   renderControls();
   try {
+    await pollPromise;
+    if (!visible()) return;
     state = await api(`batch/${action}`, input);
     sound.observe(state.activity);
     readError = "";
@@ -166,10 +182,13 @@ async function batchRequest(action, input) {
     batchBusy = false;
     render();
     if (visible() && !failed) {
-      if (["cancel", "dismiss"].includes(action) && !state?.batch) {
-        (focusKey(batchFocusKey) ?? $("search")).focus();
-      }
+      const target = state?.batch?.status === "stopping" ? $("batch-progress") :
+        batchLocked() ? $("batch-stop") : focusKey(batchFocusKey) ?? $("search");
+      restoreFocus(previousFocus, target);
+    } else {
+      restoreFocus(previousFocus);
     }
+    void flushSearch();
     schedule();
   }
 }
@@ -177,12 +196,12 @@ async function batchRequest(action, input) {
 function renderBatch() {
   const batch = state?.batch;
   const controls = [$("batch-stop"), $("batch-retry"), $("batch-dismiss")];
+  const previousFocus = document.activeElement;
+  const hadFocus = [...controls, $("batch-progress")].includes(previousFocus);
   $("batch-progress").hidden = !batch;
   if (!batch) {
     for (const id of ["batch-title", "batch-counts", "batch-error"]) $(id).textContent = "";
-    if (visible() && [...controls, $("batch-progress")].includes(document.activeElement)) {
-      (focusKey(batchFocusKey) ?? $("search")).focus();
-    }
+    if (hadFocus) restoreFocus(previousFocus, focusKey(batchFocusKey) ?? $("search"));
     return;
   }
   const running = ["running", "stopping"].includes(batch.status);
@@ -201,8 +220,7 @@ function renderBatch() {
   $("batch-retry").disabled = batchBusy || busy || batch.retryAt > Date.now();
   $("batch-dismiss").hidden = running;
   $("batch-dismiss").disabled = batchBusy || busy;
-  if (controls.some(button =>
-    button === document.activeElement && button.hidden) && visible()) $("batch-progress").focus();
+  if (controls.includes(previousFocus) && previousFocus.hidden) restoreFocus(previousFocus, $("batch-progress"));
 }
 
 function schedule() {
@@ -210,10 +228,7 @@ function schedule() {
   if (visible()) timer = setTimeout(tick, batchLocked() ? 1000 : 5000);
 }
 
-async function update(path = "state", input) {
-  if (busy || batchBusy || !visible()) return;
-  if ((markingRead.size || batchLocked() || batchBusy) && path !== "state") return;
-  busy = true;
+async function performUpdate(path, input) {
   const soundGeneration = sound.generation;
   const soundWasEnabled = sound.enabled;
   renderControls();
@@ -226,8 +241,9 @@ async function update(path = "state", input) {
     });
     connectionError = "";
     if (path === "refresh") readError = "";
+    return true;
   } catch (error) {
-    if (!visible() && error.name === "AbortError") return;
+    if (!visible() && error.name === "AbortError") return false;
     connectionError = error.name === "AbortError"
       ? "The canvas request timed out. This view retries automatically while visible; reopen it if it stays disconnected."
       : error.message || "The local canvas disconnected. Reopen it to reconnect.";
@@ -242,17 +258,57 @@ async function update(path = "state", input) {
     } else if (visible()) {
       sound.resetBaseline();
     }
+    return false;
+  }
+}
+
+function update(path = "state", input) {
+  if (path === "filters") {
+    pendingQuery = input.query;
+    return flushSearch();
+  }
+  if (path !== "state") return blockingUpdate(path, input);
+  if (pollPromise) return pollPromise;
+  if (busy || batchBusy || markingRead.size || !visible()) return Promise.resolve();
+  pollPromise = performUpdate(path, input).finally(() => {
+    pollPromise = undefined;
+    render();
+    void flushSearch();
+    schedule();
+  });
+  return pollPromise;
+}
+
+async function blockingUpdate(path, input) {
+  if (busy || batchBusy || markingRead.size || batchLocked() || !visible()) return;
+  const previousFocus = document.activeElement;
+  let succeeded = false;
+  busy = true;
+  renderControls();
+  try {
+    await pollPromise;
+    if (path === "filters" && pendingQuery !== undefined) {
+      input = { query: pendingQuery };
+      pendingQuery = undefined;
+      clearTimeout(searchTimer);
+    }
+    if (visible()) succeeded = await performUpdate(path, input);
   } finally {
     busy = false;
+    if (!succeeded && path === "filters" && pendingQuery === undefined) pendingQuery = input.query;
     render();
-    if (pendingQuery !== undefined && visible()) {
-      const query = pendingQuery;
-      pendingQuery = undefined;
-      void update("filters", { query });
-    } else {
-      schedule();
-    }
+    restoreFocus(previousFocus);
+    if (succeeded || path !== "filters") void flushSearch();
+    schedule();
   }
+}
+
+async function flushSearch() {
+  if (pendingQuery === undefined || busy || batchBusy || markingRead.size || batchLocked() || !visible()) return;
+  const query = pendingQuery;
+  pendingQuery = undefined;
+  clearTimeout(searchTimer);
+  if (query !== state?.filters.query) await blockingUpdate("filters", { query });
 }
 
 async function tick() {
@@ -282,6 +338,9 @@ function renderControls() {
     }
   }
   $("search").disabled = batchBusy || batchLocked();
+  $("batch-stop").disabled = batchBusy || busy || state?.batch?.status === "stopping";
+  $("batch-retry").disabled = batchBusy || busy || (state?.batch?.retryAt ?? 0) > Date.now();
+  $("batch-dismiss").disabled = batchBusy || busy;
   $("groups").setAttribute("aria-busy", String(loading));
 }
 
@@ -427,10 +486,10 @@ document.addEventListener("keydown", event => {
 });
 $("more").addEventListener("click", () => update("more", {}));
 $("search").addEventListener("input", () => {
+  pendingQuery = $("search").value;
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => {
-    if (busy) pendingQuery = $("search").value;
-    else void update("filters", { query: $("search").value });
+    void flushSearch();
   }, 250);
 });
 $("collapse").addEventListener("click", () => {

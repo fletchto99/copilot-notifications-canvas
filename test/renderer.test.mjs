@@ -14,7 +14,7 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
 
 // Minimal DOM/event/timer doubles exercise the actual renderer without a browser dependency.
 async function renderer({ hidden = false, token = "a".repeat(64), audioOptions = {}, readFailure = false,
-  initialRows, onWrite, onFetch, initialOffline = false } = {}) {
+  initialRows, onWrite, onFetch, onState, onFilters, initialOffline = false } = {}) {
   const calls = [];
   const timers = new Map();
   let timerId = 0;
@@ -38,13 +38,42 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
       this.events = {};
       this.textContent = "";
       this.value = "";
+      this._disabled = false;
+      this._hidden = false;
+    }
+    get disabled() { return this._disabled; }
+    set disabled(value) {
+      this._disabled = Boolean(value);
+      if (value && document.activeElement === this) document.activeElement = document.body;
+    }
+    get hidden() { return this._hidden; }
+    set hidden(value) {
+      this._hidden = Boolean(value);
+      if (value && this.contains(document.activeElement)) document.activeElement = document.body;
     }
     set innerHTML(_) { throw new Error("HTML interpolation is forbidden"); }
     setAttribute(key, value) { this.attributes[key] = value; }
-    append(...children) { this.children.push(...children); }
-    replaceChildren(fragment) { this.children = fragment.children; }
+    append(...children) {
+      for (const child of children) child.parentNode = this;
+      this.children.push(...children);
+    }
+    replaceChildren(fragment) {
+      if (this.contains(document.activeElement)) document.activeElement = document.body;
+      for (const child of this.children) child.parentNode = null;
+      this.children = fragment.children;
+      for (const child of this.children) child.parentNode = this;
+    }
     addEventListener(name, handler) { this.events[name] = handler; }
-    focus() { document.activeElement = this; }
+    focus() {
+      if (this.disabled) return;
+      let node = this;
+      while (node) {
+        if (node.hidden) return;
+        if (!node.parentNode && !node.id && !["body", "html"].includes(node.tag)) return;
+        node = node.parentNode;
+      }
+      document.activeElement = this;
+    }
     contains(node) { return this === node || this.children.some(child => child.contains(node)); }
     querySelectorAll(selector) {
       const result = [];
@@ -55,10 +84,18 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
       return result;
     }
   }
-  const ids = new Map([...html.matchAll(/<(\w+)[^>]*\bid="([^"]+)"/g)].map(([, tag, id]) => [id, new Node(tag)]));
+  const ids = new Map([...html.matchAll(/<(\w+)[^>]*\bid="([^"]+)"/g)].map(([, tag, id]) => {
+    const node = new Node(tag);
+    node.id = id;
+    return [id, node];
+  }));
+  for (const id of ["batch-stop", "batch-retry", "batch-dismiss"]) ids.get(id).parentNode = ids.get("batch-progress");
+  ids.get("batch-progress").contains = node =>
+    ["batch-progress", "batch-stop", "batch-retry", "batch-dismiss"].some(id => ids.get(id) === node);
   ids.get("settings").contains = node => ["settings", "settings-toggle", "settings-panel", "sound", "auto-open"].some(id => ids.get(id) === node);
   const document = {
     hidden,
+    body: new Node("body"),
     documentElement: new Node("html"),
     events: {},
     getElementById(id) {
@@ -103,7 +140,16 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
         return { ok: true, json: async () => ({ autoOpen: storedAutoOpen }) };
       }
       if (path === "/api/refresh") await inbox.refresh();
-      if (path === "/api/filters") await inbox.setFilters(JSON.parse(options.body));
+      if (path === "/api/state") {
+        const snapshot = inbox.snapshot();
+        if (onState) await onState();
+        return { ok: true, json: async () => snapshot };
+      }
+      if (path === "/api/filters") {
+        const input = JSON.parse(options.body);
+        if (onFilters) await onFilters(input);
+        await inbox.setFilters(input);
+      }
       if (path === "/api/read") await inbox.markRead(JSON.parse(options.body));
       if (path.startsWith("/api/batch/")) inbox.batch[path.slice("/api/batch/".length)](JSON.parse(options.body));
       return { ok: true, json: async () => inbox.snapshot() };
@@ -251,12 +297,13 @@ test("renderer preserves focus and collapsed groups across unchanged data and up
   await runInContext("update()", ui.context);
   assert.equal(ui.document.activeElement, firstLink);
   const group = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.disclosure);
+  group.focus();
   group.events.click();
   assert.equal(group.attributes["aria-expanded"], "false");
   assert.equal(ui.ids.get("collapse").textContent, "Expand all");
   await runInContext("state.groups[0].items[0].title = 'Updated synthetic title'; render()", ui.context);
   assert.equal(ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.disclosure).attributes["aria-expanded"], "false");
-  assert.equal(ui.document.activeElement.dataset.focusKey, "thread:1");
+  assert.equal(ui.document.activeElement.dataset.focusKey, "repo:example/widgets");
 });
 
 test("search and clearing search keep working without mode controls", async () => {
@@ -457,7 +504,7 @@ test("repository action starts from one click with no dialog and preserves indep
   await settle();
   assert.deepEqual(ui.patches, ["/notifications/threads/1"]);
   assert.deepEqual(ui.calls.filter(call => call.path.startsWith("/api/batch/")).map(call => call.path), ["/api/batch/start"]);
-  assert.equal(ui.document.activeElement, groupRead);
+  assert.equal(ui.document.activeElement, ui.ids.get("batch-stop"));
   assert.equal(disclosure.attributes["aria-expanded"], "false");
   assert.match(groupRead.textContent, /Marking 0\/1/);
   assert.equal(groupRead.attributes["aria-busy"], "true");
@@ -491,7 +538,7 @@ test("one-click repository read honors search, blocks duplicate clicks and quiet
   assert.equal(ui.ids.get("search").disabled, true);
   assert.equal(ui.inbox.batch.snapshot().total, 1);
   assert.equal(ui.inbox.batch.snapshot().searchActive, true);
-  assert.equal(ui.document.activeElement, groupRead);
+  assert.equal(ui.document.activeElement, ui.ids.get("batch-stop"));
   await settle();
   await runInContext("update()", ui.context);
   assert.match(groupRead.textContent, /Marking 0\/1/);
@@ -582,4 +629,249 @@ test("stop remains usable during a long batch and the final successful request c
   assert.equal(ui.ids.get("batch-title").textContent, "");
   assert.equal(ui.ids.get("notice").hidden, true);
   assert.equal(ui.document.activeElement, ui.ids.get("search"));
+});
+
+test("local status polling preserves keyboard focus on row and repository read controls", async () => {
+  const ui = await renderer();
+  for (const key of ["read:1", "bulk:example/widgets"]) {
+    const button = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.focusKey === key);
+    button.focus();
+    assert.equal(ui.document.activeElement, button);
+    await ui.fireTimer();
+    assert.equal(ui.calls.at(-1).path, "/api/state");
+    assert.equal(button.disabled, false);
+    assert.equal(ui.document.activeElement, button);
+  }
+});
+
+test("a row action clicked during a delayed local poll runs after the poll instead of being dropped", async () => {
+  let release;
+  const ui = await renderer({
+    initialRows: [thread("1"), thread("2")],
+    onState: () => new Promise(resolve => { release = resolve; }),
+  });
+  const button = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "1");
+  button.focus();
+  const polling = ui.fireTimer();
+  await settle();
+  assert.equal(button.disabled, false);
+  assert.equal(ui.document.activeElement, button);
+  const reading = button.events.click();
+  await button.events.click();
+  assert.equal(button.disabled, true);
+  assert.equal(ui.document.activeElement, ui.document.body);
+  assert.deepEqual(ui.patches, []);
+  release();
+  await polling;
+  await reading;
+  assert.deepEqual(ui.patches, ["/notifications/threads/1"]);
+  assert.equal(ui.document.querySelectorAll("article").length, 1);
+  assert.equal(ui.document.activeElement.dataset.focusKey, "read:2");
+  assert.equal(ui.document.activeElement.disabled, false);
+});
+
+test("a repository action clicked during local polling is not dropped and cannot receive a stale poll response afterward", async () => {
+  let release;
+  const ui = await renderer({
+    initialRows: [thread("1"), thread("2")],
+    onState: () => new Promise(resolve => { release = resolve; }),
+  });
+  const button = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.repository);
+  button.focus();
+  const polling = ui.fireTimer();
+  await settle();
+  assert.equal(button.disabled, false);
+  const reading = button.events.click();
+  assert.deepEqual(ui.patches, []);
+  release();
+  await polling;
+  await reading;
+  await ui.inbox.batch.done;
+  const finalPoll = runInContext("update()", ui.context);
+  await settle();
+  release();
+  await finalPoll;
+  assert.deepEqual(ui.patches, ["/notifications/threads/1", "/notifications/threads/2"]);
+  assert.equal(ui.document.querySelectorAll("article").length, 0);
+  assert.equal(ui.ids.get("batch-progress").hidden, true);
+  assert.equal(ui.ids.get("notice").hidden, true);
+});
+
+test("search edits during a row write are preserved on success and failure, with the latest edit winning", async () => {
+  for (const success of [true, false]) {
+    let release;
+    const ui = await renderer({
+      initialRows: [thread("1"), thread("2"), thread("3")],
+      onWrite: () => new Promise(resolve => { release = () => resolve(success ? "HTTP/2 205 Reset Content\r\n\r\n" : http({}, {}, 403)); }),
+    });
+    const button = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "1");
+    const reading = button.events.click();
+    await settle();
+    const search = ui.ids.get("search");
+    search.focus();
+    search.value = "notification 2";
+    search.events.input();
+    await ui.fireTimer(250);
+    search.value = "notification 3";
+    search.events.input();
+    release();
+    await reading;
+    await settle();
+    assert.equal(search.value, "notification 3");
+    assert.equal(ui.inbox.filters.query, "notification 3");
+    assert.equal(ui.document.querySelectorAll("article").length, 1);
+    assert.equal(ui.document.querySelectorAll("a")[0].textContent, "Synthetic notification 3");
+    assert.deepEqual(ui.calls.filter(call => call.path === "/api/filters").map(call => JSON.parse(call.options.body).query), ["notification 3"]);
+    assert.equal(ui.document.activeElement, search);
+    assert.equal(ui.ids.get("notice").hidden, success);
+  }
+});
+
+test("a search debounce already pending before a read is flushed after the read", async () => {
+  const ui = await renderer({ initialRows: [thread("1"), thread("2")] });
+  const search = ui.ids.get("search");
+  search.value = "notification 2";
+  search.events.input();
+  const button = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "1");
+  await button.events.click();
+  await settle();
+  assert.equal(ui.inbox.filters.query, "notification 2");
+  assert.equal(ui.document.querySelectorAll("article").length, 1);
+  assert.equal([...ui.timers.values()].some(timer => timer.delay === 250), false);
+});
+
+test("pending search is retained while a repository batch runs", async () => {
+  let release;
+  const ui = await renderer({
+    initialRows: [thread("1"), thread("2", { repository: { full_name: "example/other" } })],
+    onWrite: () => new Promise(resolve => { release = () => resolve("HTTP/2 205 Reset Content\r\n\r\n"); }),
+  });
+  const search = ui.ids.get("search");
+  search.value = "other";
+  search.events.input();
+  const group = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.repository === "example/widgets");
+  await group.events.click();
+  await settle();
+  await ui.fireTimer(250);
+  assert.equal(search.disabled, true);
+  release();
+  await ui.inbox.batch.done;
+  await runInContext("update()", ui.context);
+  await settle();
+  assert.equal(search.disabled, false);
+  assert.equal(search.value, "other");
+  assert.equal(ui.inbox.filters.query, "other");
+  assert.equal(ui.document.querySelectorAll("article").length, 1);
+});
+
+test("newer queued queries replace older edits while waiting for a local poll", async () => {
+  let release;
+  const ui = await renderer({
+    initialRows: [thread("1"), thread("2"), thread("3")],
+    onState: () => new Promise(resolve => { release = resolve; }),
+  });
+  const polling = ui.fireTimer();
+  await settle();
+  const filtering = runInContext('update("filters", { query: "notification 2" })', ui.context);
+  const search = ui.ids.get("search");
+  search.value = "notification 3";
+  search.events.input();
+  release();
+  await polling;
+  await filtering;
+  assert.deepEqual(ui.calls.filter(call => call.path === "/api/filters").map(call => JSON.parse(call.options.body).query), ["notification 3"]);
+  assert.equal(ui.inbox.filters.query, "notification 3");
+});
+
+test("rapid edits during an in-flight filter cannot apply an older query after a newer one", async () => {
+  let release;
+  let filtered = 0;
+  const ui = await renderer({
+    initialRows: [thread("1"), thread("2"), thread("3")],
+    onFilters: async () => {
+      if (++filtered === 1) await new Promise(resolve => { release = resolve; });
+    },
+  });
+  const filtering = runInContext('update("filters", { query: "notification 1" })', ui.context);
+  await settle();
+  const search = ui.ids.get("search");
+  search.focus();
+  search.value = "notification 2";
+  search.events.input();
+  search.value = "notification 3";
+  search.events.input();
+  release();
+  await filtering;
+  await settle();
+  assert.deepEqual(ui.calls.filter(call => call.path === "/api/filters").map(call => JSON.parse(call.options.body).query),
+    ["notification 1", "notification 3"]);
+  assert.equal(ui.inbox.filters.query, "notification 3");
+});
+
+test("necessary disables restore focus after success or failure without stealing a user's new focus", async () => {
+  for (const moveFocus of [false, true]) {
+    let release;
+    let requests = 0;
+    const ui = await renderer({ onFetch: () => ++requests === 1 ? http([thread()]) :
+      new Promise(resolve => { release = () => resolve(http([thread()])); }) });
+    const button = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "1");
+    button.focus();
+    ui.advance();
+    const refreshing = ui.fireTimer();
+    await settle();
+    assert.equal(button.disabled, true);
+    assert.equal(ui.document.activeElement, ui.document.body);
+    if (moveFocus) ui.ids.get("search").focus();
+    release();
+    await refreshing;
+    assert.equal(button.disabled, false);
+    assert.equal(ui.document.activeElement, moveFocus ? ui.ids.get("search") : button);
+  }
+  const failed = await renderer({ readFailure: true });
+  const button = failed.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "1");
+  button.focus();
+  await button.events.click();
+  assert.equal(button.disabled, false);
+  assert.equal(failed.document.activeElement, button);
+});
+
+test("a failed filter request retains the latest text and retries on a later local poll", async () => {
+  let fail = true;
+  const ui = await renderer({ initialRows: [thread("1"), thread("2")], onFilters: async () => {
+    if (fail) throw new Error("Synthetic filter connection failure");
+  } });
+  const search = ui.ids.get("search");
+  search.focus();
+  search.value = "notification 2";
+  search.events.input();
+  await ui.fireTimer(250);
+  assert.equal(ui.inbox.filters.query, "");
+  assert.equal(search.value, "notification 2");
+  assert.equal(ui.ids.get("notice").hidden, false);
+  fail = false;
+  await ui.fireTimer();
+  assert.equal(ui.inbox.filters.query, "notification 2");
+  assert.equal(ui.document.querySelectorAll("article").length, 1);
+  assert.equal(ui.document.activeElement, search);
+});
+
+test("a queued filter survives becoming hidden before a local poll settles", async () => {
+  let release;
+  let hold = true;
+  const ui = await renderer({ onState: async () => {
+    if (hold) await new Promise(resolve => { release = resolve; });
+  } });
+  const polling = ui.fireTimer();
+  await settle();
+  const filtering = runInContext('update("filters", { query: "no match" })', ui.context);
+  ui.intersect(false);
+  release();
+  await polling;
+  await filtering;
+  assert.equal(ui.inbox.filters.query, "");
+  hold = false;
+  ui.intersect(true);
+  await settle();
+  assert.equal(ui.inbox.filters.query, "no match");
+  assert.equal(ui.document.querySelectorAll("article").length, 0);
 });
