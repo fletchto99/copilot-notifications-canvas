@@ -122,7 +122,7 @@ export class Inbox {
         next = page.next;
       }
       if (this.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
-      if (revision !== this.client.revision) throw new InboxError("inbox_changed", "The inbox changed while refreshing. Refresh again to reconcile it.", 409);
+      if (revision !== this.client.revision) throw new InboxError("inbox_changed", "The inbox changed while refreshing. The next automatic refresh will reconcile it.", 409);
       this.recordActivity(pages, true);
       this.pages = pages;
       this.needsRefresh = false;
@@ -132,7 +132,7 @@ export class Inbox {
 
   async more() {
     if (this.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
-    if (this.needsRefresh) throw new InboxError("refresh_required", "Refresh the inbox before loading more after marking a notification read.", 409);
+    if (this.needsRefresh) throw new InboxError("refresh_required", "Wait for the next automatic refresh before loading more after marking a notification read.", 409);
     if (!this.pages.at(-1)?.next) throw new InboxError("no_more_pages", "No more notifications to load.", 409);
     return this.execute(async () => {
       const revision = this.client.revision;
@@ -166,7 +166,7 @@ export class Inbox {
     if (this.batch.locked) throw new InboxError("busy", "Finish or cancel the repository batch first.", 409);
     if (this.reading.has(input.id)) throw new InboxError("busy", "This notification is already being marked as read.", 409);
     if (!this.pages.some(page => page.items.some(item => item.id === input.id && item.unread))) {
-      throw new InboxError("unknown_thread", "This notification is no longer in the loaded inbox. Refresh and try again.", 404);
+      throw new InboxError("unknown_thread", "This notification is no longer in the loaded inbox. Let the view update automatically before trying again.", 404);
     }
     this.reading.add(input.id);
     try {

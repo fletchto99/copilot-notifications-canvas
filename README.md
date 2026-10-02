@@ -46,7 +46,10 @@ instance ID, for example:
 }
 ```
 
-The UI fetches when visible. Agent actions are `get_state`, `get_settings`, `refresh`, `set_filters`
+The UI fetches automatically when visible; there is no manual Refresh button.
+The read-only `refresh` action and `/api/refresh` endpoint remain available for
+programmatic use and automatic polling, with the same polling/rate protections.
+Agent actions are `get_state`, `get_settings`, `refresh`, `set_filters`
 (`query` up to 200 characters), and `load_more`.
 Actions return only aggregate counts, status, and timing metadata, never titles,
 repository names, or the search text. Invalid inputs and failed actions raise
@@ -95,13 +98,15 @@ an artifacts-only folder created by the project extension is also supported.
   `Link` header, one page at a time, without an arbitrary total cap. Counts always
   describe loaded items, not the entire account. Search covers loaded titles and
   repository names; the UI explicitly tells you when older pages remain.
-- **Refresh:** manual and automatic refresh have the same rate protections. Visible
-  panels refresh no faster than every two minutes, or GitHub's `X-Poll-Interval`,
-  whichever is longer. HTTP `ETag`/`If-None-Match` or
+- **Automatic refresh:** visible panels refresh no faster than every two minutes,
+  or GitHub's `X-Poll-Interval`, whichever is longer. HTTP `ETag`/`If-None-Match` or
   `Last-Modified`/`If-Modified-Since` validators avoid refetching unchanged pages.
   All previously loaded pages are reconciled on refresh, and duplicate thread IDs
   are removed. GitHub's changing inbox is not a transactional snapshot: changes
-  during pagination settle on subsequent refreshes.
+  during pagination settle on subsequent refreshes. Last-checked and next-refresh
+  times remain visible. Recoverable failures retry automatically while visible,
+  respecting backoff; sign-in/scope errors require fixing `gh` authentication
+  first. Reopen the canvas if its local connection does not recover.
 - **Rate limits:** serialized requests and a per-provider cache are shared between
   panels. `Retry-After`, exhausted quota reset times, and exponential error backoff
   pause requests. Authentication, scope, network and malformed-response errors
@@ -117,7 +122,8 @@ an artifacts-only folder created by the project extension is also supported.
   writes are serialized with at least one second between them and respect GitHub
   rate-limit backoff without imposing the read polling interval on every click.
   Shared panels update on their next local state check; cached rows and conditional
-  validators are invalidated. Refresh reconciles pagination before loading more.
+  validators are invalidated. Automatic refresh reconciles pagination before
+  loading more.
   Genuinely newer activity on the same thread can reappear. Reading is not Done,
   deletion, or unsubscribing.
 - **Repository actions:** each repository header has **Mark N as read**, where N
@@ -156,9 +162,10 @@ an artifacts-only folder created by the project extension is also supported.
   overlapping read requests from other panels are also blocked. **Stop remaining**
   cancels queued work but lets an already-sent PATCH report its outcome. Closing
   the canvas or reloading the provider aborts outstanding work; a request already
-  accepted by GitHub cannot be undone, so refresh before retrying an uncertain
-  outcome. Hidden panels do not poll progress, but an already-started job can
-  continue until stopped or closed. Successful job state is cleared automatically;
+  accepted by GitHub cannot be undone, so wait for an automatic refresh or reopen
+  the canvas before retrying an uncertain outcome. Hidden panels do not poll
+  progress, but an already-started job can continue until stopped or closed.
+  Successful job state is cleared automatically;
   meaningful failure results remain until retried, replaced by another group click,
   or dismissed. Results are not stored on disk and are lost
   on provider restart; reopening the same live panel can recover its current

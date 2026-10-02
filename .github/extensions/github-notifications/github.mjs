@@ -86,7 +86,7 @@ export function runGh(args, { signal } = {}) {
         // gh exits nonzero on HTTP errors, but --include still supplies status and headers.
         if (/^HTTP\/[\d.]+\s+\d{3}/.test(stdout)) return resolve(stdout);
         if (/gh auth login|not logged|GH_TOKEN|authentication/i.test(stderr)) {
-          return reject(new InboxError("authentication", "Sign in with gh auth login --hostname github.com, then refresh.", 401));
+          return reject(new InboxError("authentication", "Sign in with gh auth login --hostname github.com. This view retries automatically while visible.", 401));
         }
         reject(new InboxError("gh_failed", "GitHub CLI could not reach GitHub. Check your connection and gh auth status.", 502));
       });
@@ -208,7 +208,7 @@ export class GitHubClient {
         throw new InboxError("rate_limited", "GitHub rate limit reached. Requests are paused; wait for the retry time.", 429);
       }
       if (status === 401) throw new InboxError("authentication",
-        "GitHub sign-in expired. Run gh auth login --hostname github.com, then refresh.", 401);
+        "GitHub sign-in expired. Run gh auth login --hostname github.com. This view retries automatically while visible.", 401);
       if (status === 403 || status === 404) throw new InboxError("permission",
         "GitHub denied notifications access. Check gh auth status; grant notifications scope with gh auth refresh --hostname github.com --scopes notifications. Check organization SSO if applicable. Fine-grained tokens are unsupported.", 403);
       if (!(method === "PATCH" ? [205, 304] : [200, 304]).includes(status)) throw new InboxError("github_http",

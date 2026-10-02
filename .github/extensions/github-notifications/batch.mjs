@@ -37,7 +37,7 @@ export class ReadBatch {
       throw new InboxError("invalid_batch", "Use the current repository operation token.", 400);
     }
     if (!this.operation || this.operation.token !== input.token) {
-      throw new InboxError("unknown_batch", "This repository operation is no longer available. Refresh the view and try again.", 409);
+      throw new InboxError("unknown_batch", "This repository operation is no longer available. Review the updated view and try again.", 409);
     }
     return this.operation;
   }
@@ -51,7 +51,7 @@ export class ReadBatch {
     }
     const group = this.inbox.groups().find(item => item.repository === input.repository);
     if (!group || group.selectionKey !== input.selectionKey) {
-      throw new InboxError("selection_changed", "The shown group changed. Refresh the view and review its count again.", 409);
+      throw new InboxError("selection_changed", "The shown group changed. Review its updated count and try again.", 409);
     }
     this.launch(group.repository, group.items);
   }
@@ -115,9 +115,9 @@ export class ReadBatch {
           if (operation.inFlight) item.result = "failed";
           operation.error = error instanceof InboxError
             ? { code: error.code, message: error.message }
-            : { code: "batch_failed", message: "An unexpected batch error occurred. Refresh before retrying remaining notifications." };
+            : { code: "batch_failed", message: "An unexpected batch error occurred. Wait for the next automatic refresh before retrying remaining notifications." };
           if (signal.aborted && operation.inFlight) {
-            operation.error = { code: "result_unknown", message: "The in-flight request was interrupted. GitHub may have applied it; refresh before reviewing remaining notifications." };
+            operation.error = { code: "result_unknown", message: "The in-flight request was interrupted. GitHub may have applied it; wait for the next automatic refresh or reopen the canvas before retrying." };
           }
           break;
         } finally {
@@ -149,7 +149,7 @@ export class ReadBatch {
     const remaining = operation.items.filter(item => ["pending", "failed"].includes(item.result) &&
       shown.has(item.id) && this.eligible(operation, item));
     if (!remaining.length) {
-      throw new InboxError("no_remaining", "No unchanged, shown notifications remain from this batch. Refresh and review a repository group instead.", 409);
+      throw new InboxError("no_remaining", "No unchanged, shown notifications remain from this batch. Wait for the next automatic refresh, then choose a repository group instead.", 409);
     }
     this.launch(operation.repository, remaining);
   }

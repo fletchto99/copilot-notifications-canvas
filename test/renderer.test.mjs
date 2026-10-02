@@ -14,13 +14,13 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
 
 // Minimal DOM/event/timer doubles exercise the actual renderer without a browser dependency.
 async function renderer({ hidden = false, token = "a".repeat(64), audioOptions = {}, readFailure = false,
-  initialRows, onWrite } = {}) {
+  initialRows, onWrite, onFetch, initialOffline = false } = {}) {
   const calls = [];
   const timers = new Map();
   let timerId = 0;
   let intersect;
   let now = Date.now();
-  let offline = false;
+  let offline = initialOffline;
   let rows = initialRows ?? [
     thread("1", { subject: { title: "<img src=x onerror=alert(1)>", type: "Issue", url: null } }),
     thread("2", { unread: false }),
@@ -28,6 +28,7 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
   const audioContexts = [];
   let storedAutoOpen = false;
   const patches = [];
+  const githubCalls = [];
   class Node {
     constructor(tag) {
       this.tag = tag;
@@ -73,15 +74,17 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
     constructor() { super(audioOptions); audioContexts.push(this); }
   };
   const inbox = new Inbox(new GitHubClient({ now: () => now, sleep: async delay => { now += delay; }, run: async args => {
+    githubCalls.push(args);
     if (args.includes("PATCH")) {
       patches.push(args.at(-1));
       if (onWrite) return onWrite(args.at(-1), patches.length);
       return readFailure ? http({}, {}, 403) : "HTTP/2 205 Reset Content\r\n\r\n";
     }
-    return http(rows);
+    return onFetch ? onFetch(args) : http(rows);
   } }));
   const context = createContext({
-    document, window, location: { hash: `#${token}` }, Intl, Date, AbortController,
+    document, window, location: { hash: `#${token}` }, Intl, AbortController,
+    Date: class extends Date { static now() { return now; } },
     NotificationSound: class extends NotificationSound {
       constructor(options) { super({ ...options, now: () => now }); }
     },
@@ -110,8 +113,14 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
   runInContext(script.replace(/^import \{ NotificationSound \} from "\.\/sound\.mjs";/, ""), context);
   await settle();
   return {
-    calls, document, window, ids, timers, context, audioContexts, inbox, patches,
-    advance() { now += 120_000; return now; },
+    calls, document, window, ids, timers, context, audioContexts, inbox, patches, githubCalls,
+    advance(milliseconds = 120_000) { now += milliseconds; return now; },
+    async fireTimer(delay = 5000) {
+      const [id, timer] = [...timers].find(([, timer]) => timer.delay === delay);
+      timers.delete(id);
+      await timer.fn();
+      await settle();
+    },
     setRows(value) { rows = value; },
     setOffline(value) { offline = value; },
     intersect: value => intersect([{ isIntersecting: value }]),
@@ -129,6 +138,7 @@ test("renderer fetches with a capability, renders untrusted titles as text and e
   assert.equal(links[0].rel, "noopener noreferrer");
   assert.equal(ui.ids.has("unread"), false);
   assert.equal(ui.ids.has("all"), false);
+  assert.equal(ui.ids.has("refresh"), false);
   assert.equal(ui.ids.get("empty").hidden, true);
   assert.equal(ui.document.querySelectorAll("time")[0].attributes["aria-label"].length > 0, true);
   assert.equal(ui.document.querySelectorAll("article").length, 1);
@@ -138,6 +148,100 @@ test("canvas is titled Unread Notifications without mode tabs or the old All not
   assert.match(html, /<title>Unread Notifications<\/title>/);
   assert.match(html, /<h1>Unread Notifications<\/h1>/);
   assert.doesNotMatch(html, /id="(?:all|unread|api-limit)"/);
+});
+
+test("manual Refresh controls are absent while the automatic endpoint and SDK action remain", async () => {
+  assert.doesNotMatch(html, /id="refresh"|>Refresh<\/button>|class="heading"/);
+  assert.doesNotMatch(script, /\$\("refresh"\)/);
+  const extension = await readFile(new URL("../.github/extensions/github-notifications/extension.mjs", import.meta.url), "utf8");
+  assert.match(extension, /name: "refresh"/);
+  const ui = await renderer();
+  assert.equal(ui.calls[0].path, "/api/refresh");
+  assert.equal(ui.githubCalls.length, 1);
+  assert.match(ui.ids.get("updated").textContent, /Checked .*Next refresh/);
+});
+
+test("automatic polling honors the two-minute minimum without a manual button", async () => {
+  const ui = await renderer();
+  ui.advance(119_999);
+  await ui.fireTimer();
+  assert.equal(ui.calls.at(-1).path, "/api/state");
+  assert.equal(ui.githubCalls.length, 1);
+  ui.advance(1);
+  await ui.fireTimer();
+  assert.equal(ui.calls.at(-1).path, "/api/refresh");
+  assert.equal(ui.githubCalls.length, 2);
+});
+
+test("automatic polling honors a longer GitHub interval and resumes only when visible", async () => {
+  const ui = await renderer({ onFetch: () => http([thread()], { "x-poll-interval": "300" }) });
+  ui.advance(120_000);
+  await ui.fireTimer();
+  assert.equal(ui.githubCalls.length, 1);
+  ui.advance(179_999);
+  await ui.fireTimer();
+  assert.equal(ui.githubCalls.length, 1);
+  ui.advance(1);
+  await ui.fireTimer();
+  assert.equal(ui.githubCalls.length, 2);
+  ui.intersect(false);
+  ui.advance(300_000);
+  assert.equal(ui.timers.size, 0);
+  await runInContext("tick()", ui.context);
+  assert.equal(ui.githubCalls.length, 2);
+  ui.intersect(true);
+  await settle();
+  assert.equal(ui.githubCalls.length, 3);
+});
+
+test("authentication errors remain visible and automatically retry after backoff", async () => {
+  let fetches = 0;
+  const ui = await renderer({ onFetch: () => ++fetches === 2 ? http({}, {}, 401) : http([thread()]) });
+  ui.advance();
+  await ui.fireTimer();
+  assert.equal(ui.ids.get("notice").hidden, false);
+  assert.match(ui.ids.get("notice").textContent, /gh auth login/);
+  assert.match(ui.ids.get("empty-description").textContent, /retries automatically/);
+  ui.advance(119_999);
+  await ui.fireTimer();
+  assert.equal(fetches, 2);
+  ui.advance(1);
+  await ui.fireTimer();
+  assert.equal(fetches, 3);
+  assert.equal(ui.ids.get("notice").hidden, true);
+  assert.equal(ui.inbox.summary().status, "ready");
+});
+
+test("an offline initial open recovers automatically without a Refresh control", async () => {
+  const ui = await renderer({ initialOffline: true });
+  assert.equal(ui.ids.get("notice").hidden, false);
+  assert.equal(ui.ids.get("empty-title").textContent, "Your inbox is unavailable");
+  assert.match(ui.ids.get("empty-description").textContent, /retries automatically.*Reopen/);
+  assert.equal(ui.githubCalls.length, 0);
+  ui.setOffline(false);
+  await ui.fireTimer();
+  assert.equal(ui.githubCalls.length, 1);
+  assert.equal(ui.ids.get("notice").hidden, true);
+  assert.equal(ui.document.querySelectorAll("article").length, 1);
+});
+
+test("search typed during automatic loading is applied after the fetch finishes", async () => {
+  let requests = 0;
+  let release;
+  const ui = await renderer({ onFetch: () => ++requests === 1 ? http([thread()]) :
+    new Promise(resolve => { release = () => resolve(http([thread("1"), thread("3")])); }) });
+  ui.advance();
+  const polling = ui.fireTimer();
+  await settle();
+  const search = ui.ids.get("search");
+  search.value = "notification 3";
+  search.events.input();
+  await ui.fireTimer(250);
+  release();
+  await polling;
+  assert.equal(ui.calls.at(-1).path, "/api/filters");
+  assert.equal(ui.document.querySelectorAll("article").length, 1);
+  assert.equal(ui.document.querySelectorAll("a")[0].textContent, "Synthetic notification 3");
 });
 
 test("renderer preserves focus and collapsed groups across unchanged data and updates", async () => {
@@ -391,7 +495,7 @@ test("one-click repository read honors search, blocks duplicate clicks and quiet
   await settle();
   await runInContext("update()", ui.context);
   assert.match(groupRead.textContent, /Marking 0\/1/);
-  assert.equal(ui.ids.get("refresh").disabled, true);
+  assert.equal(ui.ids.has("refresh"), false);
   assert.equal(ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "1").disabled, true);
   release();
   await ui.inbox.batch.done;

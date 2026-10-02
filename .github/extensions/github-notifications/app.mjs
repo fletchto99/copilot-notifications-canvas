@@ -229,7 +229,7 @@ async function update(path = "state", input) {
   } catch (error) {
     if (!visible() && error.name === "AbortError") return;
     connectionError = error.name === "AbortError"
-      ? "The canvas request timed out. Refresh to reconnect."
+      ? "The canvas request timed out. This view retries automatically while visible; reopen it if it stays disconnected."
       : error.message || "The local canvas disconnected. Reopen it to reconnect.";
     if (path !== "state" && visible()) {
       try {
@@ -269,9 +269,6 @@ async function tick() {
 function renderControls() {
   const loading = busy || state?.status === "loading" || markingRead.size > 0 || batchBusy || batchLocked();
   const waiting = state && Date.now() < state.nextRefreshAt;
-  $("refresh").disabled = loading || Boolean(waiting);
-  $("refresh").textContent = loading ? "Loading..." : "Refresh";
-  $("refresh").title = waiting ? `Available ${new Date(state.nextRefreshAt).toLocaleTimeString()}` : "Refresh loaded notifications";
   $("more").disabled = loading || state?.needsRefresh || Boolean(state?.error && waiting);
   for (const button of $("groups").querySelectorAll("button")) {
     if (!button.dataset.disclosure) button.disabled = loading || markingRead.has(button.dataset.threadId);
@@ -375,13 +372,19 @@ function render() {
   const error = readError || state?.error?.message || connectionError;
   $("notice").hidden = !error;
   $("notice").textContent = error ? `${state?.loaded ? "Showing previously loaded notifications. " : ""}${error}` : "";
-  if (!state) return;
+  if (!state) {
+    if (error) {
+      $("empty-title").textContent = "Your inbox is unavailable";
+      $("empty-description").textContent = "This view retries automatically while visible. Reopen the canvas if it stays disconnected.";
+    }
+    return;
+  }
   if (document.activeElement !== $("search") && pendingQuery === undefined) $("search").value = state.filters.query;
   $("count").textContent = `${state.matching} shown / ${state.groups.length} repositories / ${state.unread} unread loaded`;
   $("collapse").hidden = !state.groups.length;
   $("more").hidden = !state.hasMore;
   $("more").textContent = "Load more (up to 50)";
-  $("coverage").textContent = `${state.loaded} notifications loaded.${state.hasMore ? " Older notifications are available." : state.lastFetchedAt ? " End of the available inbox." : ""}${state.needsRefresh ? " Refresh before loading more; pagination changed." : ""}${state.filters.query ? " Search covers loaded notifications only." : ""}`;
+  $("coverage").textContent = `${state.loaded} notifications loaded.${state.hasMore ? " Older notifications are available." : state.lastFetchedAt ? " End of the available inbox." : ""}${state.needsRefresh ? " Waiting for automatic refresh before loading more; pagination changed." : ""}${state.filters.query ? " Search covers loaded notifications only." : ""}`;
   renderGroups(state.groups);
   renderControls();
   for (const time of document.querySelectorAll("time")) time.textContent = relativeTime(time.dateTime);
@@ -389,7 +392,7 @@ function render() {
   $("empty-title").textContent = error ? "Your inbox is unavailable" :
     state.status === "idle" || state.status === "loading" ? "Loading your inbox" :
     state.filters.query ? "No matches in loaded notifications" : "All caught up";
-  $("empty-description").textContent = error ? "Resolve the message above, then refresh when the retry time arrives." :
+  $("empty-description").textContent = error ? "Resolve the message above. This view retries automatically while visible when the retry time arrives." :
     state.filters.query ? "Try another title or repository, or load more notifications." :
     state.status === "idle" || state.status === "loading" ? "Using your existing GitHub CLI sign-in." :
     "New notifications will appear here, grouped by repository.";
@@ -398,7 +401,6 @@ function render() {
   renderBatch();
 }
 
-$("refresh").addEventListener("click", () => update("refresh", {}));
 for (const [id, action] of [["batch-stop", "cancel"],
   ["batch-retry", "retry"], ["batch-dismiss", "dismiss"]]) {
   $(id).addEventListener("click", () => state?.batch && batchRequest(action, { token: state.batch.token }));
@@ -470,6 +472,5 @@ else {
   $("notice").hidden = false;
   $("notice").textContent = "Missing canvas capability. Open this canvas from Copilot instead of browsing to its local address.";
   $("empty-title").textContent = "Open from Copilot";
-  $("refresh").disabled = true;
   $("sound").disabled = true;
 }

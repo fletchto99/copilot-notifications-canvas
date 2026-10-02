@@ -16,7 +16,6 @@ h1, h2, p { margin: 0; }
 h1 { font-size: var(--text-title-large, 26px); line-height: var(--leading-title-large, 32px); letter-spacing: -.025em; }
 h1, h2, summary { font-weight: var(--font-weight-semibold, 600); }
 h2 { font-size: 18px; }
-.heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .eyebrow { font-size: 10px; font-weight: 600; letter-spacing: .13em; color: var(--muted); margin-bottom: 6px; }
 .badge { display: inline-block; vertical-align: middle; font-size: 10px; line-height: 20px; letter-spacing: 0; font-weight: 500; color: var(--muted); border: 1px solid var(--border); padding: 0 7px; border-radius: 20px; }
 .subtitle { color: var(--muted); margin-top: 8px; font-size: 13px; }
