@@ -3,10 +3,14 @@ import { GitHubClient } from "./github.mjs";
 import { Inbox } from "./inbox.mjs";
 import { emptySchema, filterSchema, InboxError } from "./model.mjs";
 import { startServer } from "./server.mjs";
+import { Preferences } from "./settings.mjs";
+import { Startup } from "./startup.mjs";
 
 const instances = new Map();
 const client = new GitHubClient();
+const preferences = new Preferences();
 let session;
+let startup;
 const log = (message, options) => session?.log(message, options);
 
 async function action(ctx, run) {
@@ -33,9 +37,15 @@ session = await joinSession({
   canvases: [createCanvas({
     id: "github-notifications",
     displayName: "Unread Notifications",
-    description: "Read-only unread GitHub notifications grouped by repository.",
+    description: "Unread GitHub notifications grouped by repository with explicit per-row mark-as-read controls.",
     inputSchema: filterSchema,
     actions: [
+      {
+        name: "get_settings",
+        description: "Read the auto-open preference and startup status. Sound is enabled only by a click in the panel.",
+        inputSchema: emptySchema,
+        handler: ctx => action(ctx, async () => ({ ...await preferences.read(), startupStatus: startup?.status ?? "initializing" })),
+      },
       {
         name: "get_state",
         description: "Return counts, status and pagination metadata, never notification content or repository names.",
@@ -65,7 +75,7 @@ session = await joinSession({
       try {
         if (!instances.has(ctx.instanceId)) {
           const inbox = new Inbox(client, ctx.input ?? {});
-          instances.set(ctx.instanceId, startServer(inbox, { log }));
+          instances.set(ctx.instanceId, startServer(inbox, { log, preferences }));
         }
         const entry = await instances.get(ctx.instanceId);
         return { title: "Unread Notifications", url: entry.url };
@@ -79,8 +89,11 @@ session = await joinSession({
     onClose: ctx => close(ctx.instanceId),
   })],
 });
+startup = new Startup(session, preferences);
+await startup.start();
 
 async function shutdown() {
+  startup?.close();
   await Promise.allSettled([...instances.keys()].map(close));
   process.exit(0);
 }

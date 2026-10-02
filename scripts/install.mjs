@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const name = "github-notifications";
 const marker = ".copilot-notifications-install.json";
-const files = ["extension.mjs", "github.mjs", "inbox.mjs", "model.mjs", "server.mjs", "app.mjs", "index.html", "styles.css"];
+const files = ["extension.mjs", "github.mjs", "inbox.mjs", "model.mjs", "server.mjs", "app.mjs", "sound.mjs", "settings.mjs", "startup.mjs", "index.html", "styles.css"];
 const source = fileURLToPath(new URL("../.github/extensions/github-notifications/", import.meta.url));
 const hash = content => createHash("sha256").update(content).digest("hex");
 
@@ -24,10 +24,17 @@ async function verifyOwned(target) {
   if (!stat) return false;
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Refusing to replace a non-directory or symlink.");
   const entries = await readdir(target);
-  if (entries.length !== files.length + 1 || entries.some(file => ![...files, marker].includes(file))) {
+  if (entries.includes("artifacts") && !(await lstat(join(target, "artifacts"))).isDirectory()) {
+    throw new Error("Refusing a symlink or non-directory artifacts location.");
+  }
+  const runtimeEntries = entries.filter(file => file !== "artifacts");
+  if (!runtimeEntries.length && entries.includes("artifacts")) return true;
+  const legacyAdditions = ["settings.mjs", "startup.mjs", ...(entries.includes("sound.mjs") ? [] : ["sound.mjs"])];
+  const installedFiles = entries.includes("startup.mjs") ? files : files.filter(file => !legacyAdditions.includes(file));
+  if (runtimeEntries.length !== installedFiles.length + 1 || runtimeEntries.some(file => ![...installedFiles, marker].includes(file))) {
     throw new Error("Refusing to overwrite an unrelated or incomplete extension directory.");
   }
-  for (const file of [...files, marker]) {
+  for (const file of [...installedFiles, marker]) {
     if (!(await lstat(join(target, file))).isFile()) throw new Error("Refusing to overwrite non-regular files.");
   }
   let manifest;
@@ -37,7 +44,11 @@ async function verifyOwned(target) {
     throw new Error("Refusing to replace an extension without a valid installer ownership marker.");
   }
   if (manifest.name !== name || manifest.version !== 1) throw new Error("Unrecognized installer ownership marker.");
-  for (const file of files) {
+  if (Object.keys(manifest.hashes ?? {}).length !== installedFiles.length ||
+      installedFiles.some(file => !Object.hasOwn(manifest.hashes ?? {}, file))) {
+    throw new Error("Refusing to replace an incomplete or unrecognized installation.");
+  }
+  for (const file of installedFiles) {
     if (hash(await readFile(join(target, file))) !== manifest.hashes?.[file]) {
       throw new Error("Installed files were modified. Preserve your changes and move that directory before reinstalling.");
     }
@@ -56,6 +67,7 @@ export async function install(home = process.env.COPILOT_HOME || join(homedir(),
   await mkdir(dirname(target), { recursive: true });
   const stage = await mkdtemp(join(dirname(target), ".github-notifications-stage-"));
   let backup;
+  let artifactsMoved = false;
   try {
     const hashes = {};
     for (const file of files) {
@@ -70,8 +82,13 @@ export async function install(home = process.env.COPILOT_HOME || join(homedir(),
       await rename(target, backup);
     }
     try {
+      if (backup && await exists(join(backup, "artifacts"))) {
+        await rename(join(backup, "artifacts"), join(stage, "artifacts"));
+        artifactsMoved = true;
+      }
       await rename(stage, target);
     } catch (error) {
+      if (artifactsMoved) await rename(join(stage, "artifacts"), join(backup, "artifacts"));
       if (backup) await rename(backup, target);
       backup = undefined;
       throw error;

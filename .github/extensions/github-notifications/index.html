@@ -13,7 +13,7 @@
       <div class="heading">
         <div>
           <p class="eyebrow">YOUR GITHUB INBOX</p>
-          <h1>Unread Notifications <span class="badge">Read-only</span></h1>
+          <h1>Unread Notifications</h1>
         </div>
         <button id="refresh" type="button">Refresh</button>
       </div>
@@ -23,6 +23,16 @@
           <span class="sr-only">Search loaded notification titles and repositories</span>
           <input id="search" type="search" maxlength="200" placeholder="Search titles or repositories" autocomplete="off" spellcheck="false">
         </label>
+        <details id="settings" class="settings">
+          <summary id="settings-toggle" aria-controls="settings-panel" aria-expanded="false">Settings</summary>
+          <div id="settings-panel" class="settings-panel" role="group" aria-label="Notification settings">
+            <button id="sound" type="button" role="switch" aria-checked="false" aria-describedby="sound-status">Play sound: Off</button>
+            <p id="sound-status" class="settings-help" role="status" aria-live="polite">Optional chime while visible. Enable separately in each panel.</p>
+            <button id="auto-open" type="button" role="switch" aria-checked="false" aria-describedby="startup-help" disabled>Open on new sessions: Off</button>
+            <p id="startup-help" class="settings-help">Saved for your user. Requires user-wide installation to work outside this repository. Does not reopen this session.</p>
+            <p id="settings-status" class="settings-help" role="status" aria-live="polite"></p>
+          </div>
+        </details>
       </div>
       <div class="status-line">
         <span id="count" role="status" aria-live="polite">Waiting for inbox...</span>
@@ -42,7 +52,7 @@
     </div>
     <footer>
       <p id="updated">Refresh runs only while this view is visible.</p>
-      <p>Viewing this canvas never marks anything read.
+      <p>Only the Mark as read button changes a notification.
         <a href="https://github.com/notifications" target="_blank" rel="noopener noreferrer">Open GitHub inbox</a>
       </p>
     </footer>

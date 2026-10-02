@@ -24,6 +24,10 @@ test("HTTP integration serves a protected inbox, rejects cross-origin access and
   assert.match(await html.text(), /Unread Notifications/);
   assert.equal(html.headers.get("cache-control"), "no-store");
   assert.match(html.headers.get("content-security-policy"), /default-src 'none'/);
+  const sound = await fetch(`${origin}/sound.mjs`);
+  assert.equal(sound.status, 200);
+  assert.match(sound.headers.get("content-type"), /javascript/);
+  assert.match(await sound.text(), /class NotificationSound/);
   const unauthenticated = await fetch(`${origin}/api/state`);
   assert.equal(unauthenticated.status, 403);
   assert.equal((await unauthenticated.text()).includes("Synthetic"), false);

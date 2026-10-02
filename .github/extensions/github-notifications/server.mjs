@@ -6,6 +6,7 @@ import { InboxError } from "./model.mjs";
 const assets = new Map([
   ["/", ["index.html", "text/html; charset=utf-8"]],
   ["/app.mjs", ["app.mjs", "text/javascript; charset=utf-8"]],
+  ["/sound.mjs", ["sound.mjs", "text/javascript; charset=utf-8"]],
   ["/styles.css", ["styles.css", "text/css; charset=utf-8"]],
 ]);
 
@@ -38,7 +39,7 @@ async function readBody(req) {
   return input;
 }
 
-export async function startServer(inbox, { log = () => {} } = {}) {
+export async function startServer(inbox, { log = () => {}, preferences } = {}) {
   const secret = randomBytes(32).toString("hex");
   const staticFiles = new Map(await Promise.all([...assets].map(async ([path, [file, type]]) =>
     [path, { body: await readFile(new URL(`./${file}`, import.meta.url)), type }])));
@@ -66,7 +67,7 @@ export async function startServer(inbox, { log = () => {} } = {}) {
         res.end(file.body);
         return;
       }
-      if (!["/api/state", "/api/refresh", "/api/more", "/api/filters"].includes(path)) {
+      if (!["/api/state", "/api/refresh", "/api/more", "/api/filters", "/api/settings", "/api/read"].includes(path)) {
         throw new InboxError("not_found", "Route not found.", 404);
       }
       if (!authorized(req.headers.authorization, secret) ||
@@ -74,18 +75,24 @@ export async function startServer(inbox, { log = () => {} } = {}) {
           (req.headers["sec-fetch-site"] && req.headers["sec-fetch-site"] !== "same-origin")) {
         throw new InboxError("forbidden", "This request is not authorized for the canvas.", 403);
       }
-      if (path === "/api/state") {
+      if (path === "/api/settings" && !preferences) {
+        throw new InboxError("settings_unavailable", "Notification settings are unavailable.", 503);
+      }
+      if (path === "/api/state" || (path === "/api/settings" && req.method === "GET")) {
         if (req.method !== "GET") throw new InboxError("method", "Only GET is supported.", 405);
+        if (path === "/api/settings") return json(200, await preferences.read());
       } else {
         if (req.method !== "POST") throw new InboxError("method", "Only POST is supported.", 405);
         if (req.headers.origin !== origin) throw new InboxError("origin", "A same-origin request is required.", 403);
         const input = await readBody(req);
-        if (path !== "/api/filters" && Object.keys(input).length) {
+        if (!["/api/filters", "/api/settings", "/api/read"].includes(path) && Object.keys(input).length) {
           throw new InboxError("invalid_input", "This action takes an empty object.", 400);
         }
         if (path === "/api/refresh") await inbox.refresh();
         if (path === "/api/more") await inbox.more();
         if (path === "/api/filters") await inbox.setFilters(input);
+        if (path === "/api/settings") return json(200, await preferences.update(input));
+        if (path === "/api/read") await inbox.markRead(input);
       }
       json(200, inbox.snapshot());
     } catch (error) {

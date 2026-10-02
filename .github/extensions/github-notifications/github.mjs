@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { setTimeout as wait } from "node:timers/promises";
 import { InboxError, normalizeThreads } from "./model.mjs";
 
 export const POLL_MS = 120_000;
@@ -97,7 +98,7 @@ function seconds(value) {
 }
 
 export class GitHubClient {
-  constructor({ run = runGh, now = Date.now } = {}) {
+  constructor({ run = runGh, now = Date.now, sleep = wait } = {}) {
     this.run = run;
     this.now = now;
     this.cache = new Map();
@@ -105,6 +106,11 @@ export class GitHubClient {
     this.blockedUntil = 0;
     this.failureCount = 0;
     this.lastError = null;
+    this.sleep = sleep;
+    this.writeAvailableAt = 0;
+    this.pendingReads = new Set();
+    this.readListeners = new Set();
+    this.revision = 0;
   }
 
   page(endpoint, signal) {
@@ -115,14 +121,46 @@ export class GitHubClient {
     return pending;
   }
 
-  async request(endpoint, signal) {
+  markRead(id, signal) {
+    if (typeof id !== "string" || !/^[1-9]\d{0,63}$/.test(id)) {
+      throw new InboxError("invalid_thread", "Use a valid notification thread ID.", 400);
+    }
+    if (this.pendingReads.has(id)) throw new InboxError("busy", "This notification is already being marked as read.", 409);
+    this.pendingReads.add(id);
+    const pending = this.queue.then(async () => {
+      const delay = this.writeAvailableAt - this.now();
+      if (delay > 0) {
+        try {
+          await this.sleep(delay, undefined, { signal });
+        } catch {
+          throw new InboxError("closed", "The canvas was closed.", 410);
+        }
+      }
+      try {
+        await this.request(`/notifications/threads/${id}`, signal, "PATCH");
+      } finally {
+        this.writeAvailableAt = this.now() + 1000;
+      }
+      this.revision++;
+      for (const page of this.cache.values()) {
+        page.items = page.items.filter(item => item.id !== id);
+        page.etag = undefined;
+        page.modified = undefined;
+      }
+      for (const listener of this.readListeners) listener(id);
+    }).finally(() => this.pendingReads.delete(id));
+    this.queue = pending.catch(() => {});
+    return pending;
+  }
+
+  async request(endpoint, signal, method = "GET") {
     if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
     const now = this.now();
     if (now < this.blockedUntil) throw this.lastError ??
       new InboxError("rate_limited", "GitHub requests are paused until the rate limit resets.", 429);
-    const cached = this.cache.get(endpoint);
+    const cached = method === "GET" ? this.cache.get(endpoint) : undefined;
     if (cached && now < cached.nextRefreshAt) return cached;
-    const args = ["api", "--hostname", "github.com", "--method", "GET", "--include",
+    const args = ["api", "--hostname", "github.com", "--method", method, "--include",
       "-H", "Accept: application/vnd.github+json",
       "-H", "X-GitHub-Api-Version: 2022-11-28"];
     if (cached?.etag) args.push("-H", `If-None-Match: ${cached.etag}`);
@@ -150,8 +188,13 @@ export class GitHubClient {
         "GitHub sign-in expired. Run gh auth login --hostname github.com, then refresh.", 401);
       if (status === 403 || status === 404) throw new InboxError("permission",
         "GitHub denied notifications access. Check gh auth status; grant notifications scope with gh auth refresh --hostname github.com --scopes notifications. Check organization SSO if applicable. Fine-grained tokens are unsupported.", 403);
-      if (status !== 200 && status !== 304) throw new InboxError("github_http",
+      if (!(method === "PATCH" ? [205, 304] : [200, 304]).includes(status)) throw new InboxError("github_http",
         `GitHub returned HTTP ${status}. Check GitHub status and try again.`, 502);
+      if (method === "PATCH") {
+        this.failureCount = 0;
+        this.lastError = null;
+        return;
+      }
       if (status === 304 && !cached) throw new InboxError("invalid_response", "GitHub returned 304 without a cached inbox.");
       let items = cached?.items;
       let next = cached?.next;

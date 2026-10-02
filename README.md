@@ -1,8 +1,10 @@
 # Unread Notifications
 
-A read-only view of unread GitHub notifications inside the GitHub Copilot app,
+A view of unread GitHub notifications inside the GitHub Copilot app,
 grouped by repository. Newest activity first, with collapsible repository groups, counts,
-title/repository search, and a compact layout that follows the app's theme.
+title/repository search, explicit per-row **Mark as read** buttons, and a compact
+layout that follows the app's theme. A Settings dropdown provides opt-in sound
+and auto-open on new sessions.
 
 ## Prerequisites
 
@@ -44,11 +46,12 @@ instance ID, for example:
 }
 ```
 
-The UI fetches when visible. Agent actions are `get_state`, `refresh`, `set_filters`
+The UI fetches when visible. Agent actions are `get_state`, `get_settings`, `refresh`, `set_filters`
 (`query` up to 200 characters), and `load_more`.
 Actions return only aggregate counts, status, and timing metadata, never titles,
 repository names, or the search text. Invalid inputs and failed actions raise
-structured errors. `get_state`, `refresh`, and `load_more` take `{}`.
+structured errors. `get_state`, `get_settings`, `refresh`, and `load_more` take `{}`.
+There is no agent-callable mark-as-read action; that operation requires a row button click.
 The optional `mode: "unread"` input remains accepted for existing panel compatibility;
 other modes are rejected. All requests and pagination are restricted to unread notifications.
 
@@ -60,7 +63,7 @@ From this repository:
 node scripts/install.mjs
 ```
 
-This copies only the eight runtime source/assets files and an ownership manifest to
+This copies only the eleven runtime source/assets files and an ownership manifest to
 `${COPILOT_HOME:-$HOME/.copilot}/extensions/github-notifications`. To choose a
 different Copilot home explicitly:
 
@@ -76,7 +79,9 @@ Installation is repeatable: an untouched installation made by this script can be
 updated by running it again from a newer checkout. It refuses an unrelated folder,
 symlink destination, extra files, or locally edited runtime files. Preserve/move
 such a directory yourself before reinstalling. It does not copy tests, a checkout,
-logs, caches, or credentials, and it never changes other extensions.
+logs, caches, or credentials, and it never changes other extensions. Existing
+`artifacts/` settings and other user artifacts are preserved during upgrades;
+an artifacts-only folder created by the project extension is also supported.
 
 ## Inbox behavior
 
@@ -104,24 +109,84 @@ logs, caches, or credentials, and it never changes other extensions.
   polling when hidden; closing stops its server and aborts outstanding subprocess
   work. There is no background GitHub polling timer in the provider. Separate app
   sessions have separate providers/caches; avoid opening many simultaneous inboxes.
+- **Mark as read:** a row's button sends `PATCH /notifications/threads/{thread_id}`.
+  Only known loaded unread IDs are accepted. The row is removed after GitHub's
+  documented `205` or `304` confirmation, never optimistically. Failed requests
+  retain the row and show an actionable error. Duplicate requests are rejected;
+  writes are serialized with at least one second between them and respect GitHub
+  rate-limit backoff without imposing the read polling interval on every click.
+  Shared panels update on their next local state check; cached rows and conditional
+  validators are invalidated. Refresh reconciles pagination before loading more.
+  Genuinely newer activity on the same thread can reappear. Reading is not Done,
+  deletion, or unsubscribing, and no bulk-read action exists.
+- **Optional sound:** open **Settings**, then click **Play sound: Off** to enable
+  a short, gentle synthesized chime; click **Play sound: On** to disable it.
+  Sound starts off, belongs only to the
+  current panel document, and resets on reload/reopen. Browser audio permission or
+  playback failures switch it off with a visible retry message. Closing the page
+  releases its audio context. No audio files, external assets, OS notifications,
+  background polling, or background audio are used.
+
+  A successful visible refresh can chime once for a new activity batch, regardless
+  of search text or collapsed groups. Detection compares unfiltered unread thread
+  IDs and GitHub `updated_at` timestamps against the highest previously observed
+  timestamp. Later activity on an existing thread can qualify. Initial loads,
+  unchanged/cached/304 results, searches, state-only reads, loading older pages,
+  and older rows moving onto the first page are silent. Equal timestamps are not
+  considered later activity. Failed or partial refreshes do not advance this
+  baseline. It is maintained even while sound is off; a batch also needs an
+  activity timestamp after sound was enabled, so enabling does not chime for
+  backlog. Returning from a hidden view or reconnecting establishes a silent
+  baseline instead of playing catch-up sounds. This is a polling convenience, not
+  a guaranteed notification delivery channel.
+- **Auto-open:** **Settings > Open on new sessions** defaults off. When enabled,
+  the extension can open one `unread-notifications-startup` panel after joining a
+  fresh session with a canvas renderer. It uses the supported SDK capability,
+  session-event, and `session.rpc.canvas.open` APIs. It does not prompt the model
+  or use a host bridge. Install user-wide for this to apply outside this repository;
+  the project copy only loads here.
+
+  Auto-open is deliberately conservative: resumed/already-active sessions, sessions
+  with an existing canvas, and sessions already checked by this extension are not
+  opened or focused again. If the renderer connects late, it can open only before
+  session activity starts. Closing the panel does not reopen it during that session,
+  and disabling the preference does not close any panel. Startup/storage failures
+  produce a sanitized extension warning instead of retry loops.
 - **Links:** issues, pull requests, commits and discussions with recognized subject
   URL shapes link directly to their GitHub web pages. Release API IDs are **not**
   release tags, and check-suite IDs are **not** Actions run IDs: those link to the
   repository's releases/Actions pages with explicit destination labels. Unsupported,
   unavailable, or unsafe subject URLs fall back to the GitHub inbox. No additional
   per-subject API requests are made.
-- **State:** GitHub owns notification state. No notification data or preferences
-  are written to disk. Search and collapsed groups are transient; reload
+- **State:** GitHub owns notification state; notification data is never written
+  to disk. Search, collapsed groups, and sound are transient; reload
   recreates a panel from its original open input and refetches GitHub data.
   The app may retain open input in its session history; avoid putting sensitive
   search text in agent inputs if you do not want it in that history.
 
-## Privacy and read-only guarantee
+### Preference storage
 
-The extension only executes `gh api --method GET` against the notifications list
-endpoint on GitHub.com. It never marks read/done, changes subscriptions, requests
-new credentials, or changes permissions. Opening an external link leaves this
-read-only surface: **GitHub itself may mark a notification read when you visit it.**
+Only the auto-open boolean is saved, in
+`${COPILOT_HOME:-$HOME/.copilot}/extensions/github-notifications/artifacts/settings.json`.
+Updates preserve unknown JSON keys, use a temporary file and atomic rename, and
+serialize concurrent writers with `.settings.lock`. Invalid JSON, unsafe files,
+and I/O failures are surfaced; the previous settings are not silently replaced.
+If a crash leaves a lock, verify that no settings update is running before
+removing it manually.
+
+A small `files/github-notifications-startup.json` marker in the SDK session
+workspace records that startup has been checked, even when auto-open was off.
+It contains no notification data. Settings are not keyed by transient panel IDs,
+ports, or localStorage. The installer preserves the artifacts directory.
+
+## Privacy and explicit actions
+
+Listing, polling, searching, and rendering only use `gh api --method GET` against
+the notifications list endpoint on GitHub.com. Only an explicit **Mark as read**
+click sends the narrowly scoped per-thread PATCH. The extension never marks Done,
+changes subscriptions, requests new credentials, or changes permissions. Opening
+an external link also leaves this surface: **GitHub itself may mark a notification
+read when you visit it.**
 
 Notification content stays in provider/renderer memory, is not sent to the agent,
 and is never logged or persisted by this extension. No third-party assets,
@@ -143,7 +208,7 @@ against malware or privileged software already running as your OS user.
 node --test test/*.test.mjs
 ```
 
-All tests use synthetic fixtures, including real loopback HTTP integration and
+All tests use synthetic fixtures, including mutation tests, real loopback HTTP integration and
 installer checks. No test needs authentication or contacts GitHub. There is no
 build step. The SDK import is resolved automatically by the Copilot runtime; do
 not install a separate SDK package.
@@ -151,8 +216,9 @@ not install a separate SDK package.
 Runtime files live together in `.github/extensions/github-notifications/`:
 `extension.mjs` wires lifecycle and actions, `github.mjs` handles `gh` and HTTP
 polling, `inbox.mjs` owns per-panel state, `model.mjs` handles normalization/links,
-`server.mjs` serves the protected UI, and `index.html`, `styles.css`, `app.mjs`
-provide the renderer.
+`server.mjs` serves the protected UI, `index.html`, `styles.css`, `app.mjs`
+provide the renderer, `sound.mjs` manages opt-in browser audio, `settings.mjs`
+stores the user preference, and `startup.mjs` coordinates conservative auto-open.
 
 After any edit, reload extensions. Use extension **list/inspect** to check the
 provider and its log, then inspect canvas capabilities and open/invoke actions.

@@ -4,18 +4,28 @@ import { readFile } from "node:fs/promises";
 import { createContext, runInContext } from "node:vm";
 import { Inbox } from "../.github/extensions/github-notifications/inbox.mjs";
 import { GitHubClient } from "../.github/extensions/github-notifications/github.mjs";
+import { NotificationSound } from "../.github/extensions/github-notifications/sound.mjs";
 import { http, thread } from "./fixtures.mjs";
+import { FakeAudioContext } from "./audio-fixtures.mjs";
 
 const script = await readFile(new URL("../.github/extensions/github-notifications/app.mjs", import.meta.url), "utf8");
 const html = await readFile(new URL("../.github/extensions/github-notifications/index.html", import.meta.url), "utf8");
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
 // Minimal DOM/event/timer doubles exercise the actual renderer without a browser dependency.
-async function renderer({ hidden = false, token = "a".repeat(64) } = {}) {
+async function renderer({ hidden = false, token = "a".repeat(64), audioOptions = {}, readFailure = false } = {}) {
   const calls = [];
   const timers = new Map();
   let timerId = 0;
   let intersect;
+  let now = Date.now();
+  let offline = false;
+  let rows = [
+    thread("1", { subject: { title: "<img src=x onerror=alert(1)>", type: "Issue", url: null } }),
+    thread("2", { unread: false }),
+  ];
+  const audioContexts = [];
+  let storedAutoOpen = false;
   class Node {
     constructor(tag) {
       this.tag = tag;
@@ -32,6 +42,7 @@ async function renderer({ hidden = false, token = "a".repeat(64) } = {}) {
     replaceChildren(fragment) { this.children = fragment.children; }
     addEventListener(name, handler) { this.events[name] = handler; }
     focus() { document.activeElement = this; }
+    contains(node) { return this === node || this.children.some(child => child.contains(node)); }
     querySelectorAll(selector) {
       const result = [];
       for (const child of this.children) {
@@ -41,7 +52,8 @@ async function renderer({ hidden = false, token = "a".repeat(64) } = {}) {
       return result;
     }
   }
-  const ids = new Map([...html.matchAll(/\bid="([^"]+)"/g)].map(([, id]) => [id, new Node(id)]));
+  const ids = new Map([...html.matchAll(/<(\w+)[^>]*\bid="([^"]+)"/g)].map(([, tag, id]) => [id, new Node(tag)]));
+  ids.get("settings").contains = node => ["settings", "settings-toggle", "settings-panel", "sound", "auto-open"].some(id => ids.get(id) === node);
   const document = {
     hidden,
     documentElement: new Node("html"),
@@ -55,12 +67,18 @@ async function renderer({ hidden = false, token = "a".repeat(64) } = {}) {
     addEventListener(name, handler) { this.events[name] = handler; },
   };
   const window = { events: {}, addEventListener(name, handler) { this.events[name] = handler; } };
-  const inbox = new Inbox(new GitHubClient({ run: async () => http([
-    thread("1", { subject: { title: "<img src=x onerror=alert(1)>", type: "Issue", url: null } }),
-    thread("2", { unread: false }),
-  ]) }));
+  window.AudioContext = class extends FakeAudioContext {
+    constructor() { super(audioOptions); audioContexts.push(this); }
+  };
+  const inbox = new Inbox(new GitHubClient({ now: () => now, run: async args => {
+    if (args.includes("PATCH")) return readFailure ? http({}, {}, 403) : "HTTP/2 205 Reset Content\r\n\r\n";
+    return http(rows);
+  } }));
   const context = createContext({
     document, window, location: { hash: `#${token}` }, Intl, Date, AbortController,
+    NotificationSound: class extends NotificationSound {
+      constructor(options) { super({ ...options, now: () => now }); }
+    },
     setTimeout(fn, delay) { timers.set(++timerId, { fn, delay }); return timerId; },
     clearTimeout(id) { timers.delete(id); },
     IntersectionObserver: class {
@@ -69,16 +87,26 @@ async function renderer({ hidden = false, token = "a".repeat(64) } = {}) {
       disconnect() {}
     },
     fetch: async (path, options) => {
+      if (offline) throw new Error("Synthetic connection failure");
       calls.push({ path, options });
+      if (path === "/api/settings") {
+        if (options.body) storedAutoOpen = JSON.parse(options.body).autoOpen;
+        return { ok: true, json: async () => ({ autoOpen: storedAutoOpen }) };
+      }
       if (path === "/api/refresh") await inbox.refresh();
       if (path === "/api/filters") await inbox.setFilters(JSON.parse(options.body));
+      if (path === "/api/read") await inbox.markRead(JSON.parse(options.body));
       return { ok: true, json: async () => inbox.snapshot() };
     },
   });
-  runInContext(script, context);
+  assert.match(script, /^import \{ NotificationSound \} from "\.\/sound\.mjs";/);
+  runInContext(script.replace(/^import \{ NotificationSound \} from "\.\/sound\.mjs";/, ""), context);
   await settle();
   return {
-    calls, document, window, ids, timers, context,
+    calls, document, window, ids, timers, context, audioContexts,
+    advance() { now += 120_000; return now; },
+    setRows(value) { rows = value; },
+    setOffline(value) { offline = value; },
     intersect: value => intersect([{ isIntersecting: value }]),
   };
 }
@@ -101,7 +129,7 @@ test("renderer fetches with a capability, renders untrusted titles as text and e
 
 test("canvas is titled Unread Notifications without mode tabs or the old All notice", () => {
   assert.match(html, /<title>Unread Notifications<\/title>/);
-  assert.match(html, /<h1>Unread Notifications /);
+  assert.match(html, /<h1>Unread Notifications<\/h1>/);
   assert.doesNotMatch(html, /id="(?:all|unread|api-limit)"/);
 });
 
@@ -111,12 +139,12 @@ test("renderer preserves focus and collapsed groups across unchanged data and up
   firstLink.focus();
   await runInContext("update()", ui.context);
   assert.equal(ui.document.activeElement, firstLink);
-  const group = ui.document.querySelectorAll("details")[0];
+  const group = ui.ids.get("groups").querySelectorAll("details")[0];
   group.open = false;
   group.events.toggle();
   assert.equal(ui.ids.get("collapse").textContent, "Expand all");
   await runInContext("state.groups[0].items[0].title = 'Updated synthetic title'; render()", ui.context);
-  assert.equal(ui.document.querySelectorAll("details")[0].open, false);
+  assert.equal(ui.ids.get("groups").querySelectorAll("details")[0].open, false);
   assert.equal(ui.document.activeElement.dataset.focusKey, "thread:1");
 });
 
@@ -166,4 +194,137 @@ test("a missing capability remains inert and explains how to open the canvas", a
   assert.equal(ui.calls.length, 0);
   assert.equal(ui.timers.size, 0);
   assert.match(ui.ids.get("notice").textContent, /Open this canvas from Copilot/);
+});
+
+test("sound is opt-in and refresh arrivals ring once even when search hides every row", async () => {
+  const ui = await renderer();
+  assert.equal(ui.audioContexts.length, 0);
+  assert.match(html, /id="sound"[^>]*role="switch"[^>]*aria-checked="false"/);
+  assert.match(html, /id="sound-status"[^>]*role="status"/);
+  ui.ids.get("sound").events.click();
+  await settle();
+  assert.equal(ui.ids.get("sound").attributes["aria-checked"], "true");
+  assert.equal(ui.ids.get("sound").textContent, "Play sound: On");
+  assert.equal(ui.audioContexts[0].starts, 0);
+  await runInContext('update("filters", { query: "no match" })', ui.context);
+  const later = ui.advance();
+  ui.setRows([thread("3", { updated_at: new Date(later).toISOString() })]);
+  await runInContext('update("refresh", {})', ui.context);
+  assert.equal(ui.document.querySelectorAll("article").length, 0);
+  assert.equal(ui.audioContexts[0].starts, 1);
+  await runInContext('update("refresh", {})', ui.context);
+  await runInContext('update("filters", { query: "" })', ui.context);
+  assert.equal(ui.audioContexts[0].starts, 1);
+  ui.ids.get("sound").events.click();
+  await settle();
+  assert.equal(ui.ids.get("sound").attributes["aria-checked"], "false");
+  assert.equal(ui.audioContexts[0].state, "closed");
+});
+
+test("visible toggle reports browser audio failures, and pagehide closes its context", async () => {
+  const failed = await renderer({ audioOptions: { resumeError: true } });
+  failed.ids.get("sound").events.click();
+  await settle();
+  assert.equal(failed.ids.get("sound").textContent, "Play sound: Off");
+  assert.match(failed.ids.get("sound-status").textContent, /could not be enabled/);
+  const ui = await renderer();
+  ui.ids.get("sound").events.click();
+  await settle();
+  ui.window.events.pagehide();
+  await settle();
+  assert.equal(ui.audioContexts[0].state, "closed");
+  assert.equal(ui.ids.get("sound").attributes["aria-checked"], "false");
+});
+
+test("Settings contains both switches, saves startup preference and closes accessibly", async () => {
+  const ui = await renderer();
+  const settings = ui.ids.get("settings");
+  settings.open = true;
+  settings.events.toggle();
+  await settle();
+  assert.equal(ui.ids.get("settings-toggle").attributes["aria-expanded"], "true");
+  assert.equal(ui.ids.get("auto-open").disabled, false);
+  assert.equal(ui.ids.get("auto-open").attributes["aria-checked"], "false");
+  ui.ids.get("auto-open").events.click();
+  await settle();
+  assert.equal(ui.ids.get("auto-open").attributes["aria-checked"], "true");
+  assert.match(ui.ids.get("settings-status").textContent, /future new sessions/);
+  ui.document.events.click({ target: ui.ids.get("sound") });
+  assert.equal(settings.open, true);
+  ui.document.events.keydown({ key: "Escape", preventDefault() {} });
+  assert.equal(settings.open, false);
+  assert.equal(ui.document.activeElement, ui.ids.get("settings-toggle"));
+  settings.open = true;
+  settings.events.toggle();
+  await settle();
+  assert.equal(ui.ids.get("auto-open").attributes["aria-checked"], "true");
+  ui.document.events.click({ target: ui.ids.get("search") });
+  assert.equal(settings.open, false);
+  assert.equal(ui.audioContexts.length, 0);
+});
+
+test("settings failures are visible and do not claim a saved toggle", async () => {
+  const ui = await renderer();
+  ui.setOffline(true);
+  ui.ids.get("settings").open = true;
+  ui.ids.get("settings").events.toggle();
+  await settle();
+  assert.equal(ui.ids.get("auto-open").disabled, true);
+  assert.match(ui.ids.get("settings-status").textContent, /retry/);
+  ui.setOffline(false);
+  ui.ids.get("settings").events.toggle();
+  await settle();
+  assert.equal(ui.ids.get("auto-open").disabled, false);
+});
+
+test("mark-read requires a click, removes only on confirmation and stays silent", async () => {
+  const ui = await renderer();
+  assert.equal(ui.calls.some(call => call.path === "/api/read"), false);
+  ui.ids.get("sound").events.click();
+  await settle();
+  const button = ui.ids.get("groups").querySelectorAll("button")[0];
+  assert.match(button.attributes["aria-label"], /Mark as read/);
+  button.focus();
+  const marking = button.events.click();
+  assert.equal(button.disabled, true);
+  await button.events.click();
+  await marking;
+  assert.equal(ui.calls.filter(call => call.path === "/api/read").length, 1);
+  assert.equal(ui.document.querySelectorAll("article").length, 0);
+  assert.equal(ui.audioContexts[0].starts, 0);
+  assert.equal(ui.document.activeElement, ui.ids.get("search"));
+  ui.window.events.pagehide();
+});
+
+test("mark-read failure retains the row with a usable retry control", async () => {
+  const ui = await renderer({ readFailure: true });
+  const button = ui.ids.get("groups").querySelectorAll("button")[0];
+  await button.events.click();
+  assert.equal(ui.document.querySelectorAll("article").length, 1);
+  assert.equal(button.disabled, false);
+  assert.match(ui.ids.get("notice").textContent, /Could not mark/);
+});
+
+test("hidden views and reconnects reset the audio baseline without catch-up chimes", async () => {
+  const ui = await renderer();
+  ui.ids.get("sound").events.click();
+  await settle();
+  ui.intersect(false);
+  const later = ui.advance();
+  ui.setRows([thread("3", { updated_at: new Date(later).toISOString() })]);
+  await runInContext('update("refresh", {})', ui.context);
+  assert.equal(ui.audioContexts[0].starts, 0);
+  ui.intersect(true);
+  await settle();
+  await runInContext('update("refresh", {})', ui.context);
+  assert.equal(ui.audioContexts[0].starts, 0);
+  ui.setOffline(true);
+  await runInContext('update("refresh", {})', ui.context);
+  ui.setOffline(false);
+  const newest = ui.advance();
+  ui.setRows([thread("4", { updated_at: new Date(newest).toISOString() })]);
+  await runInContext('update("refresh", {})', ui.context);
+  assert.equal(ui.audioContexts[0].starts, 0);
+  ui.window.events.pagehide();
+  await settle();
 });
