@@ -46,11 +46,12 @@ input::placeholder { color: var(--muted); }
 .repo-toggle[aria-expanded="true"]::before { content: "-"; }
 .repo-read { flex-shrink: 0; font-size: 11px; padding: 5px 8px; }
 .batch-progress { border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px; overflow-wrap: anywhere; }
-.batch-progress h2, dialog h2 { font-size: 16px; margin-bottom: 10px; }
+.batch-progress h2 { font-size: 16px; margin-bottom: 10px; }
+.batch-running { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; font-size: 12px; color: var(--muted); }
+.batch-running h2 { font-size: 12px; font-weight: 400; }
+.batch-running .batch-buttons { margin: 0 0 0 auto; }
 .batch-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
-#batch-error, #batch-dialog-error { margin-top: 10px; color: var(--true-color-red, #cf222e); }
-dialog { color: var(--text-color-default, #1f2328); background: var(--background-color-default, #fff); border: 1px solid var(--border); border-radius: 12px; padding: 22px; width: min(440px, calc(100vw - 28px)); overflow-wrap: anywhere; }
-dialog::backdrop { background: #0006; }
+#batch-error { margin-top: 10px; color: var(--true-color-red, #cf222e); }
 summary { padding: 12px 16px; cursor: pointer; overflow-wrap: anywhere; }
 summary::marker { color: var(--muted); }
 .repo-name { margin-left: 5px; }

@@ -21,7 +21,6 @@ const markingRead = new Set();
 let readError = "";
 let batchBusy = false;
 let batchFocusKey;
-let batchMessage = "";
 const sound = new NotificationSound({
   createContext: () => new (window.AudioContext || window.webkitAudioContext)(),
   onChange: ({ enabled, pending, message }) => {
@@ -137,7 +136,7 @@ function visible() {
 }
 
 function batchLocked() {
-  return ["prepared", "running", "stopping"].includes(state?.batch?.status);
+  return ["running", "stopping"].includes(state?.batch?.status);
 }
 
 function focusKey(key) {
@@ -146,28 +145,27 @@ function focusKey(key) {
 
 async function batchRequest(action, input) {
   if (!visible() || batchBusy || busy) return;
-  if (action === "prepare" && (busy || markingRead.size || batchLocked())) return;
+  if (["start", "retry"].includes(action) && (markingRead.size || batchLocked())) return;
   batchBusy = true;
-  batchMessage = "";
+  let failed = false;
   renderControls();
   try {
     state = await api(`batch/${action}`, input);
     sound.observe(state.activity);
     readError = "";
   } catch (error) {
-    batchMessage = error.message || "The repository action failed. Try again.";
-    readError = batchMessage;
+    failed = true;
+    readError = error.message || "The repository action failed. Try again.";
     try {
       state = await api("state");
       sound.observe(state.activity);
     } catch {
-      batchMessage += " Could not reconnect. Reopen this panel to inspect its current progress.";
+      readError += " Could not reconnect. Reopen this panel to inspect its current progress.";
     }
   } finally {
     batchBusy = false;
     render();
-    if (visible() && !batchMessage) {
-      if (action === "start") $("batch-progress").focus();
+    if (visible() && !failed) {
       if (["cancel", "dismiss"].includes(action) && !state?.batch) {
         (focusKey(batchFocusKey) ?? $("search")).focus();
       }
@@ -178,25 +176,20 @@ async function batchRequest(action, input) {
 
 function renderBatch() {
   const batch = state?.batch;
-  const dialog = $("batch-confirm");
-  if (batch?.status === "prepared") {
-    $("batch-confirm-title").textContent = `Mark ${batch.total} as read in ${batch.repository}?`;
-    $("batch-confirm-scope").textContent = `Only these ${batch.total} shown, loaded notifications will be marked as read.${batch.searchActive ? " The captured selection matches your current search." : ""} Older unloaded items, other repositories, and arrivals after this selection was prepared are excluded. Changed notifications are skipped.`;
-    $("batch-start").textContent = `Mark ${batch.total} as read`;
-    if (!dialog.open && visible()) {
-      dialog.showModal();
-      $("batch-cancel").focus();
+  const controls = [$("batch-stop"), $("batch-retry"), $("batch-dismiss")];
+  $("batch-progress").hidden = !batch;
+  if (!batch) {
+    for (const id of ["batch-title", "batch-counts", "batch-error"]) $(id).textContent = "";
+    if (visible() && [...controls, $("batch-progress")].includes(document.activeElement)) {
+      (focusKey(batchFocusKey) ?? $("search")).focus();
     }
-  } else if (dialog.open) {
-    dialog.close();
+    return;
   }
-  $("batch-dialog-error").hidden = !batchMessage;
-  $("batch-dialog-error").textContent = batchMessage;
-  $("batch-progress").hidden = !batch || batch.status === "prepared";
-  if (!batch || batch.status === "prepared") return;
   const running = ["running", "stopping"].includes(batch.status);
-  $("batch-title").textContent = `${batch.repository}: ${batch.status === "stopping" ? "Stopping after the current request" : running ? "Marking notifications as read" : "Repository action finished"}`;
-  $("batch-counts").textContent = `${batch.succeeded} succeeded / ${batch.failed} failed / ${batch.skipped} skipped / ${batch.notAttempted} ${running ? "waiting" : "not attempted"}${batch.inFlight ? " / 1 in flight" : ""} (${batch.total} selected)`;
+  $("batch-progress").className = running ? "batch-running" : "batch-progress";
+  $("batch-title").textContent = `${batch.repository}: ${batch.status === "stopping" ? "Stopping after the current request" : running ? "Marking as read..." : "Some notifications remain"}`;
+  $("batch-counts").hidden = running;
+  $("batch-counts").textContent = running ? "" : `${batch.succeeded} succeeded / ${batch.failed} failed / ${batch.skipped} skipped / ${batch.notAttempted} not attempted (${batch.total} selected)`;
   const retryTime = batch.retryAt > Date.now() ? ` Retry after ${new Date(batch.retryAt).toLocaleTimeString()}.` : "";
   const detail = batch.error?.message ?? (batch.skipped ? "Skipped notifications were changed or no longer unread in the loaded inbox. Review their current state separately." : "");
   $("batch-error").hidden = !detail;
@@ -204,11 +197,11 @@ function renderBatch() {
   $("batch-stop").hidden = !running;
   $("batch-stop").disabled = batchBusy || busy || batch.status === "stopping";
   $("batch-retry").hidden = running || batch.failed + batch.notAttempted === 0;
-  $("batch-retry").textContent = `Review remaining (${batch.failed + batch.notAttempted})`;
+  $("batch-retry").textContent = `Retry remaining (${batch.failed + batch.notAttempted})`;
   $("batch-retry").disabled = batchBusy || busy || batch.retryAt > Date.now();
   $("batch-dismiss").hidden = running;
   $("batch-dismiss").disabled = batchBusy || busy;
-  if ([ $("batch-stop"), $("batch-retry"), $("batch-dismiss") ].some(button =>
+  if (controls.some(button =>
     button === document.activeElement && button.hidden) && visible()) $("batch-progress").focus();
 }
 
@@ -282,10 +275,16 @@ function renderControls() {
   $("more").disabled = loading || state?.needsRefresh || Boolean(state?.error && waiting);
   for (const button of $("groups").querySelectorAll("button")) {
     if (!button.dataset.disclosure) button.disabled = loading || markingRead.has(button.dataset.threadId);
+    if (button.dataset.repository) {
+      const batch = batchLocked() && state.batch.repository === button.dataset.repository ? state.batch : null;
+      const progress = batch ? batch.status === "stopping" ? "Stopping..." : `Marking ${batch.succeeded}/${batch.total}...` : null;
+      button.textContent = progress ?? `Mark ${button.dataset.count} as read`;
+      button.setAttribute("aria-label", progress ? `${progress} in ${button.dataset.repository}` :
+        `Mark ${button.dataset.count} shown, loaded notifications as read in ${button.dataset.repository}`);
+      button.setAttribute("aria-busy", String(Boolean(batch)));
+    }
   }
   $("search").disabled = batchBusy || batchLocked();
-  $("batch-start").disabled = batchBusy || busy;
-  $("batch-cancel").disabled = batchBusy || busy;
   $("groups").setAttribute("aria-busy", String(loading));
 }
 
@@ -320,12 +319,14 @@ function renderGroups(groups) {
     const markGroup = element("button", "repo-read", `Mark ${group.items.length} as read`);
     markGroup.type = "button";
     markGroup.dataset.focusKey = `bulk:${group.repository}`;
+    markGroup.dataset.repository = group.repository;
+    markGroup.dataset.count = String(group.items.length);
     markGroup.setAttribute("aria-label", `Mark ${group.items.length} shown, loaded notifications as read in ${group.repository}`);
     markGroup.disabled = busy || markingRead.size > 0 || batchBusy || batchLocked();
     markGroup.addEventListener("click", () => {
       if (busy || batchBusy || batchLocked() || markingRead.size) return;
       batchFocusKey = markGroup.dataset.focusKey;
-      return batchRequest("prepare", { repository: group.repository, selectionKey: group.selectionKey });
+      return batchRequest("start", { repository: group.repository, selectionKey: group.selectionKey });
     });
     header.append(disclosure, markGroup);
     section.append(header, rows);
@@ -364,7 +365,7 @@ function renderGroups(groups) {
     fragment.append(section);
   }
   $("groups").replaceChildren(fragment);
-  if (focused && !$("batch-confirm").open) {
+  if (focused) {
     (focusKey(focused) ?? $("search")).focus({ preventScroll: true });
   }
 }
@@ -382,6 +383,7 @@ function render() {
   $("more").textContent = "Load more (up to 50)";
   $("coverage").textContent = `${state.loaded} notifications loaded.${state.hasMore ? " Older notifications are available." : state.lastFetchedAt ? " End of the available inbox." : ""}${state.needsRefresh ? " Refresh before loading more; pagination changed." : ""}${state.filters.query ? " Search covers loaded notifications only." : ""}`;
   renderGroups(state.groups);
+  renderControls();
   for (const time of document.querySelectorAll("time")) time.textContent = relativeTime(time.dateTime);
   $("empty").hidden = Boolean(state.groups.length);
   $("empty-title").textContent = error ? "Your inbox is unavailable" :
@@ -397,14 +399,10 @@ function render() {
 }
 
 $("refresh").addEventListener("click", () => update("refresh", {}));
-for (const [id, action] of [["batch-start", "start"], ["batch-cancel", "cancel"], ["batch-stop", "cancel"],
+for (const [id, action] of [["batch-stop", "cancel"],
   ["batch-retry", "retry"], ["batch-dismiss", "dismiss"]]) {
   $(id).addEventListener("click", () => state?.batch && batchRequest(action, { token: state.batch.token }));
 }
-$("batch-confirm").addEventListener("cancel", event => {
-  event.preventDefault();
-  if (state?.batch && !batchBusy) void batchRequest("cancel", { token: state.batch.token });
-});
 $("sound").addEventListener("click", () => {
   if (visible()) void sound.toggle();
 });

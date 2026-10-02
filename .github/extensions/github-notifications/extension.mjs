@@ -37,7 +37,7 @@ session = await joinSession({
   canvases: [createCanvas({
     id: "github-notifications",
     displayName: "Unread Notifications",
-    description: "Unread GitHub notifications with per-row read controls and confirmed repository actions for shown, loaded items.",
+    description: "Unread GitHub notifications with one-click row and repository read actions limited to shown, loaded items.",
     inputSchema: filterSchema,
     actions: [
       {

@@ -28,19 +28,23 @@ async function fixture({ rows = [thread("1"), thread("2"), thread("3")], run, sl
   return { inbox, client, writes, waits, advance: () => { now += POLL_MS; } };
 }
 
-function prepare(inbox, repository = "example/widgets") {
+function selection(inbox, repository = "example/widgets") {
   const group = inbox.snapshot().groups.find(group => group.repository === repository);
-  inbox.batch.prepare({ repository, selectionKey: group.selectionKey });
+  return { repository, selectionKey: group.selectionKey };
+}
+
+function start(inbox, repository = "example/widgets") {
+  inbox.batch.start(selection(inbox, repository));
   return { token: inbox.batch.snapshot().token };
 }
 
-test("confirmation captures only the shown loaded search matches and cancellation makes zero writes", async () => {
+test("one request captures only shown loaded search matches and can stop before dispatch", async () => {
   const rows = [thread("1"), thread("2"), thread("3", { repository: { full_name: "example/other" } })];
   const { inbox, writes } = await fixture({
     run: async args => args.includes("PATCH") ? ok : http(rows, { link: next }),
   });
   await inbox.setFilters({ query: "notification 1" });
-  const token = prepare(inbox);
+  const token = start(inbox);
   assert.equal(inbox.batch.snapshot().total, 1);
   assert.equal(inbox.batch.snapshot().searchActive, true);
   assert.equal(inbox.batch.snapshot().repository, "example/widgets");
@@ -49,7 +53,8 @@ test("confirmation captures only the shown loaded search matches and cancellatio
   assert.doesNotMatch(summary, /example\/|selectionKey|token/);
   inbox.batch.cancel(token);
   await inbox.batch.done;
-  assert.equal(inbox.batch.snapshot(), null);
+  assert.equal(inbox.batch.snapshot().status, "cancelled");
+  assert.equal(inbox.batch.snapshot().notAttempted, 1);
   assert.deepEqual(writes, []);
 });
 
@@ -61,10 +66,10 @@ test("strict bounded selection requests reject unknown, forged, stale, cross-rep
     { repository: group.repository, selectionKey: "a".repeat(64) },
     { repository: group.repository, selectionKey: group.selectionKey, ids: ["1", "1"] },
     { repository: group.repository, ids: ["../2"] }]) {
-    assert.throws(() => inbox.batch.prepare(input));
+    assert.throws(() => inbox.batch.start(input));
   }
   await inbox.setFilters({ query: "notification 1" });
-  assert.throws(() => inbox.batch.prepare({ repository: group.repository, selectionKey: group.selectionKey }),
+  assert.throws(() => inbox.batch.start({ repository: group.repository, selectionKey: group.selectionKey }),
     { code: "selection_changed" });
   for (const input of [{}, { token: 1 }, { token: "a".repeat(36) }, { token: "a".repeat(36), ids: ["1"] }]) {
     assert.throws(() => inbox.batch.start(input));
@@ -77,23 +82,21 @@ test("group size is bounded by loaded rows, not an arbitrary silent cap or an ov
   const group = inbox.groups()[0];
   const input = { repository: group.repository, selectionKey: group.selectionKey };
   assert.ok(JSON.stringify(input).length < 256);
-  inbox.batch.prepare(input);
+  inbox.batch.start(input);
   assert.equal(inbox.batch.snapshot().total, 2000);
   inbox.batch.cancel({ token: inbox.batch.snapshot().token });
+  await inbox.batch.done;
 });
 
-test("confirmed batches make spaced sequential per-thread PATCH calls, update shared panels, and never sound", async () => {
+test("one-click batches make spaced PATCH calls, update shared panels, and quietly clear completed state", async () => {
   const { inbox, client, writes, waits, advance } = await fixture();
   const other = new Inbox(client);
   await other.refresh();
-  const token = prepare(inbox);
-  inbox.batch.start(token);
-  inbox.batch.start(token);
+  const input = selection(inbox);
+  start(inbox);
+  assert.throws(() => inbox.batch.start(input), { code: "busy" });
   await inbox.batch.done;
-  const result = inbox.batch.snapshot();
-  assert.equal(result.status, "completed");
-  assert.equal(result.succeeded, 3);
-  assert.equal(result.failed + result.skipped + result.notAttempted, 0);
+  assert.equal(inbox.batch.snapshot(), null);
   assert.deepEqual(writes, ["/notifications/threads/1", "/notifications/threads/2", "/notifications/threads/3"]);
   assert.deepEqual(waits, [1000, 1000]);
   for (const panel of [inbox, other]) {
@@ -101,7 +104,7 @@ test("confirmed batches make spaced sequential per-thread PATCH calls, update sh
     assert.equal(panel.summary().needsRefresh, true);
     assert.equal(panel.summary().activity.sequence, 0);
   }
-  inbox.batch.start(token);
+  assert.throws(() => inbox.batch.start(input), { code: "selection_changed" });
   assert.equal(writes.length, 3);
   assert.equal(client.readReservations.size, 0);
   client.run = async () => "HTTP/2 304 Not modified\r\n\r\n";
@@ -115,11 +118,10 @@ test("confirmed batches make spaced sequential per-thread PATCH calls, update sh
   assert.equal(inbox.summary().activity.sequence, 1);
 });
 
-test("a prepared selection excludes new arrivals and skips changed or no-longer-loaded captured rows", async () => {
+test("a clicked selection excludes new arrivals and skips changed or no-longer-loaded captured rows", async () => {
   const { inbox, writes } = await fixture();
-  const token = prepare(inbox);
+  start(inbox);
   inbox.pages = [{ ...inbox.pages[0], items: normalizeThreads([thread("1"), laterThread("2"), thread("4")]) }];
-  inbox.batch.start(token);
   await inbox.batch.done;
   assert.deepEqual(writes, ["/notifications/threads/1"]);
   assert.equal(inbox.batch.snapshot().succeeded, 1);
@@ -132,9 +134,8 @@ test("newer cache activity is rechecked after queued write spacing, before a PAT
   const { inbox, client, writes } = await fixture({
     sleep: () => new Promise(resolve => { release = resolve; }),
   });
-  const token = prepare(inbox);
   client.writeAvailableAt = 1000;
-  inbox.batch.start(token);
+  start(inbox);
   await settle();
   const page = [...client.cache.values()][0];
   page.items = normalizeThreads([laterThread("1"), laterThread("2"), laterThread("3")]);
@@ -151,28 +152,26 @@ test("duplicate groups, overlapping per-row reads and other-panel batches are bl
   });
   const other = new Inbox(client);
   await other.refresh();
-  const token = prepare(inbox);
-  assert.throws(() => prepare(inbox), { code: "busy" });
+  start(inbox);
+  assert.throws(() => start(inbox), { code: "busy" });
   await assert.rejects(inbox.markRead({ id: "1" }), { code: "busy" });
   await assert.rejects(inbox.setFilters({ query: "changed" }), { code: "busy" });
-  inbox.batch.start(token);
   await settle();
   await assert.rejects(other.markRead({ id: "1" }), { code: "busy" });
-  const otherToken = prepare(other);
-  assert.throws(() => other.batch.start(otherToken), { code: "busy" });
-  other.batch.cancel(otherToken);
+  assert.throws(() => start(other), { code: "busy" });
+  assert.equal(other.batch.snapshot(), null);
   release();
   await inbox.batch.done;
   assert.equal(writes.length, 1);
 });
 
-test("preparation cannot overlap a previously issued per-row mutation", async () => {
+test("a group click cannot overlap a previously issued per-row mutation", async () => {
   let release;
   const { inbox } = await fixture({
     run: async args => args.includes("PATCH") ? new Promise(resolve => { release = () => resolve(ok); }) : http([thread("1")]),
   });
   const pending = inbox.markRead({ id: "1" });
-  assert.throws(() => prepare(inbox), { code: "busy" });
+  assert.throws(() => start(inbox), { code: "busy" });
   await settle();
   release();
   await pending;
@@ -193,8 +192,7 @@ test("auth/rate/network failures stop the batch with exact partial counts and re
         return ok;
       },
     });
-    const token = prepare(inbox);
-    inbox.batch.start(token);
+    const token = start(inbox);
     await inbox.batch.done;
     assert.deepEqual(
       (({ succeeded, failed, skipped, notAttempted }) => ({ succeeded, failed, skipped, notAttempted }))(inbox.batch.snapshot()),
@@ -205,9 +203,9 @@ test("auth/rate/network failures stop the batch with exact partial counts and re
     failing = false;
     client.blockedUntil = 0;
     inbox.batch.retry(token);
-    assert.equal(inbox.batch.snapshot().status, "prepared");
+    assert.equal(inbox.batch.snapshot().status, "running");
     assert.equal(inbox.batch.snapshot().total, 2);
-    inbox.batch.start({ token: inbox.batch.snapshot().token });
+    assert.throws(() => inbox.batch.retry(token), { code: "busy" });
     await inbox.batch.done;
     assert.deepEqual(writes, ["/notifications/threads/1", "/notifications/threads/2", "/notifications/threads/2", "/notifications/threads/3"]);
     assert.equal(inbox.summary().loaded, 0);
@@ -220,14 +218,12 @@ test("retry keeps the old selection and respects a newly narrowed search", async
     run: async args => !args.includes("PATCH") ? http([thread("1"), thread("2"), thread("3")]) :
       ++writes === 1 ? http({}, {}, 500) : ok,
   });
-  const token = prepare(inbox);
-  inbox.batch.start(token);
+  const token = start(inbox);
   await inbox.batch.done;
   await inbox.setFilters({ query: "notification 2" });
   client.blockedUntil = 0;
   inbox.batch.retry(token);
   assert.equal(inbox.batch.snapshot().total, 1);
-  inbox.batch.start({ token: inbox.batch.snapshot().token });
   await inbox.batch.done;
   assert.equal(inbox.loadedItems().some(item => item.id === "2"), false);
   assert.equal(inbox.summary().loaded, 2);
@@ -238,8 +234,7 @@ test("cancellation while a request is in flight waits for its confirmation but s
   const { inbox, writes, client } = await fixture({
     run: async args => args.includes("PATCH") ? new Promise(resolve => { release = () => resolve(ok); }) : http([thread("1"), thread("2")]),
   });
-  const token = prepare(inbox);
-  inbox.batch.start(token);
+  const token = start(inbox);
   await settle();
   inbox.batch.cancel(token);
   assert.equal(inbox.batch.snapshot().status, "stopping");
@@ -259,8 +254,7 @@ test("cancelling during a write delay and closing the panel abort not-yet-dispat
       sleep: (_ms, _, { signal }) => new Promise((resolve, reject) => signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true })),
     });
     client.writeAvailableAt = 1000;
-    const token = prepare(inbox);
-    inbox.batch.start(token);
+    const token = start(inbox);
     await settle();
     if (close) inbox.close();
     else inbox.batch.cancel(token);
@@ -273,18 +267,12 @@ test("cancelling during a write delay and closing the panel abort not-yet-dispat
   }
 });
 
-test("prepare expires without writing and unexpected transport errors become explicit partial results", async () => {
-  const { inbox, advance, writes } = await fixture();
-  const token = prepare(inbox);
-  for (let n = 0; n < 3; n++) advance();
-  assert.throws(() => inbox.batch.start(token), { code: "confirmation_expired" });
-  inbox.batch.cancel(token);
-  assert.equal(writes.length, 0);
+test("unexpected transport errors become explicit partial results", async () => {
   const broken = await fixture({ run: async args => {
     if (args.includes("PATCH")) throw new Error("secret internal context");
     return http([thread("1"), thread("2")]);
   } });
-  broken.inbox.batch.start(prepare(broken.inbox));
+  start(broken.inbox);
   await broken.inbox.batch.done;
   assert.equal(broken.inbox.batch.snapshot().failed, 1);
   assert.equal(broken.inbox.batch.snapshot().notAttempted, 1);
@@ -304,18 +292,19 @@ test("HTTP start returns before writes finish, status stays readable and cancell
     { method: "POST", headers: { ...headers, ...extra }, body: JSON.stringify(input) });
   const group = inbox.groups()[0];
   const selection = { repository: group.repository, selectionKey: group.selectionKey };
-  assert.equal((await post("prepare", selection, { Origin: "https://evil.test" })).status, 403);
-  assert.equal((await post("prepare", selection, { Authorization: "wrong" })).status, 403);
-  assert.equal((await post("prepare", { ...selection, ids: ["1", "1"] })).status, 400);
+  assert.equal((await post("start", selection, { Origin: "https://evil.test" })).status, 403);
+  assert.equal((await post("start", selection, { Authorization: "wrong" })).status, 403);
+  assert.equal((await post("start", { ...selection, ids: ["1", "1"] })).status, 400);
   assert.equal((await fetch(`${url.origin}/api/batch/start`, { headers })).status, 405);
-  const prepared = await post("prepare", selection);
-  const token = { token: (await prepared.json()).batch.token };
-  const started = await post("start", token);
+  assert.equal((await post("prepare", selection)).status, 404);
+  const started = await post("start", selection);
   assert.equal(started.status, 202);
-  assert.equal((await started.json()).batch.status, "running");
+  const batch = (await started.json()).batch;
+  const token = { token: batch.token };
+  assert.equal(batch.status, "running");
   const progress = await fetch(`${url.origin}/api/state`, { headers });
   assert.equal((await progress.json()).batch.inFlight, true);
-  assert.equal((await post("start", token)).status, 202);
+  assert.equal((await post("start", selection)).status, 409);
   const cancelling = await post("cancel", token);
   assert.equal((await cancelling.json()).batch.status, "stopping");
   release();
@@ -331,12 +320,11 @@ test("existing backoff prevents starting, and quota exhaustion after success lea
       http(null, { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "99999" }, 205) :
       http([thread("1"), thread("2"), thread("3")]),
   });
-  const token = prepare(inbox);
   client.blockedUntil = 1000;
-  assert.throws(() => inbox.batch.start(token), { code: "rate_limited" });
-  assert.equal(inbox.batch.snapshot().status, "prepared");
+  assert.throws(() => start(inbox), { code: "rate_limited" });
+  assert.equal(inbox.batch.snapshot(), null);
   client.blockedUntil = 0;
-  inbox.batch.start(token);
+  start(inbox);
   await inbox.batch.done;
   assert.equal(inbox.batch.snapshot().succeeded, 1);
   assert.equal(inbox.batch.snapshot().failed, 0);
@@ -354,7 +342,7 @@ test("closing a server aborts an in-flight batch and releases its listener and r
     },
   });
   const server = await startServer(inbox);
-  inbox.batch.start(prepare(inbox));
+  start(inbox);
   await settle();
   await server.close();
   assert.equal(inbox.batch.snapshot(), null);

@@ -40,26 +40,16 @@
       </div>
     </header>
     <div id="notice" class="notice" role="alert" hidden></div>
-    <section id="batch-progress" class="batch-progress" aria-label="Repository read progress" tabindex="-1" hidden>
+    <section id="batch-progress" class="batch-progress" aria-label="Repository read operation" tabindex="-1" hidden>
       <h2 id="batch-title"></h2>
-      <p id="batch-counts" role="status" aria-live="polite"></p>
+      <p id="batch-counts"></p>
       <p id="batch-error" role="alert" hidden></p>
-      <p class="settings-help">Only the confirmed selection is processed. This progress lasts for this panel; closing it stops remaining work.</p>
       <div class="batch-buttons">
         <button id="batch-stop" type="button">Stop remaining</button>
-        <button id="batch-retry" type="button">Review remaining</button>
+        <button id="batch-retry" type="button">Retry remaining</button>
         <button id="batch-dismiss" type="button">Dismiss result</button>
       </div>
     </section>
-    <dialog id="batch-confirm" aria-labelledby="batch-confirm-title" aria-describedby="batch-confirm-scope">
-      <h2 id="batch-confirm-title">Mark repository notifications as read?</h2>
-      <p id="batch-confirm-scope"></p>
-      <p id="batch-dialog-error" role="alert" hidden></p>
-      <div class="batch-buttons">
-        <button id="batch-cancel" type="button" autofocus>Cancel</button>
-        <button id="batch-start" type="button">Confirm</button>
-      </div>
-    </dialog>
     <section id="empty" class="empty" aria-live="polite">
       <div class="empty-symbol" aria-hidden="true">/</div>
       <h2 id="empty-title">Connecting to GitHub</h2>
@@ -72,7 +62,7 @@
     </div>
     <footer>
       <p id="updated">Refresh runs only while this view is visible.</p>
-      <p>Notifications change only through a Mark as read button or a confirmed repository action.
+      <p>Mark as read applies only to the clicked row or the repository group's shown, loaded notifications.
         <a href="https://github.com/notifications" target="_blank" rel="noopener noreferrer">Open GitHub inbox</a>
       </p>
     </footer>

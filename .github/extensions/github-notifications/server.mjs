@@ -10,7 +10,6 @@ const assets = new Map([
   ["/styles.css", ["styles.css", "text/css; charset=utf-8"]],
 ]);
 const batchRoutes = new Map([
-  ["/api/batch/prepare", "prepare"],
   ["/api/batch/start", "start"],
   ["/api/batch/cancel", "cancel"],
   ["/api/batch/retry", "retry"],
@@ -103,7 +102,7 @@ export async function startServer(inbox, { log = () => {}, preferences } = {}) {
         if (path === "/api/read") await inbox.markRead(input);
         if (batchRoutes.has(path)) {
           inbox.batch[batchRoutes.get(path)](input);
-          return json(path === "/api/batch/start" ? 202 : 200, inbox.snapshot());
+          return json(["/api/batch/start", "/api/batch/retry"].includes(path) ? 202 : 200, inbox.snapshot());
         }
       }
       json(200, inbox.snapshot());

@@ -21,7 +21,7 @@ export class ReadBatch {
   }
 
   get locked() {
-    return ["prepared", "running", "stopping"].includes(this.operation?.status);
+    return ["running", "stopping"].includes(this.operation?.status);
   }
 
   assertAvailable() {
@@ -34,15 +34,15 @@ export class ReadBatch {
   identify(input) {
     if (!fields(input, ["token"]) || typeof input.token !== "string" ||
         !/^[a-f0-9-]{36}$/.test(input.token)) {
-      throw new InboxError("invalid_batch", "Use the current confirmation token.", 400);
+      throw new InboxError("invalid_batch", "Use the current repository operation token.", 400);
     }
     if (!this.operation || this.operation.token !== input.token) {
-      throw new InboxError("unknown_batch", "This confirmation is no longer available. Review the group again.", 409);
+      throw new InboxError("unknown_batch", "This repository operation is no longer available. Refresh the view and try again.", 409);
     }
     return this.operation;
   }
 
-  prepare(input) {
+  start(input) {
     this.assertAvailable();
     if (!fields(input, ["repository", "selectionKey"]) || typeof input.repository !== "string" ||
         input.repository.length > 256 || typeof input.selectionKey !== "string" ||
@@ -53,53 +53,38 @@ export class ReadBatch {
     if (!group || group.selectionKey !== input.selectionKey) {
       throw new InboxError("selection_changed", "The shown group changed. Refresh the view and review its count again.", 409);
     }
-    this.capture(group.repository, group.items);
+    this.launch(group.repository, group.items);
   }
 
-  capture(repository, items) {
+  launch(repository, items) {
     if (!items.length || items.some(item => !/^[1-9]\d{0,63}$/.test(item.id)) ||
         new Set(items.map(item => item.id)).size !== items.length) {
       throw new InboxError("invalid_selection", "The selected group contains no eligible notifications or invalid thread IDs.", 400);
-    }
-    this.operation = {
-      token: randomUUID(), repository, status: "prepared",
-      searchActive: Boolean(this.inbox.filters.query.trim()),
-      expiresAt: this.inbox.client.now() + 5 * 60_000,
-      items: items.map(({ id, updatedAt }) => ({ id, updatedAt, result: "pending" })),
-      inFlight: false, cancelled: false, error: null,
-    };
-  }
-
-  eligible(operation, item) {
-    const current = this.inbox.loadedItems().find(row => row.id === item.id);
-    if (!current || current.repository !== operation.repository || current.updatedAt !== item.updatedAt) return false;
-    // A different panel may have fetched a newer version since this confirmation was prepared.
-    for (const page of this.inbox.client.cache.values()) {
-      if (page.items.some(row => row.id === item.id &&
-          (!row.unread || row.repository !== operation.repository || row.updatedAt > item.updatedAt))) return false;
-    }
-    return true;
-  }
-
-  start(input) {
-    if (this.disposed) throw new InboxError("closed", "The canvas was closed.", 410);
-    const operation = this.identify(input);
-    // Re-delivery after a lost HTTP response must not restart acknowledged work.
-    if (operation.status !== "prepared") return;
-    if (this.inbox.client.now() > operation.expiresAt) {
-      throw new InboxError("confirmation_expired", "The confirmation expired. Cancel and review the group again.", 409);
-    }
-    if (this.inbox.busy || this.inbox.reading.size) {
-      throw new InboxError("busy", "Wait for the current inbox request to finish.", 409);
     }
     if (this.inbox.client.now() < this.inbox.client.blockedUntil) {
       throw this.inbox.client.lastError ??
         new InboxError("rate_limited", "GitHub requests are paused until the rate limit resets.", 429);
     }
-    operation.owner = this.inbox.client.reserveReads(operation.items.map(item => item.id));
-    operation.controller = new AbortController();
-    operation.status = "running";
+    const owner = this.inbox.client.reserveReads(items.map(item => item.id));
+    const operation = {
+      token: randomUUID(), repository, status: "running",
+      searchActive: Boolean(this.inbox.filters.query.trim()),
+      items: items.map(({ id, updatedAt }) => ({ id, updatedAt, result: "pending" })),
+      inFlight: false, cancelled: false, error: null, owner, controller: new AbortController(),
+    };
+    this.operation = operation;
     this.done = this.run(operation);
+  }
+
+  eligible(operation, item) {
+    const current = this.inbox.loadedItems().find(row => row.id === item.id);
+    if (!current || current.repository !== operation.repository || current.updatedAt !== item.updatedAt) return false;
+    // A different panel may have fetched a newer version since this selection was clicked.
+    for (const page of this.inbox.client.cache.values()) {
+      if (page.items.some(row => row.id === item.id &&
+          (!row.unread || row.repository !== operation.repository || row.updatedAt > item.updatedAt))) return false;
+    }
+    return true;
   }
 
   async run(operation) {
@@ -139,19 +124,17 @@ export class ReadBatch {
           operation.inFlight = false;
         }
       }
-      operation.status = operation.cancelled || signal.aborted ? "cancelled" :
-        operation.items.every(item => item.result === "succeeded") ? "completed" : "partial";
+      operation.status = operation.items.every(item => item.result === "succeeded") ? "completed" :
+        operation.cancelled || signal.aborted ? "cancelled" : "partial";
     } finally {
       this.inbox.client.releaseReads(operation.owner);
-      if (this.disposed) this.operation = null;
+      if (this.disposed || operation.status === "completed") this.operation = null;
     }
   }
 
   cancel(input) {
     const operation = this.identify(input);
-    if (operation.status === "prepared") {
-      this.operation = null;
-    } else if (["running", "stopping"].includes(operation.status)) {
+    if (["running", "stopping"].includes(operation.status)) {
       operation.cancelled = true;
       operation.status = "stopping";
       // Let an already-sent request report its outcome; cancel queued and not-yet-sent work.
@@ -168,7 +151,7 @@ export class ReadBatch {
     if (!remaining.length) {
       throw new InboxError("no_remaining", "No unchanged, shown notifications remain from this batch. Refresh and review a repository group instead.", 409);
     }
-    this.capture(operation.repository, remaining);
+    this.launch(operation.repository, remaining);
   }
 
   dismiss(input) {
@@ -192,7 +175,7 @@ export class ReadBatch {
 
   close() {
     this.disposed = true;
-    if (this.operation?.controller) {
+    if (this.locked) {
       this.operation.cancelled = true;
       this.operation.controller.abort();
     } else {
