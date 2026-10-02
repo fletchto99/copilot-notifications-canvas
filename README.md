@@ -262,6 +262,10 @@ against malware or privileged software already running as your OS user.
 node --test test/*.test.mjs
 ```
 
+The [test workflow](.github/workflows/tests.yml) runs this command with Node.js 22
+on `ubuntu-slim` for pull requests and pushes to `main`, or by manual dispatch.
+It needs no dependency installation or GitHub credentials for the tests.
+
 All tests use synthetic fixtures, including mutation tests, real loopback HTTP integration and
 installer checks. No test needs authentication or contacts GitHub. There is no
 build step. The SDK import is resolved automatically by the Copilot runtime; do
