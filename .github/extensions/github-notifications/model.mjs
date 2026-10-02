@@ -10,7 +10,7 @@ export const filterSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
-    mode: { type: "string", enum: ["unread", "all"] },
+    mode: { type: "string", enum: ["unread"] },
     query: { type: "string", maxLength: 200 },
   },
 };
@@ -20,9 +20,9 @@ export const emptySchema = { type: "object", properties: {}, additionalPropertie
 export function validateFilters(input) {
   if (!input || typeof input !== "object" || Array.isArray(input) ||
       Object.keys(input).some(key => !["mode", "query"].includes(key)) ||
-      (input.mode !== undefined && !["unread", "all"].includes(input.mode)) ||
+      (input.mode !== undefined && input.mode !== "unread") ||
       (input.query !== undefined && (typeof input.query !== "string" || input.query.length > 200))) {
-    throw new InboxError("invalid_filters", "Use mode unread/all and a search of at most 200 characters.", 400);
+    throw new InboxError("invalid_filters", "Only unread notifications are supported. Search must be at most 200 characters.", 400);
   }
   return input;
 }
@@ -106,11 +106,11 @@ export function orderedThreads(threads) {
     b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id));
 }
 
-export function groupThreads(threads, { mode, query }) {
+export function groupThreads(threads, { query }) {
   const groups = new Map();
   const search = query.trim().toLocaleLowerCase();
   for (const thread of orderedThreads(threads)) {
-    if (mode === "unread" && !thread.unread) continue;
+    if (!thread.unread) continue;
     if (search && !`${thread.title}\n${thread.repository}`.toLocaleLowerCase().includes(search)) continue;
     let group = groups.get(thread.repository);
     if (!group) {

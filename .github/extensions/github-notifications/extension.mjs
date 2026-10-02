@@ -32,8 +32,8 @@ async function close(instanceId) {
 session = await joinSession({
   canvases: [createCanvas({
     id: "github-notifications",
-    displayName: "GitHub notifications",
-    description: "A read-only GitHub notifications inbox grouped by repository.",
+    displayName: "Unread Notifications",
+    description: "Read-only unread GitHub notifications grouped by repository.",
     inputSchema: filterSchema,
     actions: [
       {
@@ -50,7 +50,7 @@ session = await joinSession({
       },
       {
         name: "set_filters",
-        description: "Set unread/all mode or search loaded titles and repositories; return aggregate status.",
+        description: "Search loaded unread notification titles and repositories; return aggregate status.",
         inputSchema: filterSchema,
         handler: ctx => action(ctx, inbox => inbox.setFilters(ctx.input)),
       },
@@ -68,7 +68,7 @@ session = await joinSession({
           instances.set(ctx.instanceId, startServer(inbox, { log }));
         }
         const entry = await instances.get(ctx.instanceId);
-        return { title: "GitHub notifications", url: entry.url };
+        return { title: "Unread Notifications", url: entry.url };
       } catch (error) {
         instances.delete(ctx.instanceId);
         if (error instanceof InboxError) throw new CanvasError(error.code, error.message);

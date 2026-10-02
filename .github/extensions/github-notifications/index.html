@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>GitHub notifications</title>
+  <title>Unread Notifications</title>
   <link rel="stylesheet" href="/styles.css">
   <script type="module" src="/app.mjs"></script>
 </head>
@@ -13,22 +13,17 @@
       <div class="heading">
         <div>
           <p class="eyebrow">YOUR GITHUB INBOX</p>
-          <h1>Notifications <span class="badge">Read-only</span></h1>
+          <h1>Unread Notifications <span class="badge">Read-only</span></h1>
         </div>
         <button id="refresh" type="button">Refresh</button>
       </div>
       <p class="subtitle">A little less noise. One repository at a time.</p>
       <div class="toolbar">
-        <div class="segmented" role="group" aria-label="Notifications to show">
-          <button id="all" type="button" aria-pressed="false" aria-describedby="api-limit">All</button>
-          <button id="unread" type="button" aria-pressed="true">Unread</button>
-        </div>
         <label class="search">
           <span class="sr-only">Search loaded notification titles and repositories</span>
           <input id="search" type="search" maxlength="200" placeholder="Search titles or repositories" autocomplete="off" spellcheck="false">
         </label>
       </div>
-      <p id="api-limit" class="api-limit" hidden>GitHub's API does not expose Done status, so All can include Done notifications. Use the GitHub inbox link below for the exact Inbox view.</p>
       <div class="status-line">
         <span id="count" role="status" aria-live="polite">Waiting for inbox...</span>
         <button id="collapse" class="text-button" type="button">Collapse all</button>

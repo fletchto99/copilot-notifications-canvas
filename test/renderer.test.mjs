@@ -7,6 +7,7 @@ import { GitHubClient } from "../.github/extensions/github-notifications/github.
 import { http, thread } from "./fixtures.mjs";
 
 const script = await readFile(new URL("../.github/extensions/github-notifications/app.mjs", import.meta.url), "utf8");
+const html = await readFile(new URL("../.github/extensions/github-notifications/index.html", import.meta.url), "utf8");
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
 // Minimal DOM/event/timer doubles exercise the actual renderer without a browser dependency.
@@ -40,14 +41,13 @@ async function renderer({ hidden = false, token = "a".repeat(64) } = {}) {
       return result;
     }
   }
-  const ids = new Map();
+  const ids = new Map([...html.matchAll(/\bid="([^"]+)"/g)].map(([, id]) => [id, new Node(id)]));
   const document = {
     hidden,
     documentElement: new Node("html"),
     events: {},
     getElementById(id) {
-      if (!ids.has(id)) ids.set(id, new Node(id));
-      return ids.get(id);
+      return ids.get(id) ?? null;
     },
     createElement: tag => new Node(tag),
     createDocumentFragment: () => new Node("fragment"),
@@ -55,9 +55,9 @@ async function renderer({ hidden = false, token = "a".repeat(64) } = {}) {
     addEventListener(name, handler) { this.events[name] = handler; },
   };
   const window = { events: {}, addEventListener(name, handler) { this.events[name] = handler; } };
-  const inbox = new Inbox(new GitHubClient({ run: async args => http([
+  const inbox = new Inbox(new GitHubClient({ run: async () => http([
     thread("1", { subject: { title: "<img src=x onerror=alert(1)>", type: "Issue", url: null } }),
-    ...(args.at(-1).includes("all=true") ? [thread("2", { unread: false })] : []),
+    thread("2", { unread: false }),
   ]) }));
   const context = createContext({
     document, window, location: { hash: `#${token}` }, Intl, Date, AbortController,
@@ -92,24 +92,17 @@ test("renderer fetches with a capability, renders untrusted titles as text and e
   assert.equal(links[0].textContent, "<img src=x onerror=alert(1)>");
   assert.equal(links[0].href, "https://github.com/notifications");
   assert.equal(links[0].rel, "noopener noreferrer");
-  assert.equal(ui.ids.get("unread").attributes["aria-pressed"], "true");
+  assert.equal(ui.ids.has("unread"), false);
+  assert.equal(ui.ids.has("all"), false);
   assert.equal(ui.ids.get("empty").hidden, true);
   assert.equal(ui.document.querySelectorAll("time")[0].attributes["aria-label"].length > 0, true);
-  ui.ids.get("all").events.click();
-  await settle();
-  assert.equal(ui.document.querySelectorAll("article").length, 2);
-  assert.equal(ui.ids.get("all").attributes["aria-pressed"], "true");
-  assert.equal(ui.ids.get("api-limit").hidden, false);
-  ui.ids.get("unread").events.click();
-  await settle();
-  assert.equal(ui.ids.get("api-limit").hidden, true);
+  assert.equal(ui.document.querySelectorAll("article").length, 1);
 });
 
-test("All is the left-most mode control and Unread remains the default", async () => {
-  const html = await readFile(new URL("../.github/extensions/github-notifications/index.html", import.meta.url), "utf8");
-  assert.ok(html.indexOf('id="all"') < html.indexOf('id="unread"'));
-  assert.match(html, /id="unread"[^>]+aria-pressed="true"/);
-  assert.match(html, /GitHub's API does not expose Done status/);
+test("canvas is titled Unread Notifications without mode tabs or the old All notice", () => {
+  assert.match(html, /<title>Unread Notifications<\/title>/);
+  assert.match(html, /<h1>Unread Notifications /);
+  assert.doesNotMatch(html, /id="(?:all|unread|api-limit)"/);
 });
 
 test("renderer preserves focus and collapsed groups across unchanged data and updates", async () => {
@@ -122,10 +115,23 @@ test("renderer preserves focus and collapsed groups across unchanged data and up
   group.open = false;
   group.events.toggle();
   assert.equal(ui.ids.get("collapse").textContent, "Expand all");
-  ui.ids.get("all").events.click();
-  await settle();
+  await runInContext("state.groups[0].items[0].title = 'Updated synthetic title'; render()", ui.context);
   assert.equal(ui.document.querySelectorAll("details")[0].open, false);
   assert.equal(ui.document.activeElement.dataset.focusKey, "thread:1");
+});
+
+test("search and clearing search keep working without mode controls", async () => {
+  const ui = await renderer();
+  const search = ui.ids.get("search");
+  search.value = "no match";
+  search.events.input();
+  [...ui.timers.values()].find(timer => timer.delay === 250).fn();
+  await settle();
+  assert.equal(ui.calls.at(-1).path, "/api/filters");
+  assert.equal(ui.document.querySelectorAll("article").length, 0);
+  assert.equal(ui.ids.get("empty-title").textContent, "No matches in loaded notifications");
+  await runInContext('update("filters", { query: "" })', ui.context);
+  assert.equal(ui.document.querySelectorAll("article").length, 1);
 });
 
 test("hidden/non-intersecting/closed documents do not schedule unnecessary work", async () => {

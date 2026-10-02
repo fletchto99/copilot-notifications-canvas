@@ -26,20 +26,20 @@ test("load-more preserves visible coverage, deduplicates boundary shifts, and re
   assert.equal(inbox.summary().status, "ready");
 });
 
-test("mode/query changes have separate semantics and summaries never contain personal content", async () => {
+test("search is local, read items are excluded, and summaries never contain personal content", async () => {
   let calls = 0;
-  const client = new GitHubClient({ run: async args => {
+  const client = new GitHubClient({ run: async () => {
     calls++;
-    return http([thread(), ...(args.at(-1).includes("all=true") ? [thread("2", { unread: false })] : [])]);
+    return http([thread(), thread("2", { unread: false })]);
   } });
   const inbox = new Inbox(client);
   await inbox.refresh();
   await inbox.setFilters({ query: "widgets" });
   assert.equal(calls, 1);
   assert.equal(inbox.summary().searchActive, true);
-  await inbox.setFilters({ mode: "all" });
-  assert.equal(calls, 2);
-  assert.equal(inbox.summary().loaded, 2);
+  await inbox.setFilters({ mode: "unread" });
+  assert.equal(calls, 1);
+  assert.equal(inbox.summary().loaded, 1);
   assert.equal(inbox.summary().unread, 1);
   const summary = JSON.stringify(inbox.summary());
   assert.equal(summary.includes("widgets"), false);
@@ -79,15 +79,15 @@ test("initial errors and cross-panel rate blocks are never reported as a success
   assert.equal(other.summary().lastFetchedAt, null);
 });
 
-test("a filter-mode failure clears the previous mode instead of showing mislabeled data", async () => {
-  const client = new GitHubClient({ run: async args =>
-    args.at(-1).includes("all=true") ? http({}, {}, 403) : http([thread()]) });
-  const inbox = new Inbox(client);
+test("All mode is rejected without changing the existing unread inbox", async () => {
+  const client = new GitHubClient({ run: async () => http([thread()]) });
+  assert.throws(() => new Inbox(client, { mode: "all" }), { code: "invalid_filters" });
+  const inbox = new Inbox(client, { mode: "unread" });
   await inbox.refresh();
-  await assert.rejects(inbox.setFilters({ mode: "all" }), { code: "permission" });
-  assert.equal(inbox.summary().mode, "all");
-  assert.equal(inbox.summary().loaded, 0);
-  assert.equal(inbox.summary().status, "error");
+  await assert.rejects(inbox.setFilters({ mode: "all" }), { code: "invalid_filters" });
+  assert.equal(inbox.summary().mode, "unread");
+  assert.equal(inbox.summary().loaded, 1);
+  assert.equal(inbox.summary().status, "ready");
 });
 
 test("concurrent actions fail explicitly and closing aborts outstanding gh work", async () => {
@@ -103,7 +103,7 @@ test("concurrent actions fail explicitly and closing aborts outstanding gh work"
   const refresh = inbox.refresh();
   await started;
   await assert.rejects(inbox.refresh(), { code: "busy" });
-  await assert.rejects(inbox.setFilters({ mode: "all" }), { code: "busy" });
+  await assert.rejects(inbox.setFilters({ query: "widgets" }), { code: "busy" });
   inbox.close();
   await assert.rejects(refresh, { code: "closed" });
   await assert.rejects(inbox.more(), { code: "closed" });

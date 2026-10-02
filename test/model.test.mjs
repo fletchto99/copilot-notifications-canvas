@@ -10,14 +10,15 @@ test("groups, deduplicates and orders newest activity first, then stable IDs/nam
     thread("1", { updated_at: "2026-01-20T00:00:00Z" }),
     thread("3", { unread: false }),
   ]);
-  const groups = groupThreads(items, { mode: "all", query: "" });
+  const groups = groupThreads(items, { query: "" });
   assert.deepEqual(groups.map(group => group.repository), ["example/widgets", "example/another"]);
-  assert.deepEqual(groups[0].items.map(item => item.id), ["1", "3"]);
+  assert.deepEqual(groups[0].items.map(item => item.id), ["1"]);
   assert.equal(groups[0].unread, 1);
   assert.equal(orderedThreads(items).length, 3);
-  assert.equal(groupThreads(items, { mode: "unread", query: " WIDGETS " })[0].items.length, 1);
-  assert.equal(groupThreads(items, { mode: "all", query: "synthetic notification 2" })[0].repository, "example/another");
-  assert.deepEqual(groupThreads(items, { mode: "all", query: "missing" }), []);
+  assert.equal(groupThreads(items, { query: " WIDGETS " })[0].items.length, 1);
+  assert.equal(groupThreads(items, { query: "synthetic notification 2" })[0].repository, "example/another");
+  assert.deepEqual(groupThreads(items, { query: "missing" }), []);
+  assert.deepEqual(groupThreads(items, { query: "synthetic notification 3" }), []);
 });
 
 test("known API subject links become safe GitHub web links", () => {
@@ -83,9 +84,10 @@ test("malformed payloads fail explicitly instead of silently dropping rows", () 
 });
 
 test("filters match the public schema and reject invalid or surplus input", () => {
-  assert.deepEqual(validateFilters({ query: "", mode: "all" }), { query: "", mode: "all" });
+  assert.deepEqual(validateFilters({ query: "", mode: "unread" }), { query: "", mode: "unread" });
   assert.equal(filterSchema.additionalProperties, false);
-  for (const input of [null, [], "all", { mode: "read" }, { query: 1 }, { query: "x".repeat(201) }, { token: "x" }]) {
+  assert.deepEqual(filterSchema.properties.mode.enum, ["unread"]);
+  for (const input of [null, [], "all", { mode: "all" }, { mode: "read" }, { query: 1 }, { query: "x".repeat(201) }, { token: "x" }]) {
     assert.throws(() => validateFilters(input), { code: "invalid_filters" });
   }
 });

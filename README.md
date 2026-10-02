@@ -1,7 +1,7 @@
-# GitHub notifications canvas
+# Unread Notifications
 
-A read-only GitHub inbox inside the GitHub Copilot app, grouped by repository.
-Unread by default, newest activity first, with collapsible repository groups, counts,
+A read-only view of unread GitHub notifications inside the GitHub Copilot app,
+grouped by repository. Newest activity first, with collapsible repository groups, counts,
 title/repository search, and a compact layout that follows the app's theme.
 
 ## Prerequisites
@@ -30,9 +30,9 @@ through `gh`'s credential store avoids granting this extension token environment
 Clone/open this repository as a Copilot project. The app discovers
 `.github/extensions/github-notifications/extension.mjs`. Ask Copilot to:
 
-> Reload extensions, then open the GitHub notifications canvas.
+> Reload extensions, then open the Unread Notifications canvas.
 
-The canvas type is `github-notifications`, display name **GitHub notifications**,
+The canvas type is `github-notifications`, display name **Unread Notifications**,
 provider `project:github-notifications`. The agent opens a panel with an arbitrary
 instance ID, for example:
 
@@ -40,15 +40,17 @@ instance ID, for example:
 {
   "canvasId": "github-notifications",
   "instanceId": "inbox-1",
-  "input": { "mode": "unread", "query": "" }
+  "input": { "query": "" }
 }
 ```
 
 The UI fetches when visible. Agent actions are `get_state`, `refresh`, `set_filters`
-(`mode: "unread" | "all"`, optional `query` up to 200 characters), and `load_more`.
+(`query` up to 200 characters), and `load_more`.
 Actions return only aggregate counts, status, and timing metadata, never titles,
 repository names, or the search text. Invalid inputs and failed actions raise
 structured errors. `get_state`, `refresh`, and `load_more` take `{}`.
+The optional `mode: "unread"` input remains accepted for existing panel compatibility;
+other modes are rejected. All requests and pagination are restricted to unread notifications.
 
 ## Install for all projects
 
@@ -66,8 +68,8 @@ different Copilot home explicitly:
 COPILOT_HOME=/path/to/copilot-home node scripts/install.mjs
 ```
 
-Then reload extensions in the desired Copilot chat and ask to open **GitHub
-notifications**. The user-wide provider is `user:github-notifications`. The project
+Then reload extensions in the desired Copilot chat and ask to open **Unread
+Notifications**. The user-wide provider is `user:github-notifications`. The project
 copy shadows a same-named user copy while working in this repository.
 
 Installation is repeatable: an untouched installation made by this script can be
@@ -78,14 +80,11 @@ logs, caches, or credentials, and it never changes other extensions.
 
 ## Inbox behavior
 
-- **All / Unread:** All is the left tab; Unread is the right tab and the default
-  selection. All includes read notifications returned by GitHub's API, **including
-  notifications marked Done**. The public REST API exposes no Done state or
-  not-Done filter (also verified against version `2026-03-10`), so this cannot
-  faithfully mirror the website's Inbox. The All view displays this limitation.
-  Read is not the same as Done: filtering out every read item would wrongly hide
-  read-but-still-inbox notifications. Use **Open GitHub inbox** for the exact
-  website view. The API is not a permanent archive of every notification.
+- **Unread only:** the canvas requests `all=false` and shows only unread
+  notifications. There are no All/Unread tabs. Read-but-still-inbox notifications
+  are intentionally out of scope; use **Open GitHub inbox** for the website's full
+  Inbox. GitHub's public API does not expose a Done state, so this is an unread
+  view rather than an exact mirror of the website Inbox.
 - **Pagination:** initially loads up to 50 items. **Load more** follows GitHub's
   `Link` header, one page at a time, without an arbitrary total cap. Counts always
   describe loaded items, not the entire account. Search covers loaded titles and
@@ -112,7 +111,7 @@ logs, caches, or credentials, and it never changes other extensions.
   unavailable, or unsafe subject URLs fall back to the GitHub inbox. No additional
   per-subject API requests are made.
 - **State:** GitHub owns notification state. No notification data or preferences
-  are written to disk. Search/mode and collapsed groups are transient; reload
+  are written to disk. Search and collapsed groups are transient; reload
   recreates a panel from its original open input and refetches GitHub data.
   The app may retain open input in its session history; avoid putting sensitive
   search text in agent inputs if you do not want it in that history.

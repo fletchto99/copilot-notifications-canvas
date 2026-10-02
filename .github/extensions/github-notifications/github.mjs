@@ -4,8 +4,8 @@ import { InboxError, normalizeThreads } from "./model.mjs";
 export const POLL_MS = 120_000;
 const API_ORIGIN = "https://api.github.com";
 
-export function firstPage(mode) {
-  return `/notifications?all=${mode === "all"}&per_page=50&page=1`;
+export function firstPage() {
+  return "/notifications?all=false&per_page=50&page=1";
 }
 
 function endpointURL(endpoint) {
@@ -19,7 +19,7 @@ function endpointURL(endpoint) {
   if (url.origin !== API_ORIGIN || url.username || url.password || url.hash ||
       url.pathname !== "/notifications" || keys.length !== 3 ||
       !keys.every(key => ["all", "per_page", "page"].includes(key)) ||
-      !["true", "false"].includes(url.searchParams.get("all")) ||
+      url.searchParams.get("all") !== "false" ||
       url.searchParams.get("per_page") !== "50" ||
       !/^[1-9]\d*$/.test(url.searchParams.get("page") ?? "") ||
       !Number.isSafeInteger(Number(url.searchParams.get("page")))) {

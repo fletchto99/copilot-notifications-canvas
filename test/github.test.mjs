@@ -8,9 +8,10 @@ import { http, next, thread } from "./fixtures.mjs";
 test("gh calls use explicit GET, fixed host, safe argument arrays and no auth token extraction", async () => {
   const calls = [];
   const client = new GitHubClient({ run: async args => { calls.push(args); return http([thread()]); } });
-  await client.page(firstPage("unread"));
+  await client.page(firstPage());
   assert.deepEqual(calls[0].slice(0, 7), ["api", "--hostname", "github.com", "--method", "GET", "--include", "-H"]);
   assert.match(calls[0].at(-1), /^\/notifications\?/);
+  assert.match(calls[0].at(-1), /all=false/);
   assert.ok(calls[0].includes("X-GitHub-Api-Version: 2022-11-28"));
   assert.equal(calls[0].includes("auth"), false);
 });
@@ -26,14 +27,14 @@ test("poll floor and server interval are enforced even across concurrent panels;
         http(null, { "x-poll-interval": "400" }, 304);
     },
   });
-  const results = await Promise.all([client.page(firstPage("unread")), client.page(firstPage("unread"))]);
+  const results = await Promise.all([client.page(firstPage()), client.page(firstPage())]);
   assert.equal(calls.length, 1);
   assert.equal(results[0].nextRefreshAt, 300_000);
   now = 299_999;
-  await client.page(firstPage("unread"));
+  await client.page(firstPage());
   assert.equal(calls.length, 1);
   now = 300_000;
-  const page = await client.page(firstPage("unread"));
+  const page = await client.page(firstPage());
   assert.ok(calls[1].includes('If-None-Match: "sample"'));
   assert.equal(page.items.length, 1);
   assert.match(page.next, /page=2/);
@@ -48,23 +49,23 @@ test("Last-Modified is used when ETag is absent and cacheless 304 fails", async 
     calls.push(args);
     return calls.length === 1 ? http([], { "last-modified": modified }) : http(null, {}, 304);
   } });
-  await client.page(firstPage("all"));
+  await client.page(firstPage());
   now = POLL_MS;
-  await client.page(firstPage("all"));
+  await client.page(firstPage());
   assert.ok(calls[1].includes(`If-Modified-Since: ${modified}`));
   const empty = new GitHubClient({ run: async () => http(null, {}, 304) });
-  await assert.rejects(empty.page(firstPage("all")), { code: "invalid_response" });
+  await assert.rejects(empty.page(firstPage()), { code: "invalid_response" });
 });
 
 test("pagination follows and validates Link rather than guessing page count", () => {
-  assert.match(nextPage(next, firstPage("unread")), /page=2/);
-  assert.equal(nextPage(undefined, firstPage("unread")), null);
-  assert.equal(nextPage('<https://api.github.com/notifications?page=1>; rel="prev"', firstPage("unread")), null);
+  assert.match(nextPage(next, firstPage()), /page=2/);
+  assert.equal(nextPage(undefined, firstPage()), null);
+  assert.equal(nextPage('<https://api.github.com/notifications?page=1>; rel="prev"', firstPage()), null);
   for (const header of [next.replace("api.github.com", "evil.test"), next.replace("page=2", "page=1"),
     next.replace("all=false", "all=true"), next.replace("per_page=50", "per_page=100"),
     next.replace("/notifications?", "/user?"), next.replace("page=2", "page=2&token=secret"),
     `${next}, ${next}`, "broken header", next.replace("https:", "http:")]) {
-    assert.throws(() => nextPage(header, firstPage("unread")), { code: "invalid_pagination" });
+    assert.throws(() => nextPage(header, firstPage()), { code: "invalid_pagination" });
   }
 });
 
@@ -79,7 +80,7 @@ test("auth, permission, malformed JSON, malformed HTTP and upstream failures are
     ["secret", "invalid_response"],
   ]) {
     const client = new GitHubClient({ run: async () => output });
-    await assert.rejects(client.page(firstPage("unread")), error => error.code === code && !error.message.includes("secret"));
+    await assert.rejects(client.page(firstPage()), error => error.code === code && !error.message.includes("secret"));
   }
   assert.throws(() => parseResponse("HTTP/2 200\nbroken\n\n[]"), { code: "invalid_response" });
 });
@@ -91,13 +92,13 @@ test("rate limits respect Retry-After, exhausted quota reset and exponential bac
     calls++;
     return http({ message: "secondary rate limit" }, { "retry-after": "600", "x-ratelimit-remaining": "0", "x-ratelimit-reset": "3000" }, 403);
   } });
-  await assert.rejects(client.page(firstPage("unread")), { code: "rate_limited" });
+  await assert.rejects(client.page(firstPage()), { code: "rate_limited" });
   assert.equal(client.blockedUntil, 3_001_000);
   now = 2_000_000;
-  await assert.rejects(client.page(firstPage("all")), { code: "rate_limited" });
+  await assert.rejects(client.page(firstPage()), { code: "rate_limited" });
   assert.equal(calls, 1);
   now = 3_001_000;
-  await assert.rejects(client.page(firstPage("all")), { code: "rate_limited" });
+  await assert.rejects(client.page(firstPage()), { code: "rate_limited" });
   assert.equal(calls, 2);
   assert.equal(client.blockedUntil, 3_601_000);
 });
@@ -106,7 +107,7 @@ test("successful responses exhausting quota also pause later page requests", asy
   const client = new GitHubClient({ now: () => 0, run: async () => http([thread()], {
     "x-ratelimit-remaining": "0", "x-ratelimit-reset": "900", link: next,
   }) });
-  const page = await client.page(firstPage("unread"));
+  const page = await client.page(firstPage());
   assert.equal(page.nextRefreshAt, 901_000);
   await assert.rejects(client.page(page.next), { code: "rate_limited" });
 });
@@ -116,9 +117,9 @@ test("requests are serialized and a closed panel cannot launch queued work", asy
   let release;
   let calls = 0;
   const client = new GitHubClient({ run: async () => { calls++; await new Promise(resolve => { release = resolve; }); return http([]); } });
-  const first = client.page(firstPage("all"));
+  const first = client.page(firstPage());
   await new Promise(resolve => setImmediate(resolve));
-  const second = client.page(firstPage("unread"), controller.signal);
+  const second = client.page(firstPage(), controller.signal);
   controller.abort();
   release();
   await first;
@@ -156,13 +157,18 @@ test("subprocess failures sanitize stderr and use bounded, noninteractive execut
 test("Retry-After HTTP dates on service failures delay retries", async () => {
   const client = new GitHubClient({ now: () => 0, run: async () =>
     http({}, { "retry-after": new Date(600_000).toUTCString() }, 503) });
-  await assert.rejects(client.page(firstPage("all")), { code: "github_http" });
+  await assert.rejects(client.page(firstPage()), { code: "github_http" });
   assert.equal(client.blockedUntil, 600_000);
 });
 
 test("aborted requests never repopulate cache even if a transport resolves after cancellation", async () => {
   const controller = new AbortController();
   const client = new GitHubClient({ run: async () => { controller.abort(); return http([thread()]); } });
-  await assert.rejects(client.page(firstPage("all"), controller.signal), { code: "closed" });
+  await assert.rejects(client.page(firstPage(), controller.signal), { code: "closed" });
   assert.equal(client.cache.size, 0);
+});
+
+test("the API client rejects direct All requests before invoking gh", () => {
+  const client = new GitHubClient({ run: async () => assert.fail("Must not invoke gh for All") });
+  assert.throws(() => client.page("/notifications?all=true&per_page=50&page=1"), { code: "invalid_pagination" });
 });

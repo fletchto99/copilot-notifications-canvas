@@ -105,10 +105,6 @@ function renderControls() {
   $("refresh").disabled = loading || Boolean(waiting);
   $("refresh").textContent = loading ? "Loading..." : "Refresh";
   $("refresh").title = waiting ? `Available ${new Date(state.nextRefreshAt).toLocaleTimeString()}` : "Refresh loaded notifications";
-  for (const mode of ["all", "unread"]) {
-    $(mode).disabled = loading;
-    $(mode).setAttribute("aria-pressed", String((state?.filters.mode ?? "unread") === mode));
-  }
   $("more").disabled = loading || Boolean(state?.error && waiting);
   $("groups").setAttribute("aria-busy", String(loading));
 }
@@ -173,7 +169,6 @@ function render() {
   $("notice").hidden = !error;
   $("notice").textContent = error ? `${state?.loaded ? "Showing previously loaded notifications. " : ""}${error}` : "";
   if (!state) return;
-  $("api-limit").hidden = state.filters.mode !== "all";
   if (document.activeElement !== $("search") && pendingQuery === undefined) $("search").value = state.filters.query;
   $("count").textContent = `${state.matching} shown / ${state.groups.length} repositories / ${state.unread} unread loaded`;
   $("collapse").hidden = !state.groups.length;
@@ -185,8 +180,7 @@ function render() {
   $("empty").hidden = Boolean(state.groups.length);
   $("empty-title").textContent = error ? "Your inbox is unavailable" :
     state.status === "idle" || state.status === "loading" ? "Loading your inbox" :
-    state.filters.query ? "No matches in loaded notifications" :
-    state.filters.mode === "unread" ? "All caught up" : "Your inbox is clear";
+    state.filters.query ? "No matches in loaded notifications" : "All caught up";
   $("empty-description").textContent = error ? "Resolve the message above, then refresh when the retry time arrives." :
     state.filters.query ? "Try another title or repository, or load more notifications." :
     state.status === "idle" || state.status === "loading" ? "Using your existing GitHub CLI sign-in." :
@@ -197,7 +191,6 @@ function render() {
 
 $("refresh").addEventListener("click", () => update("refresh", {}));
 $("more").addEventListener("click", () => update("more", {}));
-for (const mode of ["all", "unread"]) $(mode).addEventListener("click", () => update("filters", { mode }));
 $("search").addEventListener("input", () => {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => {

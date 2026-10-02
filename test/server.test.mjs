@@ -21,7 +21,7 @@ test("HTTP integration serves a protected inbox, rejects cross-origin access and
   const { origin, headers } = await setup(t);
   const html = await fetch(origin);
   assert.equal(html.status, 200);
-  assert.match(await html.text(), /GitHub notifications/);
+  assert.match(await html.text(), /Unread Notifications/);
   assert.equal(html.headers.get("cache-control"), "no-store");
   assert.match(html.headers.get("content-security-policy"), /default-src 'none'/);
   const unauthenticated = await fetch(`${origin}/api/state`);
@@ -49,6 +49,7 @@ test("methods, paths, origins, hosts, JSON, filter input and oversized bodies ar
     ["/api/refresh", "GET", undefined, 405],
     ["/api/state", "OPTIONS", undefined, 405],
     ["/api/filters", "POST", '{"mode":"done"}', 400],
+    ["/api/filters", "POST", '{"mode":"all"}', 400],
     ["/api/filters", "POST", '{"unexpected":true}', 400],
     ["/api/refresh", "POST", '{"unexpected":true}', 400],
     ["/api/refresh", "POST", "{", 400],

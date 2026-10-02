@@ -13,7 +13,7 @@ export class Inbox {
   }
 
   snapshot() {
-    const items = orderedThreads(this.pages.flatMap(page => page.items));
+    const items = orderedThreads(this.pages.flatMap(page => page.items)).filter(item => item.unread);
     const groups = groupThreads(items, this.filters);
     return {
       filters: { ...this.filters },
@@ -65,7 +65,7 @@ export class Inbox {
     }
     return this.execute(async () => {
       const pages = [];
-      let next = firstPage(this.filters.mode);
+      let next = firstPage();
       const target = Math.max(1, this.pages.length);
       while (next && pages.length < target) {
         const page = await this.client.page(next, this.controller.signal);
@@ -92,18 +92,8 @@ export class Inbox {
     validateFilters(input);
     if (this.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
     if (this.busy) throw new InboxError("busy", "An inbox request is already running.", 409);
-    if (input.mode === undefined || input.mode === this.filters.mode) {
-      this.filters = { ...this.filters, ...input };
-      return this.summary();
-    }
-    return this.execute(async () => {
-      this.filters = { ...this.filters, ...input };
-      this.pages = [];
-      this.nextRefreshAt = 0;
-      const page = await this.client.page(firstPage(this.filters.mode), this.controller.signal);
-      this.pages = [page];
-      this.nextRefreshAt = page.nextRefreshAt;
-    }, "filters");
+    this.filters = { ...this.filters, ...input };
+    return this.summary();
   }
 
   close() {
