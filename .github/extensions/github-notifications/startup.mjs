@@ -20,10 +20,20 @@ export async function claimStartup(workspacePath) {
   }
 }
 
+function isNotificationsCanvas(canvas) {
+  return canvas.canvasId === "github-notifications";
+}
+
+function isNotificationsActivity(event) {
+  return ["session.canvas.opened", "session.canvas.closed",
+    "session.canvas.recorded", "session.canvas.removed"].includes(event.type) &&
+    isNotificationsCanvas(event.data);
+}
+
 function freshSession(events) {
   return events.some(event => event.type === "session.start") &&
-    !events.some(event => ["session.resume", "assistant.turn_start", "assistant.message",
-      "session.canvas.opened", "session.canvas.closed"].includes(event.type));
+    !events.some(event => ["session.resume", "assistant.turn_start", "assistant.message"].includes(event.type) ||
+      isNotificationsActivity(event));
 }
 
 export class Startup {
@@ -43,8 +53,10 @@ export class Startup {
       if (!(await this.preferences.read()).autoOpen) return this.finish("disabled");
       this.unsubscribe = this.session.on(event => {
         if (event.type === "capabilities.changed" && this.status === "waiting-for-renderer") void this.attempt();
-        if (["session.resume", "assistant.turn_start", "session.canvas.opened", "session.canvas.closed"].includes(event.type) &&
-            !(event.type === "session.canvas.opened" && event.data.instanceId === STARTUP_INSTANCE)) {
+        if (["session.resume", "assistant.turn_start"].includes(event.type) ||
+            (isNotificationsActivity(event) &&
+             !(["session.canvas.opened", "session.canvas.recorded"].includes(event.type) &&
+               event.data.instanceId === STARTUP_INSTANCE))) {
           this.finish("session-already-active");
         }
       });
@@ -67,7 +79,7 @@ export class Startup {
       if (!(await this.preferences.read()).autoOpen) return this.finish("disabled");
       if (!freshSession(await this.session.getEvents())) return this.finish("existing-session");
       const { openCanvases } = await this.session.rpc.canvas.listOpen();
-      if (openCanvases.length) return this.finish("panel-already-open");
+      if (openCanvases.some(isNotificationsCanvas)) return this.finish("panel-already-open");
       if (this.stopped) return;
       await this.session.rpc.canvas.open({
         canvasId: "github-notifications",
