@@ -13,19 +13,21 @@ const html = await readFile(new URL("../.github/extensions/github-notifications/
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
 // Minimal DOM/event/timer doubles exercise the actual renderer without a browser dependency.
-async function renderer({ hidden = false, token = "a".repeat(64), audioOptions = {}, readFailure = false } = {}) {
+async function renderer({ hidden = false, token = "a".repeat(64), audioOptions = {}, readFailure = false,
+  initialRows, onWrite } = {}) {
   const calls = [];
   const timers = new Map();
   let timerId = 0;
   let intersect;
   let now = Date.now();
   let offline = false;
-  let rows = [
+  let rows = initialRows ?? [
     thread("1", { subject: { title: "<img src=x onerror=alert(1)>", type: "Issue", url: null } }),
     thread("2", { unread: false }),
   ];
   const audioContexts = [];
   let storedAutoOpen = false;
+  const patches = [];
   class Node {
     constructor(tag) {
       this.tag = tag;
@@ -42,6 +44,8 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
     replaceChildren(fragment) { this.children = fragment.children; }
     addEventListener(name, handler) { this.events[name] = handler; }
     focus() { document.activeElement = this; }
+    showModal() { this.open = true; }
+    close() { this.open = false; }
     contains(node) { return this === node || this.children.some(child => child.contains(node)); }
     querySelectorAll(selector) {
       const result = [];
@@ -70,8 +74,12 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
   window.AudioContext = class extends FakeAudioContext {
     constructor() { super(audioOptions); audioContexts.push(this); }
   };
-  const inbox = new Inbox(new GitHubClient({ now: () => now, run: async args => {
-    if (args.includes("PATCH")) return readFailure ? http({}, {}, 403) : "HTTP/2 205 Reset Content\r\n\r\n";
+  const inbox = new Inbox(new GitHubClient({ now: () => now, sleep: async delay => { now += delay; }, run: async args => {
+    if (args.includes("PATCH")) {
+      patches.push(args.at(-1));
+      if (onWrite) return onWrite(args.at(-1), patches.length);
+      return readFailure ? http({}, {}, 403) : "HTTP/2 205 Reset Content\r\n\r\n";
+    }
     return http(rows);
   } }));
   const context = createContext({
@@ -96,6 +104,7 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
       if (path === "/api/refresh") await inbox.refresh();
       if (path === "/api/filters") await inbox.setFilters(JSON.parse(options.body));
       if (path === "/api/read") await inbox.markRead(JSON.parse(options.body));
+      if (path.startsWith("/api/batch/")) inbox.batch[path.slice("/api/batch/".length)](JSON.parse(options.body));
       return { ok: true, json: async () => inbox.snapshot() };
     },
   });
@@ -103,7 +112,7 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
   runInContext(script.replace(/^import \{ NotificationSound \} from "\.\/sound\.mjs";/, ""), context);
   await settle();
   return {
-    calls, document, window, ids, timers, context, audioContexts,
+    calls, document, window, ids, timers, context, audioContexts, inbox, patches,
     advance() { now += 120_000; return now; },
     setRows(value) { rows = value; },
     setOffline(value) { offline = value; },
@@ -139,12 +148,12 @@ test("renderer preserves focus and collapsed groups across unchanged data and up
   firstLink.focus();
   await runInContext("update()", ui.context);
   assert.equal(ui.document.activeElement, firstLink);
-  const group = ui.ids.get("groups").querySelectorAll("details")[0];
-  group.open = false;
-  group.events.toggle();
+  const group = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.disclosure);
+  group.events.click();
+  assert.equal(group.attributes["aria-expanded"], "false");
   assert.equal(ui.ids.get("collapse").textContent, "Expand all");
   await runInContext("state.groups[0].items[0].title = 'Updated synthetic title'; render()", ui.context);
-  assert.equal(ui.ids.get("groups").querySelectorAll("details")[0].open, false);
+  assert.equal(ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.disclosure).attributes["aria-expanded"], "false");
   assert.equal(ui.document.activeElement.dataset.focusKey, "thread:1");
 });
 
@@ -282,7 +291,7 @@ test("mark-read requires a click, removes only on confirmation and stays silent"
   assert.equal(ui.calls.some(call => call.path === "/api/read"), false);
   ui.ids.get("sound").events.click();
   await settle();
-  const button = ui.ids.get("groups").querySelectorAll("button")[0];
+  const button = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "1");
   assert.match(button.attributes["aria-label"], /Mark as read/);
   button.focus();
   const marking = button.events.click();
@@ -298,7 +307,7 @@ test("mark-read requires a click, removes only on confirmation and stays silent"
 
 test("mark-read failure retains the row with a usable retry control", async () => {
   const ui = await renderer({ readFailure: true });
-  const button = ui.ids.get("groups").querySelectorAll("button")[0];
+  const button = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "1");
   await button.events.click();
   assert.equal(ui.document.querySelectorAll("article").length, 1);
   assert.equal(button.disabled, false);
@@ -327,4 +336,109 @@ test("hidden views and reconnects reset the audio baseline without catch-up chim
   assert.equal(ui.audioContexts[0].starts, 0);
   ui.window.events.pagehide();
   await settle();
+});
+
+test("repository actions have independent accessible disclosure and confirmation controls; Cancel and Escape write nothing", async () => {
+  const ui = await renderer();
+  const buttons = ui.ids.get("groups").querySelectorAll("button");
+  const disclosure = buttons.find(node => node.dataset.disclosure);
+  const groupRead = buttons.find(node => node.dataset.focusKey === "bulk:example/widgets");
+  assert.match(groupRead.textContent, /Mark 1 as read/);
+  assert.equal(disclosure.contains(groupRead), false);
+  assert.equal(groupRead.contains(disclosure), false);
+  disclosure.events.click();
+  groupRead.focus();
+  await groupRead.events.click();
+  assert.equal(ui.ids.get("batch-confirm").open, true);
+  assert.match(ui.ids.get("batch-confirm-title").textContent, /Mark 1 as read in example\/widgets/);
+  assert.match(ui.ids.get("batch-confirm-scope").textContent, /shown, loaded/);
+  assert.equal(ui.document.activeElement, ui.ids.get("batch-cancel"));
+  assert.equal(disclosure.attributes["aria-expanded"], "false");
+  assert.equal(ui.patches.length, 0);
+  await ui.ids.get("batch-cancel").events.click();
+  assert.equal(ui.ids.get("batch-confirm").open, false);
+  assert.equal(ui.document.activeElement.dataset.focusKey, "bulk:example/widgets");
+  await groupRead.events.click();
+  let prevented = false;
+  ui.ids.get("batch-confirm").events.cancel({ preventDefault() { prevented = true; } });
+  await settle();
+  assert.equal(prevented, true);
+  assert.equal(ui.ids.get("batch-confirm").open, false);
+  assert.deepEqual(ui.patches, []);
+  assert.match(html, /<dialog id="batch-confirm" aria-labelledby="batch-confirm-title" aria-describedby="batch-confirm-scope"/);
+});
+
+test("repository confirmation reflects active search, starts only once and preserves focus when the group empties", async () => {
+  let release;
+  const ui = await renderer({
+    initialRows: [thread("1"), thread("2")],
+    onWrite: () => new Promise(resolve => { release = () => resolve("HTTP/2 205 Reset Content\r\n\r\n"); }),
+  });
+  await runInContext('update("filters", { query: "notification 1" })', ui.context);
+  ui.ids.get("sound").events.click();
+  await settle();
+  const groupRead = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.focusKey.startsWith("bulk:"));
+  await groupRead.events.click();
+  assert.match(ui.ids.get("batch-confirm-title").textContent, /Mark 1 /);
+  assert.match(ui.ids.get("batch-confirm-scope").textContent, /current search/);
+  assert.equal(ui.ids.get("search").disabled, true);
+  const first = ui.ids.get("batch-start").events.click();
+  await ui.ids.get("batch-start").events.click();
+  await first;
+  assert.equal(ui.ids.get("batch-confirm").open, false);
+  assert.equal(ui.document.activeElement, ui.ids.get("batch-progress"));
+  await settle();
+  await runInContext("update()", ui.context);
+  assert.match(ui.ids.get("batch-counts").textContent, /1 in flight/);
+  assert.equal(ui.ids.get("refresh").disabled, true);
+  assert.equal(ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "1").disabled, true);
+  release();
+  await ui.inbox.batch.done;
+  await runInContext("tick()", ui.context);
+  assert.match(ui.ids.get("batch-counts").textContent, /1 succeeded \/ 0 failed \/ 0 skipped \/ 0 not attempted/);
+  assert.equal(ui.ids.get("batch-dismiss").hidden, false);
+  assert.deepEqual(ui.patches, ["/notifications/threads/1"]);
+  assert.equal(ui.inbox.summary().loaded, 1);
+  assert.equal(ui.document.querySelectorAll("article").length, 0);
+  assert.equal(ui.audioContexts[0].starts, 0);
+  await ui.ids.get("batch-dismiss").events.click();
+  assert.equal(ui.document.activeElement, ui.ids.get("search"));
+  ui.window.events.pagehide();
+});
+
+test("partial batch progress shows retryable remaining counts without repeating successes or expanding selection", async () => {
+  let failures = true;
+  const ui = await renderer({
+    initialRows: [thread("1"), thread("2"), thread("3")],
+    onWrite: (_path, count) => count === 2 && failures ? http({}, {}, 500) : "HTTP/2 205 Reset Content\r\n\r\n",
+  });
+  await ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.focusKey.startsWith("bulk:")).events.click();
+  await ui.ids.get("batch-start").events.click();
+  await ui.inbox.batch.done;
+  await runInContext("update()", ui.context);
+  assert.match(ui.ids.get("batch-counts").textContent, /1 succeeded \/ 1 failed \/ 0 skipped \/ 1 not attempted/);
+  assert.equal(ui.ids.get("batch-retry").hidden, false);
+  assert.equal(ui.ids.get("batch-retry").disabled, true);
+  assert.match(ui.ids.get("batch-error").textContent, /HTTP 500/);
+  failures = false;
+  ui.advance();
+  ui.inbox.client.blockedUntil = 0;
+  await runInContext("update()", ui.context);
+  await ui.ids.get("batch-retry").events.click();
+  assert.match(ui.ids.get("batch-confirm-title").textContent, /Mark 2 /);
+  assert.deepEqual(ui.patches, ["/notifications/threads/1", "/notifications/threads/2"]);
+  await ui.ids.get("batch-start").events.click();
+  await ui.inbox.batch.done;
+  await runInContext("update()", ui.context);
+  assert.deepEqual(ui.patches, ["/notifications/threads/1", "/notifications/threads/2", "/notifications/threads/2", "/notifications/threads/3"]);
+  assert.equal(ui.document.querySelectorAll("article").length, 0);
+});
+
+test("batch failure to reconnect is visible and never sends an automatic confirmation", async () => {
+  const ui = await renderer();
+  ui.setOffline(true);
+  await ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.focusKey.startsWith("bulk:")).events.click();
+  assert.equal(ui.ids.get("batch-confirm").open, undefined);
+  assert.match(ui.ids.get("notice").textContent, /Synthetic connection failure/);
+  assert.equal(ui.patches.length, 0);
 });

@@ -2,7 +2,7 @@
 
 A view of unread GitHub notifications inside the GitHub Copilot app,
 grouped by repository. Newest activity first, with collapsible repository groups, counts,
-title/repository search, explicit per-row **Mark as read** buttons, and a compact
+title/repository search, per-row **Mark as read** and confirmed repository actions, and a compact
 layout that follows the app's theme. A Settings dropdown provides opt-in sound
 and auto-open on new sessions.
 
@@ -51,7 +51,8 @@ The UI fetches when visible. Agent actions are `get_state`, `get_settings`, `ref
 Actions return only aggregate counts, status, and timing metadata, never titles,
 repository names, or the search text. Invalid inputs and failed actions raise
 structured errors. `get_state`, `get_settings`, `refresh`, and `load_more` take `{}`.
-There is no agent-callable mark-as-read action; that operation requires a row button click.
+There is no agent-callable mutation action. Marking read requires a row button
+click or an explicitly confirmed repository action in the canvas.
 The optional `mode: "unread"` input remains accepted for existing panel compatibility;
 other modes are rejected. All requests and pagination are restricted to unread notifications.
 
@@ -63,7 +64,7 @@ From this repository:
 node scripts/install.mjs
 ```
 
-This copies only the eleven runtime source/assets files and an ownership manifest to
+This copies only the twelve runtime source/assets files and an ownership manifest to
 `${COPILOT_HOME:-$HOME/.copilot}/extensions/github-notifications`. To choose a
 different Copilot home explicitly:
 
@@ -118,7 +119,46 @@ an artifacts-only folder created by the project extension is also supported.
   Shared panels update on their next local state check; cached rows and conditional
   validators are invalidated. Refresh reconciles pagination before loading more.
   Genuinely newer activity on the same thread can reappear. Reading is not Done,
-  deletion, or unsubscribing, and no bulk-read action exists.
+  deletion, or unsubscribing.
+- **Repository actions:** each repository header has **Mark N as read**, where N
+  is exactly the number of shown, loaded notifications in that group. Search
+  narrows this selection; collapsing a group does not change it. A native
+  in-canvas confirmation names the repository and exact count, with Cancel
+  initially focused, keyboard focus contained by the dialog, and Escape to cancel.
+  Cancel performs no writes.
+
+  The server captures one immutable selection of thread IDs and activity
+  timestamps. A small fingerprint of the displayed group prevents preparing a
+  stale or different selection without sending an unbounded HTTP array of IDs.
+  No total selection cap is silently applied: any already-loaded group can be
+  selected. The five-minute confirmation does not include older/unloaded items,
+  other repositories, search-hidden rows, or notifications arriving after capture.
+  Immediately before each write, changed/no-longer-unread items are skipped,
+  including newer versions observed by another panel while waiting in the queue.
+  GitHub does not offer a conditional mark-read operation, so an update arriving
+  on GitHub after our last observation can still race the PATCH.
+
+  Confirmation starts a nonblocking, panel-owned job. It sends only the same
+  serialized, rate-limited **per-thread PATCH** used by row buttons, never the
+  repository-wide `PUT /repos/{owner}/{repo}/notifications`. The UI polls local
+  progress, not GitHub, and reports succeeded, failed, skipped, and not-attempted
+  counts. Confirmed successes disappear and synchronize across panels; failed or
+  unattempted rows stay. The first auth/rate/network failure stops the remaining
+  batch. **Review remaining** prepares a new confirmation for only unchanged,
+  currently shown failed/unattempted members of the original selection; it never
+  repeats acknowledged successes or adds new rows. Skipped changed rows require
+  a separate fresh group selection.
+
+  Only one selection/job is kept per panel. While it is prepared or running,
+  that panel's refresh, search, loading, and other read controls are paused;
+  overlapping read requests from other panels are also blocked. **Stop remaining**
+  cancels queued work but lets an already-sent PATCH report its outcome. Closing
+  the canvas or reloading the provider aborts outstanding work; a request already
+  accepted by GitHub cannot be undone, so refresh before retrying an uncertain
+  outcome. Hidden panels do not poll progress, but an already-confirmed job can
+  continue until stopped or closed. Results are not stored on disk and are lost
+  on provider restart; reopening the same live panel can recover its current
+  progress. Batch removal and pagination shifts never generate a sound event.
 - **Optional sound:** open **Settings**, then click **Play sound: Off** to enable
   a short, gentle synthesized chime; click **Play sound: On** to disable it.
   Sound starts off, belongs only to the
@@ -183,7 +223,8 @@ ports, or localStorage. The installer preserves the artifacts directory.
 
 Listing, polling, searching, and rendering only use `gh api --method GET` against
 the notifications list endpoint on GitHub.com. Only an explicit **Mark as read**
-click sends the narrowly scoped per-thread PATCH. The extension never marks Done,
+click or confirmed repository selection sends narrowly scoped per-thread PATCHes.
+The extension never marks Done,
 changes subscriptions, requests new credentials, or changes permissions. Opening
 an external link also leaves this surface: **GitHub itself may mark a notification
 read when you visit it.**
@@ -217,7 +258,8 @@ Runtime files live together in `.github/extensions/github-notifications/`:
 `extension.mjs` wires lifecycle and actions, `github.mjs` handles `gh` and HTTP
 polling, `inbox.mjs` owns per-panel state, `model.mjs` handles normalization/links,
 `server.mjs` serves the protected UI, `index.html`, `styles.css`, `app.mjs`
-provide the renderer, `sound.mjs` manages opt-in browser audio, `settings.mjs`
+provide the renderer, `batch.mjs` coordinates confirmed repository selections,
+`sound.mjs` manages opt-in browser audio, `settings.mjs`
 stores the user preference, and `startup.mjs` coordinates conservative auto-open.
 
 After any edit, reload extensions. Use extension **list/inspect** to check the

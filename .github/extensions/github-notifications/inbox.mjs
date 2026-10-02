@@ -1,5 +1,6 @@
 import { firstPage, POLL_MS } from "./github.mjs";
 import { groupThreads, InboxError, orderedThreads, validateFilters } from "./model.mjs";
+import { ReadBatch, selectionKey } from "./batch.mjs";
 
 export class Inbox {
   constructor(client, input = {}) {
@@ -7,6 +8,8 @@ export class Inbox {
     this.filters = { mode: "unread", query: "", ...validateFilters(input) };
     this.pages = [];
     this.busy = false;
+    this.reading = new Set();
+    this.batch = new ReadBatch(this);
     this.error = null;
     this.nextRefreshAt = 0;
     this.controller = new AbortController();
@@ -21,9 +24,18 @@ export class Inbox {
     client.readListeners.add(this.onRead);
   }
 
+  loadedItems() {
+    return orderedThreads(this.pages.flatMap(page => page.items)).filter(item => item.unread);
+  }
+
+  groups() {
+    return groupThreads(this.loadedItems(), this.filters).map(group =>
+      ({ ...group, selectionKey: selectionKey(group, this.filters.query) }));
+  }
+
   snapshot() {
-    const items = orderedThreads(this.pages.flatMap(page => page.items)).filter(item => item.unread);
-    const groups = groupThreads(items, this.filters);
+    const items = this.loadedItems();
+    const groups = this.groups();
     return {
       filters: { ...this.filters },
       status: this.busy ? "loading" : this.error ? (this.pages.length ? "stale" : "error") :
@@ -37,13 +49,15 @@ export class Inbox {
       lastFetchedAt: this.pages.length ? Math.min(...this.pages.map(page => page.fetchedAt)) : null,
       nextRefreshAt: Math.max(this.nextRefreshAt, this.client.blockedUntil),
       activity: { ...this.activity },
+      batch: this.batch.snapshot(),
       groups,
     };
   }
 
   summary() {
-    const { filters, groups, ...state } = this.snapshot();
-    return { ...state, mode: filters.mode, searchActive: Boolean(filters.query), repositories: groups.length };
+    const { filters, groups, batch, ...state } = this.snapshot();
+    const { repository, token, ...batchCounts } = batch ?? {};
+    return { ...state, batch: batch ? batchCounts : null, mode: filters.mode, searchActive: Boolean(filters.query), repositories: groups.length };
   }
 
   recordActivity(pages, refresh) {
@@ -70,6 +84,7 @@ export class Inbox {
   async execute(operation, source = "refresh") {
     if (this.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
     if (this.busy) throw new InboxError("busy", "An inbox request is already running. Try again when it finishes.", 409);
+    if (this.batch.locked) throw new InboxError("busy", "Finish or cancel the repository batch first.", 409);
     this.busy = true;
     try {
       await operation();
@@ -91,6 +106,7 @@ export class Inbox {
 
   async refresh() {
     if (this.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
+    if (this.batch.locked) throw new InboxError("busy", "Finish or cancel the repository batch first.", 409);
     if (this.client.now() < this.nextRefreshAt) {
       if (this.error) throw new InboxError(this.error.code, this.error.message, 503);
       return this.summary();
@@ -134,6 +150,7 @@ export class Inbox {
     validateFilters(input);
     if (this.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
     if (this.busy) throw new InboxError("busy", "An inbox request is already running.", 409);
+    if (this.batch.locked) throw new InboxError("busy", "Finish or cancel the repository batch before changing search.", 409);
     this.filters = { ...this.filters, ...input };
     return this.summary();
   }
@@ -146,15 +163,23 @@ export class Inbox {
     }
     if (this.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
     if (this.busy) throw new InboxError("busy", "Wait for the current inbox request to finish.", 409);
+    if (this.batch.locked) throw new InboxError("busy", "Finish or cancel the repository batch first.", 409);
+    if (this.reading.has(input.id)) throw new InboxError("busy", "This notification is already being marked as read.", 409);
     if (!this.pages.some(page => page.items.some(item => item.id === input.id && item.unread))) {
       throw new InboxError("unknown_thread", "This notification is no longer in the loaded inbox. Refresh and try again.", 404);
     }
-    await this.client.markRead(input.id, this.controller.signal);
+    this.reading.add(input.id);
+    try {
+      await this.client.markRead(input.id, this.controller.signal);
+    } finally {
+      this.reading.delete(input.id);
+    }
     return this.summary();
   }
 
   close() {
     this.controller.abort();
+    this.batch.close();
     this.pages = [];
     this.seenActivity.clear();
     this.client.readListeners.delete(this.onRead);

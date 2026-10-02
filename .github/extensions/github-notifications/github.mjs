@@ -109,6 +109,7 @@ export class GitHubClient {
     this.sleep = sleep;
     this.writeAvailableAt = 0;
     this.pendingReads = new Set();
+    this.readReservations = new Map();
     this.readListeners = new Set();
     this.revision = 0;
   }
@@ -121,11 +122,29 @@ export class GitHubClient {
     return pending;
   }
 
-  markRead(id, signal) {
+  reserveReads(ids) {
+    if (ids.some(id => this.pendingReads.has(id) || this.readReservations.has(id))) {
+      throw new InboxError("busy", "A selected notification is already being marked as read in another operation.", 409);
+    }
+    const owner = Symbol("read batch");
+    for (const id of ids) this.readReservations.set(id, owner);
+    return owner;
+  }
+
+  releaseReads(owner) {
+    for (const [id, reservedBy] of this.readReservations) {
+      if (reservedBy === owner) this.readReservations.delete(id);
+    }
+  }
+
+  markRead(id, signal, { owner, beforeWrite } = {}) {
     if (typeof id !== "string" || !/^[1-9]\d{0,63}$/.test(id)) {
       throw new InboxError("invalid_thread", "Use a valid notification thread ID.", 400);
     }
     if (this.pendingReads.has(id)) throw new InboxError("busy", "This notification is already being marked as read.", 409);
+    if (this.readReservations.has(id) && this.readReservations.get(id) !== owner) {
+      throw new InboxError("busy", "This notification belongs to an active repository batch.", 409);
+    }
     this.pendingReads.add(id);
     const pending = this.queue.then(async () => {
       const delay = this.writeAvailableAt - this.now();
@@ -136,6 +155,10 @@ export class GitHubClient {
           throw new InboxError("closed", "The canvas was closed.", 410);
         }
       }
+      if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
+      if (this.now() < this.blockedUntil) throw this.lastError ??
+        new InboxError("rate_limited", "GitHub requests are paused until the rate limit resets.", 429);
+      beforeWrite?.();
       try {
         await this.request(`/notifications/threads/${id}`, signal, "PATCH");
       } finally {

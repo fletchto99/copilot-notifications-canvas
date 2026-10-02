@@ -20,7 +20,7 @@ test("installation is repeatable, scoped to the supplied Copilot home, and copie
   assert.equal(target, join(root, "extensions", "github-notifications"));
   assert.equal(await install(root), target);
   const entries = await readdir(target);
-  assert.equal(entries.length, 12);
+  assert.equal(entries.length, 13);
   assert.equal(entries.includes("extension.mjs"), true);
   assert.equal(entries.includes("README.md"), false);
   assert.equal(entries.includes("test"), false);
@@ -33,13 +33,25 @@ test("an untouched pre-sound installation upgrades without overwriting unrelated
   const target = await install(root);
   const marker = join(target, ".copilot-notifications-install.json");
   const manifest = JSON.parse(await readFile(marker, "utf8"));
-  for (const file of ["sound.mjs", "settings.mjs", "startup.mjs"]) {
+  for (const file of ["sound.mjs", "settings.mjs", "startup.mjs", "batch.mjs"]) {
     delete manifest.hashes[file];
     await unlink(join(target, file));
   }
   await writeFile(marker, JSON.stringify(manifest));
   assert.equal(await install(root), target);
   assert.match(await readFile(join(target, "sound.mjs"), "utf8"), /class NotificationSound/);
+});
+
+test("a pre-batch installation upgrades while preserving settings", async t => {
+  const root = await home(t);
+  const target = await install(root);
+  const marker = join(target, ".copilot-notifications-install.json");
+  const manifest = JSON.parse(await readFile(marker, "utf8"));
+  delete manifest.hashes["batch.mjs"];
+  await writeFile(marker, JSON.stringify(manifest));
+  await unlink(join(target, "batch.mjs"));
+  await install(root);
+  assert.match(await readFile(join(target, "batch.mjs"), "utf8"), /class ReadBatch/);
 });
 
 test("installation preserves existing user settings and unknown artifact files on every upgrade", async t => {

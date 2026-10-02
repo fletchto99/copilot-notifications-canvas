@@ -9,6 +9,13 @@ const assets = new Map([
   ["/sound.mjs", ["sound.mjs", "text/javascript; charset=utf-8"]],
   ["/styles.css", ["styles.css", "text/css; charset=utf-8"]],
 ]);
+const batchRoutes = new Map([
+  ["/api/batch/prepare", "prepare"],
+  ["/api/batch/start", "start"],
+  ["/api/batch/cancel", "cancel"],
+  ["/api/batch/retry", "retry"],
+  ["/api/batch/dismiss", "dismiss"],
+]);
 
 function authorized(value, secret) {
   const provided = Buffer.from(value ?? "");
@@ -67,7 +74,8 @@ export async function startServer(inbox, { log = () => {}, preferences } = {}) {
         res.end(file.body);
         return;
       }
-      if (!["/api/state", "/api/refresh", "/api/more", "/api/filters", "/api/settings", "/api/read"].includes(path)) {
+      if (!["/api/state", "/api/refresh", "/api/more", "/api/filters", "/api/settings", "/api/read"].includes(path) &&
+          !batchRoutes.has(path)) {
         throw new InboxError("not_found", "Route not found.", 404);
       }
       if (!authorized(req.headers.authorization, secret) ||
@@ -85,7 +93,7 @@ export async function startServer(inbox, { log = () => {}, preferences } = {}) {
         if (req.method !== "POST") throw new InboxError("method", "Only POST is supported.", 405);
         if (req.headers.origin !== origin) throw new InboxError("origin", "A same-origin request is required.", 403);
         const input = await readBody(req);
-        if (!["/api/filters", "/api/settings", "/api/read"].includes(path) && Object.keys(input).length) {
+        if (!["/api/filters", "/api/settings", "/api/read"].includes(path) && !batchRoutes.has(path) && Object.keys(input).length) {
           throw new InboxError("invalid_input", "This action takes an empty object.", 400);
         }
         if (path === "/api/refresh") await inbox.refresh();
@@ -93,6 +101,10 @@ export async function startServer(inbox, { log = () => {}, preferences } = {}) {
         if (path === "/api/filters") await inbox.setFilters(input);
         if (path === "/api/settings") return json(200, await preferences.update(input));
         if (path === "/api/read") await inbox.markRead(input);
+        if (batchRoutes.has(path)) {
+          inbox.batch[batchRoutes.get(path)](input);
+          return json(path === "/api/batch/start" ? 202 : 200, inbox.snapshot());
+        }
       }
       json(200, inbox.snapshot());
     } catch (error) {
@@ -125,6 +137,7 @@ export async function startServer(inbox, { log = () => {}, preferences } = {}) {
         server.close(resolve);
         server.closeAllConnections();
       });
+      await inbox.batch.done;
     },
   };
 }

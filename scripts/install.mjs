@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const name = "github-notifications";
 const marker = ".copilot-notifications-install.json";
-const files = ["extension.mjs", "github.mjs", "inbox.mjs", "model.mjs", "server.mjs", "app.mjs", "sound.mjs", "settings.mjs", "startup.mjs", "index.html", "styles.css"];
+const files = ["extension.mjs", "github.mjs", "inbox.mjs", "batch.mjs", "model.mjs", "server.mjs", "app.mjs", "sound.mjs", "settings.mjs", "startup.mjs", "index.html", "styles.css"];
 const source = fileURLToPath(new URL("../.github/extensions/github-notifications/", import.meta.url));
 const hash = content => createHash("sha256").update(content).digest("hex");
 
@@ -30,7 +30,8 @@ async function verifyOwned(target) {
   const runtimeEntries = entries.filter(file => file !== "artifacts");
   if (!runtimeEntries.length && entries.includes("artifacts")) return true;
   const legacyAdditions = ["settings.mjs", "startup.mjs", ...(entries.includes("sound.mjs") ? [] : ["sound.mjs"])];
-  const installedFiles = entries.includes("startup.mjs") ? files : files.filter(file => !legacyAdditions.includes(file));
+  const priorFiles = entries.includes("batch.mjs") ? files : files.filter(file => file !== "batch.mjs");
+  const installedFiles = entries.includes("startup.mjs") ? priorFiles : priorFiles.filter(file => !legacyAdditions.includes(file));
   if (runtimeEntries.length !== installedFiles.length + 1 || runtimeEntries.some(file => ![...installedFiles, marker].includes(file))) {
     throw new Error("Refusing to overwrite an unrelated or incomplete extension directory.");
   }
