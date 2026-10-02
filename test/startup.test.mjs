@@ -5,6 +5,14 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Startup, STARTUP_INSTANCE, claimStartup } from "../.github/extensions/github-notifications/startup.mjs";
 
+const notificationPanel = {
+  canvasId: "github-notifications", extensionId: "user:github-notifications", instanceId: "manual-notifications",
+};
+const otherPanel = {
+  canvasId: "agentcorp-observer", extensionId: "user:agentcorp-extension", instanceId: "office-startup",
+};
+const canvasEvents = ["session.canvas.opened", "session.canvas.closed", "session.canvas.recorded", "session.canvas.removed"];
+
 function fixture({ enabled = true, renderer = true, events = [{ type: "session.start" }], panels = [], failOpen = false } = {}) {
   let handler;
   const opened = [];
@@ -38,15 +46,83 @@ test("startup is opt-in and uses the supported RPC with one stable instance", as
   assert.equal(on.opened.length, 1);
 });
 
-test("resumes, active histories and existing panels do not cause duplicate or focus-stealing opens", async () => {
-  for (const type of ["session.resume", "assistant.turn_start", "assistant.message", "session.canvas.opened", "session.canvas.closed"]) {
-    const item = fixture({ events: [{ type: "session.start" }, { type }] });
+test("startup's own open events do not cancel its in-flight attempt", async () => {
+  const item = fixture();
+  const open = item.session.rpc.canvas.open;
+  item.session.rpc.canvas.open = async input => {
+    for (const type of ["session.canvas.recorded", "session.canvas.opened"]) {
+      item.emit({ type, data: { ...notificationPanel, instanceId: STARTUP_INSTANCE } });
+      assert.equal(item.startup.stopped, false, type);
+    }
+    return open(input);
+  };
+  await item.startup.start();
+  assert.equal(item.startup.status, "opened");
+  assert.equal(item.opened.length, 1);
+});
+
+test("resumes, active histories and existing notification panels do not cause duplicate opens", async () => {
+  for (const type of ["session.resume", "assistant.turn_start", "assistant.message", ...canvasEvents]) {
+    const item = fixture({ events: [{ type: "session.start" }, { type, data: notificationPanel }] });
     await item.startup.start();
-    assert.equal(item.opened.length, 0);
+    assert.equal(item.opened.length, 0, type);
   }
-  const existing = fixture({ panels: [{ instanceId: "already-open" }] });
-  await existing.startup.start();
-  assert.equal(existing.startup.status, "panel-already-open");
+  for (const instanceId of [notificationPanel.instanceId, STARTUP_INSTANCE]) {
+    const existing = fixture({ panels: [otherPanel, { ...notificationPanel, instanceId }] });
+    await existing.startup.start();
+    assert.equal(existing.startup.status, "panel-already-open");
+    assert.equal(existing.opened.length, 0);
+  }
+});
+
+test("other canvases in history or already open do not block startup", async () => {
+  for (const type of [undefined, ...canvasEvents]) {
+    const events = [{ type: "session.start" }];
+    if (type) events.push({ type, data: otherPanel });
+    const item = fixture({ events, panels: [otherPanel] });
+    await item.startup.start();
+    assert.equal(item.startup.status, "opened", type);
+    assert.equal(item.opened.length, 1, type);
+  }
+});
+
+test("other canvas activity while waiting for the renderer does not cancel startup", async () => {
+  for (const type of canvasEvents) {
+    const item = fixture({ renderer: false, panels: [otherPanel] });
+    await item.startup.start();
+    item.emit({ type, data: otherPanel });
+    assert.equal(item.startup.status, "waiting-for-renderer", type);
+    item.session.capabilities.ui.canvases = true;
+    item.emit({ type: "capabilities.changed" });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(item.startup.status, "opened", type);
+    assert.equal(item.opened.length, 1, type);
+  }
+});
+
+test("another canvas opening during the final panel check does not cancel startup", async () => {
+  const item = fixture();
+  item.session.rpc.canvas.listOpen = async () => {
+    item.emit({ type: "session.canvas.recorded", data: otherPanel });
+    item.emit({ type: "session.canvas.opened", data: otherPanel });
+    return { openCanvases: [otherPanel] };
+  };
+  await item.startup.start();
+  assert.equal(item.startup.status, "opened");
+  assert.equal(item.opened.length, 1);
+});
+
+test("notification activity while waiting still cancels startup", async () => {
+  for (const type of canvasEvents) {
+    const item = fixture({ renderer: false });
+    await item.startup.start();
+    item.emit({ type, data: notificationPanel });
+    item.session.capabilities.ui.canvases = true;
+    item.emit({ type: "capabilities.changed" });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(item.startup.status, "session-already-active", type);
+    assert.equal(item.opened.length, 0, type);
+  }
 });
 
 test("a late renderer capability can open once, but disabling or starting work while waiting cancels it", async () => {
@@ -57,11 +133,11 @@ test("a late renderer capability can open once, but disabling or starting work w
   item.emit({ type: "capabilities.changed" });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(item.opened.length, 1);
-  for (const cancel of ["disable", "session.canvas.closed", "assistant.turn_start"]) {
+  for (const cancel of ["disable", "session.resume", "session.canvas.closed", "session.canvas.removed", "assistant.turn_start"]) {
     const waiting = fixture({ renderer: false });
     await waiting.startup.start();
     if (cancel === "disable") waiting.preference.autoOpen = false;
-    else waiting.emit({ type: cancel, data: {} });
+    else waiting.emit({ type: cancel, data: { ...notificationPanel, instanceId: STARTUP_INSTANCE } });
     waiting.session.capabilities.ui.canvases = true;
     waiting.emit({ type: "capabilities.changed" });
     await new Promise(resolve => setImmediate(resolve));
@@ -72,16 +148,19 @@ test("a late renderer capability can open once, but disabling or starting work w
 test("the session marker prevents reopening after close or provider reload, including when initially off", async t => {
   const directory = await mkdtemp(join(tmpdir(), "notification-startup-test-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const off = fixture({ enabled: false });
-  off.session.workspacePath = directory;
-  off.startup.claim = claimStartup;
-  await off.startup.start();
-  const reload = fixture();
-  reload.session.workspacePath = directory;
-  reload.startup.claim = claimStartup;
-  await reload.startup.start();
-  assert.equal(reload.startup.status, "already-checked");
-  assert.equal(reload.opened.length, 0);
+  for (const enabled of [false, true]) {
+    const initial = fixture({ enabled, panels: [otherPanel] });
+    initial.session.workspacePath = join(directory, String(enabled));
+    initial.startup.claim = claimStartup;
+    await initial.startup.start();
+    assert.equal(initial.opened.length, enabled ? 1 : 0);
+    const reload = fixture();
+    reload.session.workspacePath = initial.session.workspacePath;
+    reload.startup.claim = claimStartup;
+    await reload.startup.start();
+    assert.equal(reload.startup.status, "already-checked");
+    assert.equal(reload.opened.length, 0);
+  }
 });
 
 test("startup and storage failures log a sanitized warning and never loop", async () => {
