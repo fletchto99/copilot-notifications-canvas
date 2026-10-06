@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { Updates, CURRENT_VERSION, CHECK_INTERVAL, REPOSITORY, compareVersions, versionParts } from "../.github/extensions/github-notifications/updates.mjs";
 import { validateReleaseTag } from "../scripts/check-release.mjs";
 import { InboxError } from "../.github/extensions/github-notifications/model.mjs";
@@ -7,6 +8,14 @@ import { http } from "./fixtures.mjs";
 
 const release = (version = "0.2.0", fields = {}) =>
   ({ tag_name: `v${version}`, draft: false, prerelease: false, ...fields });
+
+test("shared installation and update instructions retain links used by older releases", async () => {
+  const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
+  assert.match(readme, /^## Installation and Updating$/m);
+  assert.match(readme, /```text\nInstall or update the Unread Notifications canvas/);
+  assert.match(readme, /<a id="installation"><\/a>/);
+  assert.match(readme, /<a id="updating"><\/a>/);
+});
 
 test("stable versions compare numerically and reject unsupported versions", () => {
   assert.ok(versionParts(CURRENT_VERSION));
@@ -41,7 +50,8 @@ test("release checks use a fixed read-only GitHub endpoint and locally construct
   assert.equal(state.status, "available");
   assert.equal(state.latestVersion, "0.2.0");
   assert.equal(state.releaseUrl, `https://github.com/${REPOSITORY}/releases/tag/v0.2.0`);
-  assert.match(state.instructionsUrl, /#updating$/);
+  assert.match(state.instructionsUrl, /#installation-and-updating$/);
+  assert.match(state.prompt, /"Installation and Updating" instructions/);
   assert.match(state.prompt, /exact release tag\nv0\.2\.0/);
   assert.match(state.prompt, /Preserve the entire installed artifacts directory in place/);
   assert.match(state.prompt, /settings\.json\nand unknown settings/);

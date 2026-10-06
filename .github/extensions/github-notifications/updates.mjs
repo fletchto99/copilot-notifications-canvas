@@ -28,7 +28,7 @@ export function compareVersions(left, right) {
 function updatePrompt(version) {
   return `Update my user-wide Unread Notifications canvas to v${version} from
 ${REPOSITORY_URL}.
-Follow the repository's "Updating" instructions. Fetch the exact release tag
+Follow the repository's "Installation and Updating" instructions. Fetch the exact release tag
 v${version} into a separate clean checkout or worktree and verify version.json
 matches it before running node scripts/install.mjs with my existing COPILOT_HOME.
 Preserve the entire installed artifacts directory in place, including settings.json
@@ -78,7 +78,7 @@ export class Updates {
       canCheckAt: this.canCheckAt,
       error: this.error,
       releaseUrl: this.latestVersion ? `${REPOSITORY_URL}/releases/tag/v${this.latestVersion}` : null,
-      instructionsUrl: `${REPOSITORY_URL}#updating`,
+      instructionsUrl: `${REPOSITORY_URL}#installation-and-updating`,
       prompt: status === "available" ? updatePrompt(this.latestVersion) : null,
     };
   }

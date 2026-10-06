@@ -34,7 +34,7 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
     currentVersion: "0.1.0", latestVersion: "0.1.0", status: "current", checking: false,
     checkedAt: now, nextCheckAt: now + 6 * 60 * 60_000, canCheckAt: 0, error: null,
     releaseUrl: "https://github.com/fletchto99/copilot-notifications-canvas/releases/tag/v0.1.0",
-    instructionsUrl: "https://github.com/fletchto99/copilot-notifications-canvas#updating", prompt: null,
+    instructionsUrl: "https://github.com/fletchto99/copilot-notifications-canvas#installation-and-updating", prompt: null,
     ...release,
   };
   const copied = [];
@@ -250,7 +250,7 @@ test("update banner shows release links and copies a prompt without installing o
   assert.match(ui.ids.get("update-title").textContent, /v0\.2\.0.*v0\.1\.0/);
   assert.equal(ui.ids.get("installed-version").textContent, "GitHub Notification Canvas 0.1.0");
   assert.match(ui.ids.get("release-notes").href, /\/releases\/tag\/v0\.2\.0$/);
-  assert.match(ui.ids.get("update-instructions").href, /#updating$/);
+  assert.match(ui.ids.get("update-instructions").href, /#installation-and-updating$/);
   assert.equal(ui.ids.get("update-prompt").value, "Synthetic safe update prompt");
   const count = ui.calls.length;
   await ui.ids.get("copy-update").events.click();
