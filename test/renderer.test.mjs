@@ -447,7 +447,7 @@ test("Load more explains when a refresh is needed after a read", async () => {
 
 test("Force refresh is an always-enabled link-style footer button beside the checked time", async () => {
   assert.doesNotMatch(html, /id="refresh"|>Refresh<\/button>|class="heading"/);
-  assert.match(html, /<footer>\s*<p class="refresh-status">\s*<span id="updated"[^>]*>[^<]*<\/span>\s*<span class="refresh-actions">\s*<button id="force-refresh" class="refresh-link" type="button">Force refresh<\/button>/);
+  assert.match(html, /<footer>\s*<p class="refresh-status">\s*<span id="updated"[^>]*>[^<]*<\/span>\s*<button id="force-refresh" class="refresh-link" type="button">Force refresh<\/button>/);
   assert.match(styles, /\.refresh-link \{[^}]*border: 0;[^}]*padding: 0;/);
   assert.match(styles, /a, \.refresh-link \{ color: var\(--accent\); text-decoration: none; \}/);
   assert.match(styles, /a:hover, \.refresh-link:hover \{ text-decoration: underline; \}/);
@@ -495,10 +495,13 @@ test("an initial GitHub error shows the retry countdown without claiming a succe
   assert.equal(ui.ids.get("notice").hidden, false);
 });
 
-test("the footer groups Force refresh and Open GitHub inbox with a decorative dot and no help", () => {
-  assert.match(html, /<span class="refresh-actions">\s*<button id="force-refresh"[^>]*>Force refresh<\/button>\s*<span aria-hidden="true">&middot;<\/span>\s*<a href="https:\/\/github\.com\/notifications" target="_blank" rel="noopener noreferrer">Open GitHub inbox<\/a>\s*<\/span>\s*<\/p>\s*<\/footer>/);
+test("the footer keeps Force refresh without an inbox link, decorative separator or help", () => {
+  const footer = html.match(/<footer>([\s\S]*?)<\/footer>/)?.[1];
+  assert.ok(footer);
+  assert.match(footer, /<button id="force-refresh"[^>]*>Force refresh<\/button>\s*<\/p>/);
+  assert.doesNotMatch(footer, /<a\b|&middot;|Open GitHub inbox/);
   assert.match(styles, /\.refresh-status \{[^}]*flex-wrap: wrap;/);
-  assert.match(styles, /\.refresh-actions \{[^}]*display: inline-flex;[^}]*align-items: baseline;/);
+  assert.doesNotMatch(html + styles, /refresh-actions/);
   assert.doesNotMatch(html + script + styles, /read-help|footer-links|Mark-as-read help|Mark as read applies/);
 });
 
@@ -840,10 +843,28 @@ test("Sound is a single settings row with a labeled native select and matching f
   assert.match(css, /\.select-setting:has\(select:disabled\) \{[^}]*opacity: \.55/);
 });
 
+test("GitHub inbox is an accessible icon link immediately before Settings in the toolbar", () => {
+  const link = html.match(/<a\b([^>]*\bid="open-inbox"[^>]*)>([\s\S]*?)<\/a>/);
+  assert.ok(link);
+  const [, attributes, content] = link;
+  assert.match(attributes, /class="icon-button"/);
+  assert.match(attributes, /href="https:\/\/github\.com\/notifications"/);
+  assert.match(attributes, /target="_blank"/);
+  assert.match(attributes, /rel="noopener noreferrer"/);
+  assert.match(attributes, /aria-label="Open GitHub inbox"/);
+  assert.match(attributes, /title="Open GitHub inbox"/);
+  assert.doesNotMatch(attributes, /\bhidden\b|\btabindex=/);
+  assert.match(content, /<svg\b[^>]*aria-hidden="true"[^>]*focusable="false"/);
+  assert.equal(content.replace(/<[^>]*>/g, "").trim(), "");
+  assert.match(html, /<div class="toolbar">\s*<label class="search">[\s\S]*?<\/label>\s*<a id="open-inbox"[^>]*>[\s\S]*?<\/a>\s*<details id="settings"/);
+  assert.equal([...html.matchAll(/href="https:\/\/github\.com\/notifications"/g)].length, 1);
+});
+
 test("Settings uses an icon-only toggle with an accessible name and tooltip", () => {
   const summary = html.match(/<summary\b([^>]*\bid="settings-toggle"[^>]*)>([\s\S]*?)<\/summary>/);
   assert.ok(summary);
   const [, attributes, content] = summary;
+  assert.match(attributes, /class="icon-button"/);
   assert.match(attributes, /aria-label="Settings"/);
   assert.match(attributes, /title="Settings"/);
   assert.match(attributes, /aria-controls="settings-panel"/);
@@ -1257,7 +1278,7 @@ test("repository header shares its hover background across the toggle and read a
   assert.equal(disclosure.className, "repo-toggle");
   assert.equal(disclosure.parentNode.className, "repo-header");
   assert.equal(groupRead.parentNode, disclosure.parentNode);
-  assert.match(styles, /button:hover:not\(:disabled, \.repo-toggle, \.refresh-link\), summary:hover, \.repo-header:hover, \.row:hover \{\s*background: color-mix\(in srgb, var\(--canvas-text\) 4%, transparent\);/);
+  assert.match(styles, /button:hover:not\(:disabled, \.repo-toggle, \.refresh-link\), summary:hover, \.icon-button:hover, \.repo-header:hover, \.row:hover \{\s*background: color-mix\(in srgb, var\(--canvas-text\) 4%, transparent\);/);
   assert.match(styles, /@media \(prefers-reduced-motion: no-preference\) \{\s*button, a, \.repo-header \{ transition: background-color \.12s ease; \}/);
   ui.window.events.pagehide();
 });
@@ -1268,9 +1289,10 @@ test("repository toggle focus is inset inside the clipped card", () => {
   assert.match(styles, /\.repo-toggle:focus-visible \{ outline-offset: -5px; \}/);
 });
 
-test("compact toolbar keeps a shrinkable search beside the settings button", () => {
+test("compact toolbar keeps a shrinkable search beside matching inbox and settings icons", () => {
   assert.match(styles, /\.toolbar \{ display: flex;[^}]*\}/);
   assert.match(styles, /\.search \{ flex: 1; min-width: 0; \}/);
+  assert.match(styles, /\.icon-button \{[^}]*flex-shrink: 0;[^}]*width: 38px; height: 38px;[^}]*color: var\(--canvas-text\);/);
   assert.match(styles, /\.settings \{[^}]*flex-shrink: 0;/);
   assert.doesNotMatch(styles, /\.toolbar \{[^}]*flex-wrap: wrap/);
   assert.doesNotMatch(styles, /\.search \{[^}]*flex-basis: 100%/);

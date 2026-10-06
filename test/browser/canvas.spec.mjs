@@ -104,7 +104,10 @@ for (const width of [320, 480, 960]) {
       await page.goto(canvas.url);
       await expect(page.locator(".row")).toHaveCount(4);
       await expect(page.locator("html")).toHaveAttribute("data-notification-theme", theme);
-      await expect(page.getByRole("link", { name: "Open GitHub inbox", exact: true })).toHaveCSS("text-decoration-line", "underline");
+      const inboxLink = page.locator(".toolbar").getByRole("link", { name: "Open GitHub inbox", exact: true });
+      await expect(inboxLink).toBeVisible();
+      await expect(inboxLink).toHaveAttribute("href", "https://github.com/notifications");
+      await expect(page.locator("footer a")).toHaveCount(0);
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
       await page.getByLabel("Settings", { exact: true }).click();
       await expect(page.getByRole("switch", { name: "Dark mode", exact: true })).toBeEnabled();

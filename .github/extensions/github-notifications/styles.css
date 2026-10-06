@@ -48,12 +48,13 @@ h2 { font-size: 18px; }
 .subtitle { color: var(--muted); margin-top: 8px; font-size: 13px; }
 button, input, select, textarea { font: inherit; color: inherit; }
 button { background: transparent; border: 1px solid var(--border); border-radius: 7px; padding: 7px 12px; cursor: pointer; white-space: nowrap; }
-button:hover:not(:disabled, .repo-toggle, .refresh-link), summary:hover, .repo-header:hover, .row:hover { background: color-mix(in srgb, var(--canvas-text) 4%, transparent); }
+button:hover:not(:disabled, .repo-toggle, .refresh-link), summary:hover, .icon-button:hover, .repo-header:hover, .row:hover { background: color-mix(in srgb, var(--canvas-text) 4%, transparent); }
 button:disabled { opacity: .55; cursor: default; }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
 .toolbar { display: flex; gap: 12px; margin-top: 24px; }
+.icon-button { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 38px; height: 38px; border: 1px solid var(--border); border-radius: 7px; padding: 9px; color: var(--canvas-text); }
 .settings { position: relative; flex-shrink: 0; margin-left: auto; }
-.settings > summary { display: flex; align-items: center; justify-content: center; width: 38px; height: 38px; border: 1px solid var(--border); border-radius: 7px; padding: 9px; list-style: none; }
+.settings > summary { list-style: none; }
 .settings > summary::-webkit-details-marker { display: none; }
 .settings-panel { position: absolute; z-index: 2; right: 0; top: calc(100% + 8px); display: flex; flex-direction: column; gap: 8px; width: min(290px, calc(100vw - 36px)); max-height: 60vh; overflow-y: auto; padding: 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--canvas-background); box-shadow: 0 8px 24px #0002; }
 .settings-panel button { width: 100%; text-align: left; white-space: normal; }
@@ -120,9 +121,7 @@ time { color: var(--muted); font-size: 12px; white-space: nowrap; padding-top: 1
 .empty p { color: var(--muted); margin-top: 9px; max-width: 340px; margin-inline: auto; }
 .pagination { text-align: center; color: var(--muted); font-size: 12px; }
 footer { color: var(--muted); font-size: 11px; margin-top: 24px; }
-footer a { text-decoration: underline; text-underline-offset: 2px; }
 .refresh-status { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
-.refresh-actions { display: inline-flex; align-items: baseline; gap: 8px; }
 .refresh-link { border: 0; border-radius: 0; padding: 0; text-underline-offset: 2px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 [hidden] { display: none !important; }
