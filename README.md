@@ -166,14 +166,22 @@ repositories still produce five individual alerts.
 
 Very long titles are truncated to fit system payload limits. The first
 successful poll after enabling, or after all watchers have stopped, establishes
-a silent baseline. Search and the panel's loaded pages do not affect alerts.
+a silent baseline using GitHub timestamps rather than the local completion
+clock. The initial load includes all pages sharing the newest timestamp, so
+same-second arrivals can be distinguished from existing notifications. Search
+and the panel's loaded pages do not affect alerts.
 GitHub's API exposes the latest activity per thread, not every individual
 comment or event between polls.
 
 Copies using the same local `COPILOT_HOME` coordinate through a shared lock and
 checkpoint, so multiple panels and sessions do not each send the same desktop
 alert. Another open copy takes over polling if one closes or crashes. The
-checkpoint is saved before invoking the operating system: delivery is
+watchers record their shared lifetime when joining, independently of delivery,
+so opening a second canvas during an alert does not restart the baseline.
+After an upgrade, reload all older sessions to use the same coordination format.
+The first use of an upgraded checkpoint establishes a fresh silent baseline.
+
+The checkpoint is saved before invoking the operating system: delivery is
 **at most once**, not guaranteed exactly once. A crash or delivery failure can
 lose alerts from the current batch; they are not retried. Separate machines or separate `COPILOT_HOME` directories do not
 share this coordination.
@@ -197,8 +205,9 @@ extension, or sent to the agent.
 > not control the OS's storage or retention of this content.
 
 Desktop coordination saves timestamps, hashed thread/activity identifiers,
-process ownership markers and sanitized error status under the user extension's
-`artifacts/` directory. GitHub CLI handles credentials; they never enter the canvas renderer.
+watcher group IDs, process ownership markers and sanitized error status under
+the user extension's `artifacts/` directory. GitHub CLI handles credentials;
+they never enter the canvas renderer.
 There is no telemetry or remote asset loading.
 
 The extension fetches notifications and public release metadata from GitHub

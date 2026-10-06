@@ -1,7 +1,8 @@
 import { constants } from "node:fs";
-import { lstat, mkdir, open, readdir, rename, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, rename } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { setTimeout as wait } from "node:timers/promises";
 import { GitHubClient, firstPage, POLL_MS } from "./github.mjs";
 import { groupThreads, InboxError, orderedThreads } from "./model.mjs";
 import { acquireLock, ownerPattern, processAlive, removeFile } from "./lock.mjs";
@@ -9,13 +10,15 @@ import { notifyDesktop, desktopCapabilities, soundValue, validSound } from "./no
 
 const CHECK_MS = 5000;
 const BURST_THRESHOLD = 5;
+const STATE_VERSION = 2;
 const MAX_STATE_BYTES = 262_144;
 const watchingMessage = "Watching in the background while a Notifications canvas is open. System notification settings control delivery.";
-const storageMessage = "Desktop notification coordination failed. Check permissions and the desktop-state.json, desktop-watchers and .desktop.lock entries in the extension artifacts directory.";
+const storageMessage = "Desktop notification coordination failed. Check permissions and the desktop-state.json, desktop-watchers, .desktop.lock and .desktop-watchers.lock entries in the extension artifacts directory.";
 const blankState = () => ({
-  version: 1, watchers: [], generation: null, watermark: null, fingerprints: [], nextPollAt: 0, error: null,
+  version: STATE_VERSION, watchers: [], cohort: null, generation: null, watermark: null, fingerprints: [], nextPollAt: 0, error: null,
 });
 const timestamp = value => Number.isFinite(value) && value >= 0;
+const cohortID = value => typeof value === "string" && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
 const fingerprint = item => createHash("sha256").update(`${item.id}:${item.updatedAt}`).digest("hex");
 const generation = settings => settings.desktopGeneration ?? "manual";
 
@@ -30,8 +33,9 @@ async function readState(path) {
     const stat = await file.stat();
     if (!stat.isFile() || stat.size > MAX_STATE_BYTES) throw new Error("Invalid desktop state file");
     const state = JSON.parse(await file.readFile("utf8"));
-    if (!state || state.version !== 1 || !Array.isArray(state.watchers) ||
+    if (!state || ![1, STATE_VERSION].includes(state.version) || !Array.isArray(state.watchers) ||
         state.watchers.some(owner => typeof owner !== "string" || !ownerPattern.test(owner)) ||
+        (!(state.version === 1 && state.cohort === undefined) && state.cohort !== null && !cohortID(state.cohort)) ||
         !(state.generation === null || typeof state.generation === "string") ||
         !(state.watermark === null || timestamp(state.watermark)) ||
         !Array.isArray(state.fingerprints) ||
@@ -48,10 +52,10 @@ async function readState(path) {
   }
 }
 
-async function saveState(path, state) {
-  const content = `${JSON.stringify(state)}\n`;
+async function saveDocument(path, data, temporaryDirectory = dirname(path)) {
+  const content = `${JSON.stringify(data)}\n`;
   if (Buffer.byteLength(content) > MAX_STATE_BYTES) throw new InboxError("desktop_storage", storageMessage, 500);
-  const temporary = `${path}-${randomUUID()}.tmp`;
+  const temporary = join(temporaryDirectory, `.desktop-${randomUUID()}.tmp`);
   const file = await open(temporary, "wx", 0o600);
   try {
     await file.writeFile(content);
@@ -64,15 +68,27 @@ async function saveState(path, state) {
   }
 }
 
-function recordActivity(state, items, now) {
+function initialBoundary(page) {
+  const times = page.items.filter(item => item.unread).map(item => Date.parse(item.updatedAt));
+  const boundary = times.length ? Math.max(...times) : page.serverTime;
+  if (!timestamp(boundary)) {
+    throw new InboxError("desktop_baseline",
+      "GitHub did not provide a valid snapshot timestamp for the inbox. Desktop alerts will retry before establishing a baseline.", 502);
+  }
+  return boundary;
+}
+
+function recordActivity(state, items, baseline, initial) {
   const unread = orderedThreads(items).filter(item => item.unread);
-  const latest = Math.max(state.watermark ?? now, ...unread.map(item => Date.parse(item.updatedAt)));
+  const previous = state.version === STATE_VERSION ? state.watermark : null;
+  const latest = initial ? Math.max(previous ?? baseline, baseline) :
+    Math.max(state.watermark, ...unread.map(item => Date.parse(item.updatedAt)));
   const known = new Set(state.fingerprints);
-  const arrivals = state.watermark === null ? [] : unread.filter(item => {
+  const arrivals = initial ? [] : unread.filter(item => {
     const time = Date.parse(item.updatedAt);
     return time > state.watermark || (time === state.watermark && !known.has(fingerprint(item)));
   });
-  const boundary = new Set(latest === state.watermark ? state.fingerprints : []);
+  const boundary = new Set(latest === previous ? state.fingerprints : []);
   for (const item of unread) {
     if (Date.parse(item.updatedAt) === latest) boundary.add(fingerprint(item));
   }
@@ -147,9 +163,11 @@ export class DesktopNotifications {
     await this.pending;
     if (!this.panels.size) {
       try {
-        await this.unregister();
-        this.client.clear();
-        this.setStatus("off", "Desktop notifications stopped because this session has no open Notifications canvas.");
+        await this.unregister({ onlyWhenClosed: true });
+        if (!this.panels.size) {
+          this.client.clear();
+          this.setStatus("off", "Desktop notifications stopped because this session has no open Notifications canvas.");
+        }
       } catch (error) {
         this.setStatus("error", errorMessage(error));
       }
@@ -179,21 +197,47 @@ export class DesktopNotifications {
     return this.pending;
   }
 
+  async registrationLock() {
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const release = await acquireLock(join(this.directory, ".desktop-watchers.lock"), { alive: this.alive });
+      if (release) return release;
+      await wait(25);
+    }
+    throw new InboxError("desktop_busy", "Another canvas is updating desktop watcher registration. Retrying shortly.", 503);
+  }
+
   async register() {
     if (this.registered) return;
     await mkdir(this.watchersPath, { recursive: true, mode: 0o700 });
     const stat = await lstat(this.watchersPath);
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Invalid watcher directory");
-    await writeFile(this.markerPath, "", { flag: "wx", mode: 0o600 });
-    this.registered = true;
+    const release = await this.registrationLock();
+    try {
+      const cohorts = new Set((await this.activeWatchers()).map(watcher => watcher.cohort).filter(Boolean));
+      if (cohorts.size > 1) throw new Error("Inconsistent watcher cohorts");
+      this.cohort = [...cohorts][0] ?? randomUUID();
+      // Registration must not wait for a poll or native delivery to record continuity.
+      await saveDocument(this.markerPath, { cohort: this.cohort }, this.directory);
+      this.registered = true;
+    } finally {
+      await release();
+    }
   }
 
-  async unregister() {
+  async unregister({ onlyWhenClosed = false } = {}) {
     if (!this.registered) return;
-    await removeFile(this.markerPath);
-    this.registered = false;
-    this.owner = `owner-${process.pid}-${randomUUID()}`;
-    this.markerPath = join(this.watchersPath, this.owner);
+    const owner = this.owner;
+    const release = await this.registrationLock();
+    try {
+      if (!this.registered || this.owner !== owner || (onlyWhenClosed && this.panels.size)) return;
+      await removeFile(this.markerPath);
+      this.registered = false;
+      this.cohort = null;
+      this.owner = `owner-${process.pid}-${randomUUID()}`;
+      this.markerPath = join(this.watchersPath, this.owner);
+    } finally {
+      await release();
+    }
   }
 
   async activeWatchers() {
@@ -201,8 +245,26 @@ export class DesktopNotifications {
     for (const entry of await readdir(this.watchersPath, { withFileTypes: true })) {
       const match = entry.name.match(ownerPattern);
       if (!entry.isFile() || !match || !Number.isSafeInteger(Number(match[1]))) throw new Error("Invalid watcher marker");
-      if (this.alive(Number(match[1]))) active.push(entry.name);
-      else await removeFile(join(this.watchersPath, entry.name));
+      const path = join(this.watchersPath, entry.name);
+      if (!this.alive(Number(match[1]))) {
+        await removeFile(path);
+        continue;
+      }
+      let file;
+      try {
+        file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+        const stat = await file.stat();
+        if (!stat.isFile() || stat.size > 1024) throw new Error("Invalid watcher marker");
+        const text = await file.readFile("utf8");
+        // Empty markers belong to older extension processes.
+        const cohort = text === "" ? null : JSON.parse(text)?.cohort;
+        if (cohort !== null && !cohortID(cohort)) throw new Error("Invalid watcher cohort");
+        active.push({ owner: entry.name, cohort });
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      } finally {
+        await file?.close();
+      }
     }
     return active;
   }
@@ -231,39 +293,39 @@ export class DesktopNotifications {
     try {
       const state = await readState(this.statePath);
       const previous = JSON.stringify(state);
-      const watchers = await this.activeWatchers();
-      if (!state.watchers.some(owner => watchers.includes(owner)) || state.generation !== generation(settings)) {
-        state.watermark = null;
-        state.fingerprints = [];
-        state.error = null;
-      }
-      state.watchers = watchers;
-      state.generation = generation(settings);
+      const initial = state.version !== STATE_VERSION || state.watermark === null ||
+        state.cohort !== this.cohort || state.generation !== generation(settings);
+      state.watchers = (await this.activeWatchers()).map(watcher => watcher.owner);
       signal.throwIfAborted();
       if (this.now() < state.nextPollAt) {
-        if (JSON.stringify(state) !== previous) await saveState(this.statePath, state);
+        if (JSON.stringify(state) !== previous) await saveDocument(this.statePath, state);
         this.setStatus(state.error ? "error" : "watching", state.error || watchingMessage);
         return;
       }
       // Reserve the next poll before network I/O so a crashed poller cannot cause a retry storm.
       state.nextPollAt = this.now() + POLL_MS;
-      await saveState(this.statePath, state);
+      await saveDocument(this.statePath, state);
       try {
         let next = firstPage();
+        let boundary = initial ? null : state.watermark;
         const items = [];
         while (next) {
           const page = await this.client.page(next, signal);
           signal.throwIfAborted();
           items.push(...page.items);
           state.nextPollAt = Math.max(state.nextPollAt, page.nextRefreshAt);
-          next = state.watermark !== null && !page.items.some(item => Date.parse(item.updatedAt) < state.watermark) ? page.next : null;
+          if (boundary === null) boundary = initialBoundary(page);
+          next = page.items.some(item => item.unread && Date.parse(item.updatedAt) < boundary) ? null : page.next;
         }
         signal.throwIfAborted();
-        const arrivals = recordActivity(state, items, this.now());
-        state.watchers = await this.activeWatchers();
+        const arrivals = recordActivity(state, items, boundary, initial);
+        state.version = STATE_VERSION;
+        state.cohort = this.cohort;
+        state.generation = generation(settings);
+        state.watchers = (await this.activeWatchers()).map(watcher => watcher.owner);
         state.error = null;
         // Claim activity durably before delivery: a crash may lose an alert, but never replay it.
-        await saveState(this.statePath, state);
+        await saveDocument(this.statePath, state);
         for (const message of notificationMessages(arrivals)) {
           const current = await this.preferences.document();
           signal.throwIfAborted();
@@ -276,7 +338,7 @@ export class DesktopNotifications {
         if (signal.aborted) throw error;
         state.nextPollAt = Math.max(state.nextPollAt, this.now() + POLL_MS, this.client.blockedUntil);
         state.error = errorMessage(error);
-        await saveState(this.statePath, state);
+        await saveDocument(this.statePath, state);
         throw error;
       }
     } finally {

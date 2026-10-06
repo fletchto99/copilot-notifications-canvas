@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -9,6 +9,7 @@ import { DesktopNotifications } from "../.github/extensions/github-notifications
 import { Preferences } from "../.github/extensions/github-notifications/settings.mjs";
 import { GitHubClient, POLL_MS } from "../.github/extensions/github-notifications/github.mjs";
 import { InboxError } from "../.github/extensions/github-notifications/model.mjs";
+import { acquireLock } from "../.github/extensions/github-notifications/lock.mjs";
 import { http, thread, next } from "./fixtures.mjs";
 
 const epoch = Date.parse("2026-01-10T12:00:00Z");
@@ -97,6 +98,142 @@ test("initial backlog is silent and small batches retain each thread's title and
   assert.match(state.fingerprints[0], /^[a-f0-9]{64}$/);
   assert.doesNotMatch(JSON.stringify(state), /Synthetic|example\/widgets|updatedAt|repository|title/);
   assert.equal((await stat(join(f.directory, "desktop-state.json"))).mode & 0o777, 0o600);
+});
+
+test("a delayed initial response cannot hide activity that arrives before local fetch completion", async t => {
+  const f = await fixture(t);
+  let first = true;
+  let rows = [updated("1", epoch - 60_000)];
+  f.response(() => {
+    if (first) { first = false; f.advance(2000); }
+    return http(rows, { date: new Date(epoch).toUTCString() });
+  });
+  const watcher = f.make();
+  await watcher.check();
+  assert.equal((await f.state()).watermark, epoch - 60_000);
+  assert.equal(f.deliveries.length, 0);
+  rows = [updated("2", epoch + 1000), ...rows];
+  f.advance();
+  await watcher.check();
+  assert.deepEqual(f.deliveries.map(alert => alert.body), ["Synthetic notification 2"]);
+});
+
+test("initial baselines preserve same-second arrivals even when the local clock is ahead", async t => {
+  for (const skew of [500, 3_600_000]) {
+    const f = await fixture(t);
+    f.advance(skew);
+    const watcher = f.make();
+    await watcher.check();
+    assert.equal((await f.state()).watermark, epoch);
+    f.rows([thread(), thread("2")]);
+    f.advance();
+    await watcher.check();
+    assert.deepEqual(f.deliveries.map(alert => alert.body), ["Synthetic notification 2"]);
+  }
+});
+
+test("an empty initial inbox uses server time and does not skip same-second or delayed arrivals", async t => {
+  for (const delta of [0, 1000]) {
+    const f = await fixture(t);
+    f.advance(3_600_000);
+    let rows = [];
+    f.response(() => http(rows, { date: new Date(epoch).toUTCString() }));
+    const watcher = f.make();
+    await watcher.check();
+    assert.equal((await f.state()).watermark, epoch);
+    rows = [updated("2", epoch + delta), updated("1", epoch - 1000)];
+    f.advance();
+    await watcher.check();
+    assert.deepEqual(f.deliveries.map(alert => alert.body), ["Synthetic notification 2"]);
+  }
+});
+
+test("an empty inbox without a valid API timestamp reports an error rather than guessing a local baseline", async t => {
+  for (const headers of [{}, { date: "invalid" }]) {
+    const f = await fixture(t);
+    f.response(() => http([], headers));
+    const watcher = f.make();
+    await watcher.check();
+    assert.equal(watcher.snapshot().state, "error");
+    assert.match(watcher.snapshot().message, /snapshot timestamp/);
+    assert.equal((await f.state()).watermark, null);
+    assert.equal(f.deliveries.length, 0);
+    await watcher.check();
+    assert.equal(watcher.snapshot().state, "error");
+    assert.equal(f.calls.length, 1);
+    f.response(() => http([], { date: new Date(epoch).toUTCString() }));
+    f.advance();
+    await watcher.check();
+    assert.equal(watcher.snapshot().state, "watching");
+    assert.equal((await f.state()).watermark, epoch);
+  }
+});
+
+test("initial pagination records every boundary fingerprint before allowing same-second arrivals", async t => {
+  const f = await fixture(t);
+  let rows = Array.from({ length: 60 }, (_, index) => updated(String(index + 1), epoch));
+  f.response(args => args.at(-1).includes("page=1") ? http(rows.slice(0, 50), { link: next }) :
+    http([...rows.slice(50), updated("99", epoch - 1000)]));
+  const watcher = f.make();
+  await watcher.check();
+  assert.equal(f.calls.length, 2);
+  assert.equal((await f.state()).fingerprints.length, 60);
+  assert.equal(f.deliveries.length, 0);
+  rows = [updated("61", epoch), ...rows.slice(40)];
+  f.advance();
+  await watcher.check();
+  assert.deepEqual(f.deliveries.map(alert => alert.body), ["Synthetic notification 61"]);
+});
+
+test("a failed initial boundary page does not commit a partial baseline", async t => {
+  const f = await fixture(t);
+  let fail = true;
+  const rows = Array.from({ length: 50 }, (_, index) => updated(String(index + 1), epoch));
+  f.response(args => args.at(-1).includes("page=1") ? http(rows, { link: next }) :
+    fail ? http({}, {}, 500) : http([updated("51", epoch)]));
+  const watcher = f.make();
+  await watcher.check();
+  assert.equal((await f.state()).watermark, null);
+  assert.deepEqual((await f.state()).fingerprints, []);
+  fail = false;
+  f.advance();
+  await watcher.check();
+  assert.equal(f.deliveries.length, 0);
+  assert.equal((await f.state()).fingerprints.length, 51);
+});
+
+test("activity seen on a later initial page does not advance the first snapshot's cutoff", async t => {
+  const f = await fixture(t);
+  const baseline = Array.from({ length: 50 }, (_, index) => updated(String(index + 1), epoch));
+  let later = false;
+  f.response(args => args.at(-1).includes("page=1") ?
+    http(later ? [updated("51", epoch + 2000), updated("52", epoch + 1000), ...baseline] : baseline, { link: next }) :
+    http([updated("51", epoch + 2000), updated("99", epoch - 1000)]));
+  const watcher = f.make();
+  await watcher.check();
+  assert.equal((await f.state()).watermark, epoch);
+  assert.equal(f.deliveries.length, 0);
+  later = true;
+  f.advance();
+  await watcher.check();
+  assert.deepEqual(f.deliveries.map(alert => alert.body), ["Synthetic notification 51", "Synthetic notification 52"]);
+});
+
+test("legacy completion-clock checkpoints migrate to a silent API-derived baseline", async t => {
+  const f = await fixture(t);
+  await writeFile(join(f.directory, "desktop-state.json"), JSON.stringify({
+    version: 1, watchers: [], generation: null, watermark: epoch + 3_600_000,
+    fingerprints: [], nextPollAt: 0, error: null,
+  }));
+  const watcher = f.make();
+  await watcher.check();
+  assert.equal((await f.state()).version, 2);
+  assert.equal((await f.state()).watermark, epoch);
+  assert.equal(f.deliveries.length, 0);
+  f.rows([updated("2", epoch + 1000), thread()]);
+  f.advance();
+  await watcher.check();
+  assert.deepEqual(f.deliveries.map(alert => alert.body), ["Synthetic notification 2"]);
 });
 
 test("bursts group at exactly five new notifications from a repository", async t => {
@@ -225,6 +362,7 @@ test("copies share the poll deadline and checkpoint, including after one closes"
   const two = f.make();
   await Promise.all([one.check(), two.check()]);
   assert.equal(f.calls.length, 1);
+  assert.equal(one.cohort, two.cohort);
   await two.check();
   const time = f.advance();
   f.rows([updated("2", time)]);
@@ -238,6 +376,99 @@ test("copies share the poll deadline and checkpoint, including after one closes"
   f.rows([updated("2", f.advance())]);
   await two.check();
   assert.equal(f.deliveries.length, 2);
+});
+
+test("watchers joining during delivery retain continuity when the original closes", async t => {
+  for (const chainedHandoff of [false, true]) {
+    const f = await fixture(t);
+    let entered;
+    let finish;
+    const ready = new Promise(resolve => { entered = resolve; });
+    const waiting = new Promise(resolve => { finish = resolve; });
+    const one = f.make({ notify: async () => { entered(); await waiting; } });
+    await one.check();
+    const cohort = one.cohort;
+    const time = f.advance();
+    f.rows([updated("2", time), thread()]);
+    const delivering = one.check();
+    try {
+      await ready;
+      const two = f.make();
+      await two.check();
+      assert.equal(two.snapshot().state, "shared");
+      assert.equal(two.cohort, cohort);
+      assert.equal((await f.state()).watchers.includes(two.owner), false);
+      let survivor = two;
+      if (chainedHandoff) {
+        survivor = f.make();
+        await survivor.check();
+        assert.equal(survivor.cohort, cohort);
+        await two.close();
+      }
+      const closing = one.close();
+      finish();
+      await delivering;
+      await closing;
+      f.rows([updated("3", f.advance()), updated("2", time), thread()]);
+      await survivor.check();
+      assert.deepEqual(f.deliveries.map(alert => alert.body), ["Synthetic notification 3"]);
+      assert.equal((await f.state()).cohort, cohort);
+    } finally {
+      finish();
+      await delivering;
+    }
+  }
+});
+
+test("a genuine gap creates a new cohort without replaying previously claimed activity", async t => {
+  const f = await fixture(t);
+  let attempts = 0;
+  const one = f.make({ notify: async () => {
+    attempts++;
+    throw new InboxError("desktop_delivery", "Synthetic delivery failure");
+  } });
+  await one.check();
+  const cohort = one.cohort;
+  const time = f.advance();
+  f.rows([updated("2", time), thread()]);
+  await one.check();
+  assert.equal(attempts, 1);
+  await one.close();
+  f.rows([thread()]);
+  f.advance();
+  const two = f.make();
+  await two.check();
+  assert.notEqual(two.cohort, cohort);
+  assert.equal((await f.state()).watermark, time);
+  f.rows([updated("2", time), thread()]);
+  f.advance();
+  await two.check();
+  assert.equal(f.deliveries.length, 0);
+  f.rows([updated("3", f.advance()), updated("2", time), thread()]);
+  await two.check();
+  assert.deepEqual(f.deliveries.map(alert => alert.body), ["Synthetic notification 3"]);
+});
+
+test("closing cannot unregister a panel reopened while its registration lock is busy", async t => {
+  const f = await fixture(t);
+  const watcher = f.make();
+  await watcher.check();
+  const cohort = watcher.cohort;
+  const release = await acquireLock(join(f.directory, ".desktop-watchers.lock"));
+  assert.ok(release);
+  const closing = watcher.remove("panel-1");
+  try {
+    await new Promise(resolve => setImmediate(resolve));
+    watcher.add("reopened");
+  } finally {
+    await release();
+  }
+  await closing;
+  assert.equal(watcher.registered, true);
+  assert.equal(watcher.cohort, cohort);
+  f.rows([updated("2", f.advance()), thread()]);
+  await watcher.check();
+  assert.deepEqual(f.deliveries.map(alert => alert.body), ["Synthetic notification 2"]);
 });
 
 test("closing one local panel keeps watching; closing the last stops and reopening baselines silently", async t => {
@@ -362,6 +593,18 @@ test("malformed state, symlinks and unknown locks fail closed without alerting o
     if (kind === "invalid") assert.equal(await readFile(path, "utf8"), "invalid");
     if (kind === "lock") assert.equal(await readFile(join(f.directory, ".desktop.lock"), "utf8"), "unrelated");
   }
+});
+
+test("invalid watcher metadata fails closed without overwriting the marker or fetching notifications", async t => {
+  const f = await fixture(t);
+  const watcher = f.make();
+  await mkdir(watcher.watchersPath);
+  await writeFile(watcher.markerPath, '{"cohort":"invalid"}');
+  await watcher.check();
+  assert.equal(watcher.snapshot().state, "error");
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.deliveries.length, 0);
+  assert.equal(await readFile(watcher.markerPath, "utf8"), '{"cohort":"invalid"}');
 });
 
 async function childWatcher(t, directory) {
@@ -489,6 +732,25 @@ test("a crash after claiming and sending activity cannot replay it in another pr
     await two.check({ now: time + POLL_MS, updated: time });
     assert.equal(two.events.filter(event => event.type === "alert").length, 0);
     await two.check({ now: time + 2 * POLL_MS, updated: time + 2 * POLL_MS });
+    assert.equal(two.events.filter(event => event.type === "alert").length, 1);
+  });
+});
+
+test("a separate process joining during delivery inherits continuity even if the sender crashes", { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  await t.test("late joining process", async t => {
+    const one = await childWatcher(t, f.directory);
+    await one.check();
+    const time = epoch + POLL_MS;
+    one.start({ now: time, updated: time, pauseDelivery: true });
+    await one.waitFor("alert");
+    const two = await childWatcher(t, f.directory);
+    const joined = await two.check({ now: time, updated: time });
+    assert.equal(joined.status.state, "shared");
+    await one.stop();
+    await two.check({ now: time + POLL_MS, updated: time + POLL_MS });
+    assert.equal(two.events.filter(event => event.type === "alert").length, 1);
+    await two.check({ now: time + 2 * POLL_MS, updated: time + POLL_MS });
     assert.equal(two.events.filter(event => event.type === "alert").length, 1);
   });
 });
