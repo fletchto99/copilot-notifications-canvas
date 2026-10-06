@@ -989,6 +989,27 @@ test("mark-read requires a click, removes only on confirmation and stays silent"
   ui.window.events.pagehide();
 });
 
+test("mark-read keeps repository groups alphabetical as their newest and last notifications disappear", async () => {
+  const ui = await renderer({ initialRows: [
+    thread("1", { repository: { full_name: "example/alpha" }, updated_at: "2026-01-30T00:00:00Z" }),
+    thread("2", { repository: { full_name: "example/alpha" }, updated_at: "2026-01-01T00:00:00Z" }),
+    thread("3", { repository: { full_name: "example/middle" }, updated_at: "2026-01-20T00:00:00Z" }),
+    thread("4", { repository: { full_name: "example/zulu" }, updated_at: "2026-01-10T00:00:00Z" }),
+  ] });
+  const repositories = () => ui.ids.get("groups").querySelectorAll("button")
+    .filter(node => node.dataset.repository).map(node => node.dataset.repository);
+  assert.deepEqual(repositories(), ["example/alpha", "example/middle", "example/zulu"]);
+
+  await ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "1").events.click();
+  assert.deepEqual(repositories(), ["example/alpha", "example/middle", "example/zulu"]);
+  assert.equal(ui.document.querySelectorAll("article").length, 3);
+
+  await ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "2").events.click();
+  assert.deepEqual(repositories(), ["example/middle", "example/zulu"]);
+  assert.equal(ui.document.querySelectorAll("article").length, 2);
+  ui.window.events.pagehide();
+});
+
 test("mark-read failure retains the row with a usable retry control", async () => {
   const ui = await renderer({ readFailure: true });
   const button = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "1");

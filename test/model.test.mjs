@@ -3,22 +3,39 @@ import assert from "node:assert/strict";
 import { filterSchema, groupThreads, normalizeThreads, notificationLink, orderedThreads, validateFilters } from "../.github/extensions/github-notifications/model.mjs";
 import { thread } from "./fixtures.mjs";
 
-test("groups, deduplicates and orders newest activity first, then stable IDs/names", () => {
+test("groups alphabetically while deduplicating and ordering notifications newest first, then by ID", () => {
   const items = normalizeThreads([
     thread("1", { updated_at: "2026-01-01T00:00:00Z" }),
     thread("2", { repository: { full_name: "example/another" }, updated_at: "2026-01-15T00:00:00Z" }),
     thread("1", { updated_at: "2026-01-20T00:00:00Z" }),
     thread("3", { unread: false }),
+    thread("5", { updated_at: "2026-01-20T00:00:00Z" }),
+    thread("4", { updated_at: "2026-01-10T00:00:00Z" }),
   ]);
   const groups = groupThreads(items, { query: "" });
-  assert.deepEqual(groups.map(group => group.repository), ["example/widgets", "example/another"]);
-  assert.deepEqual(groups[0].items.map(item => item.id), ["1"]);
-  assert.equal(groups[0].unread, 1);
-  assert.equal(orderedThreads(items).length, 3);
-  assert.equal(groupThreads(items, { query: " WIDGETS " })[0].items.length, 1);
+  assert.deepEqual(groups.map(group => group.repository), ["example/another", "example/widgets"]);
+  assert.deepEqual(groups[1].items.map(item => item.id), ["1", "5", "4"]);
+  assert.equal(groups[1].unread, 3);
+  assert.equal(orderedThreads(items).length, 5);
+  assert.equal(groupThreads(items, { query: " WIDGETS " })[0].items.length, 3);
   assert.equal(groupThreads(items, { query: "synthetic notification 2" })[0].repository, "example/another");
   assert.deepEqual(groupThreads(items, { query: "missing" }), []);
   assert.deepEqual(groupThreads(items, { query: "synthetic notification 3" }), []);
+});
+
+test("group order follows the full repository name regardless of activity, input order or search", () => {
+  const items = normalizeThreads([
+    thread("1", { repository: { full_name: "zeta/alpha" }, updated_at: "2026-01-30T00:00:00Z" }),
+    thread("2", { repository: { full_name: "example/Zebra" }, updated_at: "2026-01-20T00:00:00Z" }),
+    thread("3", { repository: { full_name: "Alpha/widgets" }, updated_at: "2026-01-10T00:00:00Z" }),
+    thread("4", { repository: { full_name: "example/another" }, updated_at: "2026-01-01T00:00:00Z" }),
+  ]);
+  for (const threads of [items, [...items].reverse()]) {
+    assert.deepEqual(groupThreads(threads, { query: "" }).map(group => group.repository),
+      ["Alpha/widgets", "example/another", "example/Zebra", "zeta/alpha"]);
+    assert.deepEqual(groupThreads(threads, { query: "example/" }).map(group => group.repository),
+      ["example/another", "example/Zebra"]);
+  }
 });
 
 test("known API subject links become safe GitHub web links", () => {
