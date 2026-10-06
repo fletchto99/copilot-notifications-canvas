@@ -394,6 +394,18 @@ test("visible toggle reports browser audio failures, and pagehide closes its con
   assert.equal(ui.ids.get("sound").attributes["aria-checked"], "false");
 });
 
+test("Settings uses an icon-only toggle with an accessible name and tooltip", () => {
+  const summary = html.match(/<summary\b([^>]*\bid="settings-toggle"[^>]*)>([\s\S]*?)<\/summary>/);
+  assert.ok(summary);
+  const [, attributes, content] = summary;
+  assert.match(attributes, /aria-label="Settings"/);
+  assert.match(attributes, /title="Settings"/);
+  assert.match(attributes, /aria-controls="settings-panel"/);
+  assert.match(attributes, /aria-expanded="false"/);
+  assert.match(content, /<svg\b[^>]*aria-hidden="true"[^>]*focusable="false"/);
+  assert.equal(content.replace(/<[^>]*>/g, "").trim(), "");
+});
+
 test("Settings contains both switches, saves startup preference and closes accessibly", async () => {
   const ui = await renderer();
   const settings = ui.ids.get("settings");
