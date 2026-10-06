@@ -18,6 +18,7 @@ const requestControllers = new Set();
 let connectionError = "";
 let preferences;
 let settingsBusy = false;
+const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
 const markingRead = new Set();
 let readError = "";
 let batchBusy = false;
@@ -69,22 +70,45 @@ async function api(path, input) {
   }
 }
 
+function darkMode() {
+  if (typeof preferences?.darkMode === "boolean") return preferences.darkMode;
+  const mode = document.documentElement.getAttribute("data-color-mode") ?? document.body.getAttribute("data-color-mode");
+  return mode === "dark" || (mode !== "light" && systemTheme.matches);
+}
+
+function renderTheme() {
+  if (typeof preferences?.darkMode === "boolean") {
+    document.documentElement.dataset.notificationTheme = preferences.darkMode ? "dark" : "light";
+    $("dark-mode-help").textContent = "Saved across sessions. Applies to this panel now and other panels when opened or shown.";
+  } else {
+    delete document.documentElement.dataset.notificationTheme;
+    $("dark-mode-help").textContent = "Follows Copilot's theme until you choose a mode. Your choice is saved across sessions.";
+  }
+  $("dark-mode").setAttribute("aria-checked", String(darkMode()));
+}
+
 async function settingsRequest(input) {
   if (settingsBusy || !visible()) return;
+  const previousFocus = document.activeElement;
   settingsBusy = true;
   $("auto-open").disabled = true;
-  $("settings-status").textContent = input ? "Saving startup setting..." : "Loading startup setting...";
+  $("dark-mode").disabled = true;
+  $("settings-status").textContent = input ? "Saving settings..." : "Loading settings...";
+  $("settings-error").hidden = true;
   try {
     preferences = await api("settings", input);
-    $("auto-open").textContent = `Open on new sessions: ${preferences.autoOpen ? "On" : "Off"}`;
     $("auto-open").setAttribute("aria-checked", String(preferences.autoOpen));
-    $("settings-status").textContent = input ? "Saved. Applies to future new sessions." : "";
+    renderTheme();
+    $("settings-status").textContent = "";
   } catch (error) {
-    preferences = undefined;
     $("settings-status").textContent = `${error.message || "Settings request failed."} Close and reopen Settings to retry.`;
+    $("settings-error").textContent = $("settings-status").textContent;
+    $("settings-error").hidden = false;
   } finally {
     settingsBusy = false;
     $("auto-open").disabled = !preferences;
+    $("dark-mode").disabled = !preferences;
+    if (previousFocus === $("auto-open") || previousFocus === $("dark-mode")) restoreFocus(previousFocus);
   }
 }
 
@@ -475,6 +499,9 @@ $("settings").addEventListener("toggle", () => {
 $("auto-open").addEventListener("click", () => {
   if (preferences) void settingsRequest({ autoOpen: !preferences.autoOpen });
 });
+$("dark-mode").addEventListener("click", () => {
+  if (preferences) void settingsRequest({ darkMode: !darkMode() });
+});
 document.addEventListener("click", event => {
   if ($("settings").open && !$("settings").contains(event.target)) closeSettings();
 });
@@ -506,8 +533,10 @@ $("collapse").addEventListener("click", () => {
 function visibilityChanged() {
   clearTimeout(timer);
   sound.resetBaseline();
-  if (visible()) void tick();
-  else {
+  if (visible()) {
+    void tick();
+    void settingsRequest();
+  } else {
     for (const controller of requestControllers) controller.abort();
     closeSettings();
   }
@@ -518,16 +547,25 @@ const observer = new IntersectionObserver(entries => {
   visibilityChanged();
 });
 observer.observe(document.documentElement);
+const themeObserver = new MutationObserver(renderTheme);
+themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-color-mode"] });
+themeObserver.observe(document.body, { attributes: true, attributeFilter: ["data-color-mode"] });
+systemTheme.addEventListener("change", renderTheme);
+renderTheme();
 window.addEventListener("pagehide", () => {
   stopped = true;
   clearTimeout(timer);
   clearTimeout(searchTimer);
   for (const controller of requestControllers) controller.abort();
   observer.disconnect();
+  themeObserver.disconnect();
+  systemTheme.removeEventListener("change", renderTheme);
   void sound.close();
 });
-if (hasCapability) void tick();
-else {
+if (hasCapability) {
+  void tick();
+  void settingsRequest();
+} else {
   $("notice").hidden = false;
   $("notice").textContent = "Missing canvas capability. Open this canvas from Copilot instead of browsing to its local address.";
   $("empty-title").textContent = "Open from Copilot";
