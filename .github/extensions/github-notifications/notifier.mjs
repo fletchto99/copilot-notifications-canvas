@@ -83,7 +83,8 @@ export async function notifyDesktop({ title, body, sound = "none", signal, platf
   let args;
   if (platform === "darwin") {
     command = "/usr/bin/osascript";
-    args = ["-e", notificationScript, heading, text, sound === "default" ? "Glass" : sound];
+    // Foundation's NSUserNotificationDefaultSoundName uses this identifier.
+    args = ["-e", notificationScript, heading, text, sound === "default" ? "DefaultSoundName" : sound];
   } else if (platform === "win32") {
     command = win32.join(env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
     args = ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", windowsScript];

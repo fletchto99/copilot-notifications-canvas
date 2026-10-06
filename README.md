@@ -76,7 +76,7 @@ app, package or background service is installed automatically.
 
 | Platform | Backend | Sounds and requirements |
 | --- | --- | --- |
-| macOS | Built-in `/usr/bin/osascript` | Named system sounds such as Glass, Ping and Submarine. System default uses Glass. Allow notifications for the script sender. |
+| macOS | Built-in `/usr/bin/osascript` | Named system sounds such as Glass, Ping and Submarine, or the native system default. Allow notifications for the script sender. |
 | Windows 10/11 | Built-in Windows PowerShell and WinRT toasts | Default, IM, Mail, Reminder and SMS. Requires PowerShell's existing Start menu registration and an interactive Windows desktop. No module or new app registration is installed. |
 | Linux | `notify-send` and the desktop notification service | Default or themed sound hints. Requires existing libnotify tools and a graphical D-Bus session; missing dependencies produce an error, not an automatic installation. Desktops may ignore sound or silence hints. |
 

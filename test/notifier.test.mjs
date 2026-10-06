@@ -20,7 +20,7 @@ test("macOS passes repository, untrusted title and selected sound as data, never
   for (const sound of ["none", "Glass", "Ping", "Submarine", "default"]) {
     const [program, args] = await command("darwin", sound);
     assert.equal(program, "/usr/bin/osascript");
-    assert.deepEqual(args, ["-e", notificationScript, title, body, sound === "default" ? "Glass" : sound]);
+    assert.deepEqual(args, ["-e", notificationScript, title, body, sound === "default" ? "DefaultSoundName" : sound]);
     assert.equal(notificationScript.includes(body), false);
   }
 });
