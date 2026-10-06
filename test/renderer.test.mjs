@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { createContext, runInContext } from "node:vm";
+import { fileURLToPath } from "node:url";
 import { Inbox } from "../.github/extensions/github-notifications/inbox.mjs";
 import { GitHubClient } from "../.github/extensions/github-notifications/github.mjs";
 import { NotificationSound } from "../.github/extensions/github-notifications/sound.mjs";
@@ -196,7 +197,9 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
     },
   });
   assert.match(script, /^import \{ NotificationSound \} from "\.\/sound\.mjs";/);
-  runInContext(script.replace(/^import \{ NotificationSound \} from "\.\/sound\.mjs";/, ""), context);
+  runInContext(script.replace(/^import \{ NotificationSound \} from "\.\/sound\.mjs";/, ""), context, {
+    filename: fileURLToPath(new URL("../.github/extensions/github-notifications/app.mjs", import.meta.url)),
+  });
   await settle();
   return {
     calls, document, window, ids, timers, context, audioContexts, inbox, patches, githubCalls, copied, media,

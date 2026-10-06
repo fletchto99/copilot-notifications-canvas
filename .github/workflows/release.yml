@@ -18,6 +18,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  checks:
+    needs: validate
+    uses: ./.github/workflows/tests.yml
   validate:
     runs-on: ubuntu-slim
     timeout-minutes: 5
@@ -44,10 +47,8 @@ jobs:
         env:
           RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
         run: node scripts/check-release.mjs "$RELEASE_VERSION"
-      - name: Run tests
-        run: node --test test/*.test.mjs
   publish:
-    needs: validate
+    needs: [validate, checks]
     runs-on: ubuntu-slim
     timeout-minutes: 5
     permissions:
