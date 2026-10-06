@@ -417,7 +417,10 @@ test("Load more explains when a refresh is needed after a read", async () => {
 test("Force refresh is an always-enabled link-style footer button beside the checked time", async () => {
   assert.doesNotMatch(html, /id="refresh"|>Refresh<\/button>|class="heading"/);
   assert.match(html, /<footer>\s*<p class="refresh-status">\s*<span id="updated">[^<]*<\/span>\s*<button id="force-refresh" class="refresh-link" type="button">Force refresh<\/button>/);
-  assert.match(styles, /\.refresh-link \{[^}]*border: 0;[^}]*padding: 0;[^}]*text-decoration: underline;/);
+  assert.match(styles, /\.refresh-link \{[^}]*border: 0;[^}]*padding: 0;/);
+  assert.match(styles, /a, \.refresh-link \{ color: var\(--accent\); text-decoration: none; \}/);
+  assert.match(styles, /a:hover, \.refresh-link:hover \{ text-decoration: underline; \}/);
+  assert.match(styles, /button:hover:not\(:disabled, \.repo-toggle, \.refresh-link\)/);
   assert.doesNotMatch(script, /\$\("force-refresh"\)\.disabled\s*=/);
   const extension = await readFile(new URL("../.github/extensions/github-notifications/extension.mjs", import.meta.url), "utf8");
   assert.match(extension, /name: "refresh"/);
@@ -1027,7 +1030,7 @@ test("repository header shares its hover background across the toggle and read a
   assert.equal(disclosure.className, "repo-toggle");
   assert.equal(disclosure.parentNode.className, "repo-header");
   assert.equal(groupRead.parentNode, disclosure.parentNode);
-  assert.match(styles, /button:hover:not\(:disabled, \.repo-toggle\), summary:hover, \.repo-header:hover, \.row:hover \{\s*background: color-mix\(in srgb, var\(--canvas-text\) 4%, transparent\);/);
+  assert.match(styles, /button:hover:not\(:disabled, \.repo-toggle, \.refresh-link\), summary:hover, \.repo-header:hover, \.row:hover \{\s*background: color-mix\(in srgb, var\(--canvas-text\) 4%, transparent\);/);
   assert.match(styles, /@media \(prefers-reduced-motion: no-preference\) \{\s*button, a, \.repo-header \{ transition: background-color \.12s ease; \}/);
   ui.window.events.pagehide();
 });
