@@ -104,10 +104,15 @@ export class Inbox {
     return this.summary();
   }
 
-  async refresh() {
+  async refresh(input = {}) {
+    if (!input || typeof input !== "object" || Array.isArray(input) ||
+        Object.keys(input).some(key => key !== "force") ||
+        (input.force !== undefined && typeof input.force !== "boolean")) {
+      throw new InboxError("invalid_input", "Refresh accepts only an optional force boolean.", 400);
+    }
     if (this.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
     if (this.batch.locked) throw new InboxError("busy", "Finish or cancel the repository batch first.", 409);
-    if (this.client.now() < this.nextRefreshAt) {
+    if (!input.force && this.client.now() < this.nextRefreshAt) {
       if (this.error) throw new InboxError(this.error.code, this.error.message, 503);
       return this.summary();
     }
@@ -117,7 +122,7 @@ export class Inbox {
       let next = firstPage();
       const target = Math.max(1, this.pages.length);
       while (next && pages.length < target) {
-        const page = await this.client.page(next, this.controller.signal);
+        const page = await this.client.page(next, this.controller.signal, { force: input.force });
         pages.push(page);
         next = page.next;
       }
@@ -132,7 +137,7 @@ export class Inbox {
 
   async more() {
     if (this.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
-    if (this.needsRefresh) throw new InboxError("refresh_required", "Wait for the next automatic refresh before loading more after marking a notification read.", 409);
+    if (this.needsRefresh) throw new InboxError("refresh_required", "Refresh notifications before loading more after marking a notification read.", 409);
     if (!this.pages.at(-1)?.next) throw new InboxError("no_more_pages", "No more notifications to load.", 409);
     return this.execute(async () => {
       const revision = this.client.revision;

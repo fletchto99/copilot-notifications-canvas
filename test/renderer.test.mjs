@@ -5,7 +5,7 @@ import { createContext, runInContext } from "node:vm";
 import { Inbox } from "../.github/extensions/github-notifications/inbox.mjs";
 import { GitHubClient } from "../.github/extensions/github-notifications/github.mjs";
 import { NotificationSound } from "../.github/extensions/github-notifications/sound.mjs";
-import { http, thread } from "./fixtures.mjs";
+import { http, next, thread } from "./fixtures.mjs";
 import { FakeAudioContext } from "./audio-fixtures.mjs";
 
 const script = await readFile(new URL("../.github/extensions/github-notifications/app.mjs", import.meta.url), "utf8");
@@ -178,7 +178,8 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
         if (onUpdates) releaseMetadata = await onUpdates();
         return { ok: true, json: async () => releaseMetadata };
       }
-      if (path === "/api/refresh") await inbox.refresh();
+      if (path === "/api/refresh") await inbox.refresh(JSON.parse(options.body));
+      if (path === "/api/more") await inbox.more();
       if (path === "/api/state") {
         const snapshot = { ...inbox.snapshot(), updates: releaseMetadata };
         if (onState) await onState();
@@ -375,28 +376,199 @@ test("canvas is titled Unread Notifications without mode tabs or the old All not
   assert.doesNotMatch(html, /id="(?:all|unread|api-limit)"/);
 });
 
-test("inbox status says unread notifications and keeps loaded coverage separate", async () => {
+test("inbox status says unread notifications without a redundant bottom count or divider", async () => {
   const ui = await renderer({ initialRows: [thread("1"), thread("2")] });
   assert.equal(ui.ids.get("count").textContent, "2 shown / 1 repositories / 2 unread notifications");
-  assert.match(ui.ids.get("coverage").textContent, /^2 notifications loaded\./);
+  assert.equal(ui.ids.has("coverage"), false);
+  assert.doesNotMatch(script, /End of the available inbox|notifications loaded\./);
+  assert.doesNotMatch(styles, /(?:^|\n)footer \{[^}]*border-top:/);
   await runInContext('update("filters", { query: "notification 1" })', ui.context);
   assert.equal(ui.ids.get("count").textContent, "1 shown / 1 repositories / 2 unread notifications");
-  assert.match(ui.ids.get("coverage").textContent, /Search covers loaded notifications only\./);
+  assert.match(html, /Search loaded notification titles and repositories/);
   ui.window.events.pagehide();
 });
 
-test("manual Refresh controls are absent while the automatic endpoint and SDK action remain", async () => {
+test("Load more still fetches another page of 50 and disappears when the inbox ends", async () => {
+  const first = Array.from({ length: 50 }, (_, index) => thread(String(index + 1)));
+  const second = Array.from({ length: 50 }, (_, index) => thread(String(index + 51)));
+  const ui = await renderer({ onFetch: args => args.at(-1).includes("page=1") ?
+    http(first, { link: next }) : http(second) });
+  const more = ui.ids.get("more");
+  assert.equal(ui.document.querySelectorAll("article").length, 50);
+  assert.equal(more.hidden, false);
+  assert.equal(more.disabled, false);
+  assert.equal(more.textContent, "Load more (up to 50)");
+  await more.events.click();
+  assert.equal(ui.document.querySelectorAll("article").length, 100);
+  assert.equal(more.hidden, true);
+  assert.equal(ui.githubCalls.length, 2);
+  assert.ok(ui.githubCalls.every(args => args.at(-1).includes("per_page=50")));
+  ui.window.events.pagehide();
+});
+
+test("Load more explains when a refresh is needed after a read", async () => {
+  const ui = await renderer({ onFetch: () => http([thread("1"), thread("2")], { link: next }) });
+  await ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "1").events.click();
+  assert.equal(ui.ids.get("more").disabled, true);
+  assert.equal(ui.ids.get("more").title, "Refresh notifications before loading more.");
+  ui.window.events.pagehide();
+});
+
+test("Force refresh is an always-enabled link-style footer button beside the checked time", async () => {
   assert.doesNotMatch(html, /id="refresh"|>Refresh<\/button>|class="heading"/);
-  assert.doesNotMatch(script, /\$\("refresh"\)/);
+  assert.match(html, /<footer>\s*<p class="refresh-status">\s*<span id="updated">[^<]*<\/span>\s*<button id="force-refresh" class="refresh-link" type="button">Force refresh<\/button>/);
+  assert.match(styles, /\.refresh-link \{[^}]*border: 0;[^}]*padding: 0;[^}]*text-decoration: underline;/);
+  assert.doesNotMatch(script, /\$\("force-refresh"\)\.disabled\s*=/);
   const extension = await readFile(new URL("../.github/extensions/github-notifications/extension.mjs", import.meta.url), "utf8");
   assert.match(extension, /name: "refresh"/);
   const ui = await renderer();
+  assert.equal(ui.ids.get("force-refresh").disabled, false);
   assert.ok(ui.calls.some(call => call.path === "/api/refresh"));
   assert.equal(ui.githubCalls.length, 1);
   assert.match(ui.ids.get("updated").textContent, /Checked .*Next refresh/);
 });
 
-test("automatic polling honors the two-minute minimum without a manual button", async () => {
+test("Force refresh checks GitHub immediately, preserves focus and still leaves automatic polling gated", async () => {
+  const ui = await renderer();
+  const button = ui.ids.get("force-refresh");
+  button.focus();
+  ui.setRows([thread("1"), thread("2")]);
+  await button.events.click();
+  assert.equal(ui.githubCalls.length, 2);
+  assert.equal(ui.calls.at(-1).options.body, '{"force":true}');
+  assert.equal(ui.document.querySelectorAll("article").length, 2);
+  assert.equal(ui.document.activeElement, button);
+  assert.equal(button.textContent, "Force refresh");
+  assert.equal(button.attributes["aria-busy"], "false");
+  await button.events.click();
+  assert.equal(ui.githubCalls.length, 3);
+  ui.advance(119_999);
+  await ui.fireTimer();
+  assert.equal(ui.githubCalls.length, 3);
+  ui.advance(1);
+  await ui.fireTimer();
+  assert.equal(ui.githubCalls.length, 4);
+});
+
+test("clicks during a refresh stay enabled and coalesce into one follow-up refresh", async () => {
+  let fetches = 0;
+  let release;
+  const ui = await renderer({ onFetch: () => ++fetches === 2 ?
+    new Promise(resolve => { release = () => resolve(http([thread()])); }) : http([thread()]) });
+  const button = ui.ids.get("force-refresh");
+  button.focus();
+  const refreshing = button.events.click();
+  await settle();
+  assert.equal(button.disabled, false);
+  assert.equal(button.textContent, "Refreshing...");
+  assert.equal(button.attributes["aria-busy"], "true");
+  await button.events.click();
+  await button.events.click();
+  assert.equal(button.textContent, "Refresh queued...");
+  assert.equal(fetches, 2);
+  release();
+  await refreshing;
+  await settle();
+  assert.equal(fetches, 3);
+  assert.equal(button.disabled, false);
+  assert.equal(button.textContent, "Force refresh");
+  assert.equal(button.attributes["aria-busy"], "false");
+  assert.equal(ui.document.activeElement, button);
+});
+
+test("Force refresh waits for a local poll instead of losing the click or accepting its stale snapshot", async () => {
+  let release;
+  const ui = await renderer({ onState: () => new Promise(resolve => { release = resolve; }) });
+  const polling = ui.fireTimer();
+  await settle();
+  ui.setRows([thread("2")]);
+  const button = ui.ids.get("force-refresh");
+  const refreshing = button.events.click();
+  assert.equal(button.disabled, false);
+  assert.equal(ui.githubCalls.length, 1);
+  release();
+  await polling;
+  await refreshing;
+  assert.equal(ui.githubCalls.length, 2);
+  assert.equal(ui.document.querySelectorAll("a")[0].textContent, "Synthetic notification 2");
+});
+
+test("Force refresh queues behind row and repository writes without interrupting them", async () => {
+  for (const kind of ["row", "repository"]) {
+    let release;
+    const ui = await renderer({
+      onWrite: () => new Promise(resolve => { release = () => resolve("HTTP/2 205 Reset Content\r\n\r\n"); }),
+    });
+    const read = ui.ids.get("groups").querySelectorAll("button")
+      .find(node => kind === "row" ? node.dataset.threadId : node.dataset.repository);
+    const reading = read.events.click();
+    await settle();
+    const button = ui.ids.get("force-refresh");
+    await button.events.click();
+    assert.equal(button.disabled, false);
+    assert.equal(button.textContent, "Refresh queued...");
+    assert.equal(ui.calls.filter(call => call.path === "/api/refresh").length, 1);
+    ui.setRows([]);
+    release();
+    await reading;
+    if (kind === "repository") {
+      await ui.inbox.batch.done;
+      await runInContext("update()", ui.context);
+    }
+    await settle();
+    assert.deepEqual(ui.patches, ["/notifications/threads/1"]);
+    assert.equal(ui.calls.filter(call => call.path === "/api/refresh").length, 2);
+    assert.equal(ui.document.querySelectorAll("article").length, 0);
+    assert.equal(button.textContent, "Force refresh");
+  }
+});
+
+test("queued Force refresh preserves the latest search edit during a filter request", async () => {
+  let release;
+  let filters = 0;
+  const ui = await renderer({
+    initialRows: [thread("1"), thread("2")],
+    onFilters: () => ++filters === 1 ? new Promise(resolve => { release = resolve; }) : undefined,
+  });
+  const filtering = runInContext('update("filters", { query: "notification 1" })', ui.context);
+  await settle();
+  const search = ui.ids.get("search");
+  search.value = "notification 2";
+  search.events.input();
+  const button = ui.ids.get("force-refresh");
+  await button.events.click();
+  assert.equal(button.disabled, false);
+  assert.equal(button.textContent, "Refresh queued...");
+  release();
+  await filtering;
+  await settle();
+  assert.equal(ui.githubCalls.length, 2);
+  assert.equal(ui.inbox.filters.query, "notification 2");
+  assert.equal(search.value, "notification 2");
+  assert.equal(ui.document.querySelectorAll("a")[0].textContent, "Synthetic notification 2");
+});
+
+test("Force refresh remains clickable during GitHub backoff and reports the wait without retrying upstream", async () => {
+  let fetches = 0;
+  const ui = await renderer({ onFetch: () => ++fetches === 2 ?
+    http({}, { "retry-after": "600" }, 429) : http([thread()]) });
+  const button = ui.ids.get("force-refresh");
+  await button.events.click();
+  assert.equal(ui.ids.get("notice").hidden, false);
+  assert.match(ui.ids.get("notice").textContent, /rate limit/);
+  assert.equal(button.disabled, false);
+  await button.events.click();
+  assert.equal(fetches, 2);
+  assert.equal(button.textContent, "Force refresh");
+  assert.equal(button.disabled, false);
+  ui.advance(600_000);
+  await button.events.click();
+  assert.equal(fetches, 3);
+  assert.equal(ui.ids.get("notice").hidden, true);
+  assert.equal(button.attributes["aria-busy"], "false");
+});
+
+test("automatic polling honors the two-minute minimum", async () => {
   const ui = await renderer();
   ui.advance(119_999);
   await ui.fireTimer();
@@ -447,7 +619,7 @@ test("authentication errors remain visible and automatically retry after backoff
   assert.equal(ui.inbox.summary().status, "ready");
 });
 
-test("an offline initial open recovers automatically without a Refresh control", async () => {
+test("an offline initial open recovers automatically without needing a manual refresh", async () => {
   const ui = await renderer({ initialOffline: true });
   assert.equal(ui.ids.get("notice").hidden, false);
   assert.equal(ui.ids.get("empty-title").textContent, "Your inbox is unavailable");

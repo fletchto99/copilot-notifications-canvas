@@ -102,8 +102,15 @@ per-panel, so a reload resets sound to off; persisted settings such as
 
 ## Usage
 
+- The canvas loads up to 50 notifications initially. **Load more** fetches up to
+  50 more at a time, with no fixed total cap while GitHub has more pages.
+  Search covers loaded notifications only.
 - Notifications refresh about every two minutes while the canvas is visible.
   GitHub polling and rate limits can delay updates.
+- **Force refresh**, beside the checked time in the footer, checks loaded pages
+  immediately without waiting for the polling interval. It stays clickable;
+  clicks during an active operation queue one follow-up refresh. GitHub
+  rate-limit and error retry waits still apply and are shown as errors.
 - The **Settings** gear icon includes matching **Dark mode**, **Auto-open**, and
   **Play sound** switches. The canvas follows Copilot's theme until you choose
   light or dark; your choice is saved across sessions and loaded when a panel

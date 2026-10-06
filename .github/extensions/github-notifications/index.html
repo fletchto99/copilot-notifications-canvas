@@ -83,11 +83,13 @@
     </section>
     <section id="groups" aria-label="Notifications by repository"></section>
     <div class="pagination">
-      <p id="coverage"></p>
       <button id="more" type="button" hidden>Load more</button>
     </div>
     <footer>
-      <p id="updated">Automatic refresh runs only while this view is visible.</p>
+      <p class="refresh-status">
+        <span id="updated">Automatic refresh runs only while this view is visible.</span>
+        <button id="force-refresh" class="refresh-link" type="button">Force refresh</button>
+      </p>
       <p>Mark as read applies only to the clicked row or the repository group's shown, loaded notifications.
         <a href="https://github.com/notifications" target="_blank" rel="noopener noreferrer">Open GitHub inbox</a>
       </p>
