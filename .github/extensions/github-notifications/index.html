@@ -33,12 +33,25 @@
           <input id="search" type="search" maxlength="200" placeholder="Search titles or repositories" autocomplete="off" spellcheck="false">
         </label>
         <details id="settings" class="settings">
-          <summary id="settings-toggle" aria-controls="settings-panel" aria-expanded="false">Settings</summary>
+          <summary id="settings-toggle" aria-label="Settings" title="Settings" aria-controls="settings-panel" aria-expanded="false">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true" focusable="false">
+              <path d="M10 2h4l.6 2.8L17 6.2l2.7-.9 2 3.4-2.1 1.9v2.8l2.1 1.9-2 3.4-2.7-.9-2.4 1.4L14 22h-4l-.6-2.8L7 17.8l-2.7.9-2-3.4 2.1-1.9v-2.8L2.3 8.7l2-3.4 2.7.9 2.4-1.4Z"/>
+              <circle cx="12" cy="12" r="3.2"/>
+            </svg>
+          </summary>
           <div id="settings-panel" class="settings-panel" role="group" aria-label="Notification settings">
+            <button id="dark-mode" class="switch-toggle" type="button" role="switch" aria-checked="false" aria-describedby="dark-mode-help" disabled>
+              <span>Dark mode</span>
+              <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+            </button>
+            <p id="dark-mode-help" class="settings-help">Follows Copilot's theme until you choose a mode. Your choice is saved across sessions.</p>
+            <button id="auto-open" class="switch-toggle" type="button" role="switch" aria-checked="false" aria-describedby="startup-help" disabled>
+              <span>Auto-open</span>
+              <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+            </button>
+            <p id="startup-help" class="settings-help">Saved for your user. Requires user-wide installation to work outside this repository. Does not reopen this session.</p>
             <button id="sound" type="button" role="switch" aria-checked="false" aria-describedby="sound-status">Play sound: Off</button>
             <p id="sound-status" class="settings-help" role="status" aria-live="polite">Optional chime while visible. Enable separately in each panel.</p>
-            <button id="auto-open" type="button" role="switch" aria-checked="false" aria-describedby="startup-help" disabled>Open on new sessions: Off</button>
-            <p id="startup-help" class="settings-help">Saved for your user. Requires user-wide installation to work outside this repository. Does not reopen this session.</p>
             <p id="settings-status" class="settings-help" role="status" aria-live="polite"></p>
             <p id="installed-version" class="settings-help">Canvas version loading...</p>
             <button id="check-updates" type="button" disabled>Check for updates</button>
@@ -51,6 +64,7 @@
         <button id="collapse" class="text-button" type="button">Collapse all</button>
       </div>
     </header>
+    <div id="settings-error" class="notice" role="alert" hidden></div>
     <div id="notice" class="notice" role="alert" hidden></div>
     <section id="batch-progress" class="batch-progress" aria-label="Repository read operation" tabindex="-1" hidden>
       <h2 id="batch-title"></h2>

@@ -83,7 +83,7 @@ test("a pre-update-check installation upgrades with settings and artifacts byte-
   await writeFile(marker, JSON.stringify(manifest));
   const artifacts = join(target, "artifacts");
   await mkdir(artifacts);
-  const settings = '{\n  "autoOpen": true,\n  "future": {"nested": [1, 2]}\n}\n';
+  const settings = '{\n  "autoOpen": true,\n  "darkMode": true,\n  "future": {"nested": [1, 2]}\n}\n';
   await writeFile(join(artifacts, "settings.json"), settings);
   await writeFile(join(artifacts, "user-note.txt"), "preserve");
   await install(root);

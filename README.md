@@ -105,7 +105,7 @@ Updates use the user-wide installer. A project-local checkout shadows a
 user-wide installation in that repository; update that checkout deliberately
 instead of expecting a user-wide install to replace it. Sound is intentionally
 per-panel, so a reload resets sound to off; persisted settings such as
-**Open on new sessions** are retained.
+**Auto-open** and **Dark mode** are retained.
 
 There is no automatic installation or auto-update setting. Installation and
 reload remain explicit. A future opt-in updater should be off by default,
@@ -115,7 +115,10 @@ reuse these installer safeguards, and coordinate activation across sessions.
 
 - Notifications refresh about every two minutes while the canvas is visible.
   GitHub polling and rate limits can delay updates.
-- **Settings** offers sound and **Open on new sessions**, both off by default.
+- The **Settings** gear icon includes a sliding **Dark mode** switch. The canvas
+  follows Copilot's theme until you choose light or dark; your choice is saved
+  across sessions and loaded when a panel opens or becomes visible.
+- Settings also includes an **Auto-open** slider above **Play sound**; both are off by default.
   Sound is per-panel and resets when the panel reloads or reopens.
 - Auto-open runs once per new session, including general chats, before assistant
   work starts. Other canvases do not block it. It does not reopen Notifications

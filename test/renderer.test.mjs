@@ -15,11 +15,14 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
 // Minimal DOM/event/timer doubles exercise the actual renderer without a browser dependency.
 async function renderer({ hidden = false, token = "a".repeat(64), audioOptions = {}, readFailure = false,
   initialRows, onWrite, onFetch, onState, onFilters, initialOffline = false, release,
-  onUpdates, clipboardFailure = false } = {}) {
+  onUpdates, clipboardFailure = false, onSettings,
+  storedSettings = { autoOpen: false, darkMode: null }, appColorMode = "light", systemDark = false } = {}) {
   const calls = [];
   const timers = new Map();
   let timerId = 0;
   let intersect;
+  let themeChanged;
+  let themeDisconnected = false;
   let now = Date.now();
   let offline = initialOffline;
   let rows = initialRows ?? [
@@ -27,7 +30,6 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
     thread("2", { unread: false }),
   ];
   const audioContexts = [];
-  let storedAutoOpen = false;
   let releaseMetadata = {
     currentVersion: "0.1.0", latestVersion: "0.1.0", status: "current", checking: false,
     checkedAt: now, nextCheckAt: now + 6 * 60 * 60_000, canCheckAt: 0, error: null,
@@ -62,6 +64,7 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
     }
     set innerHTML(_) { throw new Error("HTML interpolation is forbidden"); }
     setAttribute(key, value) { this.attributes[key] = value; }
+    getAttribute(key) { return this.attributes[key] ?? null; }
     append(...children) {
       for (const child of children) child.parentNode = this;
       this.children.push(...children);
@@ -102,7 +105,8 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
   for (const id of ["batch-stop", "batch-retry", "batch-dismiss"]) ids.get(id).parentNode = ids.get("batch-progress");
   ids.get("batch-progress").contains = node =>
     ["batch-progress", "batch-stop", "batch-retry", "batch-dismiss"].some(id => ids.get(id) === node);
-  ids.get("settings").contains = node => ["settings", "settings-toggle", "settings-panel", "sound", "auto-open", "check-updates"].some(id => ids.get(id) === node);
+  ids.get("settings").contains = node =>
+    ["settings", "settings-toggle", "settings-panel", "sound", "auto-open", "dark-mode", "check-updates"].some(id => ids.get(id) === node);
   const document = {
     hidden,
     body: new Node("body"),
@@ -117,6 +121,13 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
     addEventListener(name, handler) { this.events[name] = handler; },
   };
   const window = { events: {}, addEventListener(name, handler) { this.events[name] = handler; } };
+  if (appColorMode !== null) document.documentElement.setAttribute("data-color-mode", appColorMode);
+  const media = {
+    matches: systemDark, events: {},
+    addEventListener(name, handler) { this.events[name] = handler; },
+    removeEventListener(name) { delete this.events[name]; },
+  };
+  window.matchMedia = () => media;
   window.AudioContext = class extends FakeAudioContext {
     constructor() { super(audioOptions); audioContexts.push(this); }
   };
@@ -146,12 +157,19 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
       observe() {}
       disconnect() {}
     },
+    MutationObserver: class {
+      constructor(callback) { themeChanged = callback; }
+      observe() {}
+      disconnect() { themeDisconnected = true; }
+    },
     fetch: async (path, options) => {
       if (offline) throw new Error("Synthetic connection failure");
       calls.push({ path, options });
       if (path === "/api/settings") {
-        if (options.body) storedAutoOpen = JSON.parse(options.body).autoOpen;
-        return { ok: true, json: async () => ({ autoOpen: storedAutoOpen }) };
+        const input = options.body ? JSON.parse(options.body) : undefined;
+        if (onSettings) await onSettings(input);
+        if (input) Object.assign(storedSettings, input);
+        return { ok: true, json: async () => ({ ...storedSettings }) };
       }
       if (path === "/api/updates") {
         if (onUpdates) releaseMetadata = await onUpdates();
@@ -177,7 +195,17 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
   runInContext(script.replace(/^import \{ NotificationSound \} from "\.\/sound\.mjs";/, ""), context);
   await settle();
   return {
-    calls, document, window, ids, timers, context, audioContexts, inbox, patches, githubCalls, copied,
+    calls, document, window, ids, timers, context, audioContexts, inbox, patches, githubCalls, copied, media,
+    get themeDisconnected() { return themeDisconnected; },
+    setAppTheme(mode) {
+      if (mode === null) delete document.documentElement.attributes["data-color-mode"];
+      else document.documentElement.setAttribute("data-color-mode", mode);
+      themeChanged();
+    },
+    setSystemTheme(dark) {
+      media.matches = dark;
+      media.events.change?.();
+    },
     advance(milliseconds = 120_000) { now += milliseconds; return now; },
     async fireTimer(delay = 5000) {
       const [id, timer] = [...timers].find(([, timer]) => timer.delay === delay);
@@ -229,7 +257,7 @@ test("update banner shows release links and copies a prompt without installing o
   assert.deepEqual(ui.copied, ["Synthetic safe update prompt"]);
   assert.equal(ui.calls.length, count);
   assert.match(ui.ids.get("copy-status").textContent, /Copied.*Paste/);
-  assert.equal(ui.calls.some(call => call.path === "/api/settings"), false);
+  assert.equal(ui.calls.some(call => call.path === "/api/settings" && call.options.body), false);
 });
 
 test("clipboard denial exposes a selectable prompt and does not claim it was copied", async () => {
@@ -301,9 +329,10 @@ test("release check request failures are visible and hidden panels never trigger
 
 test("renderer fetches with a capability, renders untrusted titles as text and exposes accessible controls", async () => {
   const ui = await renderer();
-  assert.equal(ui.calls[0].path, "/api/refresh");
-  assert.equal(ui.calls[0].options.headers.Authorization, `Bearer ${"a".repeat(64)}`);
-  assert.equal(ui.calls[0].options.credentials, "omit");
+  const refresh = ui.calls.find(call => call.path === "/api/refresh");
+  assert.ok(refresh);
+  assert.equal(refresh.options.headers.Authorization, `Bearer ${"a".repeat(64)}`);
+  assert.equal(refresh.options.credentials, "omit");
   const links = ui.document.querySelectorAll("a");
   assert.equal(links[0].textContent, "<img src=x onerror=alert(1)>");
   assert.equal(links[0].href, "https://github.com/notifications");
@@ -328,7 +357,7 @@ test("manual Refresh controls are absent while the automatic endpoint and SDK ac
   const extension = await readFile(new URL("../.github/extensions/github-notifications/extension.mjs", import.meta.url), "utf8");
   assert.match(extension, /name: "refresh"/);
   const ui = await renderer();
-  assert.equal(ui.calls[0].path, "/api/refresh");
+  assert.ok(ui.calls.some(call => call.path === "/api/refresh"));
   assert.equal(ui.githubCalls.length, 1);
   assert.match(ui.ids.get("updated").textContent, /Checked .*Next refresh/);
 });
@@ -453,21 +482,21 @@ test("hidden/non-intersecting/closed documents do not schedule unnecessary work"
   ui.document.hidden = false;
   ui.document.events.visibilitychange();
   await settle();
-  assert.equal(ui.calls.length, 1);
+  assert.equal(ui.calls.length, 2);
   assert.equal(ui.timers.size, 1);
   ui.intersect(false);
   await settle();
   assert.equal(ui.timers.size, 0);
   await runInContext("tick()", ui.context);
-  assert.equal(ui.calls.length, 1);
+  assert.equal(ui.calls.length, 2);
   ui.intersect(true);
   await settle();
-  assert.equal(ui.calls.length, 2);
-  assert.equal(ui.calls[1].path, "/api/state");
+  assert.equal(ui.calls.length, 4);
+  assert.equal(ui.calls[2].path, "/api/state");
   ui.window.events.pagehide();
   assert.equal(ui.timers.size, 0);
   await runInContext("tick()", ui.context);
-  assert.equal(ui.calls.length, 2);
+  assert.equal(ui.calls.length, 4);
 });
 
 test("a missing capability remains inert and explains how to open the canvas", async () => {
@@ -520,7 +549,24 @@ test("visible toggle reports browser audio failures, and pagehide closes its con
   assert.equal(ui.ids.get("sound").attributes["aria-checked"], "false");
 });
 
-test("Settings contains both switches, saves startup preference and closes accessibly", async () => {
+test("Settings uses an icon-only toggle with an accessible name and tooltip", () => {
+  const summary = html.match(/<summary\b([^>]*\bid="settings-toggle"[^>]*)>([\s\S]*?)<\/summary>/);
+  assert.ok(summary);
+  const [, attributes, content] = summary;
+  assert.match(attributes, /aria-label="Settings"/);
+  assert.match(attributes, /title="Settings"/);
+  assert.match(attributes, /aria-controls="settings-panel"/);
+  assert.match(attributes, /aria-expanded="false"/);
+  assert.match(content, /<svg\b[^>]*aria-hidden="true"[^>]*focusable="false"/);
+  assert.equal(content.replace(/<[^>]*>/g, "").trim(), "");
+});
+
+test("Settings puts an Auto-open slider above sound, saves startup preference and closes accessibly", async () => {
+  assert.match(html, /<button\b[^>]*id="auto-open"[^>]*class="switch-toggle"[^>]*role="switch"[^>]*aria-describedby="startup-help"/);
+  assert.match(html, /<span>Auto-open<\/span>\s*<span class="switch-track" aria-hidden="true"><span class="switch-thumb"><\/span><\/span>/);
+  assert.ok(html.indexOf('id="auto-open"') < html.indexOf('id="sound"'));
+  assert.doesNotMatch(html, /Open on new sessions:/);
+  assert.doesNotMatch(script, /\$\("auto-open"\)\.textContent\s*=/);
   const ui = await renderer();
   const settings = ui.ids.get("settings");
   settings.open = true;
@@ -532,7 +578,7 @@ test("Settings contains both switches, saves startup preference and closes acces
   ui.ids.get("auto-open").events.click();
   await settle();
   assert.equal(ui.ids.get("auto-open").attributes["aria-checked"], "true");
-  assert.match(ui.ids.get("settings-status").textContent, /future new sessions/);
+  assert.equal(ui.ids.get("settings-status").textContent, "");
   ui.document.events.click({ target: ui.ids.get("sound") });
   assert.equal(settings.open, true);
   ui.document.events.keydown({ key: "Escape", preventDefault() {} });
@@ -548,17 +594,125 @@ test("Settings contains both switches, saves startup preference and closes acces
 });
 
 test("settings failures are visible and do not claim a saved toggle", async () => {
-  const ui = await renderer();
-  ui.setOffline(true);
+  const ui = await renderer({ initialOffline: true });
   ui.ids.get("settings").open = true;
   ui.ids.get("settings").events.toggle();
   await settle();
   assert.equal(ui.ids.get("auto-open").disabled, true);
+  assert.equal(ui.ids.get("dark-mode").disabled, true);
+  assert.equal(ui.ids.get("settings-error").hidden, false);
   assert.match(ui.ids.get("settings-status").textContent, /retry/);
   ui.setOffline(false);
   ui.ids.get("settings").events.toggle();
   await settle();
   assert.equal(ui.ids.get("auto-open").disabled, false);
+  assert.equal(ui.ids.get("dark-mode").disabled, false);
+  assert.equal(ui.ids.get("settings-error").hidden, true);
+});
+
+test("dark mode uses an accessible slider-style switch and follows the app until explicitly saved", async () => {
+  assert.match(html, /<button\b[^>]*id="dark-mode"[^>]*role="switch"[^>]*aria-describedby="dark-mode-help"/);
+  assert.match(html, /<span>Dark mode<\/span>\s*<span class="switch-track" aria-hidden="true"><span class="switch-thumb"><\/span><\/span>/);
+  const ui = await renderer({ appColorMode: "dark" });
+  assert.equal(ui.ids.get("dark-mode").disabled, false);
+  assert.equal(ui.ids.get("dark-mode").attributes["aria-checked"], "true");
+  assert.equal(ui.document.documentElement.dataset.notificationTheme, undefined);
+  ui.setAppTheme("light");
+  assert.equal(ui.ids.get("dark-mode").attributes["aria-checked"], "false");
+  ui.setAppTheme(null);
+  ui.setSystemTheme(true);
+  assert.equal(ui.ids.get("dark-mode").attributes["aria-checked"], "true");
+  ui.document.body.setAttribute("data-color-mode", "light");
+  ui.setSystemTheme(true);
+  assert.equal(ui.ids.get("dark-mode").attributes["aria-checked"], "false");
+});
+
+test("dark and light choices persist across panels, preserve auto-open and ignore host theme changes", async () => {
+  const storedSettings = { autoOpen: true, darkMode: null };
+  const ui = await renderer({ storedSettings });
+  const toggle = ui.ids.get("dark-mode");
+  toggle.focus();
+  toggle.events.click();
+  assert.equal(toggle.disabled, true);
+  await settle();
+  assert.equal(toggle.attributes["aria-checked"], "true");
+  assert.equal(ui.document.documentElement.dataset.notificationTheme, "dark");
+  assert.deepEqual(storedSettings, { autoOpen: true, darkMode: true });
+  assert.equal(ui.document.activeElement, toggle);
+  assert.equal(ui.ids.get("settings-status").textContent, "");
+  ui.document.events.click({ target: toggle });
+  ui.setAppTheme("light");
+  assert.equal(toggle.attributes["aria-checked"], "true");
+  const reopened = await renderer({ storedSettings });
+  assert.equal(reopened.document.documentElement.dataset.notificationTheme, "dark");
+  reopened.ids.get("dark-mode").events.click();
+  await settle();
+  assert.deepEqual(storedSettings, { autoOpen: true, darkMode: false });
+  assert.equal(reopened.document.documentElement.dataset.notificationTheme, "light");
+  reopened.setAppTheme("dark");
+  reopened.setSystemTheme(true);
+  assert.equal(reopened.ids.get("dark-mode").attributes["aria-checked"], "false");
+  assert.equal(reopened.document.documentElement.dataset.notificationTheme, "light");
+  const lightPanel = await renderer({ storedSettings, appColorMode: "dark" });
+  assert.equal(lightPanel.document.documentElement.dataset.notificationTheme, "light");
+  assert.equal(ui.patches.length, 0);
+});
+
+test("failed dark-mode saves retain the prior theme and focus with an explicit retryable error", async () => {
+  const storedSettings = { autoOpen: false, darkMode: true };
+  let fail = true;
+  const ui = await renderer({ storedSettings, onSettings: input => {
+    if (input && fail) throw new Error("Could not save notification settings.");
+  } });
+  const toggle = ui.ids.get("dark-mode");
+  toggle.focus();
+  toggle.events.click();
+  await settle();
+  assert.equal(toggle.disabled, false);
+  assert.equal(toggle.attributes["aria-checked"], "true");
+  assert.equal(ui.document.documentElement.dataset.notificationTheme, "dark");
+  assert.equal(storedSettings.darkMode, true);
+  assert.equal(ui.document.activeElement, toggle);
+  assert.match(ui.ids.get("settings-status").textContent, /Could not save.*retry/);
+  assert.doesNotMatch(ui.ids.get("settings-status").textContent, /Saved\./);
+  assert.equal(ui.ids.get("settings-error").hidden, false);
+  fail = false;
+  toggle.events.click();
+  await settle();
+  assert.equal(storedSettings.darkMode, false);
+  assert.equal(ui.ids.get("settings-error").hidden, true);
+});
+
+test("a pending theme save blocks duplicate changes without stealing focus", async () => {
+  let release;
+  const storedSettings = { autoOpen: false, darkMode: false };
+  const ui = await renderer({ storedSettings, onSettings: input =>
+    input ? new Promise(resolve => { release = resolve; }) : undefined });
+  const toggle = ui.ids.get("dark-mode");
+  toggle.focus();
+  toggle.events.click();
+  toggle.events.click();
+  assert.equal(ui.calls.filter(call => call.path === "/api/settings" && call.options.body).length, 1);
+  assert.equal(ui.document.documentElement.dataset.notificationTheme, "light");
+  ui.ids.get("search").focus();
+  release();
+  await settle();
+  assert.equal(ui.document.documentElement.dataset.notificationTheme, "dark");
+  assert.equal(ui.document.activeElement, ui.ids.get("search"));
+});
+
+test("settings refresh on visibility and theme observers are cleaned up on close", async () => {
+  const storedSettings = { autoOpen: false, darkMode: false };
+  const ui = await renderer({ storedSettings });
+  ui.intersect(false);
+  storedSettings.darkMode = true;
+  ui.intersect(true);
+  await settle();
+  assert.equal(ui.document.documentElement.dataset.notificationTheme, "dark");
+  assert.equal(ui.ids.get("dark-mode").attributes["aria-checked"], "true");
+  ui.window.events.pagehide();
+  assert.equal(ui.themeDisconnected, true);
+  assert.equal(ui.media.events.change, undefined);
 });
 
 test("mark-read requires a click, removes only on confirmation and stays silent", async () => {
