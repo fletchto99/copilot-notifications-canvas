@@ -118,9 +118,7 @@ async function settingsRequest(input) {
 function renderUpdates(updates = releaseState) {
   if (!updates) return;
   releaseState = updates;
-  $("installed-version").textContent = `Running canvas v${updates.currentVersion}`;
-  $("canvas-version").textContent = `GitHub Notification Canvas ${updates.currentVersion}`;
-  $("canvas-version").hidden = false;
+  $("installed-version").textContent = `GitHub Notification Canvas ${updates.currentVersion}`;
   $("check-updates").disabled = updatesBusy || updates.checking || Date.now() < updates.canCheckAt;
   $("check-updates").textContent = updates.checking ? "Checking for updates..." : "Check for updates";
   const messages = {

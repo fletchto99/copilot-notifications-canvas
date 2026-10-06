@@ -227,8 +227,9 @@ test("update banner sits below the subtitle and above the inbox controls with it
   assert.match(html, /<details id="update-prompt-details">/);
 });
 
-test("footer shows the running version, not the available release, even while checks are pending or failing", async () => {
-  assert.match(html, /<footer>[\s\S]*<p id="canvas-version" hidden><\/p>\s*<\/footer>/);
+test("Settings shows the running version below Check for updates without a duplicate footer version", async () => {
+  assert.match(html, /<button id="check-updates"[^>]*>Check for updates<\/button>\s*<p id="installed-version"/);
+  assert.doesNotMatch(html, /id="canvas-version"/);
   for (const release of [
     {},
     { status: "available", latestVersion: "0.2.0", prompt: "Synthetic update prompt" },
@@ -236,8 +237,7 @@ test("footer shows the running version, not the available release, even while ch
     { status: "unchecked", error: "Release check failed", checkedAt: null },
   ]) {
     const ui = await renderer({ release });
-    assert.equal(ui.ids.get("canvas-version").textContent, "GitHub Notification Canvas 0.1.0");
-    assert.equal(ui.ids.get("canvas-version").hidden, false);
+    assert.equal(ui.ids.get("installed-version").textContent, "GitHub Notification Canvas 0.1.0");
   }
 });
 
@@ -248,7 +248,7 @@ test("update banner shows release links and copies a prompt without installing o
   } });
   assert.equal(ui.ids.get("update-banner").hidden, false);
   assert.match(ui.ids.get("update-title").textContent, /v0\.2\.0.*v0\.1\.0/);
-  assert.match(ui.ids.get("installed-version").textContent, /Running canvas v0\.1\.0/);
+  assert.equal(ui.ids.get("installed-version").textContent, "GitHub Notification Canvas 0.1.0");
   assert.match(ui.ids.get("release-notes").href, /\/releases\/tag\/v0\.2\.0$/);
   assert.match(ui.ids.get("update-instructions").href, /#updating$/);
   assert.equal(ui.ids.get("update-prompt").value, "Synthetic safe update prompt");

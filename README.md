@@ -67,8 +67,8 @@ When a newer version is available, a small banner offers **Release notes**,
 Copilot to perform the update; copying it does not execute anything. The prompt
 is also selectable in the banner if clipboard access is unavailable.
 
-The footer shows the running canvas version. **Settings** also shows the version
-and a **Check for updates** button.
+**Settings** shows a **Check for updates** button with the running canvas version
+directly below it.
 Checks happen while the canvas is visible and are cached for six hours per
 running extension, shared by its panels. A manual check can bypass this cache
 at most once a minute, but never GitHub's retry delay. Failed checks retry
