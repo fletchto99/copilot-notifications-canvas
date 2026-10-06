@@ -64,6 +64,10 @@ test("manual checks require the capability, same origin, POST and an empty objec
   await updates.pending;
   assert.equal(calls, 1);
   assert.equal(updates.snapshot().status, "available");
+  const again = await fetch(`${origin}/api/updates`, { method: "POST", headers, body: "{}" });
+  assert.equal(again.status, 202);
+  await updates.pending;
+  assert.equal(calls, 2);
   const source = await fetch(`${origin}/updates.mjs`);
   assert.equal(source.status, 404);
 });
