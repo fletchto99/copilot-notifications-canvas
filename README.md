@@ -54,7 +54,10 @@ After installation finishes, ask Copilot:
 
 - Notifications refresh about every two minutes while the canvas is visible.
   GitHub polling and rate limits can delay updates.
-- The **Settings** gear icon offers sound and **Open on new sessions**, both off by default.
+- The **Settings** gear icon includes a sliding **Dark mode** switch. The canvas
+  follows Copilot's theme until you choose light or dark; your choice is saved
+  across sessions and loaded when a panel opens or becomes visible.
+- Settings also includes an **Auto-open** slider above **Play sound**; both are off by default.
   Sound is per-panel and resets when the panel reloads or reopens.
 - Auto-open runs once per new session, including general chats, before assistant
   work starts. Other canvases do not block it. It does not reopen Notifications

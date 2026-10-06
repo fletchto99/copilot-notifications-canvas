@@ -42,7 +42,7 @@ session = await joinSession({
     actions: [
       {
         name: "get_settings",
-        description: "Read the auto-open preference and startup status. Sound is enabled only by a click in the panel.",
+        description: "Read saved auto-open and dark-mode preferences and startup status. Sound is enabled only by a click in the panel.",
         inputSchema: emptySchema,
         handler: ctx => action(ctx, async () => ({ ...await preferences.read(), startupStatus: startup?.status ?? "initializing" })),
       },

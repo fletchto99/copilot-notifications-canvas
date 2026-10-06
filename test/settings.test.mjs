@@ -14,28 +14,43 @@ async function setup(t, io) {
   return new Preferences({ directory, io });
 }
 
-test("settings default off, persist across instances and preserve unknown keys", async t => {
+test("settings default to auto-open off and app theme, persist across instances and preserve unknown keys", async t => {
   const preferences = await setup(t);
-  assert.deepEqual(await preferences.read(), { autoOpen: false });
+  assert.deepEqual(await preferences.read(), { autoOpen: false, darkMode: null });
   await fs.writeFile(preferences.path, '{"future":{"theme":"custom"},"autoOpen":false}');
   await preferences.update({ autoOpen: true });
   const other = new Preferences({ directory: preferences.directory });
-  assert.deepEqual(await other.read(), { autoOpen: true });
+  assert.deepEqual(await other.read(), { autoOpen: true, darkMode: null });
   assert.deepEqual(JSON.parse(await fs.readFile(preferences.path, "utf8")).future, { theme: "custom" });
   await other.update({ autoOpen: false });
-  assert.deepEqual(await preferences.read(), { autoOpen: false });
+  assert.deepEqual(await preferences.read(), { autoOpen: false, darkMode: null });
   assert.equal((await fs.stat(preferences.path)).mode & 0o777, 0o600);
+});
+
+test("dark mode persists across instances without replacing auto-open or unknown preferences", async t => {
+  const preferences = await setup(t);
+  await fs.writeFile(preferences.path, '{"autoOpen":true,"future":42}');
+  assert.deepEqual(await preferences.update({ darkMode: true }), { autoOpen: true, darkMode: true });
+  const other = new Preferences({ directory: preferences.directory });
+  assert.deepEqual(await other.read(), { autoOpen: true, darkMode: true });
+  assert.deepEqual(await other.update({ autoOpen: false }), { autoOpen: false, darkMode: true });
+  assert.deepEqual(await preferences.update({ darkMode: false }), { autoOpen: false, darkMode: false });
+  assert.deepEqual(await other.read(), { autoOpen: false, darkMode: false });
+  assert.equal(JSON.parse(await fs.readFile(preferences.path, "utf8")).future, 42);
+  assert.deepEqual(await preferences.update({ autoOpen: true, darkMode: null }), { autoOpen: true, darkMode: null });
+  assert.deepEqual(await other.read(), { autoOpen: true, darkMode: null });
 });
 
 test("malformed stored settings and invalid updates fail explicitly without overwriting data", async t => {
   const preferences = await setup(t);
-  for (const data of ["{", "[]", "null", '{"autoOpen":"yes"}', " ".repeat(17000)]) {
+  for (const data of ["{", "[]", "null", '{"autoOpen":"yes"}', '{"darkMode":"dark"}', '{"darkMode":0}', " ".repeat(17000)]) {
     await fs.writeFile(preferences.path, data);
     await assert.rejects(preferences.read(), { code: "settings_read" });
     await assert.rejects(preferences.update({ autoOpen: true }), { code: "settings_read" });
     assert.equal(await fs.readFile(preferences.path, "utf8"), data);
   }
-  for (const input of [null, [], {}, { autoOpen: "yes" }, { autoOpen: true, token: "not accepted" }]) {
+  for (const input of [null, [], {}, { autoOpen: "yes" }, { darkMode: "dark" }, { darkMode: 0 },
+    { darkMode: undefined }, { autoOpen: null }, { autoOpen: true, token: "not accepted" }]) {
     await assert.rejects(preferences.update(input), { code: "invalid_settings" });
   }
 });
@@ -58,19 +73,21 @@ test("storage errors and concurrent-writer locks are actionable, not success-sha
   await assert.rejects(denied.update({ autoOpen: true }), { code: "settings_write" });
 });
 
-test("settings HTTP routes require capability/origin and persist only the permitted preference", async t => {
+test("settings HTTP routes require capability/origin and persist only permitted preferences", async t => {
   const preferences = await setup(t);
   const server = await startServer(new Inbox(new GitHubClient()), { preferences });
   t.after(() => server.close());
   const url = new URL(server.url);
   const headers = { Authorization: `Bearer ${url.hash.slice(1)}`, Origin: url.origin, "Content-Type": "application/json" };
   assert.equal((await fetch(`${url.origin}/api/settings`)).status, 403);
-  assert.deepEqual(await (await fetch(`${url.origin}/api/settings`, { headers })).json(), { autoOpen: false });
-  for (const [input, status] of [[{ autoOpen: true }, 200], [{ autoOpen: "yes" }, 400], [{ sound: true }, 400]]) {
+  assert.deepEqual(await (await fetch(`${url.origin}/api/settings`, { headers })).json(), { autoOpen: false, darkMode: null });
+  for (const [input, status] of [[{ autoOpen: true }, 200], [{ darkMode: true }, 200],
+    [{ autoOpen: "yes" }, 400], [{ darkMode: "dark" }, 400], [{ sound: true }, 400]]) {
     const response = await fetch(`${url.origin}/api/settings`, { method: "POST", headers, body: JSON.stringify(input) });
     assert.equal(response.status, status);
   }
-  assert.deepEqual(await preferences.read(), { autoOpen: true });
+  assert.deepEqual(await preferences.read(), { autoOpen: true, darkMode: true });
+  assert.deepEqual(await (await fetch(`${url.origin}/api/settings`, { headers })).json(), { autoOpen: true, darkMode: true });
   assert.equal((await fetch(`${url.origin}/api/settings`, {
     method: "POST", headers: { ...headers, Origin: "https://evil.test" }, body: '{"autoOpen":false}',
   })).status, 403);

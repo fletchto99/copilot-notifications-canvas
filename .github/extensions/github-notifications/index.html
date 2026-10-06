@@ -26,10 +26,18 @@
             </svg>
           </summary>
           <div id="settings-panel" class="settings-panel" role="group" aria-label="Notification settings">
+            <button id="dark-mode" class="switch-toggle" type="button" role="switch" aria-checked="false" aria-describedby="dark-mode-help" disabled>
+              <span>Dark mode</span>
+              <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+            </button>
+            <p id="dark-mode-help" class="settings-help">Follows Copilot's theme until you choose a mode. Your choice is saved across sessions.</p>
+            <button id="auto-open" class="switch-toggle" type="button" role="switch" aria-checked="false" aria-describedby="startup-help" disabled>
+              <span>Auto-open</span>
+              <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+            </button>
+            <p id="startup-help" class="settings-help">Saved for your user. Requires user-wide installation to work outside this repository. Does not reopen this session.</p>
             <button id="sound" type="button" role="switch" aria-checked="false" aria-describedby="sound-status">Play sound: Off</button>
             <p id="sound-status" class="settings-help" role="status" aria-live="polite">Optional chime while visible. Enable separately in each panel.</p>
-            <button id="auto-open" type="button" role="switch" aria-checked="false" aria-describedby="startup-help" disabled>Open on new sessions: Off</button>
-            <p id="startup-help" class="settings-help">Saved for your user. Requires user-wide installation to work outside this repository. Does not reopen this session.</p>
             <p id="settings-status" class="settings-help" role="status" aria-live="polite"></p>
           </div>
         </details>
@@ -39,6 +47,7 @@
         <button id="collapse" class="text-button" type="button">Collapse all</button>
       </div>
     </header>
+    <div id="settings-error" class="notice" role="alert" hidden></div>
     <div id="notice" class="notice" role="alert" hidden></div>
     <section id="batch-progress" class="batch-progress" aria-label="Repository read operation" tabindex="-1" hidden>
       <h2 id="batch-title"></h2>
