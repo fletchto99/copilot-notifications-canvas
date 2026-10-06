@@ -5,6 +5,7 @@ import { emptySchema, filterSchema, InboxError } from "./model.mjs";
 import { startServer } from "./server.mjs";
 import { Preferences } from "./settings.mjs";
 import { Startup } from "./startup.mjs";
+import { Updates } from "./updates.mjs";
 
 const instances = new Map();
 const client = new GitHubClient();
@@ -12,6 +13,7 @@ const preferences = new Preferences();
 let session;
 let startup;
 const log = (message, options) => session?.log(message, options);
+const updates = new Updates({ log });
 
 async function action(ctx, run) {
   try {
@@ -40,6 +42,12 @@ session = await joinSession({
     description: "Unread GitHub notifications with one-click row and repository read actions limited to shown, loaded items.",
     inputSchema: filterSchema,
     actions: [
+      {
+        name: "check_for_updates",
+        description: "Check for a stable canvas release and return its version, links and update prompt. Never installs or changes settings.",
+        inputSchema: emptySchema,
+        handler: ctx => action(ctx, () => updates.check({ force: true })),
+      },
       {
         name: "get_settings",
         description: "Read saved auto-open and dark-mode preferences and startup status. Sound is enabled only by a click in the panel.",
@@ -75,7 +83,7 @@ session = await joinSession({
       try {
         if (!instances.has(ctx.instanceId)) {
           const inbox = new Inbox(client, ctx.input ?? {});
-          instances.set(ctx.instanceId, startServer(inbox, { log, preferences }));
+          instances.set(ctx.instanceId, startServer(inbox, { log, preferences, updates }));
         }
         const entry = await instances.get(ctx.instanceId);
         return { title: "Unread Notifications", url: entry.url };
@@ -94,6 +102,7 @@ await startup.start();
 
 async function shutdown() {
   startup?.close();
+  updates.close();
   await Promise.allSettled([...instances.keys()].map(close));
   process.exit(0);
 }

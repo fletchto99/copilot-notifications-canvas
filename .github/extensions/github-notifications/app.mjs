@@ -18,6 +18,9 @@ const requestControllers = new Set();
 let connectionError = "";
 let preferences;
 let settingsBusy = false;
+let releaseState;
+let updatesBusy = false;
+let updateError = "";
 const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
 const markingRead = new Set();
 let readError = "";
@@ -109,6 +112,64 @@ async function settingsRequest(input) {
     $("auto-open").disabled = !preferences;
     $("dark-mode").disabled = !preferences;
     if (previousFocus === $("auto-open") || previousFocus === $("dark-mode")) restoreFocus(previousFocus);
+  }
+}
+
+function renderUpdates(updates = releaseState) {
+  if (!updates) return;
+  releaseState = updates;
+  $("installed-version").textContent = `GitHub Notification Canvas ${updates.currentVersion}`;
+  $("check-updates").disabled = updatesBusy || updates.checking || Date.now() < updates.canCheckAt;
+  $("check-updates").textContent = updates.checking ? "Checking for updates..." : "Check for updates";
+  const messages = {
+    unchecked: "No successful release check yet.",
+    no_release: "No stable GitHub release is available yet.",
+    current: "You are on the latest stable release.",
+    ahead: "This build is newer than the latest stable release.",
+    available: `v${updates.latestVersion} is available. Use the update banner to install it.`,
+  };
+  const checked = updates.checkedAt === null ? "" : ` Last checked ${new Date(updates.checkedAt).toLocaleString()}.`;
+  const retry = !updates.checking && Date.now() < updates.canCheckAt
+    ? ` Check again after ${new Date(updates.canCheckAt).toLocaleTimeString()}.` : "";
+  $("update-status").textContent = updateError || (updates.checking ? "Checking stable GitHub releases..." :
+    `${updates.error ? `Could not check for updates: ${updates.error}` : messages[updates.status]}${checked}${retry}`);
+  const available = updates.status === "available";
+  $("update-banner").hidden = !available;
+  if (!available) return;
+  $("update-title").textContent = `Canvas update available: v${updates.latestVersion} (running v${updates.currentVersion}).${updates.error ? " Last known release; the latest check failed." : ""}`;
+  $("release-notes").href = updates.releaseUrl;
+  $("update-instructions").href = updates.instructionsUrl;
+  if ($("update-prompt").value !== updates.prompt) {
+    $("update-prompt").value = updates.prompt;
+    $("copy-status").textContent = "";
+  }
+}
+
+async function checkUpdates() {
+  if (!visible() || updatesBusy || releaseState?.checking || Date.now() < releaseState?.canCheckAt) return;
+  updatesBusy = true;
+  updateError = "";
+  renderUpdates();
+  try {
+    renderUpdates(await api("updates", {}));
+  } catch (error) {
+    updateError = error.message || "Could not check for updates. Try again.";
+  } finally {
+    updatesBusy = false;
+    renderUpdates();
+  }
+}
+
+async function copyUpdatePrompt() {
+  if (!visible() || !releaseState?.prompt) return;
+  try {
+    await navigator.clipboard.writeText(releaseState.prompt);
+    $("copy-status").textContent = "Copied. Paste the prompt into Copilot to review and run the update.";
+  } catch {
+    $("update-prompt-details").open = true;
+    $("update-prompt").focus();
+    $("update-prompt").select();
+    $("copy-status").textContent = "Clipboard unavailable. Copy the selected prompt and paste it into Copilot.";
   }
 }
 
@@ -451,6 +512,7 @@ function renderGroups(groups) {
 }
 
 function render() {
+  renderUpdates(state?.updates);
   renderControls();
   const error = readError || state?.error?.message || connectionError;
   $("notice").hidden = !error;
@@ -499,6 +561,8 @@ $("settings").addEventListener("toggle", () => {
 $("auto-open").addEventListener("click", () => {
   if (preferences) void settingsRequest({ autoOpen: !preferences.autoOpen });
 });
+$("check-updates").addEventListener("click", checkUpdates);
+$("copy-update").addEventListener("click", copyUpdatePrompt);
 $("dark-mode").addEventListener("click", () => {
   if (preferences) void settingsRequest({ darkMode: !darkMode() });
 });
