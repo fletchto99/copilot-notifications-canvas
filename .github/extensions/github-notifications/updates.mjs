@@ -5,8 +5,7 @@ import { InboxError } from "./model.mjs";
 export const CURRENT_VERSION = metadata.version;
 export const REPOSITORY = "fletchto99/copilot-notifications-canvas";
 export const REPOSITORY_URL = `https://github.com/${REPOSITORY}`;
-export const CHECK_INTERVAL = 6 * 60 * 60 * 1000;
-const RETRY_INTERVAL = 30 * 60 * 1000;
+export const CHECK_INTERVAL = 15 * 60 * 1000;
 
 export function versionParts(version) {
   if (typeof version !== "string" || version.length > 64 ||
@@ -28,7 +27,7 @@ export function compareVersions(left, right) {
 function updatePrompt(version) {
   return `Update my user-wide Unread Notifications canvas to v${version} from
 ${REPOSITORY_URL}.
-Follow the repository's "Updating" instructions. Fetch the exact release tag
+Follow the repository's "Installation and Updating" instructions. Fetch the exact release tag
 v${version} into a separate clean checkout or worktree and verify version.json
 matches it before running node scripts/install.mjs with my existing COPILOT_HOME.
 Preserve the entire installed artifacts directory in place, including settings.json
@@ -44,7 +43,7 @@ function rateLimitUntil(headers, now) {
   const retry = headers["retry-after"];
   const delay = /^\d+$/.test(retry ?? "") ? Number(retry) * 1000 : Date.parse(retry) - now;
   const reset = /^\d+$/.test(headers["x-ratelimit-reset"] ?? "") ? Number(headers["x-ratelimit-reset"]) * 1000 : 0;
-  return Math.max(now + RETRY_INTERVAL, Number.isFinite(delay) ? now + delay : 0,
+  return Math.max(now + CHECK_INTERVAL, Number.isFinite(delay) ? now + delay : 0,
     Number.isFinite(reset) ? reset : 0);
 }
 
@@ -78,7 +77,7 @@ export class Updates {
       canCheckAt: this.canCheckAt,
       error: this.error,
       releaseUrl: this.latestVersion ? `${REPOSITORY_URL}/releases/tag/v${this.latestVersion}` : null,
-      instructionsUrl: `${REPOSITORY_URL}#updating`,
+      instructionsUrl: `${REPOSITORY_URL}#installation-and-updating`,
       prompt: status === "available" ? updatePrompt(this.latestVersion) : null,
     };
   }
@@ -88,7 +87,6 @@ export class Updates {
     if (this.closed || this.now() < (force ? this.canCheckAt : this.nextCheckAt)) {
       return Promise.resolve(this.snapshot());
     }
-    this.canCheckAt = this.now() + 60_000;
     this.controller = new AbortController();
     this.pending = this.request(this.controller.signal)
       .finally(() => { this.pending = null; })
@@ -128,11 +126,12 @@ export class Updates {
       this.latestVersion = latest;
       this.checkedAt = this.now();
       this.nextCheckAt = this.now() + CHECK_INTERVAL;
+      this.canCheckAt = 0;
       this.error = null;
     } catch (error) {
       if (signal.aborted) return;
       this.error = error instanceof InboxError ? error.message : "The release check failed. Inspect the extension log.";
-      this.nextCheckAt = Math.max(this.now() + RETRY_INTERVAL, this.canCheckAt);
+      this.nextCheckAt = Math.max(this.now() + CHECK_INTERVAL, this.canCheckAt);
       this.log("Notification release check failed; the inbox is unaffected.", { level: "warning" });
     }
   }

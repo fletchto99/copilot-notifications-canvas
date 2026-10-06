@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to publish, matching version.json (for example, 0.1.0)"
+        description: "Version or tag matching version.json (for example, 0.1.1 or v0.1.1)"
         required: true
         type: string
   push:
@@ -12,9 +12,6 @@ on:
 
 permissions:
   contents: read
-
-env:
-  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref_name }}
 
 concurrency:
   group: ${{ github.workflow }}-publish
@@ -24,6 +21,8 @@ jobs:
   validate:
     runs-on: ubuntu-slim
     timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - name: Require main for manual releases
         if: github.event_name == 'workflow_dispatch'
@@ -41,7 +40,10 @@ jobs:
           node-version: "22"
           package-manager-cache: false
       - name: Validate release version
-        run: node scripts/check-release.mjs "$RELEASE_TAG"
+        id: version
+        env:
+          RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+        run: node scripts/check-release.mjs "$RELEASE_VERSION"
       - name: Run tests
         run: node --test test/*.test.mjs
   publish:
@@ -63,4 +65,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
         run: node scripts/publish-release.mjs "$RELEASE_TAG"

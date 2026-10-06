@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { Updates, CURRENT_VERSION, CHECK_INTERVAL, REPOSITORY, compareVersions, versionParts } from "../.github/extensions/github-notifications/updates.mjs";
 import { validateReleaseTag } from "../scripts/check-release.mjs";
 import { InboxError } from "../.github/extensions/github-notifications/model.mjs";
@@ -7,6 +8,14 @@ import { http } from "./fixtures.mjs";
 
 const release = (version = "0.2.0", fields = {}) =>
   ({ tag_name: `v${version}`, draft: false, prerelease: false, ...fields });
+
+test("shared installation and update instructions retain links used by older releases", async () => {
+  const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
+  assert.match(readme, /^## Installation and Updating$/m);
+  assert.match(readme, /```text\nInstall or update the Unread Notifications canvas/);
+  assert.match(readme, /<a id="installation"><\/a>/);
+  assert.match(readme, /<a id="updating"><\/a>/);
+});
 
 test("stable versions compare numerically and reject unsupported versions", () => {
   assert.ok(versionParts(CURRENT_VERSION));
@@ -41,7 +50,8 @@ test("release checks use a fixed read-only GitHub endpoint and locally construct
   assert.equal(state.status, "available");
   assert.equal(state.latestVersion, "0.2.0");
   assert.equal(state.releaseUrl, `https://github.com/${REPOSITORY}/releases/tag/v0.2.0`);
-  assert.match(state.instructionsUrl, /#updating$/);
+  assert.match(state.instructionsUrl, /#installation-and-updating$/);
+  assert.match(state.prompt, /"Installation and Updating" instructions/);
   assert.match(state.prompt, /exact release tag\nv0\.2\.0/);
   assert.match(state.prompt, /Preserve the entire installed artifacts directory in place/);
   assert.match(state.prompt, /settings\.json\nand unknown settings/);
@@ -53,7 +63,8 @@ test("release checks use a fixed read-only GitHub endpoint and locally construct
   assert.equal(calls[0].at(-1), `/repos/${REPOSITORY}/releases/latest`);
 });
 
-test("checks coalesce across panels, cache for six hours, and throttle manual refreshes", async () => {
+test("automatic release checks coalesce across panels and run at most every 15 minutes", async () => {
+  assert.equal(CHECK_INTERVAL, 900_000);
   let now = 10_000;
   let calls = 0;
   let finish;
@@ -69,21 +80,29 @@ test("checks coalesce across panels, cache for six hours, and throttle manual re
   finish();
   assert.deepEqual(await one, await two);
   assert.equal(updates.snapshot().nextCheckAt, now + CHECK_INTERVAL);
-  now += 59_999;
-  await updates.check({ force: true });
-  assert.equal(calls, 1);
-  now++;
-  const manual = updates.check({ force: true });
-  finish();
-  await manual;
-  assert.equal(calls, 2);
-  now += CHECK_INTERVAL - 1;
+  assert.equal(updates.snapshot().canCheckAt, 0);
+  now += 899_999;
   await updates.check();
-  assert.equal(calls, 2);
+  assert.equal(calls, 1);
   now++;
   const automatic = updates.check();
   finish();
   await automatic;
+  assert.equal(calls, 2);
+});
+
+test("manual release checks bypass the automatic cache without a cooldown", async () => {
+  let calls = 0;
+  const updates = new Updates({ now: () => 10_000, run: async () => {
+    calls++;
+    return http(release());
+  } });
+  await updates.check();
+  await updates.check({ force: true });
+  await updates.check({ force: true });
+  assert.equal(calls, 3);
+  assert.equal(updates.snapshot().canCheckAt, 0);
+  await updates.check();
   assert.equal(calls, 3);
 });
 
@@ -140,12 +159,11 @@ test("offline failures keep a last-known update and back off without claiming a 
   const failed = await updates.check();
   assert.equal(failed.status, "available");
   assert.equal(failed.checkedAt, 1000);
-  assert.equal(failed.nextCheckAt, now + 30 * 60_000);
+  assert.equal(failed.nextCheckAt, now + 900_000);
   assert.match(failed.error, /release check failed/);
   assert.doesNotMatch(JSON.stringify(failed), /sensitive/);
   await updates.check();
   assert.equal(calls, 2);
-  now += 60_000;
   offline = false;
   assert.equal((await updates.check({ force: true })).error, null);
 });
@@ -169,6 +187,7 @@ test("rate-limit retry headers apply even to manual requests", async () => {
     assert.equal(calls, 1);
     now++;
     assert.equal((await updates.check({ force: true })).status, "available");
+    assert.equal(updates.snapshot().canCheckAt, 0);
     assert.equal(calls, 2);
   }
 });

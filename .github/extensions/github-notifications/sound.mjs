@@ -17,7 +17,7 @@ export class NotificationSound {
     if (this.enabled || this.pending) return this.disable();
     const generation = ++this.generation;
     this.pending = true;
-    this.onChange({ enabled: false, pending: true, message: "Enabling sound..." });
+    this.onChange({ enabled: false, pending: true, message: "" });
     let timeout;
     try {
       const context = this.createContext();
@@ -38,7 +38,7 @@ export class NotificationSound {
       this.enabled = true;
       this.pending = false;
       this.enabledAt = this.now();
-      this.onChange({ enabled: true, pending: false, message: "Sound is on for new activity while this canvas is visible." });
+      this.onChange({ enabled: true, pending: false, message: "" });
     } catch {
       if (generation === this.generation) {
         await this.disable("Sound could not be enabled. Check browser audio permissions, then enable sound to retry.");
@@ -115,7 +115,7 @@ export class NotificationSound {
     const context = this.context;
     this.context = null;
     if (context) context.onstatechange = null;
-    this.onChange({ enabled: false, pending: false, message: message || (failed ? "Sound is off; audio cleanup failed." : "Sound is off.") });
+    this.onChange({ enabled: false, pending: false, message: message || (failed ? "Sound is off; audio cleanup failed." : "") });
     try {
       if (context && context.state !== "closed") await context.close();
     } catch {
