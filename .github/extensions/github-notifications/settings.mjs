@@ -4,6 +4,13 @@ import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { InboxError } from "./model.mjs";
+import { soundValue, validSound } from "./notifier.mjs";
+
+const booleanSettings = ["autoOpen", "desktopNotifications"];
+const settingsValue = data => ({
+  ...Object.fromEntries(booleanSettings.map(key => [key, data[key] ?? false])),
+  desktopSound: soundValue(data.desktopSound),
+});
 
 export class Preferences {
   constructor({ directory = join(process.env.COPILOT_HOME || join(homedir(), ".copilot"),
@@ -21,13 +28,15 @@ export class Preferences {
       if (!stat.isFile() || stat.size > 16_384) throw new Error("Invalid settings file");
       const data = JSON.parse(await file.readFile("utf8"));
       if (!data || typeof data !== "object" || Array.isArray(data) ||
-          (data.autoOpen !== undefined && typeof data.autoOpen !== "boolean")) {
+          booleanSettings.some(key => data[key] !== undefined && typeof data[key] !== "boolean") ||
+          !validSound(soundValue(data.desktopSound)) ||
+          (data.desktopGeneration !== undefined && typeof data.desktopGeneration !== "string")) {
         throw new Error("Invalid settings object");
       }
       return data;
     } catch (error) {
       if (error.code === "ENOENT") return {};
-      throw new InboxError("settings_read", "Could not read notification settings. Check artifacts/settings.json; it must be a valid JSON object with a boolean autoOpen setting.", 500);
+      throw new InboxError("settings_read", "Could not read notification settings. Check artifacts/settings.json; autoOpen and desktopNotifications must be booleans, and desktopSound must be a supported sound name.", 500);
     } finally {
       await file?.close();
     }
@@ -35,13 +44,15 @@ export class Preferences {
 
   async read() {
     const data = await this.document();
-    return { autoOpen: data.autoOpen ?? false };
+    return settingsValue(data);
   }
 
   async update(input) {
     if (!input || typeof input !== "object" || Array.isArray(input) ||
-        Object.keys(input).length !== 1 || typeof input.autoOpen !== "boolean") {
-      throw new InboxError("invalid_settings", "Settings require only an autoOpen boolean.", 400);
+        Object.keys(input).length !== 1 ||
+        !(booleanSettings.includes(Object.keys(input)[0]) && typeof Object.values(input)[0] === "boolean") &&
+          !(Object.hasOwn(input, "desktopSound") && validSound(input.desktopSound))) {
+      throw new InboxError("invalid_settings", "Change one setting: autoOpen or desktopNotifications (boolean), or desktopSound (sound name).", 400);
     }
     const lockPath = join(this.directory, ".settings.lock");
     const temporary = join(this.directory, `.settings-${randomUUID()}.tmp`);
@@ -58,7 +69,11 @@ export class Preferences {
         throw error;
       }
       const current = await this.document();
-      const content = JSON.stringify({ ...current, autoOpen: input.autoOpen }, null, 2);
+      const updated = { ...current, ...input };
+      if (input.desktopNotifications === true && !current.desktopNotifications) {
+        updated.desktopGeneration = randomUUID();
+      }
+      const content = JSON.stringify(updated, null, 2);
       if (Buffer.byteLength(content) > 16_384) throw new Error("Settings size limit");
       const output = await this.io.open(temporary, "wx", 0o600);
       temporaryCreated = true;
@@ -69,7 +84,7 @@ export class Preferences {
       }
       await this.io.rename(temporary, this.path);
       temporaryCreated = false;
-      return { autoOpen: input.autoOpen };
+      return settingsValue(updated);
     } catch (error) {
       if (error instanceof InboxError) throw error;
       throw new InboxError("settings_write", "Could not save notification settings. Check permissions and free disk space in the extension artifacts directory.", 500);

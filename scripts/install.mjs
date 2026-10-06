@@ -1,12 +1,15 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { copyFile, lstat, mkdir, mkdtemp, readFile, readdir, rename, rmdir, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { acquireLock } from "../.github/extensions/github-notifications/lock.mjs";
 
 const name = "github-notifications";
 const marker = ".copilot-notifications-install.json";
-const files = ["extension.mjs", "github.mjs", "inbox.mjs", "batch.mjs", "model.mjs", "server.mjs", "app.mjs", "sound.mjs", "settings.mjs", "startup.mjs", "index.html", "styles.css"];
+const desktopFiles = ["desktop.mjs", "notifier.mjs", "lock.mjs"];
+const files = ["extension.mjs", "github.mjs", "inbox.mjs", "batch.mjs", "model.mjs", "server.mjs", "app.mjs", "settings.mjs", "startup.mjs", "index.html", "styles.css", ...desktopFiles];
+const retiredFiles = ["sound.mjs"];
 const source = fileURLToPath(new URL("../.github/extensions/github-notifications/", import.meta.url));
 const hash = content => createHash("sha256").update(content).digest("hex");
 
@@ -29,8 +32,10 @@ async function verifyOwned(target) {
   }
   const runtimeEntries = entries.filter(file => file !== "artifacts");
   if (!runtimeEntries.length) return new Map();
-  const legacyAdditions = ["settings.mjs", "startup.mjs", ...(entries.includes("sound.mjs") ? [] : ["sound.mjs"])];
-  const priorFiles = entries.includes("batch.mjs") ? files : files.filter(file => file !== "batch.mjs");
+  const legacyAdditions = ["settings.mjs", "startup.mjs"];
+  const knownFiles = [...files, ...retiredFiles.filter(file => entries.includes(file))];
+  const priorDesktopFiles = entries.includes("desktop.mjs") ? knownFiles : knownFiles.filter(file => !desktopFiles.includes(file));
+  const priorFiles = entries.includes("batch.mjs") ? priorDesktopFiles : priorDesktopFiles.filter(file => file !== "batch.mjs");
   const installedFiles = entries.includes("startup.mjs") ? priorFiles : priorFiles.filter(file => !legacyAdditions.includes(file));
   if (runtimeEntries.length !== installedFiles.length + 1 || runtimeEntries.some(file => ![...installedFiles, marker].includes(file))) {
     throw new Error("Refusing to overwrite an unrelated or incomplete extension directory.");
@@ -64,52 +69,9 @@ async function removeOwnedDirectory(path) {
 }
 
 async function acquireInstallLock(parent) {
-  const lockPath = join(parent, ".github-notifications-install-lock");
-  const candidate = await mkdtemp(join(parent, ".github-notifications-lock-"));
-  const owner = `owner-${process.pid}-${randomUUID()}`;
-  let acquired = false;
-  try {
-    await writeFile(join(candidate, owner), "", { flag: "wx", mode: 0o600 });
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        // Publish a nonempty directory atomically, so even a crashed owner has an identity.
-        await rename(candidate, lockPath);
-        acquired = true;
-        return async () => {
-          await unlink(join(lockPath, owner));
-          try {
-            await rmdir(lockPath);
-          } catch (error) {
-            if (!["ENOENT", "ENOTEMPTY", "EEXIST"].includes(error.code)) throw error;
-          }
-        };
-      } catch (error) {
-        if (!["EEXIST", "ENOTEMPTY", "EPERM"].includes(error.code)) throw error;
-      }
-      const stat = await exists(lockPath);
-      if (!stat) continue;
-      if (!stat.isDirectory()) throw new Error("Refusing an unrecognized installer lock.");
-      const entries = await readdir(lockPath);
-      if (!entries.length) continue;
-      const match = entries.length === 1 && entries[0].match(/^owner-([1-9]\d*)-[a-f0-9-]{36}$/);
-      if (!match || !Number.isSafeInteger(Number(match[1]))) throw new Error("Refusing an unrecognized installer lock.");
-      try {
-        process.kill(Number(match[1]), 0);
-        throw new Error("Another notification installation is running. Retry when it finishes.");
-      } catch (error) {
-        if (error.code !== "ESRCH") throw error;
-      }
-      // Remove only the dead owner's unique file. A replacement owner's file is never touched.
-      try {
-        await unlink(join(lockPath, entries[0]));
-      } catch (error) {
-        if (error.code !== "ENOENT") throw error;
-      }
-    }
-    throw new Error("The installer lock changed concurrently. Retry installation.");
-  } finally {
-    if (!acquired) await removeOwnedDirectory(candidate);
-  }
+  const release = await acquireLock(join(parent, ".github-notifications-install-lock"), { label: "installer" });
+  if (!release) throw new Error("Another notification installation is running. Retry when it finishes.");
+  return release;
 }
 
 async function fileHash(path) {
@@ -150,10 +112,12 @@ export async function install(home = process.env.COPILOT_HOME || join(homedir(),
     const touched = [];
     try {
       // Keep target/artifacts stable for settings writers, including already-running older providers.
-      for (const file of [...files.filter(file => file !== "extension.mjs"), "extension.mjs", marker]) {
+      for (const file of [...files.filter(file => file !== "extension.mjs"), "extension.mjs",
+        ...retiredFiles.filter(file => previous.has(file)), marker]) {
         if (await fileHash(join(target, file)) !== previous.get(file)) throw new Error("Installed files changed during publication.");
         touched.push(file);
-        await rename(join(stage, file), join(target, file));
+        if (retiredFiles.includes(file)) await unlink(join(target, file));
+        else await rename(join(stage, file), join(target, file));
       }
     } catch (error) {
       for (const file of new Set([...touched].reverse().concat([...previous.keys()]))) {

@@ -4,17 +4,16 @@ import { readFile } from "node:fs/promises";
 import { createContext, runInContext } from "node:vm";
 import { Inbox } from "../.github/extensions/github-notifications/inbox.mjs";
 import { GitHubClient } from "../.github/extensions/github-notifications/github.mjs";
-import { NotificationSound } from "../.github/extensions/github-notifications/sound.mjs";
+import { desktopCapabilities } from "../.github/extensions/github-notifications/notifier.mjs";
 import { http, thread } from "./fixtures.mjs";
-import { FakeAudioContext } from "./audio-fixtures.mjs";
 
 const script = await readFile(new URL("../.github/extensions/github-notifications/app.mjs", import.meta.url), "utf8");
 const html = await readFile(new URL("../.github/extensions/github-notifications/index.html", import.meta.url), "utf8");
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
 // Minimal DOM/event/timer doubles exercise the actual renderer without a browser dependency.
-async function renderer({ hidden = false, token = "a".repeat(64), audioOptions = {}, readFailure = false,
-  initialRows, onWrite, onFetch, onState, onFilters, initialOffline = false } = {}) {
+async function renderer({ hidden = false, token = "a".repeat(64), readFailure = false,
+  initialRows, onWrite, onFetch, onState, onFilters, onSettings, initialOffline = false, desktopPlatform = "darwin" } = {}) {
   const calls = [];
   const timers = new Map();
   let timerId = 0;
@@ -25,8 +24,7 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
     thread("1", { subject: { title: "<img src=x onerror=alert(1)>", type: "Issue", url: null } }),
     thread("2", { unread: false }),
   ];
-  const audioContexts = [];
-  let storedAutoOpen = false;
+  const storedSettings = { autoOpen: false, desktopNotifications: false, desktopSound: "none" };
   const patches = [];
   const githubCalls = [];
   class Node {
@@ -92,7 +90,7 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
   for (const id of ["batch-stop", "batch-retry", "batch-dismiss"]) ids.get(id).parentNode = ids.get("batch-progress");
   ids.get("batch-progress").contains = node =>
     ["batch-progress", "batch-stop", "batch-retry", "batch-dismiss"].some(id => ids.get(id) === node);
-  ids.get("settings").contains = node => ["settings", "settings-toggle", "settings-panel", "sound", "auto-open"].some(id => ids.get(id) === node);
+  ids.get("settings").contains = node => ["settings", "settings-toggle", "settings-panel", "auto-open", "desktop-notifications", "desktop-sound"].some(id => ids.get(id) === node);
   const document = {
     hidden,
     body: new Node("body"),
@@ -107,9 +105,6 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
     addEventListener(name, handler) { this.events[name] = handler; },
   };
   const window = { events: {}, addEventListener(name, handler) { this.events[name] = handler; } };
-  window.AudioContext = class extends FakeAudioContext {
-    constructor() { super(audioOptions); audioContexts.push(this); }
-  };
   const inbox = new Inbox(new GitHubClient({ now: () => now, sleep: async delay => { now += delay; }, run: async args => {
     githubCalls.push(args);
     if (args.includes("PATCH")) {
@@ -122,9 +117,6 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
   const context = createContext({
     document, window, location: { hash: `#${token}` }, Intl, AbortController,
     Date: class extends Date { static now() { return now; } },
-    NotificationSound: class extends NotificationSound {
-      constructor(options) { super({ ...options, now: () => now }); }
-    },
     setTimeout(fn, delay) { timers.set(++timerId, { fn, delay }); return timerId; },
     clearTimeout(id) { timers.delete(id); },
     IntersectionObserver: class {
@@ -136,8 +128,11 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
       if (offline) throw new Error("Synthetic connection failure");
       calls.push({ path, options });
       if (path === "/api/settings") {
-        if (options.body) storedAutoOpen = JSON.parse(options.body).autoOpen;
-        return { ok: true, json: async () => ({ autoOpen: storedAutoOpen }) };
+        if (onSettings) await onSettings(options.body ? JSON.parse(options.body) : undefined);
+        if (options.body) Object.assign(storedSettings, JSON.parse(options.body));
+        return { ok: true, json: async () => ({ ...storedSettings,
+          desktopStatus: { ...desktopCapabilities(desktopPlatform), state: "watching", message: "Desktop notification status." },
+        }) };
       }
       if (path === "/api/refresh") await inbox.refresh();
       if (path === "/api/state") {
@@ -155,11 +150,10 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
       return { ok: true, json: async () => inbox.snapshot() };
     },
   });
-  assert.match(script, /^import \{ NotificationSound \} from "\.\/sound\.mjs";/);
-  runInContext(script.replace(/^import \{ NotificationSound \} from "\.\/sound\.mjs";/, ""), context);
+  runInContext(script, context);
   await settle();
   return {
-    calls, document, window, ids, timers, context, audioContexts, inbox, patches, githubCalls,
+    calls, document, window, ids, timers, context, inbox, patches, githubCalls,
     advance(milliseconds = 120_000) { now += milliseconds; return now; },
     async fireTimer(delay = 5000) {
       const [id, timer] = [...timers].find(([, timer]) => timer.delay === delay);
@@ -354,47 +348,14 @@ test("a missing capability remains inert and explains how to open the canvas", a
   assert.match(ui.ids.get("notice").textContent, /Open this canvas from Copilot/);
 });
 
-test("sound is opt-in and refresh arrivals ring once even when search hides every row", async () => {
-  const ui = await renderer();
-  assert.equal(ui.audioContexts.length, 0);
-  assert.match(html, /id="sound"[^>]*role="switch"[^>]*aria-checked="false"/);
-  assert.match(html, /id="sound-status"[^>]*role="status"/);
-  ui.ids.get("sound").events.click();
-  await settle();
-  assert.equal(ui.ids.get("sound").attributes["aria-checked"], "true");
-  assert.equal(ui.ids.get("sound").textContent, "Play sound: On");
-  assert.equal(ui.audioContexts[0].starts, 0);
-  await runInContext('update("filters", { query: "no match" })', ui.context);
-  const later = ui.advance();
-  ui.setRows([thread("3", { updated_at: new Date(later).toISOString() })]);
-  await runInContext('update("refresh", {})', ui.context);
-  assert.equal(ui.document.querySelectorAll("article").length, 0);
-  assert.equal(ui.audioContexts[0].starts, 1);
-  await runInContext('update("refresh", {})', ui.context);
-  await runInContext('update("filters", { query: "" })', ui.context);
-  assert.equal(ui.audioContexts[0].starts, 1);
-  ui.ids.get("sound").events.click();
-  await settle();
-  assert.equal(ui.ids.get("sound").attributes["aria-checked"], "false");
-  assert.equal(ui.audioContexts[0].state, "closed");
+test("the per-panel Web Audio option is replaced by the native notification sound picker", () => {
+  assert.doesNotMatch(html, /id="sound"|Play sound|per-panel chime/);
+  assert.match(html, /<label for="desktop-sound"/);
+  assert.match(html, /<select id="desktop-sound"/);
+  assert.doesNotMatch(script, /AudioContext|NotificationSound|sound\.mjs/);
 });
 
-test("visible toggle reports browser audio failures, and pagehide closes its context", async () => {
-  const failed = await renderer({ audioOptions: { resumeError: true } });
-  failed.ids.get("sound").events.click();
-  await settle();
-  assert.equal(failed.ids.get("sound").textContent, "Play sound: Off");
-  assert.match(failed.ids.get("sound-status").textContent, /could not be enabled/);
-  const ui = await renderer();
-  ui.ids.get("sound").events.click();
-  await settle();
-  ui.window.events.pagehide();
-  await settle();
-  assert.equal(ui.audioContexts[0].state, "closed");
-  assert.equal(ui.ids.get("sound").attributes["aria-checked"], "false");
-});
-
-test("Settings contains both switches, saves startup preference and closes accessibly", async () => {
+test("Settings saves startup preference and closes accessibly", async () => {
   const ui = await renderer();
   const settings = ui.ids.get("settings");
   settings.open = true;
@@ -407,7 +368,7 @@ test("Settings contains both switches, saves startup preference and closes acces
   await settle();
   assert.equal(ui.ids.get("auto-open").attributes["aria-checked"], "true");
   assert.match(ui.ids.get("settings-status").textContent, /future new sessions/);
-  ui.document.events.click({ target: ui.ids.get("sound") });
+  ui.document.events.click({ target: ui.ids.get("desktop-sound") });
   assert.equal(settings.open, true);
   ui.document.events.keydown({ key: "Escape", preventDefault() {} });
   assert.equal(settings.open, false);
@@ -418,7 +379,77 @@ test("Settings contains both switches, saves startup preference and closes acces
   assert.equal(ui.ids.get("auto-open").attributes["aria-checked"], "true");
   ui.document.events.click({ target: ui.ids.get("search") });
   assert.equal(settings.open, false);
-  assert.equal(ui.audioContexts.length, 0);
+});
+
+test("desktop controls persist independently, preserve focus and are disabled on unsupported hosts", async () => {
+  const ui = await renderer();
+  ui.ids.get("settings").open = true;
+  ui.ids.get("settings").events.toggle();
+  await settle();
+  const desktop = ui.ids.get("desktop-notifications");
+  const sound = ui.ids.get("desktop-sound");
+  assert.equal(desktop.disabled, false);
+  assert.equal(desktop.attributes["aria-checked"], "false");
+  assert.equal(sound.disabled, true);
+  desktop.focus();
+  desktop.events.click();
+  await settle();
+  assert.equal(desktop.attributes["aria-checked"], "true");
+  assert.equal(ui.document.activeElement, desktop);
+  assert.equal(sound.disabled, false);
+  sound.value = "Ping";
+  sound.events.change();
+  await settle();
+  assert.equal(sound.value, "Ping");
+  assert.equal(sound.children.some(option => option.value === "Submarine"), true);
+  assert.match(ui.ids.get("settings-status").textContent, /across sessions/);
+  desktop.events.click();
+  await settle();
+  assert.equal(sound.disabled, true);
+  assert.equal(sound.value, "Ping");
+  const unsupported = await renderer({ desktopPlatform: "freebsd" });
+  unsupported.ids.get("settings").open = true;
+  unsupported.ids.get("settings").events.toggle();
+  await settle();
+  assert.equal(unsupported.ids.get("desktop-notifications").disabled, true);
+  assert.equal(unsupported.ids.get("desktop-sound").disabled, true);
+  assert.match(unsupported.ids.get("desktop-sound-help").textContent, /macOS, Windows and Linux/);
+  assert.equal(unsupported.ids.get("auto-open").disabled, false);
+});
+
+test("Windows and Linux sound pickers use their own sound catalogs", async () => {
+  for (const [platform, expected] of [["win32", "Mail"], ["linux", "message-new-email"]]) {
+    const ui = await renderer({ desktopPlatform: platform });
+    ui.ids.get("settings").open = true;
+    ui.ids.get("settings").events.toggle();
+    await settle();
+    assert.equal(ui.ids.get("desktop-notifications").disabled, false);
+    const values = ui.ids.get("desktop-sound").children.map(option => option.value);
+    assert.ok(values.includes(expected));
+    assert.ok(values.includes("none"));
+    assert.equal(values.includes("Glass"), false);
+  }
+});
+
+test("a settings edit during a background status read is queued rather than dropped", async () => {
+  let reads = 0;
+  let finish;
+  const ui = await renderer({ onSettings: input => {
+    if (!input && ++reads === 2) return new Promise(resolve => { finish = resolve; });
+  } });
+  ui.ids.get("settings").open = true;
+  ui.ids.get("settings").events.toggle();
+  await settle();
+  await ui.fireTimer();
+  const control = ui.ids.get("desktop-notifications");
+  assert.equal(control.disabled, false);
+  control.focus();
+  control.events.click();
+  assert.equal(control.disabled, true);
+  finish();
+  await settle();
+  assert.equal(control.attributes["aria-checked"], "true");
+  assert.equal(ui.document.activeElement, control);
 });
 
 test("settings failures are visible and do not claim a saved toggle", async () => {
@@ -435,11 +466,9 @@ test("settings failures are visible and do not claim a saved toggle", async () =
   assert.equal(ui.ids.get("auto-open").disabled, false);
 });
 
-test("mark-read requires a click, removes only on confirmation and stays silent", async () => {
+test("mark-read requires a click and removes only on confirmation", async () => {
   const ui = await renderer();
   assert.equal(ui.calls.some(call => call.path === "/api/read"), false);
-  ui.ids.get("sound").events.click();
-  await settle();
   const button = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "1");
   assert.match(button.attributes["aria-label"], /Mark as read/);
   button.focus();
@@ -449,7 +478,6 @@ test("mark-read requires a click, removes only on confirmation and stays silent"
   await marking;
   assert.equal(ui.calls.filter(call => call.path === "/api/read").length, 1);
   assert.equal(ui.document.querySelectorAll("article").length, 0);
-  assert.equal(ui.audioContexts[0].starts, 0);
   assert.equal(ui.document.activeElement, ui.ids.get("search"));
   ui.window.events.pagehide();
 });
@@ -461,30 +489,6 @@ test("mark-read failure retains the row with a usable retry control", async () =
   assert.equal(ui.document.querySelectorAll("article").length, 1);
   assert.equal(button.disabled, false);
   assert.match(ui.ids.get("notice").textContent, /Could not mark/);
-});
-
-test("hidden views and reconnects reset the audio baseline without catch-up chimes", async () => {
-  const ui = await renderer();
-  ui.ids.get("sound").events.click();
-  await settle();
-  ui.intersect(false);
-  const later = ui.advance();
-  ui.setRows([thread("3", { updated_at: new Date(later).toISOString() })]);
-  await runInContext('update("refresh", {})', ui.context);
-  assert.equal(ui.audioContexts[0].starts, 0);
-  ui.intersect(true);
-  await settle();
-  await runInContext('update("refresh", {})', ui.context);
-  assert.equal(ui.audioContexts[0].starts, 0);
-  ui.setOffline(true);
-  await runInContext('update("refresh", {})', ui.context);
-  ui.setOffline(false);
-  const newest = ui.advance();
-  ui.setRows([thread("4", { updated_at: new Date(newest).toISOString() })]);
-  await runInContext('update("refresh", {})', ui.context);
-  assert.equal(ui.audioContexts[0].starts, 0);
-  ui.window.events.pagehide();
-  await settle();
 });
 
 test("repository action starts from one click with no dialog and preserves independent disclosure", async () => {
@@ -527,8 +531,6 @@ test("one-click repository read honors search, blocks duplicate clicks and quiet
     onWrite: () => new Promise(resolve => { release = () => resolve("HTTP/2 205 Reset Content\r\n\r\n"); }),
   });
   await runInContext('update("filters", { query: "notification 1" })', ui.context);
-  ui.ids.get("sound").events.click();
-  await settle();
   const groupRead = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.focusKey.startsWith("bulk:"));
   assert.equal(groupRead.textContent, "Mark 1 as read");
   groupRead.focus();
@@ -554,7 +556,6 @@ test("one-click repository read honors search, blocks duplicate clicks and quiet
   assert.deepEqual(ui.patches, ["/notifications/threads/1"]);
   assert.equal(ui.inbox.summary().loaded, 1);
   assert.equal(ui.document.querySelectorAll("article").length, 0);
-  assert.equal(ui.audioContexts[0].starts, 0);
   assert.equal(ui.document.activeElement, ui.ids.get("search"));
   ui.window.events.pagehide();
 });

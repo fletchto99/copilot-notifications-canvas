@@ -21,8 +21,12 @@
         <details id="settings" class="settings">
           <summary id="settings-toggle" aria-controls="settings-panel" aria-expanded="false">Settings</summary>
           <div id="settings-panel" class="settings-panel" role="group" aria-label="Notification settings">
-            <button id="sound" type="button" role="switch" aria-checked="false" aria-describedby="sound-status">Play sound: Off</button>
-            <p id="sound-status" class="settings-help" role="status" aria-live="polite">Optional chime while visible. Enable separately in each panel.</p>
+            <button id="desktop-notifications" type="button" role="switch" aria-checked="false" aria-describedby="desktop-help desktop-status" disabled>Desktop notifications: Off</button>
+            <p id="desktop-help" class="settings-help">One alert per new notification, including in the background. Shows owner/repo and the notification title, which may appear on your lock screen. Shared across sessions; stops when the last Notifications canvas closes.</p>
+            <label for="desktop-sound" class="settings-label">Notification sound</label>
+            <select id="desktop-sound" aria-describedby="desktop-sound-help" disabled><option value="none">None</option></select>
+            <p id="desktop-sound-help" class="settings-help">Sound choices depend on the operating system.</p>
+            <p id="desktop-status" class="settings-help" role="status" aria-live="polite"></p>
             <button id="auto-open" type="button" role="switch" aria-checked="false" aria-describedby="startup-help" disabled>Open on new sessions: Off</button>
             <p id="startup-help" class="settings-help">Saved for your user. Requires user-wide installation to work outside this repository. Does not reopen this session.</p>
             <p id="settings-status" class="settings-help" role="status" aria-live="polite"></p>

@@ -1,5 +1,3 @@
-import { NotificationSound } from "./sound.mjs";
-
 const $ = id => document.getElementById(id);
 const token = location.hash.slice(1);
 const hasCapability = /^[a-f0-9]{64}$/.test(token);
@@ -18,19 +16,12 @@ const requestControllers = new Set();
 let connectionError = "";
 let preferences;
 let settingsBusy = false;
+let pendingSettings;
+let soundOptionsKey;
 const markingRead = new Set();
 let readError = "";
 let batchBusy = false;
 let batchFocusKey;
-const sound = new NotificationSound({
-  createContext: () => new (window.AudioContext || window.webkitAudioContext)(),
-  onChange: ({ enabled, pending, message }) => {
-    $("sound").textContent = pending ? "Cancel enabling sound" : enabled ? "Play sound: On" : "Play sound: Off";
-    $("sound").setAttribute("aria-checked", String(enabled));
-    $("sound").setAttribute("aria-label", pending ? "Cancel enabling sound" : enabled ? "Disable notification sound" : "Enable notification sound");
-    $("sound-status").textContent = message;
-  },
-});
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -69,22 +60,72 @@ async function api(path, input) {
   }
 }
 
-async function settingsRequest(input) {
-  if (settingsBusy || !visible()) return;
+function renderSettings() {
+  for (const [id, key, label] of [
+    ["auto-open", "autoOpen", "Open on new sessions"],
+    ["desktop-notifications", "desktopNotifications", "Desktop notifications"],
+  ]) {
+    if (preferences) {
+      $(id).textContent = `${label}: ${preferences[key] ? "On" : "Off"}`;
+      $(id).setAttribute("aria-checked", String(Boolean(preferences[key])));
+    }
+    $(id).disabled = settingsBusy || !preferences ||
+      (id !== "auto-open" && !preferences.desktopStatus?.supported);
+  }
+  const select = $("desktop-sound");
+  select.disabled = settingsBusy || !preferences?.desktopNotifications || !preferences?.desktopStatus?.supported;
+  if (preferences) {
+    const choices = [...(preferences.desktopStatus?.sounds ?? [])];
+    if (!choices.some(choice => choice.value === preferences.desktopSound)) {
+      choices.push({ value: preferences.desktopSound, label: `Unavailable on this platform: ${preferences.desktopSound}` });
+    }
+    const key = JSON.stringify(choices);
+    if (key !== soundOptionsKey) {
+      const fragment = document.createDocumentFragment();
+      for (const choice of choices) {
+        const option = element("option", "", choice.label);
+        option.value = choice.value;
+        fragment.append(option);
+      }
+      select.replaceChildren(fragment);
+      soundOptionsKey = key;
+    }
+    select.value = preferences.desktopSound;
+    $("desktop-status").textContent = preferences.desktopStatus?.message ?? "Desktop notifications are unavailable.";
+    $("desktop-sound-help").textContent = preferences.desktopStatus?.help ?? "";
+  }
+}
+
+async function settingsRequest(input, quiet = false) {
+  if (!visible()) return;
+  if (settingsBusy) {
+    if (input && !pendingSettings) {
+      pendingSettings = { input, focus: document.activeElement };
+      renderSettings();
+    }
+    return;
+  }
+  const previousFocus = document.activeElement;
   settingsBusy = true;
-  $("auto-open").disabled = true;
-  $("settings-status").textContent = input ? "Saving startup setting..." : "Loading startup setting...";
+  if (!quiet) renderSettings();
+  if (!quiet) $("settings-status").textContent = input ? "Saving setting..." : "Loading settings...";
   try {
     preferences = await api("settings", input);
-    $("auto-open").textContent = `Open on new sessions: ${preferences.autoOpen ? "On" : "Off"}`;
-    $("auto-open").setAttribute("aria-checked", String(preferences.autoOpen));
-    $("settings-status").textContent = input ? "Saved. Applies to future new sessions." : "";
+    if (!quiet) $("settings-status").textContent = input ?
+      (Object.hasOwn(input, "autoOpen") ? "Saved. Applies to future new sessions." : "Saved. Applies across sessions within five seconds.") : "";
   } catch (error) {
     preferences = undefined;
     $("settings-status").textContent = `${error.message || "Settings request failed."} Close and reopen Settings to retry.`;
   } finally {
     settingsBusy = false;
-    $("auto-open").disabled = !preferences;
+    renderSettings();
+    restoreFocus(previousFocus);
+    if (pendingSettings) {
+      const next = pendingSettings;
+      pendingSettings = undefined;
+      restoreFocus(next.focus);
+      void settingsRequest(next.input);
+    }
   }
 }
 
@@ -114,7 +155,6 @@ async function markRead(id) {
     await pollPromise;
     if (!visible()) return;
     state = await api("read", { id });
-    sound.observe(state.activity);
     const remaining = state.groups.flatMap(group => group.items);
     const next = remaining[Math.min(index, remaining.length - 1)];
     nextFocusKey = next ? `read:${next.id}` : null;
@@ -167,14 +207,12 @@ async function batchRequest(action, input) {
     await pollPromise;
     if (!visible()) return;
     state = await api(`batch/${action}`, input);
-    sound.observe(state.activity);
     readError = "";
   } catch (error) {
     failed = true;
     readError = error.message || "The repository action failed. Try again.";
     try {
       state = await api("state");
-      sound.observe(state.activity);
     } catch {
       readError += " Could not reconnect. Reopen this panel to inspect its current progress.";
     }
@@ -229,16 +267,9 @@ function schedule() {
 }
 
 async function performUpdate(path, input) {
-  const soundGeneration = sound.generation;
-  const soundWasEnabled = sound.enabled;
   renderControls();
   try {
     state = await api(path, input);
-    sound.observe(state.activity, {
-      refresh: path === "refresh" && soundWasEnabled,
-      visible: visible(),
-      generation: soundGeneration,
-    });
     connectionError = "";
     if (path === "refresh") readError = "";
     return true;
@@ -250,13 +281,9 @@ async function performUpdate(path, input) {
     if (path !== "state" && visible()) {
       try {
         state = await api("state");
-        sound.observe(state.activity);
       } catch {
         connectionError = "The local canvas disconnected. Reopen it to reconnect.";
-        sound.resetBaseline();
       }
-    } else if (visible()) {
-      sound.resetBaseline();
     }
     return false;
   }
@@ -313,6 +340,7 @@ async function flushSearch() {
 
 async function tick() {
   if (!visible() || busy) return;
+  if ($("settings").open) void settingsRequest(undefined, true);
   if (markingRead.size) return schedule();
   if (batchLocked() || batchBusy) return update();
   if (!state || (state.status !== "loading" && Date.now() >= state.nextRefreshAt)) {
@@ -464,9 +492,6 @@ for (const [id, action] of [["batch-stop", "cancel"],
   ["batch-retry", "retry"], ["batch-dismiss", "dismiss"]]) {
   $(id).addEventListener("click", () => state?.batch && batchRequest(action, { token: state.batch.token }));
 }
-$("sound").addEventListener("click", () => {
-  if (visible()) void sound.toggle();
-});
 $("settings").addEventListener("toggle", () => {
   const open = $("settings").open;
   $("settings-toggle").setAttribute("aria-expanded", String(open));
@@ -474,6 +499,14 @@ $("settings").addEventListener("toggle", () => {
 });
 $("auto-open").addEventListener("click", () => {
   if (preferences) void settingsRequest({ autoOpen: !preferences.autoOpen });
+});
+$("desktop-notifications").addEventListener("click", () => {
+  if (preferences && !$("desktop-notifications").disabled) {
+    void settingsRequest({ desktopNotifications: !preferences.desktopNotifications });
+  }
+});
+$("desktop-sound").addEventListener("change", () => {
+  if (preferences && !$("desktop-sound").disabled) void settingsRequest({ desktopSound: $("desktop-sound").value });
 });
 document.addEventListener("click", event => {
   if ($("settings").open && !$("settings").contains(event.target)) closeSettings();
@@ -505,7 +538,6 @@ $("collapse").addEventListener("click", () => {
 });
 function visibilityChanged() {
   clearTimeout(timer);
-  sound.resetBaseline();
   if (visible()) void tick();
   else {
     for (const controller of requestControllers) controller.abort();
@@ -524,12 +556,10 @@ window.addEventListener("pagehide", () => {
   clearTimeout(searchTimer);
   for (const controller of requestControllers) controller.abort();
   observer.disconnect();
-  void sound.close();
 });
 if (hasCapability) void tick();
 else {
   $("notice").hidden = false;
   $("notice").textContent = "Missing canvas capability. Open this canvas from Copilot instead of browsing to its local address.";
   $("empty-title").textContent = "Open from Copilot";
-  $("sound").disabled = true;
 }

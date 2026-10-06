@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
 import { install } from "../scripts/install.mjs";
 
 async function home(t) {
@@ -20,12 +21,12 @@ test("installation is repeatable, scoped to the supplied Copilot home, and copie
   assert.equal(target, join(root, "extensions", "github-notifications"));
   assert.equal(await install(root), target);
   const entries = await readdir(target);
-  assert.equal(entries.length, 13);
+  assert.equal(entries.length, 15);
   assert.equal(entries.includes("extension.mjs"), true);
   assert.equal(entries.includes("README.md"), false);
   assert.equal(entries.includes("test"), false);
   assert.equal(entries.includes("node_modules"), false);
-  assert.equal(entries.includes("sound.mjs"), true);
+  assert.equal(entries.includes("sound.mjs"), false);
 });
 
 test("an untouched pre-sound installation upgrades without overwriting unrelated files", async t => {
@@ -33,13 +34,29 @@ test("an untouched pre-sound installation upgrades without overwriting unrelated
   const target = await install(root);
   const marker = join(target, ".copilot-notifications-install.json");
   const manifest = JSON.parse(await readFile(marker, "utf8"));
-  for (const file of ["sound.mjs", "settings.mjs", "startup.mjs", "batch.mjs"]) {
+  for (const file of ["settings.mjs", "startup.mjs", "batch.mjs", "desktop.mjs", "notifier.mjs", "lock.mjs"]) {
     delete manifest.hashes[file];
     await unlink(join(target, file));
   }
   await writeFile(marker, JSON.stringify(manifest));
   assert.equal(await install(root), target);
-  assert.match(await readFile(join(target, "sound.mjs"), "utf8"), /class NotificationSound/);
+  assert.match(await readFile(join(target, "notifier.mjs"), "utf8"), /notifyDesktop/);
+});
+
+test("a pre-desktop installation upgrades and a missing current desktop file is rejected", async t => {
+  const root = await home(t);
+  const target = await install(root);
+  const marker = join(target, ".copilot-notifications-install.json");
+  const manifest = JSON.parse(await readFile(marker, "utf8"));
+  for (const file of ["desktop.mjs", "notifier.mjs", "lock.mjs"]) {
+    delete manifest.hashes[file];
+    await unlink(join(target, file));
+  }
+  await writeFile(marker, JSON.stringify(manifest));
+  await install(root);
+  assert.match(await readFile(join(target, "desktop.mjs"), "utf8"), /class DesktopNotifications/);
+  await unlink(join(target, "desktop.mjs"));
+  await assert.rejects(install(root), /incomplete/);
 });
 
 test("a pre-batch installation upgrades while preserving settings", async t => {
@@ -66,11 +83,28 @@ test("installation preserves existing user settings and unknown artifact files o
   assert.equal(await readFile(join(artifacts, "preserve.txt"), "utf8"), "user artifact");
 });
 
-test("a missing current audio module is not mistaken for a pre-sound installation", async t => {
+test("a missing current runtime module is rejected as an incomplete installation", async t => {
   const root = await home(t);
   const target = await install(root);
-  await unlink(join(target, "sound.mjs"));
+  await unlink(join(target, "app.mjs"));
   await assert.rejects(install(root), /incomplete/);
+});
+
+test("upgrades remove only an unchanged installer-owned legacy sound module", async t => {
+  const root = await home(t);
+  const target = await install(root);
+  const marker = join(target, ".copilot-notifications-install.json");
+  const manifest = JSON.parse(await readFile(marker, "utf8"));
+  const source = "export const legacySound = true;\n";
+  manifest.hashes["sound.mjs"] = createHash("sha256").update(source).digest("hex");
+  await writeFile(marker, JSON.stringify(manifest));
+  await writeFile(join(target, "sound.mjs"), "local edit");
+  await assert.rejects(install(root), /modified/);
+  assert.equal(await readFile(join(target, "sound.mjs"), "utf8"), "local edit");
+  await writeFile(join(target, "sound.mjs"), source);
+  await install(root);
+  assert.equal((await readdir(target)).includes("sound.mjs"), false);
+  await install(root);
 });
 
 test("the documented install command respects COPILOT_HOME without touching the real user directory", async t => {
