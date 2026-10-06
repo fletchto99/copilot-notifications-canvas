@@ -111,8 +111,11 @@ function renderSettings() {
       soundOptionsKey = key;
     }
     select.value = preferences.desktopSound;
-    $("desktop-status").textContent = preferences.desktopStatus?.message ?? "Desktop notifications are unavailable.";
-    $("desktop-sound-help").textContent = preferences.desktopStatus?.help ?? "";
+    const status = preferences.desktopStatus;
+    $("desktop-status").textContent = !status?.supported || status.state === "error"
+      ? status?.message || "Desktop notifications are unavailable."
+      : "";
+    $("desktop-status").hidden = !$("desktop-status").textContent;
   }
 }
 

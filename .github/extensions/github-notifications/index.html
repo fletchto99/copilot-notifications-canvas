@@ -48,15 +48,13 @@
               <span>Auto-open</span>
               <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
             </button>
-            <button id="desktop-notifications" class="switch-toggle" type="button" role="switch" aria-checked="false" aria-describedby="desktop-help desktop-status" disabled>
+            <button id="desktop-notifications" class="switch-toggle" type="button" role="switch" aria-checked="false" aria-describedby="desktop-status" disabled>
               <span>Desktop notifications</span>
               <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
             </button>
-            <p id="desktop-help" class="settings-help">Shows owner/repo and the notification title, including in the background. Five or more new notifications from one repository in a poll share a count-only alert. Content may appear on your lock screen. Shared across sessions; stops when the last Notifications canvas closes.</p>
             <label for="desktop-sound" class="settings-label">Notification sound</label>
-            <select id="desktop-sound" aria-describedby="desktop-sound-help" disabled><option value="default">System default</option></select>
-            <p id="desktop-sound-help" class="settings-help">Sound choices depend on the operating system.</p>
-            <p id="desktop-status" class="settings-help" role="status" aria-live="polite"></p>
+            <select id="desktop-sound" aria-describedby="desktop-status" disabled><option value="default">System default</option></select>
+            <p id="desktop-status" class="settings-help" role="status" aria-live="polite" hidden></p>
             <p id="settings-status" class="settings-help" role="status" aria-live="polite" hidden></p>
             <button id="check-updates" type="button">Check for updates</button>
             <p id="installed-version" class="settings-help">Canvas version loading...</p>

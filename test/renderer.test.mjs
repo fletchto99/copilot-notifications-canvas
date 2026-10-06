@@ -14,7 +14,7 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
 // Minimal DOM/event/timer doubles exercise the actual renderer without a browser dependency.
 async function renderer({ hidden = false, token = "a".repeat(64), readFailure = false,
   initialRows, onWrite, onFetch, onState, onFilters, initialOffline = false, release,
-  onUpdates, clipboardFailure = false, onSettings, desktopPlatform = "darwin",
+  onUpdates, clipboardFailure = false, onSettings, desktopPlatform = "darwin", desktopStatus = {},
   storedSettings = { autoOpen: false, darkMode: null, desktopNotifications: false, desktopSound: "default" },
   appColorMode = "light", systemDark = false } = {}) {
   const calls = [];
@@ -162,8 +162,10 @@ async function renderer({ hidden = false, token = "a".repeat(64), readFailure = 
         const input = options.body ? JSON.parse(options.body) : undefined;
         if (onSettings) await onSettings(input);
         if (input) Object.assign(storedSettings, input);
+        const capabilities = desktopCapabilities(desktopPlatform);
         return { ok: true, json: async () => ({ desktopNotifications: false, desktopSound: "default", ...storedSettings,
-          desktopStatus: { ...desktopCapabilities(desktopPlatform), state: "watching", message: "Desktop notification status." },
+          desktopStatus: { ...capabilities, state: "watching",
+            message: capabilities.supported ? "Watching in the background." : capabilities.help, ...desktopStatus },
         }) };
       }
       if (path === "/api/updates") {
@@ -601,7 +603,8 @@ test("desktop controls persist independently, preserve focus and are disabled on
   await settle();
   assert.equal(unsupported.ids.get("desktop-notifications").disabled, true);
   assert.equal(unsupported.ids.get("desktop-sound").disabled, true);
-  assert.match(unsupported.ids.get("desktop-sound-help").textContent, /macOS, Windows and Linux/);
+  assert.match(unsupported.ids.get("desktop-status").textContent, /macOS, Windows and Linux/);
+  assert.equal(unsupported.ids.get("desktop-status").hidden, false);
   assert.equal(unsupported.ids.get("auto-open").disabled, false);
 });
 
@@ -644,11 +647,31 @@ test("a settings edit during a background status read is queued rather than drop
 });
 
 test("Settings omits explanatory copy and hides empty status messages", async () => {
-  assert.doesNotMatch(html, /dark-mode-help|startup-help|Optional chime|Saved for your user/);
+  assert.doesNotMatch(html, /dark-mode-help|startup-help|desktop-help|desktop-sound-help|Optional chime|Saved for your user/);
+  assert.doesNotMatch(script, /desktop-help|desktop-sound-help/);
   const ui = await renderer();
   assert.equal(ui.ids.get("settings-status").hidden, true);
+  assert.equal(ui.ids.get("desktop-status").hidden, true);
   assert.equal(ui.ids.get("update-status").textContent, "Up to date.");
   assert.doesNotMatch(ui.ids.get("update-status").textContent, /Last checked|Check again after/);
+});
+
+test("routine desktop statuses stay hidden, but notification errors remain visible until recovery", async () => {
+  for (const state of ["off", "starting", "watching", "shared"]) {
+    const ui = await renderer({ desktopStatus: { state, message: `Routine ${state} status.` } });
+    assert.equal(ui.ids.get("desktop-status").textContent, "");
+    assert.equal(ui.ids.get("desktop-status").hidden, true);
+  }
+  const desktopStatus = { state: "error", message: "Check system notification permissions." };
+  const ui = await renderer({ desktopStatus });
+  assert.equal(ui.ids.get("desktop-status").textContent, desktopStatus.message);
+  assert.equal(ui.ids.get("desktop-status").hidden, false);
+  desktopStatus.state = "watching";
+  ui.ids.get("settings").open = true;
+  ui.ids.get("settings").events.toggle();
+  await settle();
+  assert.equal(ui.ids.get("desktop-status").textContent, "");
+  assert.equal(ui.ids.get("desktop-status").hidden, true);
 });
 
 test("settings failures are visible and do not claim a saved toggle", async () => {
