@@ -73,10 +73,8 @@ function darkMode() {
 function renderTheme() {
   if (typeof preferences?.darkMode === "boolean") {
     document.documentElement.dataset.notificationTheme = preferences.darkMode ? "dark" : "light";
-    $("dark-mode-help").textContent = "Saved across sessions. Applies to this panel now and other panels when opened or shown.";
   } else {
     delete document.documentElement.dataset.notificationTheme;
-    $("dark-mode-help").textContent = "Follows Copilot's theme until you choose a mode. Your choice is saved across sessions.";
   }
   $("dark-mode").setAttribute("aria-checked", String(darkMode()));
 }
@@ -129,8 +127,12 @@ async function settingsRequest(input, quiet = false) {
   }
   const previousFocus = document.activeElement;
   settingsBusy = true;
-  if (!quiet) renderSettings();
-  if (!quiet) $("settings-status").textContent = input ? "Saving setting..." : "Loading settings...";
+  if (!quiet) {
+    renderSettings();
+    $("settings-status").textContent = input ? "Saving..." : "Loading...";
+    $("settings-status").hidden = false;
+    $("settings-error").hidden = true;
+  }
   try {
     preferences = await api("settings", input);
     $("settings-status").textContent = "";
@@ -141,6 +143,7 @@ async function settingsRequest(input, quiet = false) {
     $("settings-error").hidden = false;
   } finally {
     settingsBusy = false;
+    $("settings-status").hidden = !$("settings-status").textContent;
     renderSettings();
     restoreFocus(previousFocus);
     if (pendingSettings) {
@@ -153,23 +156,27 @@ async function settingsRequest(input, quiet = false) {
 }
 
 function renderUpdates(updates = releaseState) {
-  if (!updates) return;
+  $("check-updates").disabled = !hasCapability;
+  $("check-updates").setAttribute("aria-busy", String(updatesBusy || Boolean(updates?.checking)));
+  if (!updates) {
+    $("update-status").textContent = updateError || (updatesBusy ? "Checking..." : "");
+    $("update-status").hidden = !$("update-status").textContent;
+    return;
+  }
   releaseState = updates;
   $("installed-version").textContent = `GitHub Notification Canvas ${updates.currentVersion}`;
-  $("check-updates").disabled = updatesBusy || updates.checking || Date.now() < updates.canCheckAt;
-  $("check-updates").textContent = updates.checking ? "Checking for updates..." : "Check for updates";
   const messages = {
-    unchecked: "No successful release check yet.",
-    no_release: "No stable GitHub release is available yet.",
-    current: "You are on the latest stable release.",
-    ahead: "This build is newer than the latest stable release.",
-    available: `v${updates.latestVersion} is available. Use the update banner to install it.`,
+    unchecked: "",
+    no_release: "No stable release yet.",
+    current: "Up to date.",
+    ahead: "Newer than the latest release.",
+    available: `Update available: v${updates.latestVersion}.`,
   };
-  const checked = updates.checkedAt === null ? "" : ` Last checked ${new Date(updates.checkedAt).toLocaleString()}.`;
-  const retry = !updates.checking && Date.now() < updates.canCheckAt
-    ? ` Check again after ${new Date(updates.canCheckAt).toLocaleTimeString()}.` : "";
-  $("update-status").textContent = updateError || (updates.checking ? "Checking stable GitHub releases..." :
-    `${updates.error ? `Could not check for updates: ${updates.error}` : messages[updates.status]}${checked}${retry}`);
+  const retry = updates.error && Date.now() < updates.canCheckAt
+    ? ` Retry after ${new Date(updates.canCheckAt).toLocaleTimeString()}.` : "";
+  $("update-status").textContent = updateError || (updatesBusy || updates.checking ? "Checking..." :
+    updates.error ? `${updates.error}${retry}` : messages[updates.status]);
+  $("update-status").hidden = !$("update-status").textContent;
   const available = updates.status === "available";
   $("update-banner").hidden = !available;
   if (!available) return;
@@ -183,7 +190,7 @@ function renderUpdates(updates = releaseState) {
 }
 
 async function checkUpdates() {
-  if (!visible() || updatesBusy || releaseState?.checking || Date.now() < releaseState?.canCheckAt) return;
+  if (!visible() || updatesBusy) return;
   updatesBusy = true;
   updateError = "";
   renderUpdates();
@@ -660,4 +667,5 @@ if (hasCapability) {
   $("notice").hidden = false;
   $("notice").textContent = "Missing canvas capability. Open this canvas from Copilot instead of browsing to its local address.";
   $("empty-title").textContent = "Open from Copilot";
+  $("check-updates").disabled = true;
 }

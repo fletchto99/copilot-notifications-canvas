@@ -31,9 +31,9 @@ async function renderer({ hidden = false, token = "a".repeat(64), readFailure = 
   ];
   let releaseMetadata = {
     currentVersion: "0.1.0", latestVersion: "0.1.0", status: "current", checking: false,
-    checkedAt: now, nextCheckAt: now + 6 * 60 * 60_000, canCheckAt: 0, error: null,
+    checkedAt: now, nextCheckAt: now + 15 * 60_000, canCheckAt: 0, error: null,
     releaseUrl: "https://github.com/fletchto99/copilot-notifications-canvas/releases/tag/v0.1.0",
-    instructionsUrl: "https://github.com/fletchto99/copilot-notifications-canvas#updating", prompt: null,
+    instructionsUrl: "https://github.com/fletchto99/copilot-notifications-canvas#installation-and-updating", prompt: null,
     ...release,
   };
   const copied = [];
@@ -244,7 +244,7 @@ test("update banner shows release links and copies a prompt without installing o
   assert.match(ui.ids.get("update-title").textContent, /v0\.2\.0.*v0\.1\.0/);
   assert.equal(ui.ids.get("installed-version").textContent, "GitHub Notification Canvas 0.1.0");
   assert.match(ui.ids.get("release-notes").href, /\/releases\/tag\/v0\.2\.0$/);
-  assert.match(ui.ids.get("update-instructions").href, /#updating$/);
+  assert.match(ui.ids.get("update-instructions").href, /#installation-and-updating$/);
   assert.equal(ui.ids.get("update-prompt").value, "Synthetic safe update prompt");
   const count = ui.calls.length;
   await ui.ids.get("copy-update").events.click();
@@ -268,7 +268,7 @@ test("clipboard denial exposes a selectable prompt and does not claim it was cop
 
 test("current, ahead, absent and failed release checks keep the banner out of the inbox", async () => {
   for (const [status, message] of [
-    ["current", /latest stable release/], ["ahead", /newer than/], ["no_release", /No stable/],
+    ["current", /^Up to date\.$/], ["ahead", /Newer than/], ["no_release", /No stable/],
   ]) {
     const ui = await renderer({ release: { status } });
     assert.equal(ui.ids.get("update-banner").hidden, true);
@@ -276,49 +276,64 @@ test("current, ahead, absent and failed release checks keep the banner out of th
   }
   const ui = await renderer({ release: { status: "unchecked", error: "Network unavailable", checkedAt: null } });
   assert.equal(ui.ids.get("update-banner").hidden, true);
-  assert.match(ui.ids.get("update-status").textContent, /Could not check.*Network unavailable/);
-  assert.doesNotMatch(ui.ids.get("update-status").textContent, /latest stable release/);
+  assert.equal(ui.ids.get("update-status").textContent, "Network unavailable");
+  assert.equal(ui.ids.get("update-status").hidden, false);
   assert.equal(ui.ids.get("notice").hidden, true);
   assert.equal(ui.document.querySelectorAll("article").length, 1);
 });
 
-test("manual release checks show pending and retry states without blocking the inbox", async () => {
-  let checkedAt;
+test("manual release checks stay available while checking and immediately after a result", async () => {
   const ui = await renderer({ onUpdates: async () => ({
     currentVersion: "0.1.0", latestVersion: null, checking: true, status: "unchecked",
-    canCheckAt: checkedAt + 60_000, checkedAt: null,
+    canCheckAt: 0, checkedAt: null,
   }) });
-  checkedAt = ui.advance(0);
+  assert.doesNotMatch(html, /id="check-updates"[^>]*\bdisabled\b/);
   assert.equal(ui.ids.get("check-updates").disabled, false);
   await ui.ids.get("check-updates").events.click();
   assert.equal(ui.calls.at(-1).path, "/api/updates");
   assert.equal(ui.calls.at(-1).options.body, "{}");
-  assert.equal(ui.ids.get("check-updates").disabled, true);
-  assert.match(ui.ids.get("update-status").textContent, /Checking stable/);
+  assert.equal(ui.ids.get("check-updates").disabled, false);
+  assert.equal(ui.ids.get("check-updates").attributes["aria-busy"], "true");
+  assert.equal(ui.ids.get("update-status").textContent, "Checking...");
   assert.equal(ui.ids.get("search").disabled, false);
-  ui.setRelease({ checking: false, status: "current", latestVersion: "0.1.0", checkedAt });
+  await ui.ids.get("check-updates").events.click();
+  assert.equal(ui.calls.filter(call => call.path === "/api/updates").length, 2);
+  ui.setRelease({ checking: false, status: "current", latestVersion: "0.1.0", checkedAt: ui.advance(0) });
   await ui.fireTimer();
-  assert.match(ui.ids.get("update-status").textContent, /latest stable release.*Check again after/);
-  ui.advance(59_999);
-  await ui.fireTimer();
-  assert.equal(ui.ids.get("check-updates").disabled, true);
-  ui.advance(1);
-  await ui.fireTimer();
+  assert.equal(ui.ids.get("update-status").textContent, "Up to date.");
+  assert.equal(ui.ids.get("check-updates").attributes["aria-busy"], "false");
+  assert.equal(ui.ids.get("check-updates").disabled, false);
+  await ui.ids.get("check-updates").events.click();
+  assert.equal(ui.calls.filter(call => call.path === "/api/updates").length, 3);
+});
+
+test("GitHub retry delays are explained without disabling the manual check button", async () => {
+  const ui = await renderer({ release: {
+    error: "GitHub declined the release check.", canCheckAt: Date.now() + 7_200_000,
+  } });
+  assert.match(ui.ids.get("update-status").textContent, /GitHub declined.*Retry after/);
+  assert.equal(ui.ids.get("check-updates").disabled, false);
+  await ui.ids.get("check-updates").events.click();
+  assert.equal(ui.calls.at(-1).path, "/api/updates");
+  assert.match(ui.ids.get("update-status").textContent, /Retry after/);
   assert.equal(ui.ids.get("check-updates").disabled, false);
 });
 
 test("release check request failures are visible and hidden panels never trigger manual checks", async () => {
-  const ui = await renderer();
-  ui.setOffline(true);
-  await ui.ids.get("check-updates").events.click();
-  assert.match(ui.ids.get("update-status").textContent, /Synthetic connection failure/);
-  ui.setOffline(false);
-  await ui.ids.get("check-updates").events.click();
-  assert.doesNotMatch(ui.ids.get("update-status").textContent, /Synthetic connection failure/);
-  ui.intersect(false);
-  const count = ui.calls.length;
-  await ui.ids.get("check-updates").events.click();
-  assert.equal(ui.calls.length, count);
+  for (const initialOffline of [false, true]) {
+    const ui = await renderer({ initialOffline });
+    ui.setOffline(true);
+    await ui.ids.get("check-updates").events.click();
+    assert.match(ui.ids.get("update-status").textContent, /Synthetic connection failure/);
+    assert.equal(ui.ids.get("update-status").hidden, false);
+    ui.setOffline(false);
+    await ui.ids.get("check-updates").events.click();
+    assert.doesNotMatch(ui.ids.get("update-status").textContent, /Synthetic connection failure/);
+    ui.intersect(false);
+    const count = ui.calls.length;
+    await ui.ids.get("check-updates").events.click();
+    assert.equal(ui.calls.length, count);
+  }
 });
 
 test("renderer fetches with a capability, renders untrusted titles as text and exposes accessible controls", async () => {
@@ -501,6 +516,7 @@ test("a missing capability remains inert and explains how to open the canvas", a
   assert.equal(ui.calls.length, 0);
   assert.equal(ui.timers.size, 0);
   assert.match(ui.ids.get("notice").textContent, /Open this canvas from Copilot/);
+  assert.equal(ui.ids.get("check-updates").disabled, true);
 });
 
 test("the per-panel Web Audio option is replaced by the native notification sound picker", () => {
@@ -523,7 +539,7 @@ test("Settings uses an icon-only toggle with an accessible name and tooltip", ()
 });
 
 test("Settings puts an Auto-open slider above sound, saves startup preference and closes accessibly", async () => {
-  assert.match(html, /<button\b[^>]*id="auto-open"[^>]*class="switch-toggle"[^>]*role="switch"[^>]*aria-describedby="startup-help"/);
+  assert.match(html, /<button\b[^>]*id="auto-open"[^>]*class="switch-toggle"[^>]*role="switch"/);
   assert.match(html, /<span>Auto-open<\/span>\s*<span class="switch-track" aria-hidden="true"><span class="switch-thumb"><\/span><\/span>/);
   assert.ok(html.indexOf('id="auto-open"') < html.indexOf('id="desktop-sound"'));
   assert.doesNotMatch(html, /Open on new sessions:/);
@@ -612,9 +628,11 @@ test("a settings edit during a background status read is queued rather than drop
   ui.ids.get("settings").open = true;
   ui.ids.get("settings").events.toggle();
   await settle();
+  assert.equal(ui.ids.get("settings-status").hidden, true);
   await ui.fireTimer();
   const control = ui.ids.get("desktop-notifications");
   assert.equal(control.disabled, false);
+  assert.equal(ui.ids.get("settings-status").hidden, true);
   control.focus();
   control.events.click();
   assert.equal(control.disabled, true);
@@ -622,6 +640,15 @@ test("a settings edit during a background status read is queued rather than drop
   await settle();
   assert.equal(control.attributes["aria-checked"], "true");
   assert.equal(ui.document.activeElement, control);
+  assert.equal(ui.ids.get("settings-status").hidden, true);
+});
+
+test("Settings omits explanatory copy and hides empty status messages", async () => {
+  assert.doesNotMatch(html, /dark-mode-help|startup-help|Optional chime|Saved for your user/);
+  const ui = await renderer();
+  assert.equal(ui.ids.get("settings-status").hidden, true);
+  assert.equal(ui.ids.get("update-status").textContent, "Up to date.");
+  assert.doesNotMatch(ui.ids.get("update-status").textContent, /Last checked|Check again after/);
 });
 
 test("settings failures are visible and do not claim a saved toggle", async () => {
@@ -632,6 +659,7 @@ test("settings failures are visible and do not claim a saved toggle", async () =
   assert.equal(ui.ids.get("auto-open").disabled, true);
   assert.equal(ui.ids.get("dark-mode").disabled, true);
   assert.equal(ui.ids.get("settings-error").hidden, false);
+  assert.equal(ui.ids.get("settings-status").hidden, false);
   assert.match(ui.ids.get("settings-status").textContent, /retry/);
   ui.setOffline(false);
   ui.ids.get("settings").events.toggle();
@@ -639,10 +667,11 @@ test("settings failures are visible and do not claim a saved toggle", async () =
   assert.equal(ui.ids.get("auto-open").disabled, false);
   assert.equal(ui.ids.get("dark-mode").disabled, false);
   assert.equal(ui.ids.get("settings-error").hidden, true);
+  assert.equal(ui.ids.get("settings-status").hidden, true);
 });
 
 test("dark mode uses an accessible slider-style switch and follows the app until explicitly saved", async () => {
-  assert.match(html, /<button\b[^>]*id="dark-mode"[^>]*role="switch"[^>]*aria-describedby="dark-mode-help"/);
+  assert.match(html, /<button\b[^>]*id="dark-mode"[^>]*role="switch"/);
   assert.match(html, /<span>Dark mode<\/span>\s*<span class="switch-track" aria-hidden="true"><span class="switch-thumb"><\/span><\/span>/);
   const ui = await renderer({ appColorMode: "dark" });
   assert.equal(ui.ids.get("dark-mode").disabled, false);

@@ -16,83 +16,76 @@ notifications or auto-open.
 GitHub.com only; fine-grained personal access tokens are not supported.
 Check sign-in with `gh auth status --hostname github.com`.
 
-## Installation
+<a id="installation"></a>
+<a id="updating"></a>
 
-### Install with Copilot
+## Installation and Updating
 
-Have Copilot install this extension for you with this prompt:
+### Install or update with Copilot
+
+Use the same prompt for a fresh installation or an upgrade, including versions
+that do not yet have an update banner:
 
 ```text
-Install the Unread Notifications canvas from
+Install or update the Unread Notifications canvas from
 https://github.com/fletchto99/copilot-notifications-canvas as a user-wide
 GitHub Copilot extension available across sessions. Follow the repository's
-manual "Install for all projects" steps using node scripts/install.mjs.
-Install the latest stable GitHub Release, not the tip of main. If there is
-no stable release yet, stop and report that instead of installing a development build.
-Preserve existing settings and do not overwrite locally modified files or
-bypass installer safeguards. Use my existing GitHub CLI sign-in; report
-missing prerequisites or permissions without changing credentials. After
-installation succeeds, reload extensions and open Unread Notifications
-(canvasId: github-notifications).
+manual steps under "Installation and Updating".
+
+Use the latest published stable GitHub Release, not main or a prerelease.
+If no stable release exists, stop and report that. If already current, report
+that instead of reinstalling. Do not downgrade a newer installed version.
+
+Read the release notes, fetch the exact release tag into a separate clean
+checkout or worktree, and run node scripts/check-release.mjs <release-tag>
+before node scripts/install.mjs. Use my existing COPILOT_HOME and GitHub CLI
+sign-in.
+
+Preserve the entire installed artifacts directory in place, including
+settings.json, autoOpen, darkMode, unknown settings, and other files. Do not
+delete or recreate that directory, overwrite locally modified runtime files,
+or bypass installer safeguards. Report missing prerequisites or permissions
+without changing credentials.
+
+Only after installation succeeds, reload extensions in this session and
+open Unread Notifications (canvasId: github-notifications). Report the
+installed version and remind me to reload extensions in other already-open
+sessions. Do not enable auto-update or change any preferences.
 ```
 
-### Install for all projects
+### Manual installation and updates
 
-Manual alternative, from the directory where you keep repositories. Use the
-latest stable tag from [Releases](https://github.com/fletchto99/copilot-notifications-canvas/releases)
-as `<release-tag>` below. If no stable release is published yet, wait for the
-first release or use a development checkout explicitly.
+Both paths install user-wide into
+`${COPILOT_HOME:-$HOME/.copilot}/extensions/github-notifications`.
+Use the same `COPILOT_HOME` for an upgrade as for the original installation.
 
-```sh
-git clone https://github.com/fletchto99/copilot-notifications-canvas
-cd copilot-notifications-canvas
-git fetch origin tag <release-tag>
-git worktree add --detach ../copilot-notifications-release <release-tag>
-cd ../copilot-notifications-release
-node scripts/check-release.mjs <release-tag>
-node scripts/install.mjs
-```
+1. Read the [release notes](https://github.com/fletchto99/copilot-notifications-canvas/releases)
+   and choose the latest stable `<release-tag>`. If no stable release is
+   published yet, wait for the first release or use a development checkout
+   explicitly.
+2. Enter your existing repository clone. If you do not have one, create it
+   in the directory where you keep repositories:
 
-Installs user-wide into `${COPILOT_HOME:-$HOME/.copilot}/extensions/github-notifications`.
-Upgrades preserve settings and refuse to overwrite modified or unrelated files.
+   ```sh
+   git clone https://github.com/fletchto99/copilot-notifications-canvas
+   cd copilot-notifications-canvas
+   ```
 
-After installation finishes, ask Copilot:
-
-> Reload extensions, then open the Unread Notifications canvas.
-
-## Updating
-
-The canvas checks GitHub's **latest stable release**, not commits on `main`.
-When a newer version is available, a small banner offers **Release notes**,
-**Update instructions**, and **Copy update prompt**. Paste the prompt into
-Copilot to perform the update; copying it does not execute anything. The prompt
-is also selectable in the banner if clipboard access is unavailable.
-
-**Settings** shows a **Check for updates** button with the running canvas version
-directly below it.
-Checks happen while the canvas is visible and are cached for six hours per
-running extension, shared by its panels. A manual check can bypass this cache
-at most once a minute, but never GitHub's retry delay. Failed checks retry
-automatically after at least 30 minutes, do not block the inbox, and show an
-error in Settings. Drafts, prereleases, and unsupported tag formats are never
-offered. A build newer than the latest release is not downgraded.
-
-To update manually:
-
-1. Read the release notes and choose the exact stable `<release-tag>`.
-2. From your existing repository clone, run the following with a **new,
-   unused worktree path**. Set `COPILOT_HOME` to the same value used for the
-   original installation, if customized, before running the installer:
+3. From that clone, run the following with a **new, unused worktree path**.
+   Set `COPILOT_HOME` first if you use a custom location:
 
    ```sh
    git fetch origin tag <release-tag>
-   git worktree add --detach ../copilot-notifications-update <release-tag>
-   cd ../copilot-notifications-update
+   git worktree add --detach ../copilot-notifications-release <release-tag>
+   cd ../copilot-notifications-release
    node scripts/check-release.mjs <release-tag>
    node scripts/install.mjs
    ```
 
-3. Only after the installer succeeds, reload extensions and reopen the canvas.
+4. Only after the installer succeeds, ask Copilot:
+
+   > Reload extensions, then open the Unread Notifications canvas.
+
    Other already-open Copilot sessions need their own extension reload.
 
 **Settings are preserved.** The installer updates only managed runtime files.
@@ -107,10 +100,6 @@ user-wide installation in that repository; update that checkout deliberately
 instead of expecting a user-wide install to replace it. Persisted settings,
 including **Auto-open**, **Dark mode**, **Desktop notifications** and
 **Notification sound**, are retained.
-
-There is no automatic installation or auto-update setting. Installation and
-reload remain explicit. A future opt-in updater should be off by default,
-reuse these installer safeguards, and coordinate activation across sessions.
 
 ## Usage
 
@@ -232,13 +221,12 @@ installation, GitHub sign-in, or external network access.
 Use stable semantic versions (`vMAJOR.MINOR.PATCH`) so users receive deliberate,
 tested updates with release notes instead of every merge. Bump
 `.github/extensions/github-notifications/version.json` in the release PR.
-The initial version is `0.1.0`; it is not available to users until a release
-is actually published.
 
 After merging the version change into `main`, invoke the
 [Release workflow](.github/workflows/release.yml) from **Actions → Release →
-Run workflow**. Select **main** and enter the version without `v` (for example,
-`0.1.0`). The workflow must be merged into the default branch before GitHub
+Run workflow**. Select **main** and enter either the version (`0.1.1`) or its
+tag (`v0.1.1`). Both are validated and normalized to `v0.1.1` before publication.
+The workflow must be merged into the default branch before GitHub
 offers the manual trigger.
 
 You can also invoke it with GitHub CLI:
@@ -247,7 +235,7 @@ You can also invoke it with GitHub CLI:
 gh workflow run release.yml \
   --repo fletchto99/copilot-notifications-canvas \
   --ref main \
-  -f version=0.1.0
+  -f version=0.1.1
 ```
 
 The workflow checks that the requested version matches `version.json`, runs

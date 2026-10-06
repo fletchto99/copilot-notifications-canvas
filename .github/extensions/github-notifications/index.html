@@ -40,16 +40,14 @@
             </svg>
           </summary>
           <div id="settings-panel" class="settings-panel" role="group" aria-label="Notification settings">
-            <button id="dark-mode" class="switch-toggle" type="button" role="switch" aria-checked="false" aria-describedby="dark-mode-help" disabled>
+            <button id="dark-mode" class="switch-toggle" type="button" role="switch" aria-checked="false" disabled>
               <span>Dark mode</span>
               <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
             </button>
-            <p id="dark-mode-help" class="settings-help">Follows Copilot's theme until you choose a mode. Your choice is saved across sessions.</p>
-            <button id="auto-open" class="switch-toggle" type="button" role="switch" aria-checked="false" aria-describedby="startup-help" disabled>
+            <button id="auto-open" class="switch-toggle" type="button" role="switch" aria-checked="false" disabled>
               <span>Auto-open</span>
               <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
             </button>
-            <p id="startup-help" class="settings-help">Saved for your user. Requires user-wide installation to work outside this repository. Does not reopen this session.</p>
             <button id="desktop-notifications" class="switch-toggle" type="button" role="switch" aria-checked="false" aria-describedby="desktop-help desktop-status" disabled>
               <span>Desktop notifications</span>
               <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
@@ -59,10 +57,10 @@
             <select id="desktop-sound" aria-describedby="desktop-sound-help" disabled><option value="default">System default</option></select>
             <p id="desktop-sound-help" class="settings-help">Sound choices depend on the operating system.</p>
             <p id="desktop-status" class="settings-help" role="status" aria-live="polite"></p>
-            <p id="settings-status" class="settings-help" role="status" aria-live="polite"></p>
-            <button id="check-updates" type="button" disabled>Check for updates</button>
+            <p id="settings-status" class="settings-help" role="status" aria-live="polite" hidden></p>
+            <button id="check-updates" type="button">Check for updates</button>
             <p id="installed-version" class="settings-help">Canvas version loading...</p>
-            <p id="update-status" class="settings-help" role="status" aria-live="polite"></p>
+            <p id="update-status" class="settings-help" role="status" aria-live="polite" hidden></p>
           </div>
         </details>
       </div>
