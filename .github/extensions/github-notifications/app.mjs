@@ -533,6 +533,10 @@ function render() {
   renderUpdates(state?.updates);
   renderControls();
   const error = readError || state?.error?.message || connectionError;
+  const loading = state?.status === "idle" || state?.status === "loading";
+  const caughtUp = Boolean(state && !error && !loading && !state.filters.query && !state.groups.length);
+  $("empty-symbol").hidden = caughtUp;
+  $("count").hidden = caughtUp;
   $("notice").hidden = !error;
   $("notice").textContent = error ? `${state?.loaded ? "Showing previously loaded notifications. " : ""}${error}` : "";
   if (!state) {
@@ -543,7 +547,7 @@ function render() {
     return;
   }
   if (document.activeElement !== $("search") && pendingQuery === undefined) $("search").value = state.filters.query;
-  $("count").textContent = `${state.matching} shown / ${state.groups.length} repositories / ${state.unread} unread notifications`;
+  $("count").textContent = `${state.unread} unread${state.filters.query ? ` \u00b7 ${state.matching} matching` : ""}`;
   $("collapse").hidden = !state.groups.length;
   $("more").hidden = !state.hasMore;
   $("more").textContent = "Load more (up to 50)";
@@ -553,14 +557,19 @@ function render() {
   for (const time of document.querySelectorAll("time")) time.textContent = relativeTime(time.dateTime);
   $("empty").hidden = Boolean(state.groups.length);
   $("empty-title").textContent = error ? "Your inbox is unavailable" :
-    state.status === "idle" || state.status === "loading" ? "Loading your inbox" :
-    state.filters.query ? "No matches in loaded notifications" : "All caught up";
+    loading ? "Loading your inbox" :
+    state.filters.query ? "No matches in loaded notifications" : "All caught up \u{1F389}";
   $("empty-description").textContent = error ? "Resolve the message above. This view retries automatically while visible when the retry time arrives." :
     state.filters.query ? "Try another title or repository, or load more notifications." :
-    state.status === "idle" || state.status === "loading" ? "Using your existing GitHub CLI sign-in." :
+    loading ? "Using your existing GitHub CLI sign-in." :
     "New notifications will appear here, grouped by repository.";
-  const fetched = state.lastFetchedAt ? `Checked ${new Date(state.lastFetchedAt).toLocaleTimeString()}. ` : "";
-  $("updated").textContent = `${fetched}Next refresh ${new Date(Math.max(Date.now(), state.nextRefreshAt)).toLocaleTimeString()} while visible.`;
+  const fetched = state.lastFetchedAt ? `Checked ${relativeTime(new Date(state.lastFetchedAt).toISOString())} \u00b7 ` : "";
+  const minutes = Math.ceil(Math.max(0, state.nextRefreshAt - Date.now()) / 60_000);
+  const next = minutes ? `Next check in ${minutes} min` : "Next check soon";
+  $("updated").textContent = `${fetched}${loading ? "Checking..." : next}`;
+  const checkedAt = state.lastFetchedAt ? `Last checked ${new Date(state.lastFetchedAt).toLocaleString()}. ` : "";
+  const nextAt = state.nextRefreshAt ? `Next check ${new Date(state.nextRefreshAt).toLocaleString()}. ` : "";
+  $("updated").title = `${checkedAt}${nextAt}Automatic refresh runs only while this view is visible.`;
   renderBatch();
 }
 
