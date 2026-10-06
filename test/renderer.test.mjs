@@ -374,16 +374,46 @@ test("canvas is titled Unread Notifications without mode tabs or the old All not
   assert.doesNotMatch(html, /id="(?:all|unread|api-limit)"/);
 });
 
-test("inbox status says unread notifications without a redundant bottom count or divider", async () => {
+test("inbox status leads with unread counts and adds matching counts only while searching", async () => {
   const ui = await renderer({ initialRows: [thread("1"), thread("2")] });
-  assert.equal(ui.ids.get("count").textContent, "2 shown / 1 repositories / 2 unread notifications");
+  assert.equal(ui.ids.get("count").textContent, "2 unread");
+  assert.equal(ui.ids.get("count").hidden, false);
   assert.equal(ui.ids.has("coverage"), false);
   assert.doesNotMatch(script, /End of the available inbox|notifications loaded\./);
   assert.doesNotMatch(styles, /(?:^|\n)footer \{[^}]*border-top:/);
   await runInContext('update("filters", { query: "notification 1" })', ui.context);
-  assert.equal(ui.ids.get("count").textContent, "1 shown / 1 repositories / 2 unread notifications");
+  assert.equal(ui.ids.get("count").textContent, "2 unread \u00b7 1 matching");
+  await runInContext('update("filters", { query: "no match" })', ui.context);
+  assert.equal(ui.ids.get("count").textContent, "2 unread \u00b7 0 matching");
+  assert.equal(ui.ids.get("count").hidden, false);
+  await runInContext('update("filters", { query: "" })', ui.context);
+  assert.equal(ui.ids.get("count").textContent, "2 unread");
+  assert.match(html, /id="count"[^>]*title="Counts include loaded notifications only\."/);
   assert.match(html, /Search loaded notification titles and repositories/);
   ui.window.events.pagehide();
+});
+
+test("counts return when notifications arrive and hide after the last read without moving toolbar controls", async () => {
+  const ui = await renderer({ initialRows: [] });
+  const search = ui.ids.get("search");
+  const settings = ui.ids.get("settings");
+  assert.equal(ui.ids.get("count").hidden, true);
+  assert.equal(search.hidden, false);
+  assert.equal(search.disabled, false);
+  assert.equal(settings.hidden, false);
+  ui.setRows([thread("1")]);
+  await ui.ids.get("force-refresh").events.click();
+  assert.equal(ui.ids.get("count").hidden, false);
+  assert.equal(ui.ids.get("count").textContent, "1 unread");
+  await ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "1").events.click();
+  assert.equal(ui.ids.get("count").hidden, true);
+  assert.equal(ui.ids.get("collapse").hidden, true);
+  assert.equal(ui.ids.get("empty").hidden, false);
+  assert.equal(ui.ids.get("search"), search);
+  assert.equal(ui.ids.get("settings"), settings);
+  assert.equal(search.hidden, false);
+  assert.equal(search.disabled, false);
+  assert.equal(settings.hidden, false);
 });
 
 test("Load more still fetches another page of 50 and disappears when the inbox ends", async () => {
@@ -414,7 +444,7 @@ test("Load more explains when a refresh is needed after a read", async () => {
 
 test("Force refresh is an always-enabled link-style footer button beside the checked time", async () => {
   assert.doesNotMatch(html, /id="refresh"|>Refresh<\/button>|class="heading"/);
-  assert.match(html, /<footer>\s*<p class="refresh-status">\s*<span id="updated">[^<]*<\/span>\s*<button id="force-refresh" class="refresh-link" type="button">Force refresh<\/button>/);
+  assert.match(html, /<footer>\s*<p class="refresh-status">\s*<span id="updated"[^>]*>[^<]*<\/span>\s*<span class="refresh-actions">\s*<button id="force-refresh" class="refresh-link" type="button">Force refresh<\/button>/);
   assert.match(styles, /\.refresh-link \{[^}]*border: 0;[^}]*padding: 0;/);
   assert.match(styles, /a, \.refresh-link \{ color: var\(--accent\); text-decoration: none; \}/);
   assert.match(styles, /a:hover, \.refresh-link:hover \{ text-decoration: underline; \}/);
@@ -426,7 +456,47 @@ test("Force refresh is an always-enabled link-style footer button beside the che
   assert.equal(ui.ids.get("force-refresh").disabled, false);
   assert.ok(ui.calls.some(call => call.path === "/api/refresh"));
   assert.equal(ui.githubCalls.length, 1);
-  assert.match(ui.ids.get("updated").textContent, /Checked .*Next refresh/);
+  assert.equal(ui.ids.get("updated").textContent, "Checked just now \u00b7 Next check in 2 min");
+  assert.match(ui.ids.get("updated").title, /Last checked .+\. Next check .+\. Automatic refresh runs only while this view is visible\./);
+});
+
+test("refresh status ages the last check, rounds the countdown up and never displays negative waits", async () => {
+  const ui = await renderer();
+  ui.advance(59_999);
+  await runInContext("render()", ui.context);
+  assert.match(ui.ids.get("updated").textContent, /Next check in 2 min$/);
+  ui.advance(1);
+  await runInContext("render()", ui.context);
+  const minuteAgo = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(-1, "minute");
+  assert.equal(ui.ids.get("updated").textContent, `Checked ${minuteAgo} \u00b7 Next check in 1 min`);
+  ui.advance(59_999);
+  await runInContext("render()", ui.context);
+  assert.match(ui.ids.get("updated").textContent, /Next check in 1 min$/);
+  ui.advance(1);
+  await runInContext("render()", ui.context);
+  assert.match(ui.ids.get("updated").textContent, /Next check soon$/);
+  ui.advance(60_000);
+  await runInContext("render()", ui.context);
+  assert.match(ui.ids.get("updated").textContent, /Next check soon$/);
+  await runInContext('state.status = "loading"; render()', ui.context);
+  assert.match(ui.ids.get("updated").textContent, /Checking\.\.\.$/);
+  await runInContext("state.lastFetchedAt = null; render()", ui.context);
+  assert.equal(ui.ids.get("updated").textContent, "Checking...");
+  assert.doesNotMatch(ui.ids.get("updated").title, /Last checked/);
+});
+
+test("an initial GitHub error shows the retry countdown without claiming a successful check", async () => {
+  const ui = await renderer({ onFetch: () => http({}, {}, 401) });
+  assert.equal(ui.ids.get("updated").textContent, "Next check in 2 min");
+  assert.doesNotMatch(ui.ids.get("updated").title, /Last checked/);
+  assert.equal(ui.ids.get("notice").hidden, false);
+});
+
+test("the footer groups Force refresh and Open GitHub inbox with a decorative dot and no help", () => {
+  assert.match(html, /<span class="refresh-actions">\s*<button id="force-refresh"[^>]*>Force refresh<\/button>\s*<span aria-hidden="true">&middot;<\/span>\s*<a href="https:\/\/github\.com\/notifications" target="_blank" rel="noopener noreferrer">Open GitHub inbox<\/a>\s*<\/span>\s*<\/p>\s*<\/footer>/);
+  assert.match(styles, /\.refresh-status \{[^}]*flex-wrap: wrap;/);
+  assert.match(styles, /\.refresh-actions \{[^}]*display: inline-flex;[^}]*align-items: baseline;/);
+  assert.doesNotMatch(html + script + styles, /read-help|footer-links|Mark-as-read help|Mark as read applies/);
 });
 
 test("Force refresh checks GitHub immediately, preserves focus and still leaves automatic polling gated", async () => {
@@ -583,6 +653,7 @@ test("automatic polling honors the two-minute minimum", async () => {
 
 test("automatic polling honors a longer GitHub interval and resumes only when visible", async () => {
   const ui = await renderer({ onFetch: () => http([thread()], { "x-poll-interval": "300" }) });
+  assert.equal(ui.ids.get("updated").textContent, "Checked just now \u00b7 Next check in 5 min");
   ui.advance(120_000);
   await ui.fireTimer();
   assert.equal(ui.githubCalls.length, 1);
@@ -600,6 +671,34 @@ test("automatic polling honors a longer GitHub interval and resumes only when vi
   ui.intersect(true);
   await settle();
   assert.equal(ui.githubCalls.length, 3);
+});
+
+test("an empty inbox ends the caught-up heading with a party popper and hides the blue icon tile", async () => {
+  const ui = await renderer({ initialRows: [] });
+  assert.equal(ui.ids.get("empty").hidden, false);
+  assert.equal(ui.ids.get("empty-title").textContent, "All caught up \u{1F389}");
+  assert.equal(ui.ids.get("empty-symbol").hidden, true);
+  assert.equal(ui.ids.get("count").hidden, true);
+  assert.match(styles, /\.empty \{[^}]*border: 1px dashed var\(--border\);[^}]*border-radius: 10px;/);
+  assert.match(styles, /\[hidden\]\s*\{\s*display:\s*none !important;/);
+  assert.match(html, /<div id="empty-symbol" class="empty-symbol" aria-hidden="true">\/<\/div>/);
+});
+
+test("loading, search and unavailable states restore the original icon tile without a celebration", async () => {
+  for (const setup of [
+    'state.status = "idle"',
+    'state.status = "loading"',
+    'state.filters.query = "no match"',
+    'state.error = { message: "GitHub unavailable" }',
+    'connectionError = "Connection unavailable"',
+    'state = undefined; connectionError = "Connection unavailable"',
+  ]) {
+    const ui = await renderer({ initialRows: [] });
+    await runInContext(`${setup}; render()`, ui.context);
+    assert.equal(ui.ids.get("empty-symbol").hidden, false, setup);
+    assert.equal(ui.ids.get("count").hidden, false, setup);
+    assert.doesNotMatch(ui.ids.get("empty-title").textContent, /\u{1F389}/u, setup);
+  }
 });
 
 test("authentication errors remain visible and automatically retry after backoff", async () => {
@@ -1083,6 +1182,27 @@ test("mark-read requires a click and removes only on confirmation", async () => 
   assert.equal(ui.calls.filter(call => call.path === "/api/read").length, 1);
   assert.equal(ui.document.querySelectorAll("article").length, 0);
   assert.equal(ui.document.activeElement, ui.ids.get("search"));
+  ui.window.events.pagehide();
+});
+
+test("mark-read keeps repository groups alphabetical as their newest and last notifications disappear", async () => {
+  const ui = await renderer({ initialRows: [
+    thread("1", { repository: { full_name: "example/alpha" }, updated_at: "2026-01-30T00:00:00Z" }),
+    thread("2", { repository: { full_name: "example/alpha" }, updated_at: "2026-01-01T00:00:00Z" }),
+    thread("3", { repository: { full_name: "example/middle" }, updated_at: "2026-01-20T00:00:00Z" }),
+    thread("4", { repository: { full_name: "example/zulu" }, updated_at: "2026-01-10T00:00:00Z" }),
+  ] });
+  const repositories = () => ui.ids.get("groups").querySelectorAll("button")
+    .filter(node => node.dataset.repository).map(node => node.dataset.repository);
+  assert.deepEqual(repositories(), ["example/alpha", "example/middle", "example/zulu"]);
+
+  await ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "1").events.click();
+  assert.deepEqual(repositories(), ["example/alpha", "example/middle", "example/zulu"]);
+  assert.equal(ui.document.querySelectorAll("article").length, 3);
+
+  await ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "2").events.click();
+  assert.deepEqual(repositories(), ["example/middle", "example/zulu"]);
+  assert.equal(ui.document.querySelectorAll("article").length, 2);
   ui.window.events.pagehide();
 });
 

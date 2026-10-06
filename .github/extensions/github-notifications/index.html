@@ -64,7 +64,7 @@
         </details>
       </div>
       <div class="status-line">
-        <span id="count" role="status" aria-live="polite">Waiting for inbox...</span>
+        <span id="count" role="status" aria-live="polite" title="Counts include loaded notifications only.">Waiting for inbox...</span>
         <button id="collapse" class="text-button" type="button">Collapse all</button>
       </div>
     </header>
@@ -81,7 +81,7 @@
       </div>
     </section>
     <section id="empty" class="empty" aria-live="polite">
-      <div class="empty-symbol" aria-hidden="true">/</div>
+      <div id="empty-symbol" class="empty-symbol" aria-hidden="true">/</div>
       <h2 id="empty-title">Connecting to GitHub</h2>
       <p id="empty-description">Using your existing GitHub CLI sign-in.</p>
     </section>
@@ -91,11 +91,12 @@
     </div>
     <footer>
       <p class="refresh-status">
-        <span id="updated">Automatic refresh runs only while this view is visible.</span>
-        <button id="force-refresh" class="refresh-link" type="button">Force refresh</button>
-      </p>
-      <p>Mark as read applies only to the clicked row or the repository group's shown, loaded notifications.
-        <a href="https://github.com/notifications" target="_blank" rel="noopener noreferrer">Open GitHub inbox</a>
+        <span id="updated" title="Automatic refresh runs only while this view is visible.">Checks automatically while visible</span>
+        <span class="refresh-actions">
+          <button id="force-refresh" class="refresh-link" type="button">Force refresh</button>
+          <span aria-hidden="true">&middot;</span>
+          <a href="https://github.com/notifications" target="_blank" rel="noopener noreferrer">Open GitHub inbox</a>
+        </span>
       </p>
     </footer>
   </main>
