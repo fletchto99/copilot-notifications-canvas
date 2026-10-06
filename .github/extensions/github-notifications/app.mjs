@@ -151,7 +151,7 @@ async function settingsRequest(input, quiet = false) {
     $("settings-status").hidden = !$("settings-status").textContent;
     renderSettings();
     restoreFocus(previousFocus);
-    if (pendingSettings) {
+    if (pendingSettings && visible()) {
       const next = pendingSettings;
       pendingSettings = undefined;
       restoreFocus(next.focus);

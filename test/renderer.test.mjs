@@ -860,6 +860,64 @@ test("a settings edit during a background status read is queued rather than drop
   assert.equal(ui.ids.get("settings-status").hidden, true);
 });
 
+test("queued settings edits survive hidden background reads and save once when shown", async () => {
+  for (const aborted of [false, true]) {
+    for (const visibilitySource of ["document", "intersection"]) {
+      const storedSettings = { autoOpen: true, darkMode: true, desktopNotifications: true, desktopSound: "default" };
+      let reads = 0;
+      let finish;
+      const ui = await renderer({ storedSettings, onSettings: input => {
+        if (!input && ++reads === 3) return new Promise((resolve, reject) => {
+          finish = () => aborted
+            ? reject(Object.assign(new Error("Synthetic aborted request"), { name: "AbortError" }))
+            : resolve();
+        });
+      } });
+      const setVisible = visible => {
+        if (visibilitySource === "intersection") ui.intersect(visible);
+        else {
+          ui.document.hidden = !visible;
+          ui.document.events.visibilitychange();
+        }
+      };
+      const writes = () => ui.calls.filter(call => call.path === "/api/settings" && call.options.body)
+        .map(call => JSON.parse(call.options.body));
+      try {
+        ui.ids.get("settings").open = true;
+        ui.ids.get("settings").events.toggle();
+        await settle();
+        await ui.fireTimer();
+        const control = ui.ids.get("desktop-notifications");
+        control.focus();
+        control.events.click();
+        assert.equal(runInContext("pendingSettings.input.desktopNotifications", ui.context), false);
+        setVisible(false);
+        const reading = ui.calls.filter(call => call.path === "/api/settings").at(-1);
+        assert.equal(reading.options.signal.aborted, true);
+        finish();
+        await settle();
+        assert.deepEqual(writes(), []);
+        assert.equal(runInContext("pendingSettings?.input.desktopNotifications", ui.context), false);
+        assert.equal(storedSettings.desktopNotifications, true);
+        setVisible(true);
+        await settle();
+        assert.deepEqual(writes(), [{ desktopNotifications: false }]);
+        assert.equal(storedSettings.desktopNotifications, false);
+        assert.equal(control.attributes["aria-checked"], "false");
+        assert.equal(runInContext("pendingSettings", ui.context), undefined);
+        setVisible(false);
+        setVisible(true);
+        await settle();
+        assert.equal(writes().length, 1);
+      } finally {
+        finish?.();
+        ui.window.events.pagehide();
+        ui.inbox.close();
+      }
+    }
+  }
+});
+
 test("Settings omits explanatory copy and hides empty status messages", async () => {
   assert.doesNotMatch(html, /dark-mode-help|startup-help|desktop-help|desktop-sound-help|Optional chime|Saved for your user/);
   assert.doesNotMatch(script, /desktop-help|desktop-sound-help/);
