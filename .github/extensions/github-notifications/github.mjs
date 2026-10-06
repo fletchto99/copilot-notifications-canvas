@@ -114,10 +114,10 @@ export class GitHubClient {
     this.revision = 0;
   }
 
-  page(endpoint, signal) {
+  page(endpoint, signal, { force = false } = {}) {
     const url = endpointURL(endpoint);
     const path = `${url.pathname}${url.search}`;
-    const pending = this.queue.then(() => this.request(path, signal));
+    const pending = this.queue.then(() => this.request(path, signal, "GET", { force }));
     this.queue = pending.catch(() => {});
     return pending;
   }
@@ -176,13 +176,13 @@ export class GitHubClient {
     return pending;
   }
 
-  async request(endpoint, signal, method = "GET") {
+  async request(endpoint, signal, method = "GET", { force = false } = {}) {
     if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
     const now = this.now();
     if (now < this.blockedUntil) throw this.lastError ??
       new InboxError("rate_limited", "GitHub requests are paused until the rate limit resets.", 429);
     const cached = method === "GET" ? this.cache.get(endpoint) : undefined;
-    if (cached && now < cached.nextRefreshAt) return cached;
+    if (!force && cached && now < cached.nextRefreshAt) return cached;
     const requestKey = `${method} ${endpoint}`;
     const clearFailure = () => {
       this.failures.delete(requestKey);

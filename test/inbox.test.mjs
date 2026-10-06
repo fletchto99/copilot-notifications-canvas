@@ -47,6 +47,51 @@ test("search is local, read items are excluded, and summaries never contain pers
   assert.equal(summary.includes("https:"), false);
 });
 
+test("forced refresh rechecks every loaded page before the next poll without losing search", async () => {
+  let now = 1000;
+  const calls = [];
+  const client = new GitHubClient({ now: () => now, run: async args => {
+    calls.push(args);
+    return args.at(-1).includes("page=1") ? http([thread("1")], { link: next }) : http([thread("2")]);
+  } });
+  const inbox = new Inbox(client);
+  await inbox.refresh();
+  await inbox.more();
+  await inbox.setFilters({ query: "notification 2" });
+  now += 1000;
+  await inbox.refresh();
+  assert.equal(calls.length, 2);
+  await inbox.refresh({ force: true });
+  assert.equal(calls.length, 4);
+  assert.match(calls[2].at(-1), /page=1/);
+  assert.match(calls[3].at(-1), /page=2/);
+  assert.equal(inbox.summary().loaded, 2);
+  assert.equal(inbox.summary().matching, 1);
+  assert.equal(inbox.summary().lastFetchedAt, now);
+  assert.equal(inbox.summary().nextRefreshAt, now + POLL_MS);
+  await inbox.refresh({ force: false });
+  assert.equal(calls.length, 4);
+});
+
+test("forced refresh validates options and keeps the old inbox if a later page fails", async () => {
+  let fail = false;
+  const client = new GitHubClient({ now: () => 1000, run: async args => {
+    if (args.at(-1).includes("page=1")) return http([thread(fail ? "3" : "1")], { link: next });
+    return fail ? http({}, {}, 500) : http([thread("2")]);
+  } });
+  const inbox = new Inbox(client);
+  await inbox.refresh();
+  await inbox.more();
+  const before = inbox.snapshot().groups;
+  for (const input of [null, [], true, { force: "true" }, { force: null }, { force: true, unknown: true }]) {
+    await assert.rejects(inbox.refresh(input), { code: "invalid_input" });
+  }
+  fail = true;
+  await assert.rejects(inbox.refresh({ force: true }), { code: "github_http" });
+  assert.deepEqual(inbox.snapshot().groups, before);
+  assert.equal(inbox.summary().status, "stale");
+});
+
 test("a failed refresh is atomic, stale is honest, and local search cannot erase a fetch error", async () => {
   let now = 0;
   let fail = false;
@@ -103,6 +148,7 @@ test("concurrent actions fail explicitly and closing aborts outstanding gh work"
   const refresh = inbox.refresh();
   await started;
   await assert.rejects(inbox.refresh(), { code: "busy" });
+  await assert.rejects(inbox.refresh({ force: true }), { code: "busy" });
   await assert.rejects(inbox.setFilters({ query: "widgets" }), { code: "busy" });
   inbox.close();
   await assert.rejects(refresh, { code: "closed" });

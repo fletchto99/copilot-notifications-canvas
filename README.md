@@ -103,13 +103,21 @@ including **Auto-open**, **Dark mode**, **Desktop notifications** and
 
 ## Usage
 
+- The canvas loads up to 50 notifications initially. **Load more** fetches up to
+  50 more at a time, with no fixed total cap while GitHub has more pages.
+  Search covers loaded notifications only.
 - Notifications refresh about every two minutes while the canvas is visible.
   GitHub polling and rate limits can delay updates.
-- The **Settings** gear icon includes a sliding **Dark mode** switch. The canvas
-  follows Copilot's theme until you choose light or dark; your choice is saved
-  across sessions and loaded when a panel opens or becomes visible.
-- Settings also offers **Auto-open** and **Desktop notifications** sliders,
-  both off by default. **Sound** offers system-specific sounds
+- **Force refresh**, beside the checked time in the footer, checks loaded pages
+  immediately without waiting for the polling interval. It stays clickable;
+  clicks during an active operation queue one follow-up refresh. GitHub
+  rate-limit and error retry waits still apply and are shown as errors.
+- The **Settings** gear icon includes matching **Dark mode**, **Auto-open**, and
+  **Desktop notifications** switches. The canvas follows Copilot's theme until
+  you choose light or dark; your choice is saved across sessions and loaded
+  when a panel opens or becomes visible.
+- **Auto-open** and **Desktop notifications** are off by default.
+  **Sound** offers system-specific sounds
   and defaults to **System default**. These settings are saved across sessions.
   Desktop alerts run while the canvas is in the foreground, hidden, or
   Copilot is minimized, as long as its session's

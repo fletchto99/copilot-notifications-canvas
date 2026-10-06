@@ -95,7 +95,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         if (req.method !== "POST") throw new InboxError("method", "Only POST is supported.", 405);
         if (req.headers.origin !== origin) throw new InboxError("origin", "A same-origin request is required.", 403);
         const input = await readBody(req);
-        if (!["/api/filters", "/api/settings", "/api/read"].includes(path) && !batchRoutes.has(path) && Object.keys(input).length) {
+        if (!["/api/refresh", "/api/filters", "/api/settings", "/api/read"].includes(path) && !batchRoutes.has(path) && Object.keys(input).length) {
           throw new InboxError("invalid_input", "This action takes an empty object.", 400);
         }
         if (path === "/api/updates") {
@@ -103,7 +103,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
           void updates.check({ force: true });
           return json(202, updates.snapshot());
         }
-        if (path === "/api/refresh") await inbox.refresh();
+        if (path === "/api/refresh") await inbox.refresh(input);
         if (path === "/api/more") await inbox.more();
         if (path === "/api/filters") await inbox.setFilters(input);
         if (path === "/api/settings") {

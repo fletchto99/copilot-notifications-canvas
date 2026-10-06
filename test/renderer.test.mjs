@@ -5,10 +5,11 @@ import { createContext, runInContext } from "node:vm";
 import { Inbox } from "../.github/extensions/github-notifications/inbox.mjs";
 import { GitHubClient } from "../.github/extensions/github-notifications/github.mjs";
 import { desktopCapabilities } from "../.github/extensions/github-notifications/notifier.mjs";
-import { http, thread } from "./fixtures.mjs";
+import { http, next, thread } from "./fixtures.mjs";
 
 const script = await readFile(new URL("../.github/extensions/github-notifications/app.mjs", import.meta.url), "utf8");
 const html = await readFile(new URL("../.github/extensions/github-notifications/index.html", import.meta.url), "utf8");
+const styles = await readFile(new URL("../.github/extensions/github-notifications/styles.css", import.meta.url), "utf8");
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
 // Minimal DOM/event/timer doubles exercise the actual renderer without a browser dependency.
@@ -101,11 +102,15 @@ async function renderer({ hidden = false, token = "a".repeat(64), readFailure = 
     node.id = id;
     return [id, node];
   }));
+  const desktopLabel = new Node("span");
+  desktopLabel.textContent = "Desktop notifications";
+  ids.get("desktop-notifications").append(desktopLabel);
   for (const id of ["batch-stop", "batch-retry", "batch-dismiss"]) ids.get(id).parentNode = ids.get("batch-progress");
   ids.get("batch-progress").contains = node =>
     ["batch-progress", "batch-stop", "batch-retry", "batch-dismiss"].some(id => ids.get(id) === node);
   ids.get("settings").contains = node =>
-    ["settings", "settings-toggle", "settings-panel", "auto-open", "dark-mode", "check-updates", "desktop-notifications", "desktop-sound"].some(id => ids.get(id) === node);
+    node === ids.get("settings") ||
+    ["settings-toggle", "settings-panel", "auto-open", "dark-mode", "check-updates", "desktop-notifications", "desktop-sound"].some(id => ids.get(id).contains(node));
   const document = {
     hidden,
     body: new Node("body"),
@@ -172,7 +177,8 @@ async function renderer({ hidden = false, token = "a".repeat(64), readFailure = 
         if (onUpdates) releaseMetadata = await onUpdates();
         return { ok: true, json: async () => releaseMetadata };
       }
-      if (path === "/api/refresh") await inbox.refresh();
+      if (path === "/api/refresh") await inbox.refresh(JSON.parse(options.body));
+      if (path === "/api/more") await inbox.more();
       if (path === "/api/state") {
         const snapshot = { ...inbox.snapshot(), updates: releaseMetadata };
         if (onState) await onState();
@@ -223,17 +229,23 @@ test("update banner sits below the subtitle and above the inbox controls with it
   assert.match(html, /<details id="update-prompt-details">/);
 });
 
-test("Settings shows the running version below Check for updates without a duplicate footer version", async () => {
-  assert.match(html, /<button id="check-updates"[^>]*>Check for updates<\/button>\s*<p id="installed-version"/);
+test("Settings combines the running version and update status in one text row below Check for updates", async () => {
+  assert.match(html, /<button id="check-updates"[^>]*>Check for updates<\/button>\s*<p class="settings-help"><span id="installed-version">[^<]*<\/span><span id="update-status"[^>]*><\/span><\/p>/);
   assert.doesNotMatch(html, /id="canvas-version"/);
-  for (const release of [
-    {},
-    { status: "available", latestVersion: "0.2.0", prompt: "Synthetic update prompt" },
-    { status: "unchecked", checking: true, checkedAt: null },
-    { status: "unchecked", error: "Release check failed", checkedAt: null },
+  for (const [release, message] of [
+    [{}, "Up to date"],
+    [{ status: "available", latestVersion: "0.2.0", prompt: "Synthetic update prompt" }, "Update available: v0.2.0."],
+    [{ status: "unchecked", checking: true, checkedAt: null }, "Checking..."],
+    [{ status: "unchecked", error: "Release check failed", checkedAt: null }, "Release check failed"],
+    [{ status: "unchecked", checkedAt: null }, ""],
   ]) {
     const ui = await renderer({ release });
-    assert.equal(ui.ids.get("installed-version").textContent, "GitHub Notification Canvas 0.1.0");
+    const version = ui.ids.get("installed-version");
+    const status = ui.ids.get("update-status");
+    assert.equal(version.textContent, "Notification Canvas v0.1.0");
+    assert.equal(status.textContent, message ? ` - ${message}` : "");
+    assert.equal(status.hidden, !message);
+    assert.equal(version.textContent + status.textContent, `Notification Canvas v0.1.0${message ? ` - ${message}` : ""}`);
   }
 });
 
@@ -244,7 +256,7 @@ test("update banner shows release links and copies a prompt without installing o
   } });
   assert.equal(ui.ids.get("update-banner").hidden, false);
   assert.match(ui.ids.get("update-title").textContent, /v0\.2\.0.*v0\.1\.0/);
-  assert.equal(ui.ids.get("installed-version").textContent, "GitHub Notification Canvas 0.1.0");
+  assert.equal(ui.ids.get("installed-version").textContent, "Notification Canvas v0.1.0");
   assert.match(ui.ids.get("release-notes").href, /\/releases\/tag\/v0\.2\.0$/);
   assert.match(ui.ids.get("update-instructions").href, /#installation-and-updating$/);
   assert.equal(ui.ids.get("update-prompt").value, "Synthetic safe update prompt");
@@ -270,7 +282,7 @@ test("clipboard denial exposes a selectable prompt and does not claim it was cop
 
 test("current, ahead, absent and failed release checks keep the banner out of the inbox", async () => {
   for (const [status, message] of [
-    ["current", /^Up to date\.$/], ["ahead", /Newer than/], ["no_release", /No stable/],
+    ["current", /^ - Up to date$/], ["ahead", /Newer than/], ["no_release", /No stable/],
   ]) {
     const ui = await renderer({ release: { status } });
     assert.equal(ui.ids.get("update-banner").hidden, true);
@@ -278,7 +290,7 @@ test("current, ahead, absent and failed release checks keep the banner out of th
   }
   const ui = await renderer({ release: { status: "unchecked", error: "Network unavailable", checkedAt: null } });
   assert.equal(ui.ids.get("update-banner").hidden, true);
-  assert.equal(ui.ids.get("update-status").textContent, "Network unavailable");
+  assert.equal(ui.ids.get("update-status").textContent, " - Network unavailable");
   assert.equal(ui.ids.get("update-status").hidden, false);
   assert.equal(ui.ids.get("notice").hidden, true);
   assert.equal(ui.document.querySelectorAll("article").length, 1);
@@ -296,13 +308,13 @@ test("manual release checks stay available while checking and immediately after 
   assert.equal(ui.calls.at(-1).options.body, "{}");
   assert.equal(ui.ids.get("check-updates").disabled, false);
   assert.equal(ui.ids.get("check-updates").attributes["aria-busy"], "true");
-  assert.equal(ui.ids.get("update-status").textContent, "Checking...");
+  assert.equal(ui.ids.get("update-status").textContent, " - Checking...");
   assert.equal(ui.ids.get("search").disabled, false);
   await ui.ids.get("check-updates").events.click();
   assert.equal(ui.calls.filter(call => call.path === "/api/updates").length, 2);
   ui.setRelease({ checking: false, status: "current", latestVersion: "0.1.0", checkedAt: ui.advance(0) });
   await ui.fireTimer();
-  assert.equal(ui.ids.get("update-status").textContent, "Up to date.");
+  assert.equal(ui.ids.get("update-status").textContent, " - Up to date");
   assert.equal(ui.ids.get("check-updates").attributes["aria-busy"], "false");
   assert.equal(ui.ids.get("check-updates").disabled, false);
   await ui.ids.get("check-updates").events.click();
@@ -362,18 +374,202 @@ test("canvas is titled Unread Notifications without mode tabs or the old All not
   assert.doesNotMatch(html, /id="(?:all|unread|api-limit)"/);
 });
 
-test("manual Refresh controls are absent while the automatic endpoint and SDK action remain", async () => {
+test("inbox status says unread notifications without a redundant bottom count or divider", async () => {
+  const ui = await renderer({ initialRows: [thread("1"), thread("2")] });
+  assert.equal(ui.ids.get("count").textContent, "2 shown / 1 repositories / 2 unread notifications");
+  assert.equal(ui.ids.has("coverage"), false);
+  assert.doesNotMatch(script, /End of the available inbox|notifications loaded\./);
+  assert.doesNotMatch(styles, /(?:^|\n)footer \{[^}]*border-top:/);
+  await runInContext('update("filters", { query: "notification 1" })', ui.context);
+  assert.equal(ui.ids.get("count").textContent, "1 shown / 1 repositories / 2 unread notifications");
+  assert.match(html, /Search loaded notification titles and repositories/);
+  ui.window.events.pagehide();
+});
+
+test("Load more still fetches another page of 50 and disappears when the inbox ends", async () => {
+  const first = Array.from({ length: 50 }, (_, index) => thread(String(index + 1)));
+  const second = Array.from({ length: 50 }, (_, index) => thread(String(index + 51)));
+  const ui = await renderer({ onFetch: args => args.at(-1).includes("page=1") ?
+    http(first, { link: next }) : http(second) });
+  const more = ui.ids.get("more");
+  assert.equal(ui.document.querySelectorAll("article").length, 50);
+  assert.equal(more.hidden, false);
+  assert.equal(more.disabled, false);
+  assert.equal(more.textContent, "Load more (up to 50)");
+  await more.events.click();
+  assert.equal(ui.document.querySelectorAll("article").length, 100);
+  assert.equal(more.hidden, true);
+  assert.equal(ui.githubCalls.length, 2);
+  assert.ok(ui.githubCalls.every(args => args.at(-1).includes("per_page=50")));
+  ui.window.events.pagehide();
+});
+
+test("Load more explains when a refresh is needed after a read", async () => {
+  const ui = await renderer({ onFetch: () => http([thread("1"), thread("2")], { link: next }) });
+  await ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "1").events.click();
+  assert.equal(ui.ids.get("more").disabled, true);
+  assert.equal(ui.ids.get("more").title, "Refresh notifications before loading more.");
+  ui.window.events.pagehide();
+});
+
+test("Force refresh is an always-enabled link-style footer button beside the checked time", async () => {
   assert.doesNotMatch(html, /id="refresh"|>Refresh<\/button>|class="heading"/);
-  assert.doesNotMatch(script, /\$\("refresh"\)/);
+  assert.match(html, /<footer>\s*<p class="refresh-status">\s*<span id="updated">[^<]*<\/span>\s*<button id="force-refresh" class="refresh-link" type="button">Force refresh<\/button>/);
+  assert.match(styles, /\.refresh-link \{[^}]*border: 0;[^}]*padding: 0;/);
+  assert.match(styles, /a, \.refresh-link \{ color: var\(--accent\); text-decoration: none; \}/);
+  assert.match(styles, /a:hover, \.refresh-link:hover \{ text-decoration: underline; \}/);
+  assert.match(styles, /button:hover:not\(:disabled, \.repo-toggle, \.refresh-link\)/);
+  assert.doesNotMatch(script, /\$\("force-refresh"\)\.disabled\s*=/);
   const extension = await readFile(new URL("../.github/extensions/github-notifications/extension.mjs", import.meta.url), "utf8");
   assert.match(extension, /name: "refresh"/);
   const ui = await renderer();
+  assert.equal(ui.ids.get("force-refresh").disabled, false);
   assert.ok(ui.calls.some(call => call.path === "/api/refresh"));
   assert.equal(ui.githubCalls.length, 1);
   assert.match(ui.ids.get("updated").textContent, /Checked .*Next refresh/);
 });
 
-test("automatic polling honors the two-minute minimum without a manual button", async () => {
+test("Force refresh checks GitHub immediately, preserves focus and still leaves automatic polling gated", async () => {
+  const ui = await renderer();
+  const button = ui.ids.get("force-refresh");
+  button.focus();
+  ui.setRows([thread("1"), thread("2")]);
+  await button.events.click();
+  assert.equal(ui.githubCalls.length, 2);
+  assert.equal(ui.calls.at(-1).options.body, '{"force":true}');
+  assert.equal(ui.document.querySelectorAll("article").length, 2);
+  assert.equal(ui.document.activeElement, button);
+  assert.equal(button.textContent, "Force refresh");
+  assert.equal(button.attributes["aria-busy"], "false");
+  await button.events.click();
+  assert.equal(ui.githubCalls.length, 3);
+  ui.advance(119_999);
+  await ui.fireTimer();
+  assert.equal(ui.githubCalls.length, 3);
+  ui.advance(1);
+  await ui.fireTimer();
+  assert.equal(ui.githubCalls.length, 4);
+});
+
+test("clicks during a refresh stay enabled and coalesce into one follow-up refresh", async () => {
+  let fetches = 0;
+  let release;
+  const ui = await renderer({ onFetch: () => ++fetches === 2 ?
+    new Promise(resolve => { release = () => resolve(http([thread()])); }) : http([thread()]) });
+  const button = ui.ids.get("force-refresh");
+  button.focus();
+  const refreshing = button.events.click();
+  await settle();
+  assert.equal(button.disabled, false);
+  assert.equal(button.textContent, "Refreshing...");
+  assert.equal(button.attributes["aria-busy"], "true");
+  await button.events.click();
+  await button.events.click();
+  assert.equal(button.textContent, "Refresh queued...");
+  assert.equal(fetches, 2);
+  release();
+  await refreshing;
+  await settle();
+  assert.equal(fetches, 3);
+  assert.equal(button.disabled, false);
+  assert.equal(button.textContent, "Force refresh");
+  assert.equal(button.attributes["aria-busy"], "false");
+  assert.equal(ui.document.activeElement, button);
+});
+
+test("Force refresh waits for a local poll instead of losing the click or accepting its stale snapshot", async () => {
+  let release;
+  const ui = await renderer({ onState: () => new Promise(resolve => { release = resolve; }) });
+  const polling = ui.fireTimer();
+  await settle();
+  ui.setRows([thread("2")]);
+  const button = ui.ids.get("force-refresh");
+  const refreshing = button.events.click();
+  assert.equal(button.disabled, false);
+  assert.equal(ui.githubCalls.length, 1);
+  release();
+  await polling;
+  await refreshing;
+  assert.equal(ui.githubCalls.length, 2);
+  assert.equal(ui.document.querySelectorAll("a")[0].textContent, "Synthetic notification 2");
+});
+
+test("Force refresh queues behind row and repository writes without interrupting them", async () => {
+  for (const kind of ["row", "repository"]) {
+    let release;
+    const ui = await renderer({
+      onWrite: () => new Promise(resolve => { release = () => resolve("HTTP/2 205 Reset Content\r\n\r\n"); }),
+    });
+    const read = ui.ids.get("groups").querySelectorAll("button")
+      .find(node => kind === "row" ? node.dataset.threadId : node.dataset.repository);
+    const reading = read.events.click();
+    await settle();
+    const button = ui.ids.get("force-refresh");
+    await button.events.click();
+    assert.equal(button.disabled, false);
+    assert.equal(button.textContent, "Refresh queued...");
+    assert.equal(ui.calls.filter(call => call.path === "/api/refresh").length, 1);
+    ui.setRows([]);
+    release();
+    await reading;
+    if (kind === "repository") {
+      await ui.inbox.batch.done;
+      await runInContext("update()", ui.context);
+    }
+    await settle();
+    assert.deepEqual(ui.patches, ["/notifications/threads/1"]);
+    assert.equal(ui.calls.filter(call => call.path === "/api/refresh").length, 2);
+    assert.equal(ui.document.querySelectorAll("article").length, 0);
+    assert.equal(button.textContent, "Force refresh");
+  }
+});
+
+test("queued Force refresh preserves the latest search edit during a filter request", async () => {
+  let release;
+  let filters = 0;
+  const ui = await renderer({
+    initialRows: [thread("1"), thread("2")],
+    onFilters: () => ++filters === 1 ? new Promise(resolve => { release = resolve; }) : undefined,
+  });
+  const filtering = runInContext('update("filters", { query: "notification 1" })', ui.context);
+  await settle();
+  const search = ui.ids.get("search");
+  search.value = "notification 2";
+  search.events.input();
+  const button = ui.ids.get("force-refresh");
+  await button.events.click();
+  assert.equal(button.disabled, false);
+  assert.equal(button.textContent, "Refresh queued...");
+  release();
+  await filtering;
+  await settle();
+  assert.equal(ui.githubCalls.length, 2);
+  assert.equal(ui.inbox.filters.query, "notification 2");
+  assert.equal(search.value, "notification 2");
+  assert.equal(ui.document.querySelectorAll("a")[0].textContent, "Synthetic notification 2");
+});
+
+test("Force refresh remains clickable during GitHub backoff and reports the wait without retrying upstream", async () => {
+  let fetches = 0;
+  const ui = await renderer({ onFetch: () => ++fetches === 2 ?
+    http({}, { "retry-after": "600" }, 429) : http([thread()]) });
+  const button = ui.ids.get("force-refresh");
+  await button.events.click();
+  assert.equal(ui.ids.get("notice").hidden, false);
+  assert.match(ui.ids.get("notice").textContent, /rate limit/);
+  assert.equal(button.disabled, false);
+  await button.events.click();
+  assert.equal(fetches, 2);
+  assert.equal(button.textContent, "Force refresh");
+  assert.equal(button.disabled, false);
+  ui.advance(600_000);
+  await button.events.click();
+  assert.equal(fetches, 3);
+  assert.equal(ui.ids.get("notice").hidden, true);
+  assert.equal(button.attributes["aria-busy"], "false");
+});
+
+test("automatic polling honors the two-minute minimum", async () => {
   const ui = await renderer();
   ui.advance(119_999);
   await ui.fireTimer();
@@ -424,7 +620,7 @@ test("authentication errors remain visible and automatically retry after backoff
   assert.equal(ui.inbox.summary().status, "ready");
 });
 
-test("an offline initial open recovers automatically without a Refresh control", async () => {
+test("an offline initial open recovers automatically without needing a manual refresh", async () => {
   const ui = await renderer({ initialOffline: true });
   assert.equal(ui.ids.get("notice").hidden, false);
   assert.equal(ui.ids.get("empty-title").textContent, "Your inbox is unavailable");
@@ -574,6 +770,8 @@ test("Settings puts an Auto-open slider above sound, saves startup preference an
   assert.equal(ui.ids.get("settings-status").textContent, "");
   ui.document.events.click({ target: ui.ids.get("desktop-sound") });
   assert.equal(settings.open, true);
+  ui.document.events.click({ target: ui.ids.get("desktop-notifications").children[0] });
+  assert.equal(settings.open, true);
   ui.document.events.keydown({ key: "Escape", preventDefault() {} });
   assert.equal(settings.open, false);
   assert.equal(ui.document.activeElement, ui.ids.get("settings-toggle"));
@@ -668,7 +866,7 @@ test("Settings omits explanatory copy and hides empty status messages", async ()
   const ui = await renderer();
   assert.equal(ui.ids.get("settings-status").hidden, true);
   assert.equal(ui.ids.get("desktop-status").hidden, true);
-  assert.equal(ui.ids.get("update-status").textContent, "Up to date.");
+  assert.equal(ui.ids.get("update-status").textContent, " - Up to date");
   assert.doesNotMatch(ui.ids.get("update-status").textContent, /Last checked|Check again after/);
 });
 
@@ -837,6 +1035,52 @@ test("mark-read failure retains the row with a usable retry control", async () =
   assert.equal(ui.document.querySelectorAll("article").length, 1);
   assert.equal(button.disabled, false);
   assert.match(ui.ids.get("notice").textContent, /Could not mark/);
+});
+
+test("repository header shares its hover background across the toggle and read action", async () => {
+  const ui = await renderer();
+  const buttons = ui.ids.get("groups").querySelectorAll("button");
+  const disclosure = buttons.find(node => node.dataset.disclosure);
+  const groupRead = buttons.find(node => node.dataset.focusKey === "bulk:example/widgets");
+  assert.equal(disclosure.className, "repo-toggle");
+  assert.equal(disclosure.parentNode.className, "repo-header");
+  assert.equal(groupRead.parentNode, disclosure.parentNode);
+  assert.match(styles, /button:hover:not\(:disabled, \.repo-toggle, \.refresh-link\), summary:hover, \.repo-header:hover, \.row:hover \{\s*background: color-mix\(in srgb, var\(--canvas-text\) 4%, transparent\);/);
+  assert.match(styles, /@media \(prefers-reduced-motion: no-preference\) \{\s*button, a, \.repo-header \{ transition: background-color \.12s ease; \}/);
+  ui.window.events.pagehide();
+});
+
+test("repository toggle focus is inset inside the clipped card", () => {
+  assert.match(styles, /:focus-visible \{ outline: 2px solid var\(--focus\); outline-offset: 3px; \}/);
+  assert.match(styles, /\.repo-group \{[^}]*overflow: clip;/);
+  assert.match(styles, /\.repo-toggle:focus-visible \{ outline-offset: -5px; \}/);
+});
+
+test("compact toolbar keeps a shrinkable search beside the settings button", () => {
+  assert.match(styles, /\.toolbar \{ display: flex;[^}]*\}/);
+  assert.match(styles, /\.search \{ flex: 1; min-width: 0; \}/);
+  assert.match(styles, /\.settings \{[^}]*flex-shrink: 0;/);
+  assert.doesNotMatch(styles, /\.toolbar \{[^}]*flex-wrap: wrap/);
+  assert.doesNotMatch(styles, /\.search \{[^}]*flex-basis: 100%/);
+});
+
+test("notification metadata, counts and read actions use 12px text", () => {
+  for (const selector of ["\\.metadata", "time", "\\.repo-count", "\\.repo-read", "\\.mark-read"]) {
+    const rule = styles.match(new RegExp(`(?:^|\\n)${selector} \\{[^}]*\\}`))?.[0] ?? "";
+    assert.match(rule, /font-size: 12px;/, selector);
+  }
+});
+
+test("footer force refresh preserves the native notification toggle and selected sound", async () => {
+  const storedSettings = { autoOpen: true, darkMode: true, desktopNotifications: true, desktopSound: "Submarine" };
+  const ui = await renderer({ storedSettings });
+  await ui.ids.get("force-refresh").events.click();
+  assert.equal(ui.githubCalls.length, 2);
+  assert.equal(ui.ids.get("desktop-notifications").attributes["aria-checked"], "true");
+  assert.equal(ui.ids.get("desktop-sound").value, "Submarine");
+  assert.equal(ui.ids.get("desktop-sound").disabled, false);
+  assert.deepEqual(storedSettings, { autoOpen: true, darkMode: true, desktopNotifications: true, desktopSound: "Submarine" });
+  assert.equal(ui.calls.some(call => call.path === "/api/settings" && call.options.body), false);
 });
 
 test("repository action starts from one click with no dialog and preserves independent disclosure", async () => {
