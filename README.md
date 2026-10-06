@@ -54,7 +54,7 @@ After installation finishes, ask Copilot:
 
 - Notifications refresh about every two minutes while the canvas is visible.
   GitHub polling and rate limits can delay updates.
-- **Settings** offers sound and **Open on new sessions**, both off by default.
+- The **Settings** gear icon offers sound and **Open on new sessions**, both off by default.
   Sound is per-panel and resets when the panel reloads or reopens.
 - Auto-open runs once per new session, including general chats, before assistant
   work starts. Other canvases do not block it. It does not reopen Notifications
