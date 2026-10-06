@@ -100,27 +100,6 @@ instead of expecting a user-wide install to replace it. Sound is intentionally
 per-panel, so a reload resets sound to off; persisted settings such as
 **Auto-open** and **Dark mode** are retained.
 
-### Update checks
-
-The canvas checks GitHub's **latest stable release**, not commits on `main`.
-When a newer version is available, a small banner offers **Release notes**,
-**Update instructions**, and **Copy update prompt**. Paste the prompt into
-Copilot to perform the update; copying it does not execute anything. The prompt
-is also selectable in the banner if clipboard access is unavailable.
-
-**Settings** shows a **Check for updates** button with the running canvas version
-directly below it.
-Checks happen while the canvas is visible and are cached for six hours per
-running extension, shared by its panels. A manual check can bypass this cache
-at most once a minute, but never GitHub's retry delay. Failed checks retry
-automatically after at least 30 minutes, do not block the inbox, and show an
-error in Settings. Drafts, prereleases, and unsupported tag formats are never
-offered. A build newer than the latest release is not downgraded.
-
-There is no automatic installation or auto-update setting. Installation and
-reload remain explicit. A future opt-in updater should be off by default,
-reuse these installer safeguards, and coordinate activation across sessions.
-
 ## Usage
 
 - Notifications refresh about every two minutes while the canvas is visible.
