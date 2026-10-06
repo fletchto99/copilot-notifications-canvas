@@ -179,9 +179,14 @@ support clicking to focus the canvas.
 ## Privacy
 
 Notification titles and repository names are not logged, saved to disk by the
-extension, or sent to the agent. When you enable desktop notifications, they
-are sent to the operating system and **may appear on the lock screen and
-remain in notification history**.
+extension, or sent to the agent.
+
+> **Native notification content:** If desktop notifications are enabled,
+> repository names and notification titles are sent to your operating system.
+> The OS may store this content on disk in its notification history and display
+> it on the lock screen, according to your system settings. The extension does
+> not control the OS's storage or retention of this content.
+
 Desktop coordination saves timestamps, hashed thread/activity identifiers,
 process ownership markers and sanitized error status under the user extension's
 `artifacts/` directory. GitHub CLI handles credentials; they never enter the canvas renderer.
