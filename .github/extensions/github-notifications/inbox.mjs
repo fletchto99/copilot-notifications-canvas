@@ -13,9 +13,6 @@ export class Inbox {
     this.error = null;
     this.nextRefreshAt = 0;
     this.controller = new AbortController();
-    this.seenActivity = new Map();
-    this.activityWatermark = null;
-    this.activity = { sequence: 0, latestAt: null };
     this.needsRefresh = false;
     this.onRead = id => {
       this.pages = this.pages.map(page => ({ ...page, items: page.items.filter(item => item.id !== id) }));
@@ -48,7 +45,6 @@ export class Inbox {
       needsRefresh: this.needsRefresh,
       lastFetchedAt: this.pages.length ? Math.min(...this.pages.map(page => page.fetchedAt)) : null,
       nextRefreshAt: Math.max(this.nextRefreshAt, this.client.blockedUntil),
-      activity: { ...this.activity },
       batch: this.batch.snapshot(),
       groups,
     };
@@ -58,27 +54,6 @@ export class Inbox {
     const { filters, groups, batch, ...state } = this.snapshot();
     const { repository, token, ...batchCounts } = batch ?? {};
     return { ...state, batch: batch ? batchCounts : null, mode: filters.mode, searchActive: Boolean(filters.query), repositories: groups.length };
-  }
-
-  recordActivity(pages, refresh) {
-    const items = orderedThreads(pages.flatMap(page => page.items)).filter(item => item.unread);
-    let watermark = this.activityWatermark;
-    let newestArrival = null;
-    for (const item of items) {
-      const updatedAt = Date.parse(item.updatedAt);
-      const previous = this.seenActivity.get(item.id) ?? -Infinity;
-      if (refresh && this.activityWatermark !== null &&
-          updatedAt > this.activityWatermark && updatedAt > previous) {
-        newestArrival = Math.max(newestArrival ?? updatedAt, updatedAt);
-      }
-      this.seenActivity.set(item.id, Math.max(previous, updatedAt));
-      watermark = Math.max(watermark ?? updatedAt, updatedAt);
-    }
-    // An empty first inbox starts at observation time, not at the beginning of history.
-    this.activityWatermark = watermark ?? this.client.now();
-    if (newestArrival !== null) {
-      this.activity = { sequence: this.activity.sequence + 1, latestAt: newestArrival };
-    }
   }
 
   async execute(operation, source = "refresh") {
@@ -128,7 +103,6 @@ export class Inbox {
       }
       if (this.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
       if (revision !== this.client.revision) throw new InboxError("inbox_changed", "The inbox changed while refreshing. The next automatic refresh will reconcile it.", 409);
-      this.recordActivity(pages, true);
       this.pages = pages;
       this.needsRefresh = false;
       this.nextRefreshAt = Math.max(...pages.map(page => page.nextRefreshAt));
@@ -145,7 +119,6 @@ export class Inbox {
       const page = await this.client.page(next, this.controller.signal);
       if (this.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
       if (revision !== this.client.revision) throw new InboxError("inbox_changed", "The inbox changed while loading. Try loading more again.", 409);
-      this.recordActivity([page], false);
       this.pages = [...this.pages, page];
       this.nextRefreshAt = Math.max(this.nextRefreshAt, page.nextRefreshAt);
     }, "more");
@@ -186,7 +159,6 @@ export class Inbox {
     this.controller.abort();
     this.batch.close();
     this.pages = [];
-    this.seenActivity.clear();
     this.client.readListeners.delete(this.onRead);
   }
 }

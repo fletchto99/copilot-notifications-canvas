@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GitHubClient } from "../../.github/extensions/github-notifications/github.mjs";
 import { Inbox } from "../../.github/extensions/github-notifications/inbox.mjs";
+import { DesktopNotifications } from "../../.github/extensions/github-notifications/desktop.mjs";
 import { Preferences } from "../../.github/extensions/github-notifications/settings.mjs";
 import { startServer } from "../../.github/extensions/github-notifications/server.mjs";
 import { Updates, CURRENT_VERSION } from "../../.github/extensions/github-notifications/updates.mjs";
@@ -15,6 +16,7 @@ export const test = base.extend({
   canvas: async ({ page, context }, use) => {
     const directory = await mkdtemp(join(tmpdir(), "notification-browser-"));
     const writes = [];
+    const deliveries = [];
     const requests = [];
     const errors = [];
     const rows = Array.from({ length: 53 }, (_, index) => {
@@ -31,7 +33,7 @@ export const test = base.extend({
         subject: { title: titles[id] ?? `Synthetic notification ${id}`, type: "Issue", url: null },
       });
     });
-    const client = new GitHubClient({ run: async args => {
+    const run = async args => {
       const endpoint = args.at(-1);
       requests.push(endpoint);
       if (args.includes("PATCH")) {
@@ -47,15 +49,22 @@ export const test = base.extend({
       const offset = (Number(url.searchParams.get("page")) - 1) * 50;
       const unread = rows.filter(row => row.unread);
       return http(unread.slice(offset, offset + 50), offset + 50 < unread.length ? { link: next } : {});
-    } });
+    };
+    const client = new GitHubClient({ run });
     const preferences = new Preferences({ directory });
+    const desktop = new DesktopNotifications({
+      preferences, client: new GitHubClient({ run }), platform: "darwin",
+      notify: async message => { deliveries.push(message); },
+      log: message => errors.push(message),
+    });
     const updates = new Updates({ run: async args => {
       expect(args.at(-1)).toBe("/repos/fletchto99/copilot-notifications-canvas/releases/latest");
       return http({ tag_name: `v${CURRENT_VERSION}`, draft: false, prerelease: false });
     } });
     let server;
     try {
-      server = await startServer(new Inbox(client), { preferences, updates, log: message => errors.push(message) });
+      server = await startServer(new Inbox(client), { preferences, desktop, updates, log: message => errors.push(message) });
+      desktop.add("browser-test");
       const origin = new URL(server.url).origin;
       await context.route("**/*", async route => {
         const url = route.request().url();
@@ -67,11 +76,12 @@ export const test = base.extend({
       page.on("console", message => {
         if (message.type() === "error") errors.push(message.text());
       });
-      await use({ url: server.url, rows, writes, requests, preferences });
+      await use({ url: server.url, rows, writes, requests, preferences, deliveries });
       expect(errors, "Browser execution, CSP, and external-network errors").toEqual([]);
     } finally {
       await context.unrouteAll({ behavior: "wait" });
       await page.close();
+      await desktop.close();
       updates.close();
       await server?.close();
       await rm(directory, { recursive: true, force: true });

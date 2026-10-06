@@ -2,11 +2,11 @@ import { createServer } from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { InboxError } from "./model.mjs";
+import { validSound } from "./notifier.mjs";
 
 const assets = new Map([
   ["/", ["index.html", "text/html; charset=utf-8"]],
   ["/app.mjs", ["app.mjs", "text/javascript; charset=utf-8"]],
-  ["/sound.mjs", ["sound.mjs", "text/javascript; charset=utf-8"]],
   ["/styles.css", ["styles.css", "text/css; charset=utf-8"]],
 ]);
 const batchRoutes = new Map([
@@ -45,7 +45,7 @@ async function readBody(req) {
   return input;
 }
 
-export async function startServer(inbox, { log = () => {}, preferences, updates } = {}) {
+export async function startServer(inbox, { log = () => {}, preferences, desktop, updates } = {}) {
   const secret = randomBytes(32).toString("hex");
   const snapshot = () => ({ ...inbox.snapshot(), ...(updates ? { updates: updates.snapshot() } : {}) });
   const staticFiles = new Map(await Promise.all([...assets].map(async ([path, [file, type]]) =>
@@ -88,7 +88,9 @@ export async function startServer(inbox, { log = () => {}, preferences, updates 
       }
       if (path === "/api/state" || (path === "/api/settings" && req.method === "GET")) {
         if (req.method !== "GET") throw new InboxError("method", "Only GET is supported.", 405);
-        if (path === "/api/settings") return json(200, await preferences.read());
+        if (path === "/api/settings") return json(200, {
+          ...await preferences.read(), desktopStatus: desktop?.snapshot() ?? { supported: false, state: "off", message: "Desktop notifications are unavailable." },
+        });
       } else {
         if (req.method !== "POST") throw new InboxError("method", "Only POST is supported.", 405);
         if (req.headers.origin !== origin) throw new InboxError("origin", "A same-origin request is required.", 403);
@@ -104,7 +106,19 @@ export async function startServer(inbox, { log = () => {}, preferences, updates 
         if (path === "/api/refresh") await inbox.refresh(input);
         if (path === "/api/more") await inbox.more();
         if (path === "/api/filters") await inbox.setFilters(input);
-        if (path === "/api/settings") return json(200, await preferences.update(input));
+        if (path === "/api/settings") {
+          if (input.desktopNotifications === true && !desktop?.supported) {
+            throw new InboxError("desktop_unsupported", "Desktop notifications are supported on macOS, Windows and Linux.", 400);
+          }
+          if (Object.hasOwn(input, "desktopSound") && (!desktop?.supported || !validSound(input.desktopSound, desktop.platform))) {
+            throw new InboxError("desktop_sound", "Choose a notification sound supported by this operating system.", 400);
+          }
+          const settings = await preferences.update(input);
+          desktop?.wake(settings);
+          return json(200, {
+            ...settings, desktopStatus: desktop?.snapshot() ?? { supported: false, state: "off", message: "Desktop notifications are unavailable." },
+          });
+        }
         if (path === "/api/read") await inbox.markRead(input);
         if (batchRoutes.has(path)) {
           inbox.batch[batchRoutes.get(path)](input);

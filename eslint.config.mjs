@@ -12,11 +12,11 @@ export default [
   },
   {
     files: ["**/*.mjs"],
-    ignores: [".github/extensions/github-notifications/{app,sound}.mjs"],
+    ignores: [".github/extensions/github-notifications/app.mjs"],
     languageOptions: { globals: globals.node },
   },
   {
-    files: [".github/extensions/github-notifications/{app,sound}.mjs"],
+    files: [".github/extensions/github-notifications/app.mjs"],
     languageOptions: { globals: globals.browser },
   },
   {

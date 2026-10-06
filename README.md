@@ -1,7 +1,8 @@
 # Unread Notifications
 
 Unread GitHub notifications in the GitHub Copilot app, grouped by repository.
-Search, mark rows or repositories as read, and opt into sound or auto-open.
+Search, mark rows or repositories as read, and opt into desktop
+notifications or auto-open.
 
 ![Unread Notifications canvas showing a repository group, search, settings, and mark-as-read controls](docs/images/unread-notifications.png)
 
@@ -87,18 +88,31 @@ Use the same `COPILOT_HOME` for an upgrade as for the original installation.
 
    Other already-open Copilot sessions need their own extension reload.
 
-**Settings are preserved.** The installer updates only managed runtime files.
+**Settings are preserved.** The installer writes a complete runtime, including
+its HTML, JavaScript and styles, under `runtimes/<content-hash>/`, then atomically
+switches the extension entry point to that version. It never replaces files
+inside a published runtime. `.copilot-notifications-install.json` records the
+active runtime; its `version.json` is authoritative, not any retained legacy
+`version.json` at the extension root.
+
 It leaves `artifacts/` in place, including `artifacts/settings.json`, unknown
 settings, and other artifacts, even if a running session saves settings during
 the update. Never delete the installed extension to upgrade it. If the installer
 reports modified files, stop and preserve those changes; do not bypass its
 ownership or concurrency safeguards.
 
+Older runtimes are retained so already-open sessions keep a consistent version,
+even if an upgrade rolls back. Upgrades from the original flat layout also keep
+its legacy files, including `sound.mjs`, for sessions that have not reloaded.
+These retained files are extension code, not notification content. They are not
+automatically pruned; do not remove them while a session may still use them.
+New runtimes contain no Web Audio playback or its old inbox activity tracking.
+
 Updates use the user-wide installer. A project-local checkout shadows a
 user-wide installation in that repository; update that checkout deliberately
-instead of expecting a user-wide install to replace it. Sound is intentionally
-per-panel, so a reload resets sound to off; persisted settings such as
-**Auto-open** and **Dark mode** are retained.
+instead of expecting a user-wide install to replace it. Persisted settings,
+including **Auto-open**, **Dark mode**, **Desktop notifications** and
+**Sound**, are retained.
 
 ## Usage
 
@@ -120,22 +134,102 @@ per-panel, so a reload resets sound to off; persisted settings such as
   follow-up refresh. GitHub rate-limit and error retry waits still apply and
   are shown as errors.
 - The **Settings** gear icon includes matching **Dark mode**, **Auto-open**, and
-  **Play sound** switches. The canvas follows Copilot's theme until you choose
-  light or dark; your choice is saved across sessions and loaded when a panel
-  opens or becomes visible.
-- **Auto-open** and **Play sound** are off by default. Sound is per-panel and
-  resets when the panel reloads or reopens.
+  **Desktop notifications** switches. The canvas follows Copilot's theme until
+  you choose light or dark; your choice is saved across sessions and loaded
+  when a panel opens or becomes visible.
+- **Auto-open** and **Desktop notifications** are off by default.
+  **Sound** offers system-specific sounds
+  and defaults to **System default**. These settings are saved across sessions.
+  Desktop alerts run while the canvas is in the foreground, hidden, or
+  Copilot is minimized, as long as its session's
+  extension process is running. Closing the last Notifications canvas stops
+  the watcher; quitting Copilot stops it too.
 - Auto-open runs once per new session, including general chats, before assistant
   work starts. Other canvases do not block it. It does not reopen Notifications
   on session resume, extension reload, or after you close the panel.
 - A repository's **Mark N as read** immediately starts marking only its shown,
   loaded notifications, narrowed by search. Older unloaded items are not included.
 
+### Desktop notifications
+
+Enable **Desktop notifications** in Settings and choose a **Sound**.
+The old per-panel Web Audio chime has been replaced by this setting. No extra
+app, package or background service is installed automatically.
+
+| Platform | Backend | Sounds and requirements |
+| --- | --- | --- |
+| macOS | Built-in `/usr/bin/osascript` | Named system sounds such as Glass, Ping and Submarine, or the native system default. Allow notifications for the script sender. |
+| Windows 10/11 | Built-in Windows PowerShell and WinRT toasts | Default, IM, Mail, Reminder and SMS. Requires PowerShell's existing Start menu registration and an interactive Windows desktop. No module or new app registration is installed. |
+| Linux | `notify-send` and the desktop notification service | Default or themed sound hints. Requires existing libnotify tools and a graphical D-Bus session; missing dependencies produce an error, not an automatic installation. Desktops may ignore sound or silence hints. |
+
+Windows and Linux backends are experimental; actual delivery depends on the
+desktop configuration. Commands run on the extension host, so a remote
+session does not automatically send alerts to your local computer.
+
+The watcher polls about every two minutes, respecting GitHub polling and rate
+limits, and follows additional pages when new activity spans multiple pages.
+For each repository with **1-4 new or updated unread threads in a poll**, it
+sends one alert per thread:
+
+- **Title:** `owner/repo`
+- **Body:** the GitHub notification's title.
+
+At **5 or more new or updated unread threads from the same repository in a
+single poll**, it sends one summary alert instead:
+
+- **Title:** `owner/repo`
+- **Body:** `<count> new notifications`
+
+Each summary makes one notification sound request, not one per thread. Counts
+include only newly detected activity, not the repository's entire unread inbox.
+Repositories are grouped independently; five notifications from five different
+repositories still produce five individual alerts.
+
+Very long titles are truncated to fit system payload limits. The first
+successful poll after enabling, or after all watchers have stopped, establishes
+a silent baseline using GitHub timestamps rather than the local completion
+clock. The initial load includes all pages sharing the newest timestamp, so
+same-second arrivals can be distinguished from existing notifications. Search
+and the panel's loaded pages do not affect alerts.
+GitHub's API exposes the latest activity per thread, not every individual
+comment or event between polls.
+
+Copies using the same local `COPILOT_HOME` coordinate through a shared lock and
+checkpoint, so multiple panels and sessions do not each send the same desktop
+alert. Another open copy takes over polling if one closes or crashes. The
+watchers record their shared lifetime when joining, independently of delivery,
+so opening a second canvas during an alert does not restart the baseline.
+After an upgrade, reload all older sessions to use the same coordination format.
+The first use of an upgraded checkpoint establishes a fresh silent baseline.
+
+The checkpoint is saved before invoking the operating system: delivery is
+**at most once**, not guaranteed exactly once. A crash or delivery failure can
+lose alerts from the current batch; they are not retried. Separate machines or separate `COPILOT_HOME` directories do not
+share this coordination.
+
+The sender's icon is controlled by the operating system and is not necessarily
+branded as GitHub Copilot. System notification, sound and Focus/Do Not Disturb
+settings can suppress a banner or sound even when the command succeeds.
+The extension cannot confirm that the operating system displayed it. Detected
+failures appear in Settings and the extension log. Desktop alerts do not
+support clicking to focus the canvas.
+
 ## Privacy
 
-Notification content stays in local memory. It is not logged, saved to disk, or
-sent to the agent. GitHub CLI handles credentials; they never enter the canvas
-renderer. There is no telemetry or remote asset loading.
+Notification titles and repository names are not logged, saved to disk by the
+extension, or sent to the agent.
+
+> **Native notification content:** If desktop notifications are enabled,
+> repository names and notification titles are sent to your operating system.
+> The OS may store this content on disk in its notification history and display
+> it on the lock screen, according to your system settings. The extension does
+> not control the OS's storage or retention of this content.
+
+Desktop coordination saves timestamps, hashed thread/activity identifiers,
+watcher group IDs, process ownership markers and sanitized error status under
+the user extension's `artifacts/` directory. GitHub CLI handles credentials;
+they never enter the canvas renderer.
+There is no telemetry or remote asset loading.
 
 The extension fetches notifications and public release metadata from GitHub
 through GitHub CLI. Release checks do not send notification content or download
@@ -173,7 +267,8 @@ The [test workflow](.github/workflows/tests.yml) runs on pull requests, pushes t
 
 All tests use synthetic GitHub responses. They need no GitHub sign-in, make no
 live GitHub requests, and cannot mark real notifications read. Browser tests
-block unexpected external requests and fail on browser errors. Temporary
+stub native desktop delivery, block unexpected external requests, and fail on
+browser errors. Tests never show operating-system notifications. Temporary
 settings and lifecycle-test `COPILOT_HOME` directories are isolated and removed
 after each test. The SDK-boundary stub tests our registration and lifecycle
 wiring, not compatibility with a particular Copilot build; still reload and

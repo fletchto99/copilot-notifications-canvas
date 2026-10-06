@@ -86,8 +86,12 @@ test("Settings supports keyboard dismissal and persists theme and auto-open acro
   await expect(page.locator("html")).toHaveAttribute("data-notification-theme", "dark");
   await settings.click();
   await expect(autoOpen).toHaveAttribute("aria-checked", "true");
-  await expect(page.getByRole("switch", { name: "Play sound", exact: true })).toHaveAttribute("aria-checked", "false");
-  expect(await canvas.preferences.read()).toEqual({ autoOpen: true, darkMode: true });
+  await expect(page.getByRole("switch", { name: "Desktop notifications", exact: true })).toHaveAttribute("aria-checked", "false");
+  await expect(page.getByRole("combobox", { name: "Sound", exact: true })).toHaveValue("default");
+  expect(await canvas.preferences.read()).toEqual({
+    autoOpen: true, darkMode: true, desktopNotifications: false, desktopSound: "default",
+  });
+  expect(canvas.deliveries).toEqual([]);
 });
 
 for (const width of [320, 480, 960]) {
