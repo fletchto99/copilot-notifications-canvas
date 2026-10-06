@@ -13,6 +13,8 @@ let intersecting = true;
 let timer;
 let searchTimer;
 let pendingQuery;
+let pendingRefresh = false;
+let refreshing = false;
 let pollPromise;
 const requestControllers = new Set();
 let connectionError = "";
@@ -29,9 +31,8 @@ let batchFocusKey;
 const sound = new NotificationSound({
   createContext: () => new (window.AudioContext || window.webkitAudioContext)(),
   onChange: ({ enabled, pending, message }) => {
-    $("sound").textContent = pending ? "Cancel enabling sound" : enabled ? "Play sound: On" : "Play sound: Off";
+    $("sound-label").textContent = pending ? "Cancel enabling sound" : "Play sound";
     $("sound").setAttribute("aria-checked", String(enabled));
-    $("sound").setAttribute("aria-label", pending ? "Cancel enabling sound" : enabled ? "Disable notification sound" : "Enable notification sound");
     $("sound-status").textContent = message;
     $("sound-status").hidden = !message;
   },
@@ -120,24 +121,26 @@ function renderUpdates(updates = releaseState) {
   $("check-updates").disabled = !hasCapability;
   $("check-updates").setAttribute("aria-busy", String(updatesBusy || Boolean(updates?.checking)));
   if (!updates) {
-    $("update-status").textContent = updateError || (updatesBusy ? "Checking..." : "");
-    $("update-status").hidden = !$("update-status").textContent;
+    const message = updateError || (updatesBusy ? "Checking..." : "");
+    $("update-status").textContent = message ? ` - ${message}` : "";
+    $("update-status").hidden = !message;
     return;
   }
   releaseState = updates;
-  $("installed-version").textContent = `GitHub Notification Canvas ${updates.currentVersion}`;
+  $("installed-version").textContent = `Notification Canvas v${updates.currentVersion}`;
   const messages = {
     unchecked: "",
     no_release: "No stable release yet.",
-    current: "Up to date.",
+    current: "Up to date",
     ahead: "Newer than the latest release.",
     available: `Update available: v${updates.latestVersion}.`,
   };
   const retry = updates.error && Date.now() < updates.canCheckAt
     ? ` Retry after ${new Date(updates.canCheckAt).toLocaleTimeString()}.` : "";
-  $("update-status").textContent = updateError || (updatesBusy || updates.checking ? "Checking..." :
+  const message = updateError || (updatesBusy || updates.checking ? "Checking..." :
     updates.error ? `${updates.error}${retry}` : messages[updates.status]);
-  $("update-status").hidden = !$("update-status").textContent;
+  $("update-status").textContent = message ? ` - ${message}` : "";
+  $("update-status").hidden = !message;
   const available = updates.status === "available";
   $("update-banner").hidden = !available;
   if (!available) return;
@@ -219,7 +222,7 @@ async function markRead(id) {
       current.textContent = "Mark as read";
     }
     restoreFocus(previousFocus, nextFocusKey ? findButton(nextFocusKey) : $("search"));
-    void flushSearch();
+    void flushPendingUpdates();
     schedule();
   }
 }
@@ -278,7 +281,7 @@ async function batchRequest(action, input) {
     } else {
       restoreFocus(previousFocus);
     }
-    void flushSearch();
+    void flushPendingUpdates();
     schedule();
   }
 }
@@ -355,7 +358,7 @@ async function performUpdate(path, input) {
 function update(path = "state", input) {
   if (path === "filters") {
     pendingQuery = input.query;
-    return flushSearch();
+    return flushPendingUpdates();
   }
   if (path !== "state") return blockingUpdate(path, input);
   if (pollPromise) return pollPromise;
@@ -363,7 +366,7 @@ function update(path = "state", input) {
   pollPromise = performUpdate(path, input).finally(() => {
     pollPromise = undefined;
     render();
-    void flushSearch();
+    void flushPendingUpdates();
     schedule();
   });
   return pollPromise;
@@ -374,6 +377,7 @@ async function blockingUpdate(path, input) {
   const previousFocus = document.activeElement;
   let succeeded = false;
   busy = true;
+  refreshing = path === "refresh";
   renderControls();
   try {
     await pollPromise;
@@ -385,16 +389,22 @@ async function blockingUpdate(path, input) {
     if (visible()) succeeded = await performUpdate(path, input);
   } finally {
     busy = false;
+    refreshing = false;
     if (!succeeded && path === "filters" && pendingQuery === undefined) pendingQuery = input.query;
     render();
     restoreFocus(previousFocus);
-    if (succeeded || path !== "filters") void flushSearch();
+    if (succeeded || path !== "filters" || pendingRefresh) void flushPendingUpdates();
     schedule();
   }
 }
 
-async function flushSearch() {
-  if (pendingQuery === undefined || busy || batchBusy || markingRead.size || batchLocked() || !visible()) return;
+async function flushPendingUpdates() {
+  if (busy || batchBusy || markingRead.size || batchLocked() || !visible()) return;
+  if (pendingRefresh) {
+    pendingRefresh = false;
+    return blockingUpdate("refresh", { force: true });
+  }
+  if (pendingQuery === undefined) return;
   const query = pendingQuery;
   pendingQuery = undefined;
   clearTimeout(searchTimer);
@@ -405,6 +415,7 @@ async function tick() {
   if (!visible() || busy) return;
   if (markingRead.size) return schedule();
   if (batchLocked() || batchBusy) return update();
+  if (pendingRefresh) return flushPendingUpdates();
   if (!state || (state.status !== "loading" && Date.now() >= state.nextRefreshAt)) {
     await update("refresh", {});
   } else {
@@ -415,6 +426,8 @@ async function tick() {
 function renderControls() {
   const loading = busy || state?.status === "loading" || markingRead.size > 0 || batchBusy || batchLocked();
   const waiting = state && Date.now() < state.nextRefreshAt;
+  $("force-refresh").textContent = pendingRefresh ? "Refresh queued..." : refreshing ? "Refreshing..." : "Force refresh";
+  $("force-refresh").setAttribute("aria-busy", String(pendingRefresh || refreshing));
   $("more").disabled = loading || state?.needsRefresh || Boolean(state?.error && waiting);
   for (const button of $("groups").querySelectorAll("button")) {
     if (!button.dataset.disclosure) button.disabled = loading || markingRead.has(button.dataset.threadId);
@@ -530,11 +543,11 @@ function render() {
     return;
   }
   if (document.activeElement !== $("search") && pendingQuery === undefined) $("search").value = state.filters.query;
-  $("count").textContent = `${state.matching} shown / ${state.groups.length} repositories / ${state.unread} unread loaded`;
+  $("count").textContent = `${state.matching} shown / ${state.groups.length} repositories / ${state.unread} unread notifications`;
   $("collapse").hidden = !state.groups.length;
   $("more").hidden = !state.hasMore;
   $("more").textContent = "Load more (up to 50)";
-  $("coverage").textContent = `${state.loaded} notifications loaded.${state.hasMore ? " Older notifications are available." : state.lastFetchedAt ? " End of the available inbox." : ""}${state.needsRefresh ? " Waiting for automatic refresh before loading more; pagination changed." : ""}${state.filters.query ? " Search covers loaded notifications only." : ""}`;
+  $("more").title = state.needsRefresh ? "Refresh notifications before loading more." : "";
   renderGroups(state.groups);
   renderControls();
   for (const time of document.querySelectorAll("time")) time.textContent = relativeTime(time.dateTime);
@@ -581,11 +594,17 @@ document.addEventListener("keydown", event => {
   }
 });
 $("more").addEventListener("click", () => update("more", {}));
+$("force-refresh").addEventListener("click", () => {
+  if (!visible()) return;
+  pendingRefresh = true;
+  renderControls();
+  return flushPendingUpdates();
+});
 $("search").addEventListener("input", () => {
   pendingQuery = $("search").value;
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => {
-    void flushSearch();
+    void flushPendingUpdates();
   }, 250);
 });
 $("collapse").addEventListener("click", () => {

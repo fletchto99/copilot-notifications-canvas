@@ -48,12 +48,14 @@
               <span>Auto-open</span>
               <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
             </button>
-            <button id="sound" type="button" role="switch" aria-checked="false" aria-describedby="sound-status">Play sound: Off</button>
+            <button id="sound" class="switch-toggle" type="button" role="switch" aria-checked="false" aria-describedby="sound-status">
+              <span id="sound-label">Play sound</span>
+              <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+            </button>
             <p id="sound-status" class="settings-help" role="status" aria-live="polite" hidden></p>
             <p id="settings-status" class="settings-help" role="status" aria-live="polite" hidden></p>
             <button id="check-updates" type="button">Check for updates</button>
-            <p id="installed-version" class="settings-help">Canvas version loading...</p>
-            <p id="update-status" class="settings-help" role="status" aria-live="polite" hidden></p>
+            <p class="settings-help"><span id="installed-version">Canvas version loading...</span><span id="update-status" role="status" aria-live="polite" hidden></span></p>
           </div>
         </details>
       </div>
@@ -81,11 +83,13 @@
     </section>
     <section id="groups" aria-label="Notifications by repository"></section>
     <div class="pagination">
-      <p id="coverage"></p>
       <button id="more" type="button" hidden>Load more</button>
     </div>
     <footer>
-      <p id="updated">Automatic refresh runs only while this view is visible.</p>
+      <p class="refresh-status">
+        <span id="updated">Automatic refresh runs only while this view is visible.</span>
+        <button id="force-refresh" class="refresh-link" type="button">Force refresh</button>
+      </p>
       <p>Mark as read applies only to the clicked row or the repository group's shown, loaded notifications.
         <a href="https://github.com/notifications" target="_blank" rel="noopener noreferrer">Open GitHub inbox</a>
       </p>

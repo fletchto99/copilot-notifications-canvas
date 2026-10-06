@@ -58,6 +58,48 @@ test("Last-Modified is used when ETag is absent and cacheless 304 fails", async 
   await assert.rejects(empty.page(firstPage()), { code: "invalid_response" });
 });
 
+test("forced reads bypass the cached poll interval, preserve ETags and reset the automatic schedule", async () => {
+  let now = 1000;
+  const calls = [];
+  const client = new GitHubClient({ now: () => now, run: async args => {
+    calls.push(args);
+    return calls.length === 1 ? http([thread()], { etag: '"sample"', "x-poll-interval": "300" }) :
+      http(null, { "x-poll-interval": "400" }, 304);
+  } });
+  await client.page(firstPage());
+  now += 1000;
+  const refreshed = await client.page(firstPage(), undefined, { force: true });
+  assert.equal(calls.length, 2);
+  assert.ok(calls[1].includes('If-None-Match: "sample"'));
+  assert.equal(refreshed.items.length, 1);
+  assert.equal(refreshed.fetchedAt, now);
+  assert.equal(refreshed.nextRefreshAt, now + 400_000);
+  await client.page(firstPage());
+  assert.equal(calls.length, 2);
+});
+
+test("forced reads cannot bypass GitHub retry waits, exhausted quota or error backoff", async () => {
+  for (const response of [
+    http({}, { "retry-after": "600" }, 429),
+    http([thread()], { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "900" }),
+    http({}, {}, 500),
+  ]) {
+    let calls = 0;
+    const client = new GitHubClient({ now: () => 1000, run: async () => {
+      calls++;
+      return calls === 1 ? http([thread()]) : response;
+    } });
+    await client.page(firstPage());
+    await client.page(firstPage(), undefined, { force: true }).catch(error => {
+      assert.ok(["rate_limited", "github_http"].includes(error.code));
+    });
+    await assert.rejects(client.page(firstPage(), undefined, { force: true }),
+      error => ["rate_limited", "github_http"].includes(error.code));
+    assert.equal(calls, 2);
+    assert.ok(client.blockedUntil > 1000);
+  }
+});
+
 test("pagination follows and validates Link rather than guessing page count", () => {
   assert.match(nextPage(next, firstPage()), /page=2/);
   assert.equal(nextPage(undefined, firstPage()), null);

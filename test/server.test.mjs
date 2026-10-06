@@ -56,6 +56,9 @@ test("methods, paths, origins, hosts, JSON, filter input and oversized bodies ar
     ["/api/filters", "POST", '{"mode":"all"}', 400],
     ["/api/filters", "POST", '{"unexpected":true}', 400],
     ["/api/refresh", "POST", '{"unexpected":true}', 400],
+    ["/api/refresh", "POST", '{"force":"true"}', 400],
+    ["/api/refresh", "POST", '{"force":null}', 400],
+    ["/api/refresh", "POST", '{"force":true,"unexpected":true}', 400],
     ["/api/refresh", "POST", "{", 400],
     ["/api/refresh", "POST", "null", 400],
     ["/api/refresh", "POST", "[]", 400],
@@ -98,6 +101,20 @@ test("separate panels have separate ephemeral ports/capabilities, and close rele
   await one.close();
   await assert.rejects(fetch(one.origin));
   assert.equal((await fetch(two.origin)).status, 200);
+});
+
+test("HTTP force refresh bypasses the polling cache only when explicitly requested", async t => {
+  let calls = 0;
+  const { origin, headers } = await setup(t, async () => http([thread(String(++calls))]));
+  const refresh = input => fetch(`${origin}/api/refresh`, {
+    method: "POST", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify(input),
+  });
+  for (const [input, expected] of [[{}, "1"], [{ force: false }, "1"], [{ force: true }, "2"]]) {
+    const response = await refresh(input);
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).groups[0].items[0].id, expected);
+  }
+  assert.equal(calls, 2);
 });
 
 test("HTTP errors remain explicit and contain no upstream response or stderr", async t => {
