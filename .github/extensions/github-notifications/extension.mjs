@@ -5,6 +5,7 @@ import { emptySchema, filterSchema, InboxError } from "./model.mjs";
 import { startServer } from "./server.mjs";
 import { Preferences } from "./settings.mjs";
 import { Startup } from "./startup.mjs";
+import { DesktopNotifications } from "./desktop.mjs";
 import { Updates } from "./updates.mjs";
 
 const instances = new Map();
@@ -13,6 +14,7 @@ const preferences = new Preferences();
 let session;
 let startup;
 const log = (message, options) => session?.log(message, options);
+const desktop = new DesktopNotifications({ preferences, log });
 const updates = new Updates({ log });
 
 async function action(ctx, run) {
@@ -31,6 +33,7 @@ async function close(instanceId) {
   const pending = instances.get(instanceId);
   if (!pending) return;
   instances.delete(instanceId);
+  await desktop.remove(instanceId);
   await (await pending).close();
   if (!instances.size) client.clear();
 }
@@ -50,9 +53,11 @@ session = await joinSession({
       },
       {
         name: "get_settings",
-        description: "Read saved auto-open and dark-mode preferences and startup status. Sound is enabled only by a click in the panel.",
+        description: "Read saved auto-open, dark-mode and desktop notification settings and status. Settings are changed through the panel.",
         inputSchema: emptySchema,
-        handler: ctx => action(ctx, async () => ({ ...await preferences.read(), startupStatus: startup?.status ?? "initializing" })),
+        handler: ctx => action(ctx, async () => ({
+          ...await preferences.read(), desktopStatus: desktop.snapshot(), startupStatus: startup?.status ?? "initializing",
+        })),
       },
       {
         name: "get_state",
@@ -80,15 +85,24 @@ session = await joinSession({
       },
     ],
     open: async ctx => {
+      let pending;
       try {
         if (!instances.has(ctx.instanceId)) {
           const inbox = new Inbox(client, ctx.input ?? {});
-          instances.set(ctx.instanceId, startServer(inbox, { log, preferences, updates }));
+          instances.set(ctx.instanceId, startServer(inbox, { log, preferences, desktop, updates }).catch(error => {
+            inbox.close();
+            throw error;
+          }));
         }
-        const entry = await instances.get(ctx.instanceId);
+        pending = instances.get(ctx.instanceId);
+        const entry = await pending;
+        if (instances.get(ctx.instanceId) !== pending) {
+          throw new InboxError("closed", "The Notifications canvas was closed while opening.", 410);
+        }
+        desktop.add(ctx.instanceId);
         return { title: "Unread Notifications", url: entry.url };
       } catch (error) {
-        instances.delete(ctx.instanceId);
+        if (instances.get(ctx.instanceId) === pending) instances.delete(ctx.instanceId);
         if (error instanceof InboxError) throw new CanvasError(error.code, error.message);
         log("Could not start the notifications loopback server.", { level: "error" });
         throw new CanvasError("server_start", "Could not start the local notifications server.");
@@ -102,6 +116,7 @@ await startup.start();
 
 async function shutdown() {
   startup?.close();
+  await desktop.close();
   updates.close();
   await Promise.allSettled([...instances.keys()].map(close));
   process.exit(0);

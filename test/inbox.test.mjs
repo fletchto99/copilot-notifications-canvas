@@ -45,6 +45,10 @@ test("search is local, read items are excluded, and summaries never contain pers
   assert.equal(summary.includes("widgets"), false);
   assert.equal(summary.includes("Synthetic"), false);
   assert.equal(summary.includes("https:"), false);
+  assert.equal(Object.hasOwn(inbox.snapshot(), "activity"), false);
+  assert.equal(Object.hasOwn(inbox.summary(), "activity"), false);
+  assert.equal(Object.hasOwn(inbox, "seenActivity"), false);
+  assert.equal(Object.hasOwn(inbox, "activityWatermark"), false);
 });
 
 test("forced refresh rechecks every loaded page before the next poll without losing search", async () => {

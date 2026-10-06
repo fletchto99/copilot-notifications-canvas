@@ -4,9 +4,8 @@ import { readFile } from "node:fs/promises";
 import { createContext, runInContext } from "node:vm";
 import { Inbox } from "../.github/extensions/github-notifications/inbox.mjs";
 import { GitHubClient } from "../.github/extensions/github-notifications/github.mjs";
-import { NotificationSound } from "../.github/extensions/github-notifications/sound.mjs";
+import { desktopCapabilities } from "../.github/extensions/github-notifications/notifier.mjs";
 import { http, next, thread } from "./fixtures.mjs";
-import { FakeAudioContext } from "./audio-fixtures.mjs";
 
 const script = await readFile(new URL("../.github/extensions/github-notifications/app.mjs", import.meta.url), "utf8");
 const html = await readFile(new URL("../.github/extensions/github-notifications/index.html", import.meta.url), "utf8");
@@ -14,10 +13,11 @@ const styles = await readFile(new URL("../.github/extensions/github-notification
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
 // Minimal DOM/event/timer doubles exercise the actual renderer without a browser dependency.
-async function renderer({ hidden = false, token = "a".repeat(64), audioOptions = {}, readFailure = false,
+async function renderer({ hidden = false, token = "a".repeat(64), readFailure = false,
   initialRows, onWrite, onFetch, onState, onFilters, initialOffline = false, release,
-  onUpdates, clipboardFailure = false, onSettings,
-  storedSettings = { autoOpen: false, darkMode: null }, appColorMode = "light", systemDark = false } = {}) {
+  onUpdates, clipboardFailure = false, onSettings, desktopPlatform = "darwin", desktopStatus = {},
+  storedSettings = { autoOpen: false, darkMode: null, desktopNotifications: false, desktopSound: "default" },
+  appColorMode = "light", systemDark = false } = {}) {
   const calls = [];
   const timers = new Map();
   let timerId = 0;
@@ -30,7 +30,6 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
     thread("1", { subject: { title: "<img src=x onerror=alert(1)>", type: "Issue", url: null } }),
     thread("2", { unread: false }),
   ];
-  const audioContexts = [];
   let releaseMetadata = {
     currentVersion: "0.1.0", latestVersion: "0.1.0", status: "current", checking: false,
     checkedAt: now, nextCheckAt: now + 15 * 60_000, canCheckAt: 0, error: null,
@@ -103,13 +102,15 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
     node.id = id;
     return [id, node];
   }));
-  ids.get("sound").append(ids.get("sound-label"));
+  const desktopLabel = new Node("span");
+  desktopLabel.textContent = "Desktop notifications";
+  ids.get("desktop-notifications").append(desktopLabel);
   for (const id of ["batch-stop", "batch-retry", "batch-dismiss"]) ids.get(id).parentNode = ids.get("batch-progress");
   ids.get("batch-progress").contains = node =>
     ["batch-progress", "batch-stop", "batch-retry", "batch-dismiss"].some(id => ids.get(id) === node);
   ids.get("settings").contains = node =>
     node === ids.get("settings") ||
-    ["settings-toggle", "settings-panel", "sound", "auto-open", "dark-mode", "check-updates"].some(id => ids.get(id).contains(node));
+    ["settings-toggle", "settings-panel", "auto-open", "dark-mode", "check-updates", "desktop-notifications", "desktop-sound"].some(id => ids.get(id).contains(node));
   const document = {
     hidden,
     body: new Node("body"),
@@ -131,9 +132,6 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
     removeEventListener(name) { delete this.events[name]; },
   };
   window.matchMedia = () => media;
-  window.AudioContext = class extends FakeAudioContext {
-    constructor() { super(audioOptions); audioContexts.push(this); }
-  };
   const inbox = new Inbox(new GitHubClient({ now: () => now, sleep: async delay => { now += delay; }, run: async args => {
     githubCalls.push(args);
     if (args.includes("PATCH")) {
@@ -150,9 +148,6 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
       copied.push(text);
     } } },
     Date: class extends Date { static now() { return now; } },
-    NotificationSound: class extends NotificationSound {
-      constructor(options) { super({ ...options, now: () => now }); }
-    },
     setTimeout(fn, delay) { timers.set(++timerId, { fn, delay }); return timerId; },
     clearTimeout(id) { timers.delete(id); },
     IntersectionObserver: class {
@@ -172,7 +167,11 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
         const input = options.body ? JSON.parse(options.body) : undefined;
         if (onSettings) await onSettings(input);
         if (input) Object.assign(storedSettings, input);
-        return { ok: true, json: async () => ({ ...storedSettings }) };
+        const capabilities = desktopCapabilities(desktopPlatform);
+        return { ok: true, json: async () => ({ desktopNotifications: false, desktopSound: "default", ...storedSettings,
+          desktopStatus: { ...capabilities, state: "watching",
+            message: capabilities.supported ? "Watching in the background." : capabilities.help, ...desktopStatus },
+        }) };
       }
       if (path === "/api/updates") {
         if (onUpdates) releaseMetadata = await onUpdates();
@@ -195,11 +194,10 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
       return { ok: true, json: async () => ({ ...inbox.snapshot(), updates: releaseMetadata }) };
     },
   });
-  assert.match(script, /^import \{ NotificationSound \} from "\.\/sound\.mjs";/);
-  runInContext(script.replace(/^import \{ NotificationSound \} from "\.\/sound\.mjs";/, ""), context);
+  runInContext(script, context);
   await settle();
   return {
-    calls, document, window, ids, timers, context, audioContexts, inbox, patches, githubCalls, copied, media,
+    calls, document, window, ids, timers, context, inbox, patches, githubCalls, copied, media,
     get themeDisconnected() { return themeDisconnected; },
     setAppTheme(mode) {
       if (mode === null) delete document.documentElement.attributes["data-color-mode"];
@@ -818,79 +816,25 @@ test("a missing capability remains inert and explains how to open the canvas", a
   assert.equal(ui.ids.get("check-updates").disabled, true);
 });
 
-test("sound is opt-in and refresh arrivals ring once even when search hides every row", async () => {
-  const ui = await renderer();
-  assert.equal(ui.audioContexts.length, 0);
-  assert.match(html, /id="sound"[^>]*role="switch"[^>]*aria-checked="false"/);
-  assert.match(html, /id="sound-status"[^>]*role="status"/);
-  ui.ids.get("sound").events.click();
-  await settle();
-  assert.equal(ui.ids.get("sound").attributes["aria-checked"], "true");
-  assert.equal(ui.ids.get("sound-label").textContent, "Play sound");
-  assert.equal(ui.ids.get("sound-status").textContent, "");
-  assert.equal(ui.ids.get("sound-status").hidden, true);
-  assert.equal(ui.audioContexts[0].starts, 0);
-  await runInContext('update("filters", { query: "no match" })', ui.context);
-  const later = ui.advance();
-  ui.setRows([thread("3", { updated_at: new Date(later).toISOString() })]);
-  await runInContext('update("refresh", {})', ui.context);
-  assert.equal(ui.document.querySelectorAll("article").length, 0);
-  assert.equal(ui.audioContexts[0].starts, 1);
-  await runInContext('update("refresh", {})', ui.context);
-  await runInContext('update("filters", { query: "" })', ui.context);
-  assert.equal(ui.audioContexts[0].starts, 1);
-  ui.ids.get("sound").events.click();
-  await settle();
-  assert.equal(ui.ids.get("sound").attributes["aria-checked"], "false");
-  assert.equal(ui.ids.get("sound-label").textContent, "Play sound");
-  assert.equal(ui.ids.get("sound-status").textContent, "");
-  assert.equal(ui.ids.get("sound-status").hidden, true);
-  assert.equal(ui.audioContexts[0].state, "closed");
+test("the per-panel Web Audio option is replaced by the native notification sound picker", () => {
+  assert.doesNotMatch(html, /id="sound"|Play sound|per-panel chime/);
+  assert.match(html, /<label for="desktop-sound"/);
+  assert.match(html, /<select id="desktop-sound"/);
+  assert.doesNotMatch(script, /AudioContext|NotificationSound|sound\.mjs/);
 });
 
-test("visible toggle reports browser audio failures, and pagehide closes its context", async () => {
-  const failed = await renderer({ audioOptions: { resumeError: true } });
-  failed.ids.get("sound").events.click();
-  await settle();
-  assert.equal(failed.ids.get("sound-label").textContent, "Play sound");
-  assert.equal(failed.ids.get("sound").attributes["aria-checked"], "false");
-  assert.match(failed.ids.get("sound-status").textContent, /could not be enabled/);
-  assert.equal(failed.ids.get("sound-status").hidden, false);
-  const ui = await renderer();
-  ui.ids.get("sound").events.click();
-  await settle();
-  ui.window.events.pagehide();
-  await settle();
-  assert.equal(ui.audioContexts[0].state, "closed");
-  assert.equal(ui.ids.get("sound").attributes["aria-checked"], "false");
-});
-
-test("Play sound uses the shared switch and keeps pending activation cancellable", async () => {
-  assert.match(html, /<button\b[^>]*id="sound"[^>]*class="switch-toggle"[^>]*role="switch"/);
-  assert.match(html, /<span id="sound-label">Play sound<\/span>\s*<span class="switch-track" aria-hidden="true"><span class="switch-thumb"><\/span><\/span>/);
-  assert.doesNotMatch(script, /\$\("sound"\)\.(textContent|innerHTML)\s*=/);
-  for (const cancel of [false, true]) {
-    let resume;
-    const ui = await renderer({ audioOptions: { resumeWait: new Promise(resolve => { resume = resolve; }) } });
-    const toggle = ui.ids.get("sound");
-    toggle.focus();
-    toggle.events.click();
-    assert.equal(ui.ids.get("sound-label").textContent, "Cancel enabling sound");
-    assert.equal(toggle.attributes["aria-checked"], "false");
-    assert.equal(toggle.disabled, false);
-    if (cancel) {
-      toggle.events.click();
-      assert.equal(ui.ids.get("sound-label").textContent, "Play sound");
-    }
-    resume();
-    await settle();
-    assert.equal(toggle.attributes["aria-checked"], String(!cancel));
-    assert.equal(ui.ids.get("sound-label").textContent, "Play sound");
-    assert.equal(ui.document.activeElement, toggle);
-    assert.equal(ui.audioContexts[0].starts, 0);
-    ui.window.events.pagehide();
-    await settle();
-  }
+test("Sound is a single settings row with a labeled native select and matching focus and disabled styling", async () => {
+  const row = html.match(/<div class="select-setting">([\s\S]*?)<\/div>/);
+  assert.ok(row);
+  assert.match(row[1], /<label for="desktop-sound">Sound<\/label>/);
+  assert.match(row[1], /<select id="desktop-sound"[^>]*aria-describedby="desktop-status"/);
+  assert.doesNotMatch(row[1], /<button|role="(?:button|combobox|listbox)"|tabindex/);
+  const css = await readFile(new URL("../.github/extensions/github-notifications/styles.css", import.meta.url), "utf8");
+  assert.match(css, /\.select-setting \{[^}]*min-height: 38px;[^}]*border-radius: 7px;[^}]*padding: 7px 12px;/);
+  assert.match(css, /\.select-setting select \{[^}]*border: 0;[^}]*text-align-last: right;[^}]*appearance: none;/);
+  assert.match(css, /\.select-setting::after \{[^}]*pointer-events: none;/);
+  assert.match(css, /\.select-setting:focus-within \{[^}]*outline: 2px solid var\(--focus\)/);
+  assert.match(css, /\.select-setting:has\(select:disabled\) \{[^}]*opacity: \.55/);
 });
 
 test("Settings uses an icon-only toggle with an accessible name and tooltip", () => {
@@ -908,7 +852,7 @@ test("Settings uses an icon-only toggle with an accessible name and tooltip", ()
 test("Settings puts an Auto-open slider above sound, saves startup preference and closes accessibly", async () => {
   assert.match(html, /<button\b[^>]*id="auto-open"[^>]*class="switch-toggle"[^>]*role="switch"/);
   assert.match(html, /<span>Auto-open<\/span>\s*<span class="switch-track" aria-hidden="true"><span class="switch-thumb"><\/span><\/span>/);
-  assert.ok(html.indexOf('id="auto-open"') < html.indexOf('id="sound"'));
+  assert.ok(html.indexOf('id="auto-open"') < html.indexOf('id="desktop-sound"'));
   assert.doesNotMatch(html, /Open on new sessions:/);
   assert.doesNotMatch(script, /\$\("auto-open"\)\.textContent\s*=/);
   const ui = await renderer();
@@ -923,9 +867,9 @@ test("Settings puts an Auto-open slider above sound, saves startup preference an
   await settle();
   assert.equal(ui.ids.get("auto-open").attributes["aria-checked"], "true");
   assert.equal(ui.ids.get("settings-status").textContent, "");
-  ui.document.events.click({ target: ui.ids.get("sound") });
+  ui.document.events.click({ target: ui.ids.get("desktop-sound") });
   assert.equal(settings.open, true);
-  ui.document.events.click({ target: ui.ids.get("sound-label") });
+  ui.document.events.click({ target: ui.ids.get("desktop-notifications").children[0] });
   assert.equal(settings.open, true);
   ui.document.events.keydown({ key: "Escape", preventDefault() {} });
   assert.equal(settings.open, false);
@@ -936,15 +880,169 @@ test("Settings puts an Auto-open slider above sound, saves startup preference an
   assert.equal(ui.ids.get("auto-open").attributes["aria-checked"], "true");
   ui.document.events.click({ target: ui.ids.get("search") });
   assert.equal(settings.open, false);
-  assert.equal(ui.audioContexts.length, 0);
+});
+
+test("desktop controls persist independently, preserve focus and are disabled on unsupported hosts", async () => {
+  const ui = await renderer();
+  ui.ids.get("settings").open = true;
+  ui.ids.get("settings").events.toggle();
+  await settle();
+  const desktop = ui.ids.get("desktop-notifications");
+  const sound = ui.ids.get("desktop-sound");
+  assert.equal(desktop.disabled, false);
+  assert.equal(desktop.attributes["aria-checked"], "false");
+  assert.equal(sound.disabled, true);
+  desktop.focus();
+  desktop.events.click();
+  await settle();
+  assert.equal(desktop.attributes["aria-checked"], "true");
+  assert.equal(ui.document.activeElement, desktop);
+  assert.equal(sound.disabled, false);
+  sound.focus();
+  sound.value = "Ping";
+  sound.events.change();
+  await settle();
+  assert.equal(sound.value, "Ping");
+  assert.equal(ui.document.activeElement, sound);
+  assert.equal(sound.children.some(option => option.value === "Submarine"), true);
+  assert.equal(ui.ids.get("settings-status").textContent, "");
+  desktop.events.click();
+  await settle();
+  assert.equal(sound.disabled, true);
+  assert.equal(sound.value, "Ping");
+  const unsupported = await renderer({ desktopPlatform: "freebsd" });
+  unsupported.ids.get("settings").open = true;
+  unsupported.ids.get("settings").events.toggle();
+  await settle();
+  assert.equal(unsupported.ids.get("desktop-notifications").disabled, true);
+  assert.equal(unsupported.ids.get("desktop-sound").disabled, true);
+  assert.match(unsupported.ids.get("desktop-status").textContent, /macOS, Windows and Linux/);
+  assert.equal(unsupported.ids.get("desktop-status").hidden, false);
+  assert.equal(unsupported.ids.get("auto-open").disabled, false);
+});
+
+test("Windows and Linux sound pickers use their own sound catalogs", async () => {
+  for (const [platform, expected] of [["win32", "Mail"], ["linux", "message-new-email"]]) {
+    const ui = await renderer({ desktopPlatform: platform });
+    ui.ids.get("settings").open = true;
+    ui.ids.get("settings").events.toggle();
+    await settle();
+    assert.equal(ui.ids.get("desktop-notifications").disabled, false);
+    const values = ui.ids.get("desktop-sound").children.map(option => option.value);
+    assert.ok(values.includes(expected));
+    assert.ok(values.includes("none"));
+    assert.equal(values.includes("Glass"), false);
+  }
+});
+
+test("a settings edit during a background status read is queued rather than dropped", async () => {
+  let reads = 0;
+  let finish;
+  const ui = await renderer({ onSettings: input => {
+    if (!input && ++reads === 3) return new Promise(resolve => { finish = resolve; });
+  } });
+  ui.ids.get("settings").open = true;
+  ui.ids.get("settings").events.toggle();
+  await settle();
+  assert.equal(ui.ids.get("settings-status").hidden, true);
+  await ui.fireTimer();
+  const control = ui.ids.get("desktop-notifications");
+  assert.equal(control.disabled, false);
+  assert.equal(ui.ids.get("settings-status").hidden, true);
+  control.focus();
+  control.events.click();
+  assert.equal(control.disabled, true);
+  finish();
+  await settle();
+  assert.equal(control.attributes["aria-checked"], "true");
+  assert.equal(ui.document.activeElement, control);
+  assert.equal(ui.ids.get("settings-status").hidden, true);
+});
+
+test("queued settings edits survive hidden background reads and save once when shown", async () => {
+  for (const aborted of [false, true]) {
+    for (const visibilitySource of ["document", "intersection"]) {
+      const storedSettings = { autoOpen: true, darkMode: true, desktopNotifications: true, desktopSound: "default" };
+      let reads = 0;
+      let finish;
+      const ui = await renderer({ storedSettings, onSettings: input => {
+        if (!input && ++reads === 3) return new Promise((resolve, reject) => {
+          finish = () => aborted
+            ? reject(Object.assign(new Error("Synthetic aborted request"), { name: "AbortError" }))
+            : resolve();
+        });
+      } });
+      const setVisible = visible => {
+        if (visibilitySource === "intersection") ui.intersect(visible);
+        else {
+          ui.document.hidden = !visible;
+          ui.document.events.visibilitychange();
+        }
+      };
+      const writes = () => ui.calls.filter(call => call.path === "/api/settings" && call.options.body)
+        .map(call => JSON.parse(call.options.body));
+      try {
+        ui.ids.get("settings").open = true;
+        ui.ids.get("settings").events.toggle();
+        await settle();
+        await ui.fireTimer();
+        const control = ui.ids.get("desktop-notifications");
+        control.focus();
+        control.events.click();
+        assert.equal(runInContext("pendingSettings.input.desktopNotifications", ui.context), false);
+        setVisible(false);
+        const reading = ui.calls.filter(call => call.path === "/api/settings").at(-1);
+        assert.equal(reading.options.signal.aborted, true);
+        finish();
+        await settle();
+        assert.deepEqual(writes(), []);
+        assert.equal(runInContext("pendingSettings?.input.desktopNotifications", ui.context), false);
+        assert.equal(storedSettings.desktopNotifications, true);
+        setVisible(true);
+        await settle();
+        assert.deepEqual(writes(), [{ desktopNotifications: false }]);
+        assert.equal(storedSettings.desktopNotifications, false);
+        assert.equal(control.attributes["aria-checked"], "false");
+        assert.equal(runInContext("pendingSettings", ui.context), undefined);
+        setVisible(false);
+        setVisible(true);
+        await settle();
+        assert.equal(writes().length, 1);
+      } finally {
+        finish?.();
+        ui.window.events.pagehide();
+        ui.inbox.close();
+      }
+    }
+  }
 });
 
 test("Settings omits explanatory copy and hides empty status messages", async () => {
-  assert.doesNotMatch(html, /dark-mode-help|startup-help|Optional chime|Saved for your user/);
+  assert.doesNotMatch(html, /dark-mode-help|startup-help|desktop-help|desktop-sound-help|Optional chime|Saved for your user/);
+  assert.doesNotMatch(script, /desktop-help|desktop-sound-help/);
   const ui = await renderer();
   assert.equal(ui.ids.get("settings-status").hidden, true);
+  assert.equal(ui.ids.get("desktop-status").hidden, true);
   assert.equal(ui.ids.get("update-status").textContent, " - Up to date");
   assert.doesNotMatch(ui.ids.get("update-status").textContent, /Last checked|Check again after/);
+});
+
+test("routine desktop statuses stay hidden, but notification errors remain visible until recovery", async () => {
+  for (const state of ["off", "starting", "watching", "shared"]) {
+    const ui = await renderer({ desktopStatus: { state, message: `Routine ${state} status.` } });
+    assert.equal(ui.ids.get("desktop-status").textContent, "");
+    assert.equal(ui.ids.get("desktop-status").hidden, true);
+  }
+  const desktopStatus = { state: "error", message: "Check system notification permissions." };
+  const ui = await renderer({ desktopStatus });
+  assert.equal(ui.ids.get("desktop-status").textContent, desktopStatus.message);
+  assert.equal(ui.ids.get("desktop-status").hidden, false);
+  desktopStatus.state = "watching";
+  ui.ids.get("settings").open = true;
+  ui.ids.get("settings").events.toggle();
+  await settle();
+  assert.equal(ui.ids.get("desktop-status").textContent, "");
+  assert.equal(ui.ids.get("desktop-status").hidden, true);
 });
 
 test("settings failures are visible and do not claim a saved toggle", async () => {
@@ -955,6 +1053,7 @@ test("settings failures are visible and do not claim a saved toggle", async () =
   assert.equal(ui.ids.get("auto-open").disabled, true);
   assert.equal(ui.ids.get("dark-mode").disabled, true);
   assert.equal(ui.ids.get("settings-error").hidden, false);
+  assert.equal(ui.ids.get("settings-status").hidden, false);
   assert.match(ui.ids.get("settings-status").textContent, /retry/);
   ui.setOffline(false);
   ui.ids.get("settings").events.toggle();
@@ -962,6 +1061,7 @@ test("settings failures are visible and do not claim a saved toggle", async () =
   assert.equal(ui.ids.get("auto-open").disabled, false);
   assert.equal(ui.ids.get("dark-mode").disabled, false);
   assert.equal(ui.ids.get("settings-error").hidden, true);
+  assert.equal(ui.ids.get("settings-status").hidden, true);
 });
 
 test("dark mode uses an accessible slider-style switch and follows the app until explicitly saved", async () => {
@@ -1069,11 +1169,9 @@ test("settings refresh on visibility and theme observers are cleaned up on close
   assert.equal(ui.media.events.change, undefined);
 });
 
-test("mark-read requires a click, removes only on confirmation and stays silent", async () => {
+test("mark-read requires a click and removes only on confirmation", async () => {
   const ui = await renderer();
   assert.equal(ui.calls.some(call => call.path === "/api/read"), false);
-  ui.ids.get("sound").events.click();
-  await settle();
   const button = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "1");
   assert.match(button.attributes["aria-label"], /Mark as read/);
   button.focus();
@@ -1083,7 +1181,6 @@ test("mark-read requires a click, removes only on confirmation and stays silent"
   await marking;
   assert.equal(ui.calls.filter(call => call.path === "/api/read").length, 1);
   assert.equal(ui.document.querySelectorAll("article").length, 0);
-  assert.equal(ui.audioContexts[0].starts, 0);
   assert.equal(ui.document.activeElement, ui.ids.get("search"));
   ui.window.events.pagehide();
 });
@@ -1118,30 +1215,6 @@ test("mark-read failure retains the row with a usable retry control", async () =
   assert.match(ui.ids.get("notice").textContent, /Could not mark/);
 });
 
-test("hidden views and reconnects reset the audio baseline without catch-up chimes", async () => {
-  const ui = await renderer();
-  ui.ids.get("sound").events.click();
-  await settle();
-  ui.intersect(false);
-  const later = ui.advance();
-  ui.setRows([thread("3", { updated_at: new Date(later).toISOString() })]);
-  await runInContext('update("refresh", {})', ui.context);
-  assert.equal(ui.audioContexts[0].starts, 0);
-  ui.intersect(true);
-  await settle();
-  await runInContext('update("refresh", {})', ui.context);
-  assert.equal(ui.audioContexts[0].starts, 0);
-  ui.setOffline(true);
-  await runInContext('update("refresh", {})', ui.context);
-  ui.setOffline(false);
-  const newest = ui.advance();
-  ui.setRows([thread("4", { updated_at: new Date(newest).toISOString() })]);
-  await runInContext('update("refresh", {})', ui.context);
-  assert.equal(ui.audioContexts[0].starts, 0);
-  ui.window.events.pagehide();
-  await settle();
-});
-
 test("repository header shares its hover background across the toggle and read action", async () => {
   const ui = await renderer();
   const buttons = ui.ids.get("groups").querySelectorAll("button");
@@ -1174,6 +1247,18 @@ test("notification metadata, counts and read actions use 12px text", () => {
     const rule = styles.match(new RegExp(`(?:^|\\n)${selector} \\{[^}]*\\}`))?.[0] ?? "";
     assert.match(rule, /font-size: 12px;/, selector);
   }
+});
+
+test("footer force refresh preserves the native notification toggle and selected sound", async () => {
+  const storedSettings = { autoOpen: true, darkMode: true, desktopNotifications: true, desktopSound: "Submarine" };
+  const ui = await renderer({ storedSettings });
+  await ui.ids.get("force-refresh").events.click();
+  assert.equal(ui.githubCalls.length, 2);
+  assert.equal(ui.ids.get("desktop-notifications").attributes["aria-checked"], "true");
+  assert.equal(ui.ids.get("desktop-sound").value, "Submarine");
+  assert.equal(ui.ids.get("desktop-sound").disabled, false);
+  assert.deepEqual(storedSettings, { autoOpen: true, darkMode: true, desktopNotifications: true, desktopSound: "Submarine" });
+  assert.equal(ui.calls.some(call => call.path === "/api/settings" && call.options.body), false);
 });
 
 test("repository action starts from one click with no dialog and preserves independent disclosure", async () => {
@@ -1216,8 +1301,6 @@ test("one-click repository read honors search, blocks duplicate clicks and quiet
     onWrite: () => new Promise(resolve => { release = () => resolve("HTTP/2 205 Reset Content\r\n\r\n"); }),
   });
   await runInContext('update("filters", { query: "notification 1" })', ui.context);
-  ui.ids.get("sound").events.click();
-  await settle();
   const groupRead = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.focusKey.startsWith("bulk:"));
   assert.equal(groupRead.textContent, "Mark 1 as read");
   groupRead.focus();
@@ -1243,7 +1326,6 @@ test("one-click repository read honors search, blocks duplicate clicks and quiet
   assert.deepEqual(ui.patches, ["/notifications/threads/1"]);
   assert.equal(ui.inbox.summary().loaded, 1);
   assert.equal(ui.document.querySelectorAll("article").length, 0);
-  assert.equal(ui.audioContexts[0].starts, 0);
   assert.equal(ui.document.activeElement, ui.ids.get("search"));
   ui.window.events.pagehide();
 });

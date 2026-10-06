@@ -102,7 +102,6 @@ test("one-click batches make spaced PATCH calls, update shared panels, and quiet
   for (const panel of [inbox, other]) {
     assert.equal(panel.summary().loaded, 0);
     assert.equal(panel.summary().needsRefresh, true);
-    assert.equal(panel.summary().activity.sequence, 0);
   }
   assert.throws(() => inbox.batch.start(input), { code: "selection_changed" });
   assert.equal(writes.length, 3);
@@ -115,7 +114,6 @@ test("one-click batches make spaced PATCH calls, update shared panels, and quiet
   advance();
   await inbox.refresh();
   assert.equal(inbox.summary().loaded, 1);
-  assert.equal(inbox.summary().activity.sequence, 1);
 });
 
 test("a clicked selection excludes new arrivals and skips changed or no-longer-loaded captured rows", async () => {
@@ -199,7 +197,6 @@ test("auth/rate/network failures stop the batch with exact partial counts and re
       { succeeded: 1, failed: 1, skipped: 0, notAttempted: 1 });
     assert.equal(writes.length, 2);
     assert.equal(inbox.summary().loaded, 2);
-    assert.equal(inbox.summary().activity.sequence, 0);
     failing = false;
     client.blockedUntil = 0;
     inbox.batch.retry(token);

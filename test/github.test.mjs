@@ -58,6 +58,29 @@ test("Last-Modified is used when ETag is absent and cacheless 304 fails", async 
   await assert.rejects(empty.page(firstPage()), { code: "invalid_response" });
 });
 
+test("page metadata preserves API response time separately from the local completion clock", async () => {
+  const serverTime = Date.parse("2026-01-10T12:00:00Z");
+  let now = serverTime + 60_000;
+  let calls = 0;
+  const client = new GitHubClient({ now: () => now, run: async () => {
+    calls++;
+    now += 2000;
+    return calls === 1 ? http([], { date: new Date(serverTime).toUTCString(), etag: '"empty"' }) :
+      http(null, { date: new Date(serverTime + POLL_MS).toUTCString() }, 304);
+  } });
+  const first = await client.page(firstPage());
+  assert.equal(first.serverTime, serverTime);
+  assert.equal(first.fetchedAt, serverTime + 62_000);
+  now = first.nextRefreshAt;
+  const unchanged = await client.page(firstPage());
+  assert.equal(unchanged.serverTime, serverTime + POLL_MS);
+  assert.deepEqual(unchanged.items, []);
+  for (const headers of [{}, { date: "invalid" }]) {
+    const missingTime = new GitHubClient({ run: async () => http([], headers) });
+    assert.equal((await missingTime.page(firstPage())).serverTime, null);
+  }
+});
+
 test("forced reads bypass the cached poll interval, preserve ETags and reset the automatic schedule", async () => {
   let now = 1000;
   const calls = [];

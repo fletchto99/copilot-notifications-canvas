@@ -200,6 +200,7 @@ export class GitHubClient {
       if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
       const { status, headers } = response;
       const fetchedAt = this.now();
+      const serverTime = Date.parse(headers.date ?? "");
       const poll = Math.max(POLL_MS, seconds(headers["x-poll-interval"]));
       const reset = seconds(headers["x-ratelimit-reset"]);
       const retry = seconds(headers["retry-after"]) ||
@@ -237,6 +238,7 @@ export class GitHubClient {
       }
       const page = {
         items, next, fetchedAt, nextRefreshAt: Math.max(fetchedAt + poll, this.blockedUntil),
+        serverTime: Number.isFinite(serverTime) && serverTime >= 0 ? serverTime : null,
         etag: headers.etag ?? (status === 304 ? cached?.etag : undefined),
         modified: headers["last-modified"] ?? (status === 304 ? cached?.modified : undefined),
       };
