@@ -165,8 +165,9 @@ is actually published.
 
 After merging the version change into `main`, invoke the
 [Release workflow](.github/workflows/release.yml) from **Actions → Release →
-Run workflow**. Select **main** and enter the version without `v` (for example,
-`0.1.0`). The workflow must be merged into the default branch before GitHub
+Run workflow**. Select **main** and enter either the version (`0.1.0`) or its
+tag (`v0.1.0`). Both are validated and normalized to `v0.1.0` before publication.
+The workflow must be merged into the default branch before GitHub
 offers the manual trigger.
 
 You can also invoke it with GitHub CLI:

@@ -1,5 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import { normalizeReleaseTag } from "../scripts/check-release.mjs";
 import { publishRelease } from "../scripts/publish-release.mjs";
 import { CURRENT_VERSION } from "../.github/extensions/github-notifications/updates.mjs";
 
@@ -7,6 +14,33 @@ const tag = `v${CURRENT_VERSION}`;
 const sha = "a".repeat(40);
 const ref = `refs/tags/${tag}`;
 const url = `https://github.com/example/repo/releases/tag/${tag}`;
+
+test("release input accepts a bare version or one v prefix without weakening version validation", () => {
+  for (const input of [CURRENT_VERSION, tag]) assert.equal(normalizeReleaseTag(input), tag);
+  for (const input of [undefined, null, "", `v${tag}`, `${tag}-rc.1`, "999.0.0",
+    ` ${tag}`, `${tag}\n`, `${CURRENT_VERSION}\ntag=unsafe`]) {
+    assert.throws(() => normalizeReleaseTag(input), String(input));
+  }
+});
+
+test("release validation writes only a validated canonical tag to GitHub Actions output", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "notification-release-input-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const output = join(directory, "output");
+  const script = fileURLToPath(new URL("../scripts/check-release.mjs", import.meta.url));
+  const run = input => promisify(execFile)(process.execPath, [script, input], {
+    env: { ...process.env, GITHUB_OUTPUT: output },
+  });
+  for (const input of [CURRENT_VERSION, tag]) {
+    await writeFile(output, "existing=preserved\n");
+    const { stdout } = await run(input);
+    assert.equal(stdout, `Validated ${tag}\n`);
+    assert.equal(await readFile(output, "utf8"), `existing=preserved\ntag=${tag}\n`);
+  }
+  await writeFile(output, "existing=preserved\n");
+  await assert.rejects(run(`v${tag}`), { code: 1 });
+  assert.equal(await readFile(output, "utf8"), "existing=preserved\n");
+});
 
 function fixture({ refs = [], remoteSha = sha, fail, event = "workflow_dispatch" } = {}) {
   const calls = [];
