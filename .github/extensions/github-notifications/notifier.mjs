@@ -67,7 +67,8 @@ function displayText(value) {
   return characters.length > 500 ? `${characters.slice(0, 497).join("")}...` : characters.join("");
 }
 
-const escapeMarkup = text => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+// notify-send decodes C-style backslash escapes before the daemon parses markup.
+const escapeLinuxBody = text => text.replace(/\\/g, "\\\\").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 export async function notifyDesktop({ title, body, sound = "default", signal, platform = process.platform,
   execute = execFile, env = process.env } = {}) {
@@ -95,7 +96,7 @@ export async function notifyDesktop({ title, body, sound = "default", signal, pl
     args = ["--app-name=GitHub notifications", "--icon=dialog-information",
       `--hint=boolean:suppress-sound:${sound === "none"}`];
     if (!["none", "default"].includes(sound)) args.push(`--hint=string:sound-name:${sound}`);
-    args.push("--", heading, escapeMarkup(text));
+    args.push("--", heading, escapeLinuxBody(text));
   }
   return new Promise((resolve, reject) => {
     execute(command, args, options, error => {

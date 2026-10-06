@@ -5,6 +5,13 @@ import { notifyDesktop, notificationScript, windowsScript, desktopCapabilities, 
 const title = "example/widgets";
 const body = 'Fix <widget> & "quotes"; $(do-not-run)\nUnicode: caf\u00e9';
 
+// Model notify-send's GLib g_strcompress layer, including octal and unknown escapes.
+function decodeNotifySendBody(value) {
+  const escapes = { a: "\u0007", b: "\b", f: "\f", n: "\n", r: "\r", t: "\t", v: "\v" };
+  return value.replace(/\\([0-7]{1,3}|[\s\S])/g, (_, escape) =>
+    /^[0-7]/.test(escape) ? String.fromCharCode(parseInt(escape, 8) & 255) : escapes[escape] ?? escape);
+}
+
 async function command(platform, sound = "none", overrides = {}) {
   let call;
   await notifyDesktop({ title, body, platform, sound, execute: (...args) => {
@@ -49,6 +56,45 @@ test("Linux sends sound or silence hints, escapes body markup and terminates opt
     if (!["none", "default"].includes(sound)) assert.ok(args.includes(`--hint=string:sound-name:${sound}`));
     assert.deepEqual(args.slice(-3), ["--", title, 'Fix &lt;widget&gt; &amp; "quotes"; $(do-not-run)\nUnicode: caf\u00e9']);
   }
+});
+
+test("Linux octal escapes cannot become hyperlinks or image tags after notify-send decodes the body", async () => {
+  for (const [payload, unsafeDecoded] of [
+    [String.raw`\074a href="https://example.invalid/"\076Open GitHub\074/a\076`,
+      '<a href="https://example.invalid/">Open GitHub</a>'],
+    [String.raw`\74img src="file:///tmp/never-read.png"/\76`,
+      '<img src="file:///tmp/never-read.png"/>'],
+  ]) {
+    assert.equal(decodeNotifySendBody(payload), unsafeDecoded, "unescaped input demonstrates the native decoding hazard");
+    const [, args] = await command("linux", "none", { body: payload });
+    assert.equal(decodeNotifySendBody(args.at(-1)), payload);
+    assert.doesNotMatch(decodeNotifySendBody(args.at(-1)), /[<>]/);
+  }
+});
+
+test("Linux preserves literal backslashes and XML escaping through native decoding", async () => {
+  const cases = [
+    [String.raw`C:\tmp\report\note.txt`, String.raw`C:\tmp\report\note.txt`],
+    [String.raw`\a\b\f\n\r\t\v\033\000\777\q`, String.raw`\a\b\f\n\r\t\v\033\000\777\q`],
+    [String.raw`\046lt;a\046gt;`, String.raw`\046lt;a\046gt;`],
+    ["trailing\\", "trailing\\"],
+    [String.raw`\\074a\\076`, String.raw`\\074a\\076`],
+    [String.raw`\<a href="https://example.invalid/">link</a> &`, String.raw`\&lt;a href="https://example.invalid/"&gt;link&lt;/a&gt; &amp;`],
+    [body, 'Fix &lt;widget&gt; &amp; "quotes"; $(do-not-run)\nUnicode: caf\u00e9'],
+  ];
+  for (const [payload, expected] of cases) {
+    const [, args] = await command("linux", "none", { body: payload });
+    assert.equal(decodeNotifySendBody(args.at(-1)), expected);
+  }
+});
+
+test("Linux body escaping does not change AppleScript arguments or PowerShell environment text", async () => {
+  const payload = String.raw`\074a href="https://example.invalid/"\076literal\074/a\076`;
+  const [, macArgs] = await command("darwin", "none", { body: payload });
+  const [, winArgs, winOptions] = await command("win32", "none", { body: payload });
+  assert.deepEqual(macArgs, ["-e", notificationScript, title, payload, "none"]);
+  assert.equal(winArgs.at(-1), windowsScript);
+  assert.equal(winOptions.env.COPILOT_TOAST_BODY, payload);
 });
 
 test("unsupported platforms, sound names, invalid content and missing commands fail explicitly", async () => {
