@@ -1,3 +1,5 @@
+import { orderedThreads } from "./model.mjs";
+
 const $ = id => document.getElementById(id);
 const token = location.hash.slice(1);
 const hasCapability = /^[a-f0-9]{64}$/.test(token);
@@ -66,22 +68,24 @@ async function api(path, input) {
   }
 }
 
-function darkMode() {
-  if (typeof preferences?.darkMode === "boolean") return preferences.darkMode;
-  const mode = document.documentElement.getAttribute("data-color-mode") ?? document.body.getAttribute("data-color-mode");
-  return mode === "dark" || (mode !== "light" && systemTheme.matches);
-}
-
 function renderTheme() {
-  if (typeof preferences?.darkMode === "boolean") {
-    document.documentElement.dataset.notificationTheme = preferences.darkMode ? "dark" : "light";
-  } else {
+  const theme = preferences?.darkMode === true ? "dark" : preferences?.darkMode === false ? "light" : "system";
+  const mode = document.documentElement.getAttribute("data-color-mode") ?? document.body.getAttribute("data-color-mode");
+  if (theme !== "system") {
+    document.documentElement.dataset.notificationTheme = theme;
+  } else if (mode === "dark" || mode === "light") {
     delete document.documentElement.dataset.notificationTheme;
+  } else {
+    document.documentElement.dataset.notificationTheme = systemTheme.matches ? "dark" : "light";
   }
-  $("dark-mode").setAttribute("aria-checked", String(darkMode()));
+  $("theme").value = theme;
 }
 
 function renderSettings() {
+  $("theme").disabled = settingsBusy || !preferences;
+  renderTheme();
+  $("group-by").disabled = settingsBusy || !preferences;
+  $("group-by").value = preferences?.groupBy ?? "repo";
   for (const [id, key] of [
     ["auto-open", "autoOpen"],
     ["desktop-notifications", "desktopNotifications"],
@@ -89,8 +93,6 @@ function renderSettings() {
     if (preferences) {
       $(id).setAttribute("aria-checked", String(Boolean(preferences[key])));
     }
-    $("dark-mode").disabled = settingsBusy || !preferences;
-    renderTheme();
     $(id).disabled = settingsBusy || !preferences ||
       (id !== "auto-open" && !preferences.desktopStatus?.supported);
   }
@@ -134,12 +136,13 @@ async function settingsRequest(input, quiet = false) {
   settingsBusy = true;
   if (!quiet) {
     renderSettings();
-    $("settings-status").textContent = input ? "Saving..." : "Loading...";
-    $("settings-status").hidden = false;
+    $("settings-status").textContent = input ? "" : "Loading...";
+    $("settings-status").hidden = !$("settings-status").textContent;
     $("settings-error").hidden = true;
   }
   try {
     preferences = await api("settings", input);
+    render();
     $("settings-status").textContent = "";
     $("settings-error").hidden = true;
   } catch (error) {
@@ -235,7 +238,7 @@ async function markRead(id) {
   const findButton = key => [...$("groups").querySelectorAll("[data-focus-key]")]
     .find(node => node.dataset.focusKey === key);
   const key = `read:${id}`;
-  const index = state.groups.flatMap(group => group.items).findIndex(item => item.id === id);
+  const index = displayGroups().flatMap(group => group.items).findIndex(item => item.id === id);
   const previousFocus = document.activeElement;
   let nextFocusKey = key;
   markingRead.add(id);
@@ -250,7 +253,7 @@ async function markRead(id) {
     await pollPromise;
     if (!visible()) return;
     state = await api("read", { id });
-    const remaining = state.groups.flatMap(group => group.items);
+    const remaining = displayGroups().flatMap(group => group.items);
     const next = remaining[Math.min(index, remaining.length - 1)];
     nextFocusKey = next ? `read:${next.id}` : null;
   } catch (error) {
@@ -477,7 +480,37 @@ function renderControls() {
   $("groups").setAttribute("aria-busy", String(loading));
 }
 
+function displayGroups() {
+  const groups = state?.groups ?? [];
+  const groupBy = preferences?.groupBy ?? "repo";
+  if (groupBy === "repo") {
+    return groups.map(group => ({ ...group, key: `repo:${group.repository}`, label: group.repository }));
+  }
+  const items = orderedThreads(groups.flatMap(group => group.items));
+  if (groupBy === "none") return items.length ? [{ items }] : [];
+  const dates = new Map();
+  for (const item of items) {
+    const date = new Date(item.updatedAt);
+    const key = `date:${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+    let group = dates.get(key);
+    if (!group) {
+      group = {
+        key,
+        label: date.toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" }),
+        unread: 0,
+        items: [],
+      };
+      dates.set(key, group);
+    }
+    group.items.push(item);
+    group.unread++;
+  }
+  return [...dates.values()];
+}
+
 function renderGroups(groups) {
+  $("collapse").hidden = !groups.length || !groups[0].key;
+  $("collapse").textContent = groups.some(group => !collapsed.has(group.key)) ? "Collapse all" : "Expand all";
   // Keep focused controls and disclosure state stable across unchanged polls.
   const key = JSON.stringify(groups);
   if (key === listKey) return;
@@ -485,40 +518,48 @@ function renderGroups(groups) {
   const focused = document.activeElement?.dataset.focusKey;
   const fragment = document.createDocumentFragment();
   for (const [index, group] of groups.entries()) {
-    const section = element("section", "repo-group");
-    const header = element("div", "repo-header");
-    const rows = element("div", "repo-items");
-    rows.id = `repo-items-${index}`;
-    rows.hidden = collapsed.has(group.repository);
-    const disclosure = element("button", "repo-toggle");
-    disclosure.type = "button";
-    disclosure.dataset.disclosure = "true";
-    disclosure.dataset.focusKey = `repo:${group.repository}`;
-    disclosure.setAttribute("aria-controls", rows.id);
-    disclosure.setAttribute("aria-expanded", String(!rows.hidden));
-    disclosure.append(element("span", "repo-name", group.repository),
-      element("span", "repo-count", `${group.items.length} / ${group.unread} unread`));
-    disclosure.addEventListener("click", () => {
-      rows.hidden = !rows.hidden;
-      if (rows.hidden) collapsed.add(group.repository);
-      else collapsed.delete(group.repository);
+    const rows = element("div", group.key ? "repo-items" : "notification-list");
+    if (group.key) {
+      const section = element("section", "repo-group");
+      const header = element("div", "repo-header");
+      rows.id = `group-items-${index}`;
+      rows.hidden = collapsed.has(group.key);
+      const disclosure = element("button", "repo-toggle");
+      disclosure.type = "button";
+      disclosure.dataset.disclosure = "true";
+      disclosure.dataset.focusKey = group.key;
+      disclosure.setAttribute("aria-controls", rows.id);
       disclosure.setAttribute("aria-expanded", String(!rows.hidden));
-      $("collapse").textContent = groups.some(item => !collapsed.has(item.repository)) ? "Collapse all" : "Expand all";
-    });
-    const markGroup = element("button", "repo-read", `Mark ${group.items.length} as read`);
-    markGroup.type = "button";
-    markGroup.dataset.focusKey = `bulk:${group.repository}`;
-    markGroup.dataset.repository = group.repository;
-    markGroup.dataset.count = String(group.items.length);
-    markGroup.setAttribute("aria-label", `Mark ${group.items.length} shown, loaded notifications as read in ${group.repository}`);
-    markGroup.disabled = busy || markingRead.size > 0 || batchBusy || batchLocked();
-    markGroup.addEventListener("click", () => {
-      if (busy || batchBusy || batchLocked() || markingRead.size) return;
-      batchFocusKey = markGroup.dataset.focusKey;
-      return batchRequest("start", { repository: group.repository, selectionKey: group.selectionKey });
-    });
-    header.append(disclosure, markGroup);
-    section.append(header, rows);
+      disclosure.append(element("span", "repo-name", group.label),
+        element("span", "repo-count", `${group.items.length} / ${group.unread} unread`));
+      disclosure.addEventListener("click", () => {
+        rows.hidden = !rows.hidden;
+        if (rows.hidden) collapsed.add(group.key);
+        else collapsed.delete(group.key);
+        disclosure.setAttribute("aria-expanded", String(!rows.hidden));
+        $("collapse").textContent = groups.some(item => !collapsed.has(item.key)) ? "Collapse all" : "Expand all";
+      });
+      header.append(disclosure);
+      if (group.repository) {
+        const markGroup = element("button", "repo-read", `Mark ${group.items.length} as read`);
+        markGroup.type = "button";
+        markGroup.dataset.focusKey = `bulk:${group.repository}`;
+        markGroup.dataset.repository = group.repository;
+        markGroup.dataset.count = String(group.items.length);
+        markGroup.setAttribute("aria-label", `Mark ${group.items.length} shown, loaded notifications as read in ${group.repository}`);
+        markGroup.disabled = busy || markingRead.size > 0 || batchBusy || batchLocked();
+        markGroup.addEventListener("click", () => {
+          if (busy || batchBusy || batchLocked() || markingRead.size) return;
+          batchFocusKey = markGroup.dataset.focusKey;
+          return batchRequest("start", { repository: group.repository, selectionKey: group.selectionKey });
+        });
+        header.append(markGroup);
+      }
+      section.append(header, rows);
+      fragment.append(section);
+    } else {
+      fragment.append(rows);
+    }
     for (const item of group.items) {
       const row = element("article", `row${item.unread ? " unread" : ""}`);
       const dot = element("span", `dot${item.unread ? "" : " read"}`);
@@ -532,6 +573,7 @@ function renderGroups(groups) {
       link.dataset.focusKey = `thread:${item.id}`;
       content.append(link);
       const metadata = element("div", "metadata");
+      if (!group.repository) metadata.append(element("span", "repository", item.repository));
       metadata.append(element("span", "", item.type.replace(/([a-z])([A-Z])/g, "$1 $2")),
         element("span", "", item.reason.replaceAll("_", " ")),
         element("span", "", item.unread ? "Unread" : "Read"));
@@ -551,7 +593,6 @@ function renderGroups(groups) {
       row.append(dot, content, time, read);
       rows.append(row);
     }
-    fragment.append(section);
   }
   $("groups").replaceChildren(fragment);
   if (focused) {
@@ -578,11 +619,15 @@ function render() {
   }
   if (document.activeElement !== $("search") && pendingQuery === undefined) $("search").value = state.filters.query;
   $("count").textContent = `${state.unread} unread${state.filters.query ? ` \u00b7 ${state.matching} matching` : ""}`;
-  $("collapse").hidden = !state.groups.length;
   $("more").hidden = !state.hasMore;
   $("more").textContent = "Load more (up to 50)";
   $("more").title = state.needsRefresh ? "Refresh notifications before loading more." : "";
-  renderGroups(state.groups);
+  const groupBy = preferences?.groupBy ?? "repo";
+  $("groups").setAttribute("aria-label", groupBy === "repo" ? "Notifications by repository" :
+    groupBy === "date" ? "Notifications by date" : "Notifications, newest first");
+  $("subtitle").textContent = groupBy === "repo" ? "A little less noise. One repository at a time." :
+    groupBy === "date" ? "A little less noise. One day at a time." : "A little less noise. Newest notifications first.";
+  renderGroups(displayGroups());
   renderControls();
   for (const time of document.querySelectorAll("time")) time.textContent = relativeTime(time.dateTime);
   $("empty").hidden = Boolean(state.groups.length);
@@ -592,7 +637,9 @@ function render() {
   $("empty-description").textContent = error ? "Resolve the message above. This view retries automatically while visible when the retry time arrives." :
     state.filters.query ? "Try another title or repository, or load more notifications." :
     loading ? "Using your existing GitHub CLI sign-in." :
-    "New notifications will appear here, grouped by repository.";
+    groupBy === "repo" ? "New notifications will appear here, grouped by repository." :
+    groupBy === "date" ? "New notifications will appear here, grouped by date." :
+    "New notifications will appear here, newest first.";
   const fetched = state.lastFetchedAt ? `Checked ${relativeTime(new Date(state.lastFetchedAt).toISOString())} \u00b7 ` : "";
   const minutes = Math.ceil(Math.max(0, state.nextRefreshAt - Date.now()) / 60_000);
   const next = minutes ? `Next check in ${minutes} min` : "Next check soon";
@@ -625,8 +672,14 @@ $("desktop-sound").addEventListener("change", () => {
 });
 $("check-updates").addEventListener("click", checkUpdates);
 $("copy-update").addEventListener("click", copyUpdatePrompt);
-$("dark-mode").addEventListener("click", () => {
-  if (preferences) void settingsRequest({ darkMode: !darkMode() });
+$("theme").addEventListener("change", () => {
+  if (preferences && !$("theme").disabled) {
+    const themes = { system: null, dark: true, light: false };
+    void settingsRequest({ darkMode: themes[$("theme").value] });
+  }
+});
+$("group-by").addEventListener("change", () => {
+  if (preferences && !$("group-by").disabled) void settingsRequest({ groupBy: $("group-by").value });
 });
 document.addEventListener("click", event => {
   if ($("settings").open && !$("settings").contains(event.target)) closeSettings();
@@ -652,11 +705,11 @@ $("search").addEventListener("input", () => {
   }, 250);
 });
 $("collapse").addEventListener("click", () => {
-  const groups = state?.groups ?? [];
-  const close = groups.some(group => !collapsed.has(group.repository));
+  const groups = displayGroups();
+  const close = groups.some(group => !collapsed.has(group.key));
   for (const group of groups) {
-    if (close) collapsed.add(group.repository);
-    else collapsed.delete(group.repository);
+    if (close) collapsed.add(group.key);
+    else collapsed.delete(group.key);
   }
   listKey = undefined;
   renderGroups(groups);

@@ -26,6 +26,10 @@ test("HTTP integration serves a protected inbox, rejects cross-origin access and
   assert.match(html.headers.get("content-security-policy"), /default-src 'none'/);
   const sound = await fetch(`${origin}/sound.mjs`);
   assert.equal(sound.status, 404);
+  const model = await fetch(`${origin}/model.mjs`);
+  assert.equal(model.status, 200);
+  assert.match(model.headers.get("content-type"), /javascript/);
+  assert.match(await model.text(), /export function orderedThreads/);
   const unauthenticated = await fetch(`${origin}/api/state`);
   assert.equal(unauthenticated.status, 403);
   assert.equal((await unauthenticated.text()).includes("Synthetic"), false);
