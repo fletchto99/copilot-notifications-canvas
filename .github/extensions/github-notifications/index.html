@@ -13,6 +13,20 @@
       <p class="eyebrow">YOUR GITHUB INBOX</p>
       <h1>Unread Notifications</h1>
       <p class="subtitle">A little less noise. One repository at a time.</p>
+      <section id="update-banner" class="update-banner" aria-label="Canvas update" hidden>
+        <p id="update-title" role="status" aria-live="polite"></p>
+        <div class="update-actions">
+          <a id="release-notes" target="_blank" rel="noopener noreferrer">Release notes</a>
+          <a id="update-instructions" target="_blank" rel="noopener noreferrer">Update instructions</a>
+          <button id="copy-update" type="button">Copy update prompt</button>
+        </div>
+        <details id="update-prompt-details">
+          <summary>Prompt to paste into Copilot</summary>
+          <label class="sr-only" for="update-prompt">Update prompt</label>
+          <textarea id="update-prompt" readonly rows="8" spellcheck="false"></textarea>
+        </details>
+        <p id="copy-status" class="settings-help" role="status" aria-live="polite"></p>
+      </section>
       <div class="toolbar">
         <label class="search">
           <span class="sr-only">Search loaded notification titles and repositories</span>
@@ -26,6 +40,9 @@
             <button id="auto-open" type="button" role="switch" aria-checked="false" aria-describedby="startup-help" disabled>Open on new sessions: Off</button>
             <p id="startup-help" class="settings-help">Saved for your user. Requires user-wide installation to work outside this repository. Does not reopen this session.</p>
             <p id="settings-status" class="settings-help" role="status" aria-live="polite"></p>
+            <p id="installed-version" class="settings-help">Canvas version loading...</p>
+            <button id="check-updates" type="button" disabled>Check for updates</button>
+            <p id="update-status" class="settings-help" role="status" aria-live="polite"></p>
           </div>
         </details>
       </div>
@@ -60,6 +77,7 @@
       <p>Mark as read applies only to the clicked row or the repository group's shown, loaded notifications.
         <a href="https://github.com/notifications" target="_blank" rel="noopener noreferrer">Open GitHub inbox</a>
       </p>
+      <p id="canvas-version" hidden></p>
     </footer>
   </main>
 </body>

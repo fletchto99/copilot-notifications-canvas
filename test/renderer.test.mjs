@@ -14,7 +14,8 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
 
 // Minimal DOM/event/timer doubles exercise the actual renderer without a browser dependency.
 async function renderer({ hidden = false, token = "a".repeat(64), audioOptions = {}, readFailure = false,
-  initialRows, onWrite, onFetch, onState, onFilters, initialOffline = false } = {}) {
+  initialRows, onWrite, onFetch, onState, onFilters, initialOffline = false, release,
+  onUpdates, clipboardFailure = false } = {}) {
   const calls = [];
   const timers = new Map();
   let timerId = 0;
@@ -27,6 +28,14 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
   ];
   const audioContexts = [];
   let storedAutoOpen = false;
+  let releaseMetadata = {
+    currentVersion: "0.1.0", latestVersion: "0.1.0", status: "current", checking: false,
+    checkedAt: now, nextCheckAt: now + 6 * 60 * 60_000, canCheckAt: 0, error: null,
+    releaseUrl: "https://github.com/fletchto99/copilot-notifications-canvas/releases/tag/v0.1.0",
+    instructionsUrl: "https://github.com/fletchto99/copilot-notifications-canvas#updating", prompt: null,
+    ...release,
+  };
+  const copied = [];
   const patches = [];
   const githubCalls = [];
   class Node {
@@ -64,6 +73,7 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
       for (const child of this.children) child.parentNode = this;
     }
     addEventListener(name, handler) { this.events[name] = handler; }
+    select() { this.selected = true; }
     focus() {
       if (this.disabled) return;
       let node = this;
@@ -92,7 +102,7 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
   for (const id of ["batch-stop", "batch-retry", "batch-dismiss"]) ids.get(id).parentNode = ids.get("batch-progress");
   ids.get("batch-progress").contains = node =>
     ["batch-progress", "batch-stop", "batch-retry", "batch-dismiss"].some(id => ids.get(id) === node);
-  ids.get("settings").contains = node => ["settings", "settings-toggle", "settings-panel", "sound", "auto-open"].some(id => ids.get(id) === node);
+  ids.get("settings").contains = node => ["settings", "settings-toggle", "settings-panel", "sound", "auto-open", "check-updates"].some(id => ids.get(id) === node);
   const document = {
     hidden,
     body: new Node("body"),
@@ -121,6 +131,10 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
   } }));
   const context = createContext({
     document, window, location: { hash: `#${token}` }, Intl, AbortController,
+    navigator: { clipboard: { writeText: async text => {
+      if (clipboardFailure) throw new Error("Clipboard denied");
+      copied.push(text);
+    } } },
     Date: class extends Date { static now() { return now; } },
     NotificationSound: class extends NotificationSound {
       constructor(options) { super({ ...options, now: () => now }); }
@@ -139,9 +153,13 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
         if (options.body) storedAutoOpen = JSON.parse(options.body).autoOpen;
         return { ok: true, json: async () => ({ autoOpen: storedAutoOpen }) };
       }
+      if (path === "/api/updates") {
+        if (onUpdates) releaseMetadata = await onUpdates();
+        return { ok: true, json: async () => releaseMetadata };
+      }
       if (path === "/api/refresh") await inbox.refresh();
       if (path === "/api/state") {
-        const snapshot = inbox.snapshot();
+        const snapshot = { ...inbox.snapshot(), updates: releaseMetadata };
         if (onState) await onState();
         return { ok: true, json: async () => snapshot };
       }
@@ -152,14 +170,14 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
       }
       if (path === "/api/read") await inbox.markRead(JSON.parse(options.body));
       if (path.startsWith("/api/batch/")) inbox.batch[path.slice("/api/batch/".length)](JSON.parse(options.body));
-      return { ok: true, json: async () => inbox.snapshot() };
+      return { ok: true, json: async () => ({ ...inbox.snapshot(), updates: releaseMetadata }) };
     },
   });
   assert.match(script, /^import \{ NotificationSound \} from "\.\/sound\.mjs";/);
   runInContext(script.replace(/^import \{ NotificationSound \} from "\.\/sound\.mjs";/, ""), context);
   await settle();
   return {
-    calls, document, window, ids, timers, context, audioContexts, inbox, patches, githubCalls,
+    calls, document, window, ids, timers, context, audioContexts, inbox, patches, githubCalls, copied,
     advance(milliseconds = 120_000) { now += milliseconds; return now; },
     async fireTimer(delay = 5000) {
       const [id, timer] = [...timers].find(([, timer]) => timer.delay === delay);
@@ -169,9 +187,117 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
     },
     setRows(value) { rows = value; },
     setOffline(value) { offline = value; },
+    setRelease(value) { releaseMetadata = { ...releaseMetadata, ...value }; },
     intersect: value => intersect([{ isIntersecting: value }]),
   };
 }
+
+test("update banner sits below the subtitle and above the inbox controls with its prompt collapsed", () => {
+  const positions = ['class="subtitle"', 'id="update-banner"', 'class="toolbar"', 'id="count"', 'id="groups"']
+    .map(marker => html.indexOf(marker));
+  assert.ok(positions.every((position, index) => position >= 0 && (index === 0 || position > positions[index - 1])));
+  assert.match(html, /<details id="update-prompt-details">/);
+});
+
+test("footer shows the running version, not the available release, even while checks are pending or failing", async () => {
+  assert.match(html, /<footer>[\s\S]*<p id="canvas-version" hidden><\/p>\s*<\/footer>/);
+  for (const release of [
+    {},
+    { status: "available", latestVersion: "0.2.0", prompt: "Synthetic update prompt" },
+    { status: "unchecked", checking: true, checkedAt: null },
+    { status: "unchecked", error: "Release check failed", checkedAt: null },
+  ]) {
+    const ui = await renderer({ release });
+    assert.equal(ui.ids.get("canvas-version").textContent, "GitHub Notification Canvas 0.1.0");
+    assert.equal(ui.ids.get("canvas-version").hidden, false);
+  }
+});
+
+test("update banner shows release links and copies a prompt without installing or changing settings", async () => {
+  const ui = await renderer({ release: {
+    status: "available", latestVersion: "0.2.0", prompt: "Synthetic safe update prompt",
+    releaseUrl: "https://github.com/fletchto99/copilot-notifications-canvas/releases/tag/v0.2.0",
+  } });
+  assert.equal(ui.ids.get("update-banner").hidden, false);
+  assert.match(ui.ids.get("update-title").textContent, /v0\.2\.0.*v0\.1\.0/);
+  assert.match(ui.ids.get("installed-version").textContent, /Running canvas v0\.1\.0/);
+  assert.match(ui.ids.get("release-notes").href, /\/releases\/tag\/v0\.2\.0$/);
+  assert.match(ui.ids.get("update-instructions").href, /#updating$/);
+  assert.equal(ui.ids.get("update-prompt").value, "Synthetic safe update prompt");
+  const count = ui.calls.length;
+  await ui.ids.get("copy-update").events.click();
+  assert.deepEqual(ui.copied, ["Synthetic safe update prompt"]);
+  assert.equal(ui.calls.length, count);
+  assert.match(ui.ids.get("copy-status").textContent, /Copied.*Paste/);
+  assert.equal(ui.calls.some(call => call.path === "/api/settings"), false);
+});
+
+test("clipboard denial exposes a selectable prompt and does not claim it was copied", async () => {
+  const ui = await renderer({ clipboardFailure: true, release: {
+    status: "available", latestVersion: "0.2.0", prompt: "Manual copy prompt",
+  } });
+  await ui.ids.get("copy-update").events.click();
+  assert.equal(ui.ids.get("update-prompt-details").open, true);
+  assert.equal(ui.ids.get("update-prompt").selected, true);
+  assert.equal(ui.document.activeElement, ui.ids.get("update-prompt"));
+  assert.match(ui.ids.get("copy-status").textContent, /Clipboard unavailable/);
+  assert.deepEqual(ui.copied, []);
+});
+
+test("current, ahead, absent and failed release checks keep the banner out of the inbox", async () => {
+  for (const [status, message] of [
+    ["current", /latest stable release/], ["ahead", /newer than/], ["no_release", /No stable/],
+  ]) {
+    const ui = await renderer({ release: { status } });
+    assert.equal(ui.ids.get("update-banner").hidden, true);
+    assert.match(ui.ids.get("update-status").textContent, message);
+  }
+  const ui = await renderer({ release: { status: "unchecked", error: "Network unavailable", checkedAt: null } });
+  assert.equal(ui.ids.get("update-banner").hidden, true);
+  assert.match(ui.ids.get("update-status").textContent, /Could not check.*Network unavailable/);
+  assert.doesNotMatch(ui.ids.get("update-status").textContent, /latest stable release/);
+  assert.equal(ui.ids.get("notice").hidden, true);
+  assert.equal(ui.document.querySelectorAll("article").length, 1);
+});
+
+test("manual release checks show pending and retry states without blocking the inbox", async () => {
+  let checkedAt;
+  const ui = await renderer({ onUpdates: async () => ({
+    currentVersion: "0.1.0", latestVersion: null, checking: true, status: "unchecked",
+    canCheckAt: checkedAt + 60_000, checkedAt: null,
+  }) });
+  checkedAt = ui.advance(0);
+  assert.equal(ui.ids.get("check-updates").disabled, false);
+  await ui.ids.get("check-updates").events.click();
+  assert.equal(ui.calls.at(-1).path, "/api/updates");
+  assert.equal(ui.calls.at(-1).options.body, "{}");
+  assert.equal(ui.ids.get("check-updates").disabled, true);
+  assert.match(ui.ids.get("update-status").textContent, /Checking stable/);
+  assert.equal(ui.ids.get("search").disabled, false);
+  ui.setRelease({ checking: false, status: "current", latestVersion: "0.1.0", checkedAt });
+  await ui.fireTimer();
+  assert.match(ui.ids.get("update-status").textContent, /latest stable release.*Check again after/);
+  ui.advance(59_999);
+  await ui.fireTimer();
+  assert.equal(ui.ids.get("check-updates").disabled, true);
+  ui.advance(1);
+  await ui.fireTimer();
+  assert.equal(ui.ids.get("check-updates").disabled, false);
+});
+
+test("release check request failures are visible and hidden panels never trigger manual checks", async () => {
+  const ui = await renderer();
+  ui.setOffline(true);
+  await ui.ids.get("check-updates").events.click();
+  assert.match(ui.ids.get("update-status").textContent, /Synthetic connection failure/);
+  ui.setOffline(false);
+  await ui.ids.get("check-updates").events.click();
+  assert.doesNotMatch(ui.ids.get("update-status").textContent, /Synthetic connection failure/);
+  ui.intersect(false);
+  const count = ui.calls.length;
+  await ui.ids.get("check-updates").events.click();
+  assert.equal(ui.calls.length, count);
+});
 
 test("renderer fetches with a capability, renders untrusted titles as text and exposes accessible controls", async () => {
   const ui = await renderer();
