@@ -120,6 +120,5 @@ export function groupThreads(threads, { query }) {
     group.items.push(thread);
     if (thread.unread) group.unread++;
   }
-  return [...groups.values()].sort((a, b) =>
-    b.latestAt.localeCompare(a.latestAt) || a.repository.localeCompare(b.repository));
+  return [...groups.values()].sort((a, b) => a.repository.localeCompare(b.repository));
 }

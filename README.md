@@ -102,6 +102,9 @@ per-panel, so a reload resets sound to off; persisted settings such as
 
 ## Usage
 
+- Repository groups are always sorted alphabetically by full name (`owner/repo`),
+  so marking notifications as read does not reorder the remaining groups.
+  Notifications within each group remain newest first.
 - The canvas loads up to 50 notifications initially. **Load more** fetches up to
   50 more at a time, with no fixed total cap while GitHub has more pages.
   Search covers loaded notifications only.
