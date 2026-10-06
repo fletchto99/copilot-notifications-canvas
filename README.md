@@ -88,12 +88,25 @@ Use the same `COPILOT_HOME` for an upgrade as for the original installation.
 
    Other already-open Copilot sessions need their own extension reload.
 
-**Settings are preserved.** The installer updates only managed runtime files.
+**Settings are preserved.** The installer writes a complete runtime, including
+its HTML, JavaScript and styles, under `runtimes/<content-hash>/`, then atomically
+switches the extension entry point to that version. It never replaces files
+inside a published runtime. `.copilot-notifications-install.json` records the
+active runtime; its `version.json` is authoritative, not any retained legacy
+`version.json` at the extension root.
+
 It leaves `artifacts/` in place, including `artifacts/settings.json`, unknown
 settings, and other artifacts, even if a running session saves settings during
 the update. Never delete the installed extension to upgrade it. If the installer
 reports modified files, stop and preserve those changes; do not bypass its
 ownership or concurrency safeguards.
+
+Older runtimes are retained so already-open sessions keep a consistent version,
+even if an upgrade rolls back. Upgrades from the original flat layout also keep
+its legacy files, including `sound.mjs`, for sessions that have not reloaded.
+These retained files are extension code, not notification content. They are not
+automatically pruned; do not remove them while a session may still use them.
+New runtimes contain no Web Audio playback or its old inbox activity tracking.
 
 Updates use the user-wide installer. A project-local checkout shadows a
 user-wide installation in that repository; update that checkout deliberately

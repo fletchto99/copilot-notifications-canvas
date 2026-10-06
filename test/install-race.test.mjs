@@ -1,34 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import { syncBuiltinESMExports } from "node:module";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { install } from "../scripts/install.mjs";
 import { Preferences } from "../.github/extensions/github-notifications/settings.mjs";
+import { Inbox } from "../.github/extensions/github-notifications/inbox.mjs";
+import { GitHubClient } from "../.github/extensions/github-notifications/github.mjs";
+import { home, intercept, legacyAssets, legacyInstallation, marker, olderRuntime, runtimePath, sourceContents } from "./install-fixtures.mjs";
 
 const execute = promisify(execFile);
-const digest = data => createHash("sha256").update(data).digest("hex");
-
-async function home(t) {
-  const root = await fs.mkdtemp(join(tmpdir(), "notification-upgrade-test-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
-  return root;
-}
-
-function intercept(t, name, handler) {
-  const original = fs[name];
-  fs[name] = (...args) => handler(original, ...args);
-  syncBuiltinESMExports();
-  t.after(() => {
-    fs[name] = original;
-    syncBuiltinESMExports();
-  });
-}
 
 async function writeFromProvider(directory, autoOpen) {
   const module = new URL("../.github/extensions/github-notifications/settings.mjs", import.meta.url).href;
@@ -37,93 +21,155 @@ async function writeFromProvider(directory, autoOpen) {
     directory]);
 }
 
-async function preDesktopInstallation(t) {
+async function serverFactory(directory) {
+  return (await import(pathToFileURL(join(directory, "server.mjs")).href)).startServer;
+}
+
+async function startCanvas(factory) {
+  return factory(new Inbox(new GitHubClient({ run: async () => assert.fail("Asset checks must not call GitHub") })));
+}
+
+async function assertAssets(server, contents) {
+  const origin = new URL(server.url).origin;
+  await Promise.all([["/", "index.html"], ["/app.mjs", "app.mjs"], ["/styles.css", "styles.css"]].map(async ([route, file]) => {
+    const response = await fetch(`${origin}${route}`);
+    assert.equal(response.status, 200, file);
+    assert.equal(await response.text(), contents[file], file);
+  }));
+  const sound = await fetch(`${origin}/sound.mjs`);
+  assert.equal(sound.status, contents["sound.mjs"] === undefined ? 404 : 200);
+  if (contents["sound.mjs"] !== undefined) assert.equal(await sound.text(), contents["sound.mjs"]);
+}
+
+test("servers opened at upgrade boundaries always cache a complete old or new asset set", async t => {
+  for (const legacy of [true, false]) {
+    await t.test(legacy ? "Web Audio migration" : "versioned runtime upgrade", async t => {
+      const root = await home(t);
+      const { target, contents } = legacy ? await legacyInstallation(root) : await olderRuntime(root);
+      const oldFactory = await serverFactory(await runtimePath(target));
+      const expected = await sourceContents();
+      const servers = [];
+      t.after(() => Promise.all(servers.map(({ server }) => server.close())));
+      const capture = async (factory, assets) => {
+        const server = await startCanvas(factory);
+        servers.push({ server, assets });
+        await assertAssets(server, assets);
+      };
+      await capture(oldFactory, contents);
+      const phases = new Set();
+      intercept(t, "copyFile", async (copy, from, to) => {
+        const result = await copy(from, to);
+        if (to.includes("-bundle-") && ["server.mjs", "app.mjs", "index.html"].includes(basename(to))) {
+          phases.add(`copy:${basename(to)}`);
+          await capture(oldFactory, contents);
+        }
+        return result;
+      });
+      intercept(t, "rename", async (rename, from, to) => {
+        const result = await rename(from, to);
+        if (from.includes("-bundle-") && dirname(to) === join(target, "runtimes")) {
+          phases.add("runtime");
+          await capture(await serverFactory(to), expected);
+          await capture(oldFactory, contents);
+        }
+        if (from.includes("-stage-") && dirname(to) === target) {
+          assert.ok(["extension.mjs", marker].includes(basename(to)));
+          phases.add(basename(to));
+          await capture(await serverFactory(await runtimePath(target)), expected);
+          await capture(oldFactory, contents);
+        }
+        return result;
+      });
+      await install(root);
+      assert.deepEqual(phases, new Set(["copy:server.mjs", "copy:app.mjs", "copy:index.html", "runtime", "extension.mjs", marker]));
+      for (const { server, assets } of servers) await assertAssets(server, assets);
+      await capture(oldFactory, contents);
+      assert.equal((await fs.readdir(join(target, "runtimes"))).length, legacy ? 1 : 2);
+      if (legacy) assert.equal(await fs.readFile(join(target, "sound.mjs"), "utf8"), legacyAssets["sound.mjs"]);
+    });
+  }
+});
+
+test("failed activation keeps every server's runtime available and restores the previous entry point", async t => {
+  for (const failingFile of ["extension.mjs", marker]) {
+    await t.test(`failure after ${failingFile}`, async t => {
+      const root = await home(t);
+      const { target, contents } = await legacyInstallation(root);
+      const previousMarker = await fs.readFile(join(target, marker), "utf8");
+      const newContents = await sourceContents();
+      const servers = [];
+      t.after(() => Promise.all(servers.map(({ server }) => server.close())));
+      let failed = false;
+      intercept(t, "rename", async (rename, from, to) => {
+        const result = await rename(from, to);
+        if (from.includes("-stage-") && dirname(to) === target) {
+          const server = await startCanvas(await serverFactory(await runtimePath(target)));
+          servers.push({ server, contents: newContents });
+          if (!failed && basename(to) === failingFile) {
+            failed = true;
+            throw new Error("Synthetic activation failure");
+          }
+        }
+        return result;
+      });
+      await assert.rejects(install(root), /Synthetic activation failure/);
+      assert.equal(await fs.readFile(join(target, "extension.mjs"), "utf8"), contents["extension.mjs"]);
+      assert.equal(await fs.readFile(join(target, marker), "utf8"), previousMarker);
+      for (const [file, content] of Object.entries(contents)) assert.equal(await fs.readFile(join(target, file), "utf8"), content);
+      for (const entry of servers) await assertAssets(entry.server, entry.contents);
+      const oldServer = await startCanvas(await serverFactory(target));
+      servers.push({ server: oldServer, contents });
+      await assertAssets(oldServer, contents);
+      assert.equal((await fs.readdir(join(target, "runtimes"))).length, 1);
+      await install(root);
+      for (const entry of servers) await assertAssets(entry.server, entry.contents);
+    });
+  }
+});
+
+test("an interrupted bundle publication leaves an owned, reusable runtime without activating it", async t => {
   const root = await home(t);
-  const target = await install(root);
-  const marker = join(target, ".copilot-notifications-install.json");
-  const manifest = JSON.parse(await fs.readFile(marker, "utf8"));
-  for (const file of ["desktop.mjs", "notifier.mjs", "lock.mjs"]) {
-    await fs.unlink(join(target, file));
-    delete manifest.hashes[file];
-  }
-  const legacy = {
-    "settings.mjs": "export class Preferences {}\n",
-    "server.mjs": "export async function startServer() {}\n",
-    "extension.mjs": 'import { Preferences } from "./settings.mjs";\nimport { startServer } from "./server.mjs";\n',
-    "sound.mjs": "export class NotificationSound {}\n",
-  };
-  for (const [file, content] of Object.entries(legacy)) {
-    await fs.writeFile(join(target, file), content);
-    manifest.hashes[file] = digest(content);
-  }
-  await fs.writeFile(marker, JSON.stringify(manifest));
-  const before = new Map(await Promise.all([...Object.keys(manifest.hashes), basename(marker)]
-    .map(async file => [file, await fs.readFile(join(target, file), "utf8")])));
-  return { root, target, before };
-}
-
-async function importProviderModules(target) {
-  await execute(process.execPath, ["--input-type=module", "-e",
-    "await Promise.all(process.argv.slice(1).map(url => import(url)));",
-    ...["settings.mjs", "server.mjs"].map(file => pathToFileURL(join(target, file)).href)]);
-}
-
-test("new dependencies are available to starting providers throughout a pre-desktop upgrade", async t => {
-  const { root, target } = await preDesktopInstallation(t);
-  const published = [];
+  const { target, contents } = await legacyInstallation(root);
+  const previousMarker = await fs.readFile(join(target, marker), "utf8");
+  let failed = false;
   intercept(t, "rename", async (rename, from, to) => {
     const result = await rename(from, to);
-    if (from.includes("-stage-") && dirname(to) === target) {
-      published.push(basename(to));
-      await importProviderModules(target);
+    if (!failed && from.includes("-bundle-") && dirname(to) === join(target, "runtimes")) {
+      failed = true;
+      throw new Error("Synthetic interrupted bundle publication");
     }
     return result;
   });
+  await assert.rejects(install(root), /Synthetic interrupted bundle publication/);
+  assert.equal(await fs.readFile(join(target, "extension.mjs"), "utf8"), contents["extension.mjs"]);
+  assert.equal(await fs.readFile(join(target, marker), "utf8"), previousMarker);
+  assert.equal((await fs.readdir(join(target, "runtimes"))).length, 1);
   await install(root);
-  assert.deepEqual(new Set(published.slice(0, 3)), new Set(["desktop.mjs", "notifier.mjs", "lock.mjs"]));
-  assert.ok(published.indexOf("settings.mjs") > 2);
-  assert.ok(published.indexOf("server.mjs") > 2);
-  assert.equal(published.at(-2), "extension.mjs");
-  assert.equal(published.at(-1), ".copilot-notifications-install.json");
-  assert.equal((await fs.readdir(target)).includes("sound.mjs"), false);
+  assert.equal((await fs.readdir(join(target, "runtimes"))).length, 1);
+  assert.notEqual(await runtimePath(target), target);
+  assert.deepEqual(await fs.readdir(join(root, "extensions")), ["github-notifications"]);
 });
 
-test("pre-desktop rollback restores importers before removing their new dependencies", async t => {
-  for (const failingFile of ["settings.mjs", ".copilot-notifications-install.json"]) {
-    await t.test(`failure after publishing ${failingFile}`, async t => {
-      const { root, target, before } = await preDesktopInstallation(t);
-      const added = ["desktop.mjs", "notifier.mjs", "lock.mjs"];
-      let failed = false;
-      let restored = 0;
-      const removed = [];
-      intercept(t, "rename", async (rename, from, to) => {
-        const result = await rename(from, to);
-        if (!failed && from.includes("-stage-") && to === join(target, failingFile)) {
-          failed = true;
-          throw new Error("Synthetic pre-desktop publication failure");
-        }
-        if (failed && from.includes("-backup-") && dirname(to) === target) {
-          restored++;
-          await importProviderModules(target);
-        }
-        return result;
-      });
-      intercept(t, "unlink", async (unlink, path) => {
-        const result = await unlink(path);
-        if (failed && dirname(path) === target && added.includes(basename(path))) {
-          removed.push(basename(path));
-          await importProviderModules(target);
-        }
-        return result;
-      });
-      await assert.rejects(install(root), /Synthetic pre-desktop publication failure/);
-      assert.ok(restored > 0);
-      assert.deepEqual(new Set(removed), new Set(added));
-      assert.deepEqual(new Set(await fs.readdir(target)), new Set(before.keys()));
-      for (const [file, content] of before) assert.equal(await fs.readFile(join(target, file), "utf8"), content, file);
-      assert.deepEqual(await fs.readdir(join(root, "extensions")), ["github-notifications"]);
-    });
-  }
+test("failed first activation can be retried while a server from the failed attempt still works", async t => {
+  const root = await home(t);
+  const target = join(root, "extensions", "github-notifications");
+  let server;
+  let failed = false;
+  t.after(() => server?.close());
+  intercept(t, "rename", async (rename, from, to) => {
+    const result = await rename(from, to);
+    if (!failed && from.includes("-stage-") && to === join(target, marker)) {
+      failed = true;
+      server = await startCanvas(await serverFactory(await runtimePath(target)));
+      throw new Error("Synthetic first activation failure");
+    }
+    return result;
+  });
+  await assert.rejects(install(root), /Synthetic first activation failure/);
+  assert.deepEqual(await fs.readdir(target), ["runtimes"]);
+  await assertAssets(server, await sourceContents());
+  await install(root);
+  await assertAssets(server, await sourceContents());
 });
 
 test("a concurrent provider can save settings during publication without moving artifacts or losing the entry point", async t => {
@@ -137,7 +183,7 @@ test("a concurrent provider can save settings during publication without moving 
   let writes = 0;
   intercept(t, "rename", async (rename, from, to) => {
     assert.notEqual(from, target, "The installed directory must never disappear");
-    if (from.includes("-stage-") && to === join(target, "github.mjs")) {
+    if (from.includes("-stage-") && to === join(target, "extension.mjs")) {
       await writeFromProvider(directory, true);
       await fs.access(join(target, "extension.mjs"));
       writes++;
@@ -180,7 +226,7 @@ test("an artifacts-only destination created by a provider during staging is pres
   const directory = join(target, "artifacts");
   let written = false;
   intercept(t, "copyFile", async (copy, from, to) => {
-    if (!written && to.includes("-stage-")) {
+    if (!written && to.includes("-bundle-")) {
       written = true;
       await writeFromProvider(directory, true);
     }
@@ -194,21 +240,16 @@ test("an artifacts-only destination created by a provider during staging is pres
 
 test("publication failure restores the previous runtime and retains the latest concurrent settings", async t => {
   const root = await home(t);
-  const target = await install(root);
-  const oldApp = `${await fs.readFile(join(target, "app.mjs"), "utf8")}\n// Previous synthetic release.\n`;
-  await fs.writeFile(join(target, "app.mjs"), oldApp);
-  const marker = join(target, ".copilot-notifications-install.json");
-  const manifest = JSON.parse(await fs.readFile(marker, "utf8"));
-  manifest.hashes["app.mjs"] = digest(oldApp);
-  await fs.writeFile(marker, JSON.stringify(manifest));
-  const previousMarker = await fs.readFile(marker, "utf8");
+  const { target, directory: oldRuntime, contents } = await olderRuntime(root);
+  const previousEntry = await fs.readFile(join(target, "extension.mjs"), "utf8");
+  const previousMarker = await fs.readFile(join(target, marker), "utf8");
   const directory = join(target, "artifacts");
   const preferences = new Preferences({ directory });
   await preferences.update({ autoOpen: false });
   let failed = false;
   intercept(t, "rename", async (rename, from, to) => {
     const result = await rename(from, to);
-    if (!failed && from.includes("-stage-") && to === join(target, "app.mjs")) {
+    if (!failed && from.includes("-stage-") && to === join(target, "extension.mjs")) {
       failed = true;
       await writeFromProvider(directory, true);
       throw Object.assign(new Error("Synthetic publication failure"), { code: "EIO" });
@@ -216,8 +257,9 @@ test("publication failure restores the previous runtime and retains the latest c
     return result;
   });
   await assert.rejects(install(root), /Synthetic publication failure/);
-  assert.equal(await fs.readFile(join(target, "app.mjs"), "utf8"), oldApp);
-  assert.equal(await fs.readFile(marker, "utf8"), previousMarker);
+  assert.equal(await fs.readFile(join(target, "extension.mjs"), "utf8"), previousEntry);
+  assert.equal(await fs.readFile(join(oldRuntime, "app.mjs"), "utf8"), contents["app.mjs"]);
+  assert.equal(await fs.readFile(join(target, marker), "utf8"), previousMarker);
   assert.deepEqual(await preferences.read(), { autoOpen: true, darkMode: null, desktopNotifications: false, desktopSound: "default" });
   await fs.access(join(target, "extension.mjs"));
   assert.deepEqual(await fs.readdir(join(root, "extensions")), ["github-notifications"]);
@@ -227,22 +269,22 @@ test("publication failure restores the previous runtime and retains the latest c
 test("rollback preserves an unexpected user edit and keeps original runtime backups for recovery", async t => {
   const root = await home(t);
   const target = await install(root);
-  const oldApp = await fs.readFile(join(target, "app.mjs"), "utf8");
+  const oldEntry = await fs.readFile(join(target, "extension.mjs"), "utf8");
   intercept(t, "rename", async (rename, from, to) => {
     const result = await rename(from, to);
-    if (from.includes("-stage-") && to === join(target, "app.mjs")) {
+    if (from.includes("-stage-") && to === join(target, "extension.mjs")) {
       await fs.writeFile(to, "// Unrelated user edit.\n");
       throw new Error("Synthetic interrupted publication");
     }
     return result;
   });
   await assert.rejects(install(root), /rollback needs attention/);
-  assert.equal(await fs.readFile(join(target, "app.mjs"), "utf8"), "// Unrelated user edit.\n");
+  assert.equal(await fs.readFile(join(target, "extension.mjs"), "utf8"), "// Unrelated user edit.\n");
   await fs.access(join(target, "extension.mjs"));
   const parentEntries = await fs.readdir(join(root, "extensions"));
   const backup = parentEntries.find(name => name.startsWith(".github-notifications-backup-"));
   assert.ok(backup);
-  assert.equal(await fs.readFile(join(root, "extensions", backup, "app.mjs"), "utf8"), oldApp);
+  assert.equal(await fs.readFile(join(root, "extensions", backup, "extension.mjs"), "utf8"), oldEntry);
   assert.equal(parentEntries.some(name => name.includes("install-lock")), false);
 });
 
@@ -253,7 +295,7 @@ test("concurrent installers cannot interleave publication and the lock is releas
   let paused = false;
   const ready = new Promise(resolve => { entered = resolve; });
   intercept(t, "copyFile", async (copy, from, to) => {
-    if (!paused && to.includes("-stage-")) {
+    if (!paused && to.includes("-bundle-")) {
       paused = true;
       entered();
       await new Promise(resolve => { release = resolve; });

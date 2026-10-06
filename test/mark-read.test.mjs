@@ -7,7 +7,7 @@ import { http, next, thread } from "./fixtures.mjs";
 
 const empty = status => `HTTP/2 ${status} Synthetic\r\n\r\n`;
 
-test("205 and documented 304 confirmation remove the known row and synchronize shared panels without a sound event", async () => {
+test("205 and documented 304 confirmation remove the known row and synchronize shared panels", async () => {
   for (const status of [205, 304]) {
     const calls = [];
     const client = new GitHubClient({ run: async args => {
@@ -21,7 +21,6 @@ test("205 and documented 304 confirmation remove the known row and synchronize s
     await one.markRead({ id: "1" });
     for (const inbox of [one, two]) {
       assert.equal(inbox.summary().loaded, 0);
-      assert.equal(inbox.summary().activity.sequence, 0);
       assert.equal(inbox.summary().needsRefresh, true);
     }
     const write = calls.find(args => args.includes("PATCH"));
@@ -45,7 +44,6 @@ test("failed HTTP/auth/rate/network mutations retain rows and counts", async () 
     await inbox.refresh();
     await assert.rejects(inbox.markRead({ id: "1" }));
     assert.equal(inbox.summary().loaded, 1);
-    assert.equal(inbox.summary().activity.sequence, 0);
   }
 });
 
@@ -112,7 +110,6 @@ test("cached/304 pages cannot resurrect reads; later real activity can reappear,
   now += POLL_MS;
   await inbox.refresh();
   assert.equal(inbox.summary().loaded, 1);
-  assert.equal(inbox.summary().activity.sequence, 1);
 });
 
 test("HTTP mark-read routes authorize known IDs and leave mutations out of agent actions", async t => {
@@ -140,7 +137,7 @@ test("HTTP mark-read routes authorize known IDs and leave mutations out of agent
   assert.equal(writes, 1);
 });
 
-test("a mark in another panel during a multi-page refresh cannot resurrect a read row or advance sound", async () => {
+test("a mark in another panel during a multi-page refresh cannot resurrect a read row", async () => {
   let now = 0;
   let slow = false;
   let release;
@@ -163,7 +160,6 @@ test("a mark in another panel during a multi-page refresh cannot resurrect a rea
   await read;
   await assert.rejects(refresh, { code: "inbox_changed" });
   assert.equal(one.snapshot().groups.flatMap(group => group.items).some(item => item.id === "1"), false);
-  assert.equal(one.summary().activity.sequence, 0);
 });
 
 test("rate-limited writes block subsequent writes until GitHub's retry time", async () => {
