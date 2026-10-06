@@ -149,13 +149,11 @@ installation, GitHub sign-in, or external network access.
 Use stable semantic versions (`vMAJOR.MINOR.PATCH`) so users receive deliberate,
 tested updates with release notes instead of every merge. Bump
 `.github/extensions/github-notifications/version.json` in the release PR.
-The initial version is `0.1.0`; it is not available to users until a release
-is actually published.
 
 After merging the version change into `main`, invoke the
 [Release workflow](.github/workflows/release.yml) from **Actions → Release →
-Run workflow**. Select **main** and enter either the version (`0.1.0`) or its
-tag (`v0.1.0`). Both are validated and normalized to `v0.1.0` before publication.
+Run workflow**. Select **main** and enter either the version (`0.1.1`) or its
+tag (`v0.1.1`). Both are validated and normalized to `v0.1.1` before publication.
 The workflow must be merged into the default branch before GitHub
 offers the manual trigger.
 
@@ -165,7 +163,7 @@ You can also invoke it with GitHub CLI:
 gh workflow run release.yml \
   --repo fletchto99/copilot-notifications-canvas \
   --ref main \
-  -f version=0.1.0
+  -f version=0.1.1
 ```
 
 The workflow checks that the requested version matches `version.json`, runs
