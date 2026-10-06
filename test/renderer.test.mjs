@@ -10,6 +10,7 @@ import { FakeAudioContext } from "./audio-fixtures.mjs";
 
 const script = await readFile(new URL("../.github/extensions/github-notifications/app.mjs", import.meta.url), "utf8");
 const html = await readFile(new URL("../.github/extensions/github-notifications/index.html", import.meta.url), "utf8");
+const styles = await readFile(new URL("../.github/extensions/github-notifications/styles.css", import.meta.url), "utf8");
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
 // Minimal DOM/event/timer doubles exercise the actual renderer without a browser dependency.
@@ -102,11 +103,13 @@ async function renderer({ hidden = false, token = "a".repeat(64), audioOptions =
     node.id = id;
     return [id, node];
   }));
+  ids.get("sound").append(ids.get("sound-label"));
   for (const id of ["batch-stop", "batch-retry", "batch-dismiss"]) ids.get(id).parentNode = ids.get("batch-progress");
   ids.get("batch-progress").contains = node =>
     ["batch-progress", "batch-stop", "batch-retry", "batch-dismiss"].some(id => ids.get(id) === node);
   ids.get("settings").contains = node =>
-    ["settings", "settings-toggle", "settings-panel", "sound", "auto-open", "dark-mode", "check-updates"].some(id => ids.get(id) === node);
+    node === ids.get("settings") ||
+    ["settings-toggle", "settings-panel", "sound", "auto-open", "dark-mode", "check-updates"].some(id => ids.get(id).contains(node));
   const document = {
     hidden,
     body: new Node("body"),
@@ -227,17 +230,23 @@ test("update banner sits below the subtitle and above the inbox controls with it
   assert.match(html, /<details id="update-prompt-details">/);
 });
 
-test("Settings shows the running version below Check for updates without a duplicate footer version", async () => {
-  assert.match(html, /<button id="check-updates"[^>]*>Check for updates<\/button>\s*<p id="installed-version"/);
+test("Settings combines the running version and update status in one text row below Check for updates", async () => {
+  assert.match(html, /<button id="check-updates"[^>]*>Check for updates<\/button>\s*<p class="settings-help"><span id="installed-version">[^<]*<\/span><span id="update-status"[^>]*><\/span><\/p>/);
   assert.doesNotMatch(html, /id="canvas-version"/);
-  for (const release of [
-    {},
-    { status: "available", latestVersion: "0.2.0", prompt: "Synthetic update prompt" },
-    { status: "unchecked", checking: true, checkedAt: null },
-    { status: "unchecked", error: "Release check failed", checkedAt: null },
+  for (const [release, message] of [
+    [{}, "Up to date"],
+    [{ status: "available", latestVersion: "0.2.0", prompt: "Synthetic update prompt" }, "Update available: v0.2.0."],
+    [{ status: "unchecked", checking: true, checkedAt: null }, "Checking..."],
+    [{ status: "unchecked", error: "Release check failed", checkedAt: null }, "Release check failed"],
+    [{ status: "unchecked", checkedAt: null }, ""],
   ]) {
     const ui = await renderer({ release });
-    assert.equal(ui.ids.get("installed-version").textContent, "GitHub Notification Canvas 0.1.0");
+    const version = ui.ids.get("installed-version");
+    const status = ui.ids.get("update-status");
+    assert.equal(version.textContent, "Notification Canvas v0.1.0");
+    assert.equal(status.textContent, message ? ` - ${message}` : "");
+    assert.equal(status.hidden, !message);
+    assert.equal(version.textContent + status.textContent, `Notification Canvas v0.1.0${message ? ` - ${message}` : ""}`);
   }
 });
 
@@ -248,7 +257,7 @@ test("update banner shows release links and copies a prompt without installing o
   } });
   assert.equal(ui.ids.get("update-banner").hidden, false);
   assert.match(ui.ids.get("update-title").textContent, /v0\.2\.0.*v0\.1\.0/);
-  assert.equal(ui.ids.get("installed-version").textContent, "GitHub Notification Canvas 0.1.0");
+  assert.equal(ui.ids.get("installed-version").textContent, "Notification Canvas v0.1.0");
   assert.match(ui.ids.get("release-notes").href, /\/releases\/tag\/v0\.2\.0$/);
   assert.match(ui.ids.get("update-instructions").href, /#installation-and-updating$/);
   assert.equal(ui.ids.get("update-prompt").value, "Synthetic safe update prompt");
@@ -274,7 +283,7 @@ test("clipboard denial exposes a selectable prompt and does not claim it was cop
 
 test("current, ahead, absent and failed release checks keep the banner out of the inbox", async () => {
   for (const [status, message] of [
-    ["current", /^Up to date\.$/], ["ahead", /Newer than/], ["no_release", /No stable/],
+    ["current", /^ - Up to date$/], ["ahead", /Newer than/], ["no_release", /No stable/],
   ]) {
     const ui = await renderer({ release: { status } });
     assert.equal(ui.ids.get("update-banner").hidden, true);
@@ -282,7 +291,7 @@ test("current, ahead, absent and failed release checks keep the banner out of th
   }
   const ui = await renderer({ release: { status: "unchecked", error: "Network unavailable", checkedAt: null } });
   assert.equal(ui.ids.get("update-banner").hidden, true);
-  assert.equal(ui.ids.get("update-status").textContent, "Network unavailable");
+  assert.equal(ui.ids.get("update-status").textContent, " - Network unavailable");
   assert.equal(ui.ids.get("update-status").hidden, false);
   assert.equal(ui.ids.get("notice").hidden, true);
   assert.equal(ui.document.querySelectorAll("article").length, 1);
@@ -300,13 +309,13 @@ test("manual release checks stay available while checking and immediately after 
   assert.equal(ui.calls.at(-1).options.body, "{}");
   assert.equal(ui.ids.get("check-updates").disabled, false);
   assert.equal(ui.ids.get("check-updates").attributes["aria-busy"], "true");
-  assert.equal(ui.ids.get("update-status").textContent, "Checking...");
+  assert.equal(ui.ids.get("update-status").textContent, " - Checking...");
   assert.equal(ui.ids.get("search").disabled, false);
   await ui.ids.get("check-updates").events.click();
   assert.equal(ui.calls.filter(call => call.path === "/api/updates").length, 2);
   ui.setRelease({ checking: false, status: "current", latestVersion: "0.1.0", checkedAt: ui.advance(0) });
   await ui.fireTimer();
-  assert.equal(ui.ids.get("update-status").textContent, "Up to date.");
+  assert.equal(ui.ids.get("update-status").textContent, " - Up to date");
   assert.equal(ui.ids.get("check-updates").attributes["aria-busy"], "false");
   assert.equal(ui.ids.get("check-updates").disabled, false);
   await ui.ids.get("check-updates").events.click();
@@ -533,7 +542,7 @@ test("sound is opt-in and refresh arrivals ring once even when search hides ever
   ui.ids.get("sound").events.click();
   await settle();
   assert.equal(ui.ids.get("sound").attributes["aria-checked"], "true");
-  assert.equal(ui.ids.get("sound").textContent, "Play sound: On");
+  assert.equal(ui.ids.get("sound-label").textContent, "Play sound");
   assert.equal(ui.ids.get("sound-status").textContent, "");
   assert.equal(ui.ids.get("sound-status").hidden, true);
   assert.equal(ui.audioContexts[0].starts, 0);
@@ -549,6 +558,7 @@ test("sound is opt-in and refresh arrivals ring once even when search hides ever
   ui.ids.get("sound").events.click();
   await settle();
   assert.equal(ui.ids.get("sound").attributes["aria-checked"], "false");
+  assert.equal(ui.ids.get("sound-label").textContent, "Play sound");
   assert.equal(ui.ids.get("sound-status").textContent, "");
   assert.equal(ui.ids.get("sound-status").hidden, true);
   assert.equal(ui.audioContexts[0].state, "closed");
@@ -558,7 +568,8 @@ test("visible toggle reports browser audio failures, and pagehide closes its con
   const failed = await renderer({ audioOptions: { resumeError: true } });
   failed.ids.get("sound").events.click();
   await settle();
-  assert.equal(failed.ids.get("sound").textContent, "Play sound: Off");
+  assert.equal(failed.ids.get("sound-label").textContent, "Play sound");
+  assert.equal(failed.ids.get("sound").attributes["aria-checked"], "false");
   assert.match(failed.ids.get("sound-status").textContent, /could not be enabled/);
   assert.equal(failed.ids.get("sound-status").hidden, false);
   const ui = await renderer();
@@ -568,6 +579,34 @@ test("visible toggle reports browser audio failures, and pagehide closes its con
   await settle();
   assert.equal(ui.audioContexts[0].state, "closed");
   assert.equal(ui.ids.get("sound").attributes["aria-checked"], "false");
+});
+
+test("Play sound uses the shared switch and keeps pending activation cancellable", async () => {
+  assert.match(html, /<button\b[^>]*id="sound"[^>]*class="switch-toggle"[^>]*role="switch"/);
+  assert.match(html, /<span id="sound-label">Play sound<\/span>\s*<span class="switch-track" aria-hidden="true"><span class="switch-thumb"><\/span><\/span>/);
+  assert.doesNotMatch(script, /\$\("sound"\)\.(textContent|innerHTML)\s*=/);
+  for (const cancel of [false, true]) {
+    let resume;
+    const ui = await renderer({ audioOptions: { resumeWait: new Promise(resolve => { resume = resolve; }) } });
+    const toggle = ui.ids.get("sound");
+    toggle.focus();
+    toggle.events.click();
+    assert.equal(ui.ids.get("sound-label").textContent, "Cancel enabling sound");
+    assert.equal(toggle.attributes["aria-checked"], "false");
+    assert.equal(toggle.disabled, false);
+    if (cancel) {
+      toggle.events.click();
+      assert.equal(ui.ids.get("sound-label").textContent, "Play sound");
+    }
+    resume();
+    await settle();
+    assert.equal(toggle.attributes["aria-checked"], String(!cancel));
+    assert.equal(ui.ids.get("sound-label").textContent, "Play sound");
+    assert.equal(ui.document.activeElement, toggle);
+    assert.equal(ui.audioContexts[0].starts, 0);
+    ui.window.events.pagehide();
+    await settle();
+  }
 });
 
 test("Settings uses an icon-only toggle with an accessible name and tooltip", () => {
@@ -602,6 +641,8 @@ test("Settings puts an Auto-open slider above sound, saves startup preference an
   assert.equal(ui.ids.get("settings-status").textContent, "");
   ui.document.events.click({ target: ui.ids.get("sound") });
   assert.equal(settings.open, true);
+  ui.document.events.click({ target: ui.ids.get("sound-label") });
+  assert.equal(settings.open, true);
   ui.document.events.keydown({ key: "Escape", preventDefault() {} });
   assert.equal(settings.open, false);
   assert.equal(ui.document.activeElement, ui.ids.get("settings-toggle"));
@@ -618,7 +659,7 @@ test("Settings omits explanatory copy and hides empty status messages", async ()
   assert.doesNotMatch(html, /dark-mode-help|startup-help|Optional chime|Saved for your user/);
   const ui = await renderer();
   assert.equal(ui.ids.get("settings-status").hidden, true);
-  assert.equal(ui.ids.get("update-status").textContent, "Up to date.");
+  assert.equal(ui.ids.get("update-status").textContent, " - Up to date");
   assert.doesNotMatch(ui.ids.get("update-status").textContent, /Last checked|Check again after/);
 });
 
@@ -794,6 +835,40 @@ test("hidden views and reconnects reset the audio baseline without catch-up chim
   assert.equal(ui.audioContexts[0].starts, 0);
   ui.window.events.pagehide();
   await settle();
+});
+
+test("repository header shares its hover background across the toggle and read action", async () => {
+  const ui = await renderer();
+  const buttons = ui.ids.get("groups").querySelectorAll("button");
+  const disclosure = buttons.find(node => node.dataset.disclosure);
+  const groupRead = buttons.find(node => node.dataset.focusKey === "bulk:example/widgets");
+  assert.equal(disclosure.className, "repo-toggle");
+  assert.equal(disclosure.parentNode.className, "repo-header");
+  assert.equal(groupRead.parentNode, disclosure.parentNode);
+  assert.match(styles, /button:hover:not\(:disabled, \.repo-toggle\), summary:hover, \.repo-header:hover, \.row:hover \{\s*background: color-mix\(in srgb, var\(--canvas-text\) 4%, transparent\);/);
+  assert.match(styles, /@media \(prefers-reduced-motion: no-preference\) \{\s*button, a, \.repo-header \{ transition: background-color \.12s ease; \}/);
+  ui.window.events.pagehide();
+});
+
+test("repository toggle focus is inset inside the clipped card", () => {
+  assert.match(styles, /:focus-visible \{ outline: 2px solid var\(--focus\); outline-offset: 3px; \}/);
+  assert.match(styles, /\.repo-group \{[^}]*overflow: clip;/);
+  assert.match(styles, /\.repo-toggle:focus-visible \{ outline-offset: -5px; \}/);
+});
+
+test("compact toolbar keeps a shrinkable search beside the settings button", () => {
+  assert.match(styles, /\.toolbar \{ display: flex;[^}]*\}/);
+  assert.match(styles, /\.search \{ flex: 1; min-width: 0; \}/);
+  assert.match(styles, /\.settings \{[^}]*flex-shrink: 0;/);
+  assert.doesNotMatch(styles, /\.toolbar \{[^}]*flex-wrap: wrap/);
+  assert.doesNotMatch(styles, /\.search \{[^}]*flex-basis: 100%/);
+});
+
+test("notification metadata, counts and read actions use 12px text", () => {
+  for (const selector of ["\\.metadata", "time", "\\.repo-count", "\\.repo-read", "\\.mark-read"]) {
+    const rule = styles.match(new RegExp(`(?:^|\\n)${selector} \\{[^}]*\\}`))?.[0] ?? "";
+    assert.match(rule, /font-size: 12px;/, selector);
+  }
 });
 
 test("repository action starts from one click with no dialog and preserves independent disclosure", async () => {

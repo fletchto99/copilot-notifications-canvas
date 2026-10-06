@@ -29,9 +29,8 @@ let batchFocusKey;
 const sound = new NotificationSound({
   createContext: () => new (window.AudioContext || window.webkitAudioContext)(),
   onChange: ({ enabled, pending, message }) => {
-    $("sound").textContent = pending ? "Cancel enabling sound" : enabled ? "Play sound: On" : "Play sound: Off";
+    $("sound-label").textContent = pending ? "Cancel enabling sound" : "Play sound";
     $("sound").setAttribute("aria-checked", String(enabled));
-    $("sound").setAttribute("aria-label", pending ? "Cancel enabling sound" : enabled ? "Disable notification sound" : "Enable notification sound");
     $("sound-status").textContent = message;
     $("sound-status").hidden = !message;
   },
@@ -120,24 +119,26 @@ function renderUpdates(updates = releaseState) {
   $("check-updates").disabled = !hasCapability;
   $("check-updates").setAttribute("aria-busy", String(updatesBusy || Boolean(updates?.checking)));
   if (!updates) {
-    $("update-status").textContent = updateError || (updatesBusy ? "Checking..." : "");
-    $("update-status").hidden = !$("update-status").textContent;
+    const message = updateError || (updatesBusy ? "Checking..." : "");
+    $("update-status").textContent = message ? ` - ${message}` : "";
+    $("update-status").hidden = !message;
     return;
   }
   releaseState = updates;
-  $("installed-version").textContent = `GitHub Notification Canvas ${updates.currentVersion}`;
+  $("installed-version").textContent = `Notification Canvas v${updates.currentVersion}`;
   const messages = {
     unchecked: "",
     no_release: "No stable release yet.",
-    current: "Up to date.",
+    current: "Up to date",
     ahead: "Newer than the latest release.",
     available: `Update available: v${updates.latestVersion}.`,
   };
   const retry = updates.error && Date.now() < updates.canCheckAt
     ? ` Retry after ${new Date(updates.canCheckAt).toLocaleTimeString()}.` : "";
-  $("update-status").textContent = updateError || (updatesBusy || updates.checking ? "Checking..." :
+  const message = updateError || (updatesBusy || updates.checking ? "Checking..." :
     updates.error ? `${updates.error}${retry}` : messages[updates.status]);
-  $("update-status").hidden = !$("update-status").textContent;
+  $("update-status").textContent = message ? ` - ${message}` : "";
+  $("update-status").hidden = !message;
   const available = updates.status === "available";
   $("update-banner").hidden = !available;
   if (!available) return;
