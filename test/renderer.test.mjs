@@ -375,6 +375,16 @@ test("canvas is titled Unread Notifications without mode tabs or the old All not
   assert.doesNotMatch(html, /id="(?:all|unread|api-limit)"/);
 });
 
+test("inbox status says unread notifications and keeps loaded coverage separate", async () => {
+  const ui = await renderer({ initialRows: [thread("1"), thread("2")] });
+  assert.equal(ui.ids.get("count").textContent, "2 shown / 1 repositories / 2 unread notifications");
+  assert.match(ui.ids.get("coverage").textContent, /^2 notifications loaded\./);
+  await runInContext('update("filters", { query: "notification 1" })', ui.context);
+  assert.equal(ui.ids.get("count").textContent, "1 shown / 1 repositories / 2 unread notifications");
+  assert.match(ui.ids.get("coverage").textContent, /Search covers loaded notifications only\./);
+  ui.window.events.pagehide();
+});
+
 test("manual Refresh controls are absent while the automatic endpoint and SDK action remain", async () => {
   assert.doesNotMatch(html, /id="refresh"|>Refresh<\/button>|class="heading"/);
   assert.doesNotMatch(script, /\$\("refresh"\)/);

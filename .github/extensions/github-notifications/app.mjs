@@ -531,7 +531,7 @@ function render() {
     return;
   }
   if (document.activeElement !== $("search") && pendingQuery === undefined) $("search").value = state.filters.query;
-  $("count").textContent = `${state.matching} shown / ${state.groups.length} repositories / ${state.unread} unread loaded`;
+  $("count").textContent = `${state.matching} shown / ${state.groups.length} repositories / ${state.unread} unread notifications`;
   $("collapse").hidden = !state.groups.length;
   $("more").hidden = !state.hasMore;
   $("more").textContent = "Load more (up to 50)";
