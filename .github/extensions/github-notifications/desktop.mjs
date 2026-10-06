@@ -3,11 +3,12 @@ import { lstat, mkdir, open, readdir, rename, writeFile } from "node:fs/promises
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { GitHubClient, firstPage, POLL_MS } from "./github.mjs";
-import { InboxError, orderedThreads } from "./model.mjs";
+import { groupThreads, InboxError, orderedThreads } from "./model.mjs";
 import { acquireLock, ownerPattern, processAlive, removeFile } from "./lock.mjs";
 import { notifyDesktop, desktopCapabilities, soundValue, validSound } from "./notifier.mjs";
 
 const CHECK_MS = 5000;
+const BURST_THRESHOLD = 5;
 const MAX_STATE_BYTES = 262_144;
 const watchingMessage = "Watching in the background while a Notifications canvas is open. System notification settings control delivery.";
 const storageMessage = "Desktop notification coordination failed. Check permissions and the desktop-state.json, desktop-watchers and .desktop.lock entries in the extension artifacts directory.";
@@ -78,6 +79,13 @@ function recordActivity(state, items, now) {
   state.watermark = latest;
   state.fingerprints = [...boundary];
   return arrivals;
+}
+
+function notificationMessages(arrivals) {
+  return groupThreads(arrivals, { query: "" }).flatMap(group =>
+    group.items.length >= BURST_THRESHOLD
+      ? [{ title: group.repository, body: `${group.items.length} new notifications` }]
+      : group.items.map(item => ({ title: group.repository, body: item.title })));
 }
 
 export class DesktopNotifications {
@@ -256,11 +264,11 @@ export class DesktopNotifications {
         state.error = null;
         // Claim activity durably before delivery: a crash may lose an alert, but never replay it.
         await saveState(this.statePath, state);
-        for (const item of arrivals) {
+        for (const message of notificationMessages(arrivals)) {
           const current = await this.preferences.document();
           signal.throwIfAborted();
           if (!current.desktopNotifications || generation(current) !== state.generation) break;
-          await this.notify({ title: item.repository, body: item.title,
+          await this.notify({ ...message,
             sound: soundValue(current.desktopSound), platform: this.platform, signal });
         }
         this.setStatus("watching", watchingMessage);

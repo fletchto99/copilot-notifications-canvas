@@ -150,10 +150,22 @@ session does not automatically send alerts to your local computer.
 
 The watcher polls about every two minutes, respecting GitHub polling and rate
 limits, and follows additional pages when new activity spans multiple pages.
-It sends **one alert per new or updated unread thread**:
+For each repository with **1-4 new or updated unread threads in a poll**, it
+sends one alert per thread:
 
 - **Title:** `owner/repo`
 - **Body:** the GitHub notification's title.
+
+At **5 or more new or updated unread threads from the same repository in a
+single poll**, it sends one summary alert instead:
+
+- **Title:** `owner/repo`
+- **Body:** `<count> new notifications`
+
+Each summary makes one notification sound request, not one per thread. Counts
+include only newly detected activity, not the repository's entire unread inbox.
+Repositories are grouped independently; five notifications from five different
+repositories still produce five individual alerts.
 
 Very long titles are truncated to fit system payload limits. The first
 successful poll after enabling, or after all watchers have stopped, establishes

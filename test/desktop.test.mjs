@@ -68,7 +68,7 @@ test("desktop watching is opt-in and never invokes GitHub or the sender when dis
   assert.equal(f.calls.length, 0);
 });
 
-test("initial backlog is silent and each new or updated unread thread gets its own title and body", async t => {
+test("initial backlog is silent and small batches retain each thread's title and body", async t => {
   const f = await fixture(t);
   const watcher = f.make();
   await watcher.check();
@@ -99,6 +99,61 @@ test("initial backlog is silent and each new or updated unread thread gets its o
   assert.equal((await stat(join(f.directory, "desktop-state.json"))).mode & 0o777, 0o600);
 });
 
+test("bursts group at exactly five new notifications from a repository", async t => {
+  for (const count of [1, 4, 5, 6]) {
+    const f = await fixture(t);
+    const watcher = f.make();
+    await watcher.check();
+    const time = f.advance();
+    const arrivals = Array.from({ length: count }, (_, index) => updated(String(index + 2), time));
+    f.rows([...arrivals, thread()]);
+    await watcher.check();
+    assert.equal(f.deliveries.length, count < 5 ? count : 1, `count ${count}`);
+    assert.ok(f.deliveries.every(alert => alert.title === "example/widgets"));
+    if (count >= 5) assert.equal(f.deliveries[0].body, `${count} new notifications`);
+    else assert.deepEqual(new Set(f.deliveries.map(alert => alert.body)),
+      new Set(arrivals.map(item => item.subject.title)));
+    f.advance();
+    await watcher.check();
+    assert.equal(f.deliveries.length, count < 5 ? count : 1, "unchanged activity stays silent");
+  }
+});
+
+test("burst counts are per repository and exclude the existing inbox and read threads", async t => {
+  const f = await fixture(t);
+  const watcher = f.make();
+  await watcher.check();
+  const time = f.advance();
+  let id = 2;
+  const arrivals = [["example/widgets", 5], ["example/tools", 4], ["other/service", 1]]
+    .flatMap(([repository, count]) => Array.from({ length: count }, () => thread(String(id++), {
+      repository: { full_name: repository }, updated_at: new Date(time).toISOString(),
+    })));
+  f.rows([...arrivals, thread(), thread("99", {
+    repository: { full_name: "example/tools" }, unread: false, updated_at: new Date(time).toISOString(),
+  })]);
+  await watcher.check();
+  assert.equal(f.deliveries.length, 6);
+  assert.deepEqual(f.deliveries.filter(alert => alert.title === "example/widgets").map(alert => alert.body), ["5 new notifications"]);
+  assert.deepEqual(f.deliveries.filter(alert => alert.title === "example/tools").map(alert => alert.body).sort(),
+    arrivals.filter(item => item.repository.full_name === "example/tools").map(item => item.subject.title).sort());
+  assert.deepEqual(f.deliveries.filter(alert => alert.title === "other/service").map(alert => alert.body), ["Synthetic notification 11"]);
+});
+
+test("large initial backlogs are silent and a later small update does not summarize all unread items", async t => {
+  const f = await fixture(t);
+  const backlog = Array.from({ length: 8 }, (_, index) => updated(String(index + 1), epoch - 1000));
+  f.rows(backlog);
+  const watcher = f.make();
+  await watcher.check();
+  assert.equal(f.deliveries.length, 0);
+  const time = f.advance();
+  f.rows([...backlog, updated("1", time)]);
+  await watcher.check();
+  assert.equal(f.deliveries.length, 1);
+  assert.equal(f.deliveries[0].body, "Synthetic notification 1");
+});
+
 test("equal-timestamp arrivals are detected without replaying known IDs or older promoted rows", async t => {
   const f = await fixture(t);
   const watcher = f.make();
@@ -119,7 +174,7 @@ test("equal-timestamp arrivals are detected without replaying known IDs or older
   assert.equal(f.deliveries.length, 2);
 });
 
-test("new activity spanning pages sends one alert per thread only after the complete fetch succeeds", async t => {
+test("new activity spanning pages produces one complete burst summary only after fetching succeeds", async t => {
   const f = await fixture(t);
   const watcher = f.make();
   await watcher.check();
@@ -134,11 +189,12 @@ test("new activity spanning pages sends one alert per thread only after the comp
   fail = false;
   f.advance();
   await watcher.check();
-  assert.equal(f.deliveries.length, 60);
-  assert.equal(new Set(f.deliveries.map(item => item.body)).size, 60);
+  assert.equal(f.deliveries.length, 1);
+  assert.equal(f.deliveries[0].title, "example/widgets");
+  assert.equal(f.deliveries[0].body, "60 new notifications");
   f.advance();
   await watcher.check();
-  assert.equal(f.deliveries.length, 60);
+  assert.equal(f.deliveries.length, 1);
 });
 
 test("the backend timer runs without a renderer and is cancelled when its final panel closes", async t => {
@@ -316,6 +372,7 @@ async function childWatcher(t, directory) {
     import { Preferences } from ${JSON.stringify(settings)};
     let now = ${epoch};
     let updated = ${epoch};
+    let count = 1;
     let pause = false;
     let pauseDelivery = false;
     let finish;
@@ -325,10 +382,16 @@ async function childWatcher(t, directory) {
       client: { clear() {}, blockedUntil: 0, async page() {
         process.send({ type: "poll" });
         if (pause) await new Promise(resolve => { finish = resolve; });
-        return { items: [{ id: "1", unread: true, updatedAt: new Date(updated).toISOString() }], nextRefreshAt: now + ${POLL_MS} };
+        return {
+          items: Array.from({ length: count }, (_, index) => ({
+            id: String(index + 1), repository: "example/widgets", title: "Synthetic notification " + (index + 1),
+            unread: true, updatedAt: new Date(updated).toISOString(),
+          })),
+          nextRefreshAt: now + ${POLL_MS},
+        };
       } },
-      notify: async () => {
-        process.send({ type: "alert" });
+      notify: async ({ title, body }) => {
+        process.send({ type: "alert", title, body });
         if (pauseDelivery) await new Promise(() => {});
       },
     });
@@ -337,6 +400,7 @@ async function childWatcher(t, directory) {
       if (message.type === "finish") { finish(); return; }
       now = message.now ?? now;
       updated = message.updated ?? updated;
+      count = message.count ?? count;
       pause = message.pause ?? false;
       pauseDelivery = message.pauseDelivery ?? false;
       await watcher.check();
@@ -386,7 +450,7 @@ async function childWatcher(t, directory) {
   };
 }
 
-test("separate OS processes never double-send and recover a dead poller's lock", { timeout: 30_000 }, async t => {
+test("separate OS processes send a burst summary once and recover a dead poller's lock", { timeout: 30_000 }, async t => {
   const f = await fixture(t);
   // Stop children before fixture cleanup removes their shared state.
   await t.test("cross-process coordination", async t => {
@@ -395,8 +459,10 @@ test("separate OS processes never double-send and recover a dead poller's lock",
     await one.check();
     await two.check();
     const next = epoch + POLL_MS;
-    await Promise.all([one.check({ now: next, updated: next }), two.check({ now: next, updated: next })]);
+    await Promise.all([one.check({ now: next, updated: next, count: 5 }), two.check({ now: next, updated: next, count: 5 })]);
     assert.equal([...one.events, ...two.events].filter(event => event.type === "alert").length, 1);
+    assert.deepEqual([...one.events, ...two.events].find(event => event.type === "alert"),
+      { type: "alert", title: "example/widgets", body: "5 new notifications" });
     assert.equal([...one.events, ...two.events].filter(event => event.type === "poll").length, 2);
     const after = one.events.length;
     one.start({ now: next + POLL_MS, updated: next + POLL_MS, pause: true });
