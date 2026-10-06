@@ -213,6 +213,7 @@ export class DesktopNotifications {
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Invalid watcher directory");
     const release = await this.registrationLock();
     try {
+      if (this.registered) return;
       const cohorts = new Set((await this.activeWatchers()).map(watcher => watcher.cohort).filter(Boolean));
       if (cohorts.size > 1) throw new Error("Inconsistent watcher cohorts");
       this.cohort = [...cohorts][0] ?? randomUUID();
@@ -230,8 +231,15 @@ export class DesktopNotifications {
     const release = await this.registrationLock();
     try {
       if (!this.registered || this.owner !== owner || (onlyWhenClosed && this.panels.size)) return;
-      await removeFile(this.markerPath);
-      this.registered = false;
+      while (true) {
+        await removeFile(this.markerPath);
+        this.registered = false;
+        if (!onlyWhenClosed || !this.panels.size) break;
+        // A panel can reopen during removal, then close again during restoration.
+        await saveDocument(this.markerPath, { cohort: this.cohort }, this.directory);
+        this.registered = true;
+        if (this.panels.size) return;
+      }
       this.cohort = null;
       this.owner = `owner-${process.pid}-${randomUUID()}`;
       this.markerPath = join(this.watchersPath, this.owner);

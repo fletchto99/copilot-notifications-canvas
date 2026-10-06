@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import fs, { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -469,6 +470,117 @@ test("closing cannot unregister a panel reopened while its registration lock is 
   f.rows([updated("2", f.advance()), thread()]);
   await watcher.check();
   assert.deepEqual(f.deliveries.map(alert => alert.body), ["Synthetic notification 2"]);
+});
+
+test("reopening during marker removal preserves registration, its cohort and subsequent alerts", async t => {
+  for (const removedBeforeReopen of [false, true]) {
+    const f = await fixture(t);
+    const watcher = f.make();
+    await watcher.check();
+    const cohort = watcher.cohort;
+    const marker = watcher.markerPath;
+    const unlink = fs.unlink;
+    let entered;
+    let finish;
+    let paused = false;
+    const ready = new Promise(resolve => { entered = resolve; });
+    const waiting = new Promise(resolve => { finish = resolve; });
+    fs.unlink = async path => {
+      if (path === marker && !paused) {
+        paused = true;
+        if (removedBeforeReopen) await unlink(path);
+        entered();
+        await waiting;
+        if (removedBeforeReopen) return;
+      }
+      return unlink(path);
+    };
+    syncBuiltinESMExports();
+    const closing = watcher.remove("panel-1");
+    try {
+      await ready;
+      watcher.add("reopened");
+      await watcher.check();
+      finish();
+      await closing;
+      assert.equal(watcher.registered, true);
+      assert.equal(watcher.cohort, cohort);
+      assert.equal(JSON.parse(await readFile(marker, "utf8")).cohort, cohort);
+      f.rows([updated("2", f.advance()), thread()]);
+      await watcher.check();
+      assert.deepEqual(f.deliveries.map(alert => alert.body), ["Synthetic notification 2"]);
+      assert.equal((await f.state()).cohort, cohort);
+      await watcher.close();
+      assert.equal(watcher.registered, false);
+      assert.deepEqual(await readdir(watcher.watchersPath), []);
+    } finally {
+      finish();
+      await closing;
+      fs.unlink = unlink;
+      syncBuiltinESMExports();
+    }
+  }
+});
+
+test("closing again during registration restoration leaves no live marker behind", { timeout: 10_000 }, async t => {
+  const f = await fixture(t);
+  const watcher = f.make();
+  await watcher.check();
+  const marker = watcher.markerPath;
+  const unlink = fs.unlink;
+  const rename = fs.rename;
+  let removed;
+  let finishRemoval;
+  let restoring;
+  let finishRestoration;
+  let pausedRemoval = false;
+  let pausedRestoration = false;
+  const removalStarted = new Promise(resolve => { removed = resolve; });
+  const removalWait = new Promise(resolve => { finishRemoval = resolve; });
+  const restorationStarted = new Promise(resolve => { restoring = resolve; });
+  const restorationWait = new Promise(resolve => { finishRestoration = resolve; });
+  fs.unlink = async path => {
+    const result = await unlink(path);
+    if (path === marker && !pausedRemoval) {
+      pausedRemoval = true;
+      removed();
+      await removalWait;
+    }
+    return result;
+  };
+  fs.rename = async (from, to) => {
+    const result = await rename(from, to);
+    if (to === marker && !pausedRestoration) {
+      pausedRestoration = true;
+      restoring();
+      await restorationWait;
+    }
+    return result;
+  };
+  syncBuiltinESMExports();
+  const closing = watcher.remove("panel-1");
+  let closingAgain;
+  try {
+    await removalStarted;
+    watcher.add("reopened");
+    finishRemoval();
+    await restorationStarted;
+    closingAgain = watcher.remove("reopened");
+    finishRestoration();
+    await Promise.all([closing, closingAgain]);
+    assert.equal(watcher.panels.size, 0);
+    assert.equal(watcher.registered, false);
+    assert.equal(watcher.cohort, null);
+    assert.deepEqual(await readdir(watcher.watchersPath), []);
+    assert.deepEqual(f.logs, []);
+  } finally {
+    finishRemoval();
+    finishRestoration();
+    await Promise.all([closing, closingAgain]);
+    fs.unlink = unlink;
+    fs.rename = rename;
+    syncBuiltinESMExports();
+  }
 });
 
 test("closing one local panel keeps watching; closing the last stops and reopening baselines silently", async t => {

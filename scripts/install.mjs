@@ -113,8 +113,11 @@ export async function install(home = process.env.COPILOT_HOME || join(homedir(),
     await mkdir(target, { recursive: true });
     const touched = [];
     try {
+      const added = files.filter(file => file !== "extension.mjs" && !previous.has(file));
+      const replaced = files.filter(file => file !== "extension.mjs" && previous.has(file));
+      // Publish new dependencies before their importers; rollback removes them last.
       // Keep target/artifacts stable for settings writers, including already-running older providers.
-      for (const file of [...files.filter(file => file !== "extension.mjs"), "extension.mjs",
+      for (const file of [...added, ...replaced, "extension.mjs",
         ...retiredFiles.filter(file => previous.has(file)), marker]) {
         if (await fileHash(join(target, file)) !== previous.get(file)) throw new Error("Installed files changed during publication.");
         touched.push(file);

@@ -6,7 +6,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { install } from "../scripts/install.mjs";
 import { Preferences } from "../.github/extensions/github-notifications/settings.mjs";
 
@@ -35,6 +36,95 @@ async function writeFromProvider(directory, autoOpen) {
     `import { Preferences } from ${JSON.stringify(module)}; await new Preferences({directory:process.argv[1]}).update({autoOpen:${autoOpen}});`,
     directory]);
 }
+
+async function preDesktopInstallation(t) {
+  const root = await home(t);
+  const target = await install(root);
+  const marker = join(target, ".copilot-notifications-install.json");
+  const manifest = JSON.parse(await fs.readFile(marker, "utf8"));
+  for (const file of ["desktop.mjs", "notifier.mjs", "lock.mjs"]) {
+    await fs.unlink(join(target, file));
+    delete manifest.hashes[file];
+  }
+  const legacy = {
+    "settings.mjs": "export class Preferences {}\n",
+    "server.mjs": "export async function startServer() {}\n",
+    "extension.mjs": 'import { Preferences } from "./settings.mjs";\nimport { startServer } from "./server.mjs";\n',
+    "sound.mjs": "export class NotificationSound {}\n",
+  };
+  for (const [file, content] of Object.entries(legacy)) {
+    await fs.writeFile(join(target, file), content);
+    manifest.hashes[file] = digest(content);
+  }
+  await fs.writeFile(marker, JSON.stringify(manifest));
+  const before = new Map(await Promise.all([...Object.keys(manifest.hashes), basename(marker)]
+    .map(async file => [file, await fs.readFile(join(target, file), "utf8")])));
+  return { root, target, before };
+}
+
+async function importProviderModules(target) {
+  await execute(process.execPath, ["--input-type=module", "-e",
+    "await Promise.all(process.argv.slice(1).map(url => import(url)));",
+    ...["settings.mjs", "server.mjs"].map(file => pathToFileURL(join(target, file)).href)]);
+}
+
+test("new dependencies are available to starting providers throughout a pre-desktop upgrade", async t => {
+  const { root, target } = await preDesktopInstallation(t);
+  const published = [];
+  intercept(t, "rename", async (rename, from, to) => {
+    const result = await rename(from, to);
+    if (from.includes("-stage-") && dirname(to) === target) {
+      published.push(basename(to));
+      await importProviderModules(target);
+    }
+    return result;
+  });
+  await install(root);
+  assert.deepEqual(new Set(published.slice(0, 3)), new Set(["desktop.mjs", "notifier.mjs", "lock.mjs"]));
+  assert.ok(published.indexOf("settings.mjs") > 2);
+  assert.ok(published.indexOf("server.mjs") > 2);
+  assert.equal(published.at(-2), "extension.mjs");
+  assert.equal(published.at(-1), ".copilot-notifications-install.json");
+  assert.equal((await fs.readdir(target)).includes("sound.mjs"), false);
+});
+
+test("pre-desktop rollback restores importers before removing their new dependencies", async t => {
+  for (const failingFile of ["settings.mjs", ".copilot-notifications-install.json"]) {
+    await t.test(`failure after publishing ${failingFile}`, async t => {
+      const { root, target, before } = await preDesktopInstallation(t);
+      const added = ["desktop.mjs", "notifier.mjs", "lock.mjs"];
+      let failed = false;
+      let restored = 0;
+      const removed = [];
+      intercept(t, "rename", async (rename, from, to) => {
+        const result = await rename(from, to);
+        if (!failed && from.includes("-stage-") && to === join(target, failingFile)) {
+          failed = true;
+          throw new Error("Synthetic pre-desktop publication failure");
+        }
+        if (failed && from.includes("-backup-") && dirname(to) === target) {
+          restored++;
+          await importProviderModules(target);
+        }
+        return result;
+      });
+      intercept(t, "unlink", async (unlink, path) => {
+        const result = await unlink(path);
+        if (failed && dirname(path) === target && added.includes(basename(path))) {
+          removed.push(basename(path));
+          await importProviderModules(target);
+        }
+        return result;
+      });
+      await assert.rejects(install(root), /Synthetic pre-desktop publication failure/);
+      assert.ok(restored > 0);
+      assert.deepEqual(new Set(removed), new Set(added));
+      assert.deepEqual(new Set(await fs.readdir(target)), new Set(before.keys()));
+      for (const [file, content] of before) assert.equal(await fs.readFile(join(target, file), "utf8"), content, file);
+      assert.deepEqual(await fs.readdir(join(root, "extensions")), ["github-notifications"]);
+    });
+  }
+});
 
 test("a concurrent provider can save settings during publication without moving artifacts or losing the entry point", async t => {
   const root = await home(t);
