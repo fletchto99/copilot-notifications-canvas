@@ -9,6 +9,7 @@ import { soundValue, validSound } from "./notifier.mjs";
 const booleanSettings = ["autoOpen", "desktopNotifications"];
 const settingsValue = data => ({
   ...Object.fromEntries(booleanSettings.map(key => [key, data[key] ?? false])),
+  darkMode: data.darkMode ?? null,
   desktopSound: soundValue(data.desktopSound),
 });
 
@@ -30,13 +31,14 @@ export class Preferences {
       if (!data || typeof data !== "object" || Array.isArray(data) ||
           booleanSettings.some(key => data[key] !== undefined && typeof data[key] !== "boolean") ||
           !validSound(soundValue(data.desktopSound)) ||
-          (data.desktopGeneration !== undefined && typeof data.desktopGeneration !== "string")) {
+          (data.desktopGeneration !== undefined && typeof data.desktopGeneration !== "string") ||
+          (data.darkMode !== undefined && data.darkMode !== null && typeof data.darkMode !== "boolean")) {
         throw new Error("Invalid settings object");
       }
       return data;
     } catch (error) {
       if (error.code === "ENOENT") return {};
-      throw new InboxError("settings_read", "Could not read notification settings. Check artifacts/settings.json; autoOpen and desktopNotifications must be booleans, and desktopSound must be a supported sound name.", 500);
+      throw new InboxError("settings_read", "Could not read notification settings. Check artifacts/settings.json; autoOpen and desktopNotifications must be booleans, darkMode must be a boolean or null, and desktopSound must be a supported sound name.", 500);
     } finally {
       await file?.close();
     }
@@ -49,10 +51,12 @@ export class Preferences {
 
   async update(input) {
     if (!input || typeof input !== "object" || Array.isArray(input) ||
-        Object.keys(input).length !== 1 ||
-        !(booleanSettings.includes(Object.keys(input)[0]) && typeof Object.values(input)[0] === "boolean") &&
-          !(Object.hasOwn(input, "desktopSound") && validSound(input.desktopSound))) {
-      throw new InboxError("invalid_settings", "Change one setting: autoOpen or desktopNotifications (boolean), or desktopSound (sound name).", 400);
+        Object.keys(input).length === 0 ||
+        Object.keys(input).some(key => ![...booleanSettings, "darkMode", "desktopSound"].includes(key)) ||
+        booleanSettings.some(key => Object.hasOwn(input, key) && typeof input[key] !== "boolean") ||
+        (Object.hasOwn(input, "darkMode") && input.darkMode !== null && typeof input.darkMode !== "boolean") ||
+        (Object.hasOwn(input, "desktopSound") && !validSound(input.desktopSound))) {
+      throw new InboxError("invalid_settings", "Settings accept autoOpen and desktopNotifications booleans, darkMode as a boolean or null, and desktopSound as a supported sound name.", 400);
     }
     const lockPath = join(this.directory, ".settings.lock");
     const temporary = join(this.directory, `.settings-${randomUUID()}.tmp`);

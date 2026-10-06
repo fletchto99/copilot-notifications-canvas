@@ -45,8 +45,9 @@ async function readBody(req) {
   return input;
 }
 
-export async function startServer(inbox, { log = () => {}, preferences, desktop } = {}) {
+export async function startServer(inbox, { log = () => {}, preferences, desktop, updates } = {}) {
   const secret = randomBytes(32).toString("hex");
+  const snapshot = () => ({ ...inbox.snapshot(), ...(updates ? { updates: updates.snapshot() } : {}) });
   const staticFiles = new Map(await Promise.all([...assets].map(async ([path, [file, type]]) =>
     [path, { body: await readFile(new URL(`./${file}`, import.meta.url)), type }])));
   let origin;
@@ -73,7 +74,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop 
         res.end(file.body);
         return;
       }
-      if (!["/api/state", "/api/refresh", "/api/more", "/api/filters", "/api/settings", "/api/read"].includes(path) &&
+      if (!["/api/state", "/api/refresh", "/api/more", "/api/filters", "/api/settings", "/api/read", "/api/updates"].includes(path) &&
           !batchRoutes.has(path)) {
         throw new InboxError("not_found", "Route not found.", 404);
       }
@@ -97,6 +98,11 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop 
         if (!["/api/filters", "/api/settings", "/api/read"].includes(path) && !batchRoutes.has(path) && Object.keys(input).length) {
           throw new InboxError("invalid_input", "This action takes an empty object.", 400);
         }
+        if (path === "/api/updates") {
+          if (!updates) throw new InboxError("updates_unavailable", "Release checks are unavailable.", 503);
+          void updates.check({ force: true });
+          return json(202, updates.snapshot());
+        }
         if (path === "/api/refresh") await inbox.refresh();
         if (path === "/api/more") await inbox.more();
         if (path === "/api/filters") await inbox.setFilters(input);
@@ -116,10 +122,11 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop 
         if (path === "/api/read") await inbox.markRead(input);
         if (batchRoutes.has(path)) {
           inbox.batch[batchRoutes.get(path)](input);
-          return json(["/api/batch/start", "/api/batch/retry"].includes(path) ? 202 : 200, inbox.snapshot());
+          return json(["/api/batch/start", "/api/batch/retry"].includes(path) ? 202 : 200, snapshot());
         }
       }
-      json(200, inbox.snapshot());
+      if (path === "/api/state" || path === "/api/refresh") void updates?.check();
+      json(200, snapshot());
     } catch (error) {
       if (error instanceof InboxError) {
         json(error.status, { error: { code: error.code, message: error.message } });

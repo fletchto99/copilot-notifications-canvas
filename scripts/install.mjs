@@ -8,7 +8,8 @@ import { acquireLock } from "../.github/extensions/github-notifications/lock.mjs
 const name = "github-notifications";
 const marker = ".copilot-notifications-install.json";
 const desktopFiles = ["desktop.mjs", "notifier.mjs", "lock.mjs"];
-const files = ["extension.mjs", "github.mjs", "inbox.mjs", "batch.mjs", "model.mjs", "server.mjs", "app.mjs", "settings.mjs", "startup.mjs", "index.html", "styles.css", ...desktopFiles];
+const updateFiles = ["updates.mjs", "version.json"];
+const files = ["extension.mjs", "github.mjs", "inbox.mjs", "batch.mjs", "model.mjs", "server.mjs", "app.mjs", "settings.mjs", "startup.mjs", "index.html", "styles.css", ...desktopFiles, ...updateFiles];
 const retiredFiles = ["sound.mjs"];
 const source = fileURLToPath(new URL("../.github/extensions/github-notifications/", import.meta.url));
 const hash = content => createHash("sha256").update(content).digest("hex");
@@ -34,7 +35,8 @@ async function verifyOwned(target) {
   if (!runtimeEntries.length) return new Map();
   const legacyAdditions = ["settings.mjs", "startup.mjs"];
   const knownFiles = [...files, ...retiredFiles.filter(file => entries.includes(file))];
-  const priorDesktopFiles = entries.includes("desktop.mjs") ? knownFiles : knownFiles.filter(file => !desktopFiles.includes(file));
+  const versionedFiles = updateFiles.some(file => entries.includes(file)) ? knownFiles : knownFiles.filter(file => !updateFiles.includes(file));
+  const priorDesktopFiles = desktopFiles.some(file => entries.includes(file)) ? versionedFiles : versionedFiles.filter(file => !desktopFiles.includes(file));
   const priorFiles = entries.includes("batch.mjs") ? priorDesktopFiles : priorDesktopFiles.filter(file => file !== "batch.mjs");
   const installedFiles = entries.includes("startup.mjs") ? priorFiles : priorFiles.filter(file => !legacyAdditions.includes(file));
   if (runtimeEntries.length !== installedFiles.length + 1 || runtimeEntries.some(file => ![...installedFiles, marker].includes(file))) {

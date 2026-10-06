@@ -80,7 +80,7 @@ test("initial backlog is silent and each new or updated unread thread gets its o
   await watcher.check();
   assert.equal(f.deliveries.length, 2);
   assert.deepEqual(Object.keys(f.deliveries[0]).sort(), ["body", "platform", "signal", "sound", "title"]);
-  assert.equal(f.deliveries[0].sound, "none");
+  assert.equal(f.deliveries[0].sound, "default");
   assert.equal(f.deliveries[0].title, "example/widgets");
   assert.equal(f.deliveries[0].body, "Synthetic notification 2");
   assert.equal(f.deliveries[1].body, "Synthetic notification 3");

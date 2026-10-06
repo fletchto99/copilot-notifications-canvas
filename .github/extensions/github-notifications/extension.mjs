@@ -6,6 +6,7 @@ import { startServer } from "./server.mjs";
 import { Preferences } from "./settings.mjs";
 import { Startup } from "./startup.mjs";
 import { DesktopNotifications } from "./desktop.mjs";
+import { Updates } from "./updates.mjs";
 
 const instances = new Map();
 const client = new GitHubClient();
@@ -14,6 +15,7 @@ let session;
 let startup;
 const log = (message, options) => session?.log(message, options);
 const desktop = new DesktopNotifications({ preferences, log });
+const updates = new Updates({ log });
 
 async function action(ctx, run) {
   try {
@@ -44,8 +46,14 @@ session = await joinSession({
     inputSchema: filterSchema,
     actions: [
       {
+        name: "check_for_updates",
+        description: "Check for a stable canvas release and return its version, links and update prompt. Never installs or changes settings.",
+        inputSchema: emptySchema,
+        handler: ctx => action(ctx, () => updates.check({ force: true })),
+      },
+      {
         name: "get_settings",
-        description: "Read startup and desktop notification settings and status. Settings are changed only by clicks in the panel.",
+        description: "Read saved auto-open, dark-mode and desktop notification settings and status. Settings are changed through the panel.",
         inputSchema: emptySchema,
         handler: ctx => action(ctx, async () => ({
           ...await preferences.read(), desktopStatus: desktop.snapshot(), startupStatus: startup?.status ?? "initializing",
@@ -81,7 +89,7 @@ session = await joinSession({
       try {
         if (!instances.has(ctx.instanceId)) {
           const inbox = new Inbox(client, ctx.input ?? {});
-          instances.set(ctx.instanceId, startServer(inbox, { log, preferences, desktop }).catch(error => {
+          instances.set(ctx.instanceId, startServer(inbox, { log, preferences, desktop, updates }).catch(error => {
             inbox.close();
             throw error;
           }));
@@ -109,6 +117,7 @@ await startup.start();
 async function shutdown() {
   startup?.close();
   await desktop.close();
+  updates.close();
   await Promise.allSettled([...instances.keys()].map(close));
   process.exit(0);
 }

@@ -9,7 +9,7 @@ const platformSounds = {
 };
 
 export function soundValue(value) {
-  return value === true ? "default" : value === false || value === undefined ? "none" : value;
+  return value === true || value === undefined ? "default" : value === false ? "none" : value;
 }
 
 export function validSound(value, platform) {
@@ -69,7 +69,7 @@ function displayText(value) {
 
 const escapeMarkup = text => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-export async function notifyDesktop({ title, body, sound = "none", signal, platform = process.platform,
+export async function notifyDesktop({ title, body, sound = "default", signal, platform = process.platform,
   execute = execFile, env = process.env } = {}) {
   if (!desktopCapabilities(platform).supported) {
     throw new InboxError("desktop_unsupported", "Desktop notifications are supported on macOS, Windows and Linux.", 400);

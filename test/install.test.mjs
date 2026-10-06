@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
 import { install } from "../scripts/install.mjs";
 
@@ -21,12 +21,17 @@ test("installation is repeatable, scoped to the supplied Copilot home, and copie
   assert.equal(target, join(root, "extensions", "github-notifications"));
   assert.equal(await install(root), target);
   const entries = await readdir(target);
-  assert.equal(entries.length, 15);
+  assert.equal(entries.length, 17);
   assert.equal(entries.includes("extension.mjs"), true);
   assert.equal(entries.includes("README.md"), false);
   assert.equal(entries.includes("test"), false);
   assert.equal(entries.includes("node_modules"), false);
   assert.equal(entries.includes("sound.mjs"), false);
+  assert.equal(entries.includes("updates.mjs"), true);
+  assert.equal(entries.includes("version.json"), true);
+  const { Updates } = await import(pathToFileURL(join(target, "updates.mjs")).href);
+  const version = JSON.parse(await readFile(join(target, "version.json"), "utf8")).version;
+  assert.equal(new Updates().snapshot().currentVersion, version);
 });
 
 test("an untouched pre-sound installation upgrades without overwriting unrelated files", async t => {
@@ -34,7 +39,7 @@ test("an untouched pre-sound installation upgrades without overwriting unrelated
   const target = await install(root);
   const marker = join(target, ".copilot-notifications-install.json");
   const manifest = JSON.parse(await readFile(marker, "utf8"));
-  for (const file of ["settings.mjs", "startup.mjs", "batch.mjs", "desktop.mjs", "notifier.mjs", "lock.mjs"]) {
+  for (const file of ["settings.mjs", "startup.mjs", "batch.mjs", "desktop.mjs", "notifier.mjs", "lock.mjs", "updates.mjs", "version.json"]) {
     delete manifest.hashes[file];
     await unlink(join(target, file));
   }
@@ -81,6 +86,37 @@ test("installation preserves existing user settings and unknown artifact files o
   await install(root);
   assert.equal(await readFile(join(artifacts, "settings.json"), "utf8"), '{"autoOpen":true,"future":42}');
   assert.equal(await readFile(join(artifacts, "preserve.txt"), "utf8"), "user artifact");
+});
+
+test("a pre-update-check installation upgrades with settings and artifacts byte-for-byte intact", async t => {
+  const root = await home(t);
+  const target = await install(root);
+  const marker = join(target, ".copilot-notifications-install.json");
+  const manifest = JSON.parse(await readFile(marker, "utf8"));
+  for (const file of ["updates.mjs", "version.json"]) {
+    delete manifest.hashes[file];
+    await unlink(join(target, file));
+  }
+  await writeFile(marker, JSON.stringify(manifest));
+  const artifacts = join(target, "artifacts");
+  await mkdir(artifacts);
+  const settings = '{\n  "autoOpen": true,\n  "darkMode": true,\n  "future": {"nested": [1, 2]}\n}\n';
+  await writeFile(join(artifacts, "settings.json"), settings);
+  await writeFile(join(artifacts, "user-note.txt"), "preserve");
+  await install(root);
+  assert.equal(await readFile(join(artifacts, "settings.json"), "utf8"), settings);
+  assert.equal(await readFile(join(artifacts, "user-note.txt"), "utf8"), "preserve");
+  assert.match(await readFile(join(target, "updates.mjs"), "utf8"), /class Updates/);
+  assert.match(await readFile(join(target, "version.json"), "utf8"), /"version"/);
+});
+
+test("missing update files are not mistaken for a legacy installation", async t => {
+  for (const files of [["updates.mjs"], ["version.json"], ["updates.mjs", "version.json"]]) {
+    const root = await home(t);
+    const target = await install(root);
+    for (const file of files) await unlink(join(target, file));
+    await assert.rejects(install(root), /incomplete/);
+  }
 });
 
 test("a missing current runtime module is rejected as an incomplete installation", async t => {

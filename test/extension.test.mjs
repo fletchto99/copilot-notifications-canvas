@@ -20,6 +20,7 @@ async function fixture() {
     createCanvas: value => { canvas = value; return value; },
     CanvasError, InboxError, emptySchema: {}, filterSchema: {},
     Preferences: class {},
+    Updates: class {},
     GitHubClient: class { clear() {} },
     Inbox: class {
       constructor() { this.closed = false; inboxes.push(this); }

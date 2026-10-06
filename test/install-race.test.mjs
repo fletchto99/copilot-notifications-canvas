@@ -56,7 +56,7 @@ test("a concurrent provider can save settings during publication without moving 
   });
   await install(root);
   assert.equal(writes, 1);
-  assert.deepEqual(await preferences.read(), { autoOpen: true, desktopNotifications: false, desktopSound: "none" });
+  assert.deepEqual(await preferences.read(), { autoOpen: true, darkMode: null, desktopNotifications: false, desktopSound: "default" });
   assert.equal((await fs.stat(directory)).ino, before.ino);
   assert.equal(await fs.readFile(join(directory, "user-note.txt"), "utf8"), "preserved");
   await fs.access(join(target, "extension.mjs"));
@@ -80,7 +80,7 @@ test("a settings writer already holding its original lock can finish after an up
   await install(root);
   release();
   await saving;
-  assert.deepEqual(await preferences.read(), { autoOpen: true, desktopNotifications: false, desktopSound: "none" });
+  assert.deepEqual(await preferences.read(), { autoOpen: true, darkMode: null, desktopNotifications: false, desktopSound: "default" });
   assert.deepEqual(await fs.readdir(directory), ["settings.json"]);
 });
 
@@ -98,7 +98,7 @@ test("an artifacts-only destination created by a provider during staging is pres
   });
   await install(root);
   assert.equal(written, true);
-  assert.deepEqual(await new Preferences({ directory }).read(), { autoOpen: true, desktopNotifications: false, desktopSound: "none" });
+  assert.deepEqual(await new Preferences({ directory }).read(), { autoOpen: true, darkMode: null, desktopNotifications: false, desktopSound: "default" });
   await fs.access(join(target, "extension.mjs"));
 });
 
@@ -128,7 +128,7 @@ test("publication failure restores the previous runtime and retains the latest c
   await assert.rejects(install(root), /Synthetic publication failure/);
   assert.equal(await fs.readFile(join(target, "app.mjs"), "utf8"), oldApp);
   assert.equal(await fs.readFile(marker, "utf8"), previousMarker);
-  assert.deepEqual(await preferences.read(), { autoOpen: true, desktopNotifications: false, desktopSound: "none" });
+  assert.deepEqual(await preferences.read(), { autoOpen: true, darkMode: null, desktopNotifications: false, desktopSound: "default" });
   await fs.access(join(target, "extension.mjs"));
   assert.deepEqual(await fs.readdir(join(root, "extensions")), ["github-notifications"]);
   await install(root);

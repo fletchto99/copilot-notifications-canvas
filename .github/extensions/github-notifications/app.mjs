@@ -18,6 +18,10 @@ let preferences;
 let settingsBusy = false;
 let pendingSettings;
 let soundOptionsKey;
+let releaseState;
+let updatesBusy = false;
+let updateError = "";
+const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
 const markingRead = new Set();
 let readError = "";
 let batchBusy = false;
@@ -60,15 +64,33 @@ async function api(path, input) {
   }
 }
 
+function darkMode() {
+  if (typeof preferences?.darkMode === "boolean") return preferences.darkMode;
+  const mode = document.documentElement.getAttribute("data-color-mode") ?? document.body.getAttribute("data-color-mode");
+  return mode === "dark" || (mode !== "light" && systemTheme.matches);
+}
+
+function renderTheme() {
+  if (typeof preferences?.darkMode === "boolean") {
+    document.documentElement.dataset.notificationTheme = preferences.darkMode ? "dark" : "light";
+    $("dark-mode-help").textContent = "Saved across sessions. Applies to this panel now and other panels when opened or shown.";
+  } else {
+    delete document.documentElement.dataset.notificationTheme;
+    $("dark-mode-help").textContent = "Follows Copilot's theme until you choose a mode. Your choice is saved across sessions.";
+  }
+  $("dark-mode").setAttribute("aria-checked", String(darkMode()));
+}
+
 function renderSettings() {
-  for (const [id, key, label] of [
-    ["auto-open", "autoOpen", "Open on new sessions"],
-    ["desktop-notifications", "desktopNotifications", "Desktop notifications"],
+  for (const [id, key] of [
+    ["auto-open", "autoOpen"],
+    ["desktop-notifications", "desktopNotifications"],
   ]) {
     if (preferences) {
-      $(id).textContent = `${label}: ${preferences[key] ? "On" : "Off"}`;
       $(id).setAttribute("aria-checked", String(Boolean(preferences[key])));
     }
+    $("dark-mode").disabled = settingsBusy || !preferences;
+    renderTheme();
     $(id).disabled = settingsBusy || !preferences ||
       (id !== "auto-open" && !preferences.desktopStatus?.supported);
   }
@@ -111,11 +133,12 @@ async function settingsRequest(input, quiet = false) {
   if (!quiet) $("settings-status").textContent = input ? "Saving setting..." : "Loading settings...";
   try {
     preferences = await api("settings", input);
-    if (!quiet) $("settings-status").textContent = input ?
-      (Object.hasOwn(input, "autoOpen") ? "Saved. Applies to future new sessions." : "Saved. Applies across sessions within five seconds.") : "";
+    $("settings-status").textContent = "";
+    $("settings-error").hidden = true;
   } catch (error) {
-    preferences = undefined;
     $("settings-status").textContent = `${error.message || "Settings request failed."} Close and reopen Settings to retry.`;
+    $("settings-error").textContent = $("settings-status").textContent;
+    $("settings-error").hidden = false;
   } finally {
     settingsBusy = false;
     renderSettings();
@@ -126,6 +149,64 @@ async function settingsRequest(input, quiet = false) {
       restoreFocus(next.focus);
       void settingsRequest(next.input);
     }
+  }
+}
+
+function renderUpdates(updates = releaseState) {
+  if (!updates) return;
+  releaseState = updates;
+  $("installed-version").textContent = `GitHub Notification Canvas ${updates.currentVersion}`;
+  $("check-updates").disabled = updatesBusy || updates.checking || Date.now() < updates.canCheckAt;
+  $("check-updates").textContent = updates.checking ? "Checking for updates..." : "Check for updates";
+  const messages = {
+    unchecked: "No successful release check yet.",
+    no_release: "No stable GitHub release is available yet.",
+    current: "You are on the latest stable release.",
+    ahead: "This build is newer than the latest stable release.",
+    available: `v${updates.latestVersion} is available. Use the update banner to install it.`,
+  };
+  const checked = updates.checkedAt === null ? "" : ` Last checked ${new Date(updates.checkedAt).toLocaleString()}.`;
+  const retry = !updates.checking && Date.now() < updates.canCheckAt
+    ? ` Check again after ${new Date(updates.canCheckAt).toLocaleTimeString()}.` : "";
+  $("update-status").textContent = updateError || (updates.checking ? "Checking stable GitHub releases..." :
+    `${updates.error ? `Could not check for updates: ${updates.error}` : messages[updates.status]}${checked}${retry}`);
+  const available = updates.status === "available";
+  $("update-banner").hidden = !available;
+  if (!available) return;
+  $("update-title").textContent = `Canvas update available: v${updates.latestVersion} (running v${updates.currentVersion}).${updates.error ? " Last known release; the latest check failed." : ""}`;
+  $("release-notes").href = updates.releaseUrl;
+  $("update-instructions").href = updates.instructionsUrl;
+  if ($("update-prompt").value !== updates.prompt) {
+    $("update-prompt").value = updates.prompt;
+    $("copy-status").textContent = "";
+  }
+}
+
+async function checkUpdates() {
+  if (!visible() || updatesBusy || releaseState?.checking || Date.now() < releaseState?.canCheckAt) return;
+  updatesBusy = true;
+  updateError = "";
+  renderUpdates();
+  try {
+    renderUpdates(await api("updates", {}));
+  } catch (error) {
+    updateError = error.message || "Could not check for updates. Try again.";
+  } finally {
+    updatesBusy = false;
+    renderUpdates();
+  }
+}
+
+async function copyUpdatePrompt() {
+  if (!visible() || !releaseState?.prompt) return;
+  try {
+    await navigator.clipboard.writeText(releaseState.prompt);
+    $("copy-status").textContent = "Copied. Paste the prompt into Copilot to review and run the update.";
+  } catch {
+    $("update-prompt-details").open = true;
+    $("update-prompt").focus();
+    $("update-prompt").select();
+    $("copy-status").textContent = "Clipboard unavailable. Copy the selected prompt and paste it into Copilot.";
   }
 }
 
@@ -455,6 +536,7 @@ function renderGroups(groups) {
 }
 
 function render() {
+  renderUpdates(state?.updates);
   renderControls();
   const error = readError || state?.error?.message || connectionError;
   $("notice").hidden = !error;
@@ -508,6 +590,11 @@ $("desktop-notifications").addEventListener("click", () => {
 $("desktop-sound").addEventListener("change", () => {
   if (preferences && !$("desktop-sound").disabled) void settingsRequest({ desktopSound: $("desktop-sound").value });
 });
+$("check-updates").addEventListener("click", checkUpdates);
+$("copy-update").addEventListener("click", copyUpdatePrompt);
+$("dark-mode").addEventListener("click", () => {
+  if (preferences) void settingsRequest({ darkMode: !darkMode() });
+});
 document.addEventListener("click", event => {
   if ($("settings").open && !$("settings").contains(event.target)) closeSettings();
 });
@@ -538,8 +625,10 @@ $("collapse").addEventListener("click", () => {
 });
 function visibilityChanged() {
   clearTimeout(timer);
-  if (visible()) void tick();
-  else {
+  if (visible()) {
+    void tick();
+    void settingsRequest();
+  } else {
     for (const controller of requestControllers) controller.abort();
     closeSettings();
   }
@@ -550,15 +639,24 @@ const observer = new IntersectionObserver(entries => {
   visibilityChanged();
 });
 observer.observe(document.documentElement);
+const themeObserver = new MutationObserver(renderTheme);
+themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-color-mode"] });
+themeObserver.observe(document.body, { attributes: true, attributeFilter: ["data-color-mode"] });
+systemTheme.addEventListener("change", renderTheme);
+renderTheme();
 window.addEventListener("pagehide", () => {
   stopped = true;
   clearTimeout(timer);
   clearTimeout(searchTimer);
   for (const controller of requestControllers) controller.abort();
   observer.disconnect();
+  themeObserver.disconnect();
+  systemTheme.removeEventListener("change", renderTheme);
 });
-if (hasCapability) void tick();
-else {
+if (hasCapability) {
+  void tick();
+  void settingsRequest();
+} else {
   $("notice").hidden = false;
   $("notice").textContent = "Missing canvas capability. Open this canvas from Copilot instead of browsing to its local address.";
   $("empty-title").textContent = "Open from Copilot";
