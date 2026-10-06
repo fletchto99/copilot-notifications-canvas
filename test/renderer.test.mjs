@@ -528,6 +528,20 @@ test("the per-panel Web Audio option is replaced by the native notification soun
   assert.doesNotMatch(script, /AudioContext|NotificationSound|sound\.mjs/);
 });
 
+test("Sound is a single settings row with a labeled native select and matching focus and disabled styling", async () => {
+  const row = html.match(/<div class="select-setting">([\s\S]*?)<\/div>/);
+  assert.ok(row);
+  assert.match(row[1], /<label for="desktop-sound">Sound<\/label>/);
+  assert.match(row[1], /<select id="desktop-sound"[^>]*aria-describedby="desktop-status"/);
+  assert.doesNotMatch(row[1], /<button|role="(?:button|combobox|listbox)"|tabindex/);
+  const css = await readFile(new URL("../.github/extensions/github-notifications/styles.css", import.meta.url), "utf8");
+  assert.match(css, /\.select-setting \{[^}]*min-height: 38px;[^}]*border-radius: 7px;[^}]*padding: 7px 12px;/);
+  assert.match(css, /\.select-setting select \{[^}]*border: 0;[^}]*text-align-last: right;[^}]*appearance: none;/);
+  assert.match(css, /\.select-setting::after \{[^}]*pointer-events: none;/);
+  assert.match(css, /\.select-setting:focus-within \{[^}]*outline: 2px solid var\(--focus\)/);
+  assert.match(css, /\.select-setting:has\(select:disabled\) \{[^}]*opacity: \.55/);
+});
+
 test("Settings uses an icon-only toggle with an accessible name and tooltip", () => {
   const summary = html.match(/<summary\b([^>]*\bid="settings-toggle"[^>]*)>([\s\S]*?)<\/summary>/);
   assert.ok(summary);
@@ -587,10 +601,12 @@ test("desktop controls persist independently, preserve focus and are disabled on
   assert.equal(desktop.attributes["aria-checked"], "true");
   assert.equal(ui.document.activeElement, desktop);
   assert.equal(sound.disabled, false);
+  sound.focus();
   sound.value = "Ping";
   sound.events.change();
   await settle();
   assert.equal(sound.value, "Ping");
+  assert.equal(ui.document.activeElement, sound);
   assert.equal(sound.children.some(option => option.value === "Submarine"), true);
   assert.equal(ui.ids.get("settings-status").textContent, "");
   desktop.events.click();

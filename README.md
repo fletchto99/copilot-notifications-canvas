@@ -99,7 +99,7 @@ Updates use the user-wide installer. A project-local checkout shadows a
 user-wide installation in that repository; update that checkout deliberately
 instead of expecting a user-wide install to replace it. Persisted settings,
 including **Auto-open**, **Dark mode**, **Desktop notifications** and
-**Notification sound**, are retained.
+**Sound**, are retained.
 
 ## Usage
 
@@ -109,7 +109,7 @@ including **Auto-open**, **Dark mode**, **Desktop notifications** and
   follows Copilot's theme until you choose light or dark; your choice is saved
   across sessions and loaded when a panel opens or becomes visible.
 - Settings also offers **Auto-open** and **Desktop notifications** sliders,
-  both off by default. **Notification sound** offers system-specific sounds
+  both off by default. **Sound** offers system-specific sounds
   and defaults to **System default**. These settings are saved across sessions.
   Desktop alerts run while the canvas is in the foreground, hidden, or
   Copilot is minimized, as long as its session's
@@ -123,7 +123,7 @@ including **Auto-open**, **Dark mode**, **Desktop notifications** and
 
 ### Desktop notifications
 
-Enable **Desktop notifications** in Settings and choose a **Notification sound**.
+Enable **Desktop notifications** in Settings and choose a **Sound**.
 The old per-panel Web Audio chime has been replaced by this setting. No extra
 app, package or background service is installed automatically.
 

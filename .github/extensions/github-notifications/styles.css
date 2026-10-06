@@ -57,8 +57,15 @@ button:disabled { opacity: .55; cursor: default; }
 .settings > summary::-webkit-details-marker { display: none; }
 .settings-panel { position: absolute; z-index: 2; right: 0; top: calc(100% + 8px); display: flex; flex-direction: column; gap: 8px; width: min(290px, calc(100vw - 36px)); max-height: 60vh; overflow-y: auto; padding: 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--canvas-background); box-shadow: 0 8px 24px #0002; }
 .settings-panel button { width: 100%; text-align: left; white-space: normal; }
-.settings-label { display: block; margin-bottom: 7px; }
-.settings-panel select { width: 100%; border: 1px solid var(--border); border-radius: 7px; padding: 7px; background: var(--canvas-background); }
+.select-setting { position: relative; display: flex; align-items: center; gap: 12px; flex-shrink: 0; min-height: 38px; border: 1px solid var(--border); border-radius: 7px; padding: 7px 12px; }
+.select-setting label { flex-shrink: 0; }
+.select-setting select { flex: 1; min-width: 0; width: 0; margin: 0; border: 0; border-radius: 0; padding: 0 20px 0 0; background: transparent; line-height: 22px; text-align: right; text-align-last: right; text-overflow: ellipsis; appearance: none; -webkit-appearance: none; cursor: pointer; }
+.select-setting::after { content: ""; position: absolute; right: 14px; top: 50%; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-4px) rotate(45deg); pointer-events: none; }
+.select-setting:has(select:enabled):hover { background: color-mix(in srgb, var(--canvas-text) 4%, transparent); }
+.select-setting:focus-within { outline: 2px solid var(--focus); outline-offset: 3px; }
+.select-setting select:focus-visible { outline: none; }
+.select-setting:has(select:disabled) { opacity: .55; }
+.select-setting select:disabled { cursor: default; }
 .switch-toggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .switch-track { display: flex; align-items: center; flex-shrink: 0; width: 36px; height: 22px; padding: 3px; border-radius: 11px; background: var(--muted); }
 .switch-thumb { width: 16px; height: 16px; border-radius: 50%; background: var(--color-white, #fff); }
