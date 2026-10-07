@@ -276,7 +276,8 @@ after each test. The SDK-boundary stub tests our registration and lifecycle
 wiring, not compatibility with a particular Copilot build; still reload and
 inspect the real extension when changing SDK integration.
 
-Install development-only lint/browser dependencies and run the checks locally:
+The repository's `.npmrc` selects the public npm registry for development
+dependencies. Install them and run the checks locally:
 
 ```sh
 npm ci --ignore-scripts
