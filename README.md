@@ -1,6 +1,7 @@
 # Unread Notifications
 
-Unread GitHub notifications in the GitHub Copilot app, grouped by repository.
+Unread GitHub notifications in the GitHub Copilot app, grouped by repository or
+date, or shown as a single newest-first list.
 Search, mark rows or repositories as read, and opt into desktop
 notifications or auto-open.
 
@@ -42,7 +43,7 @@ before node scripts/install.mjs. Use my existing COPILOT_HOME and GitHub CLI
 sign-in.
 
 Preserve the entire installed artifacts directory in place, including
-settings.json, autoOpen, darkMode, unknown settings, and other files. Do not
+settings.json, autoOpen, darkMode, groupBy, unknown settings, and other files. Do not
 delete or recreate that directory, overwrite locally modified runtime files,
 or bypass installer safeguards. Report missing prerequisites or permissions
 without changing credentials.
@@ -111,14 +112,19 @@ New runtimes contain no Web Audio playback or its old inbox activity tracking.
 Updates use the user-wide installer. A project-local checkout shadows a
 user-wide installation in that repository; update that checkout deliberately
 instead of expecting a user-wide install to replace it. Persisted settings,
-including **Auto-open**, **Dark mode**, **Desktop notifications** and
+including **Group By**, **Theme**, **Auto-open**, **Desktop notifications** and
 **Sound**, are retained.
 
 ## Usage
 
-- Repository groups are always sorted alphabetically by full name (`owner/repo`),
-  so marking notifications as read does not reorder the remaining groups.
-  Notifications within each group remain newest first.
+- **Settings > Group By** has three saved options:
+  - **none**: no group headers; all loaded, matching notifications are sorted
+    globally by their last-updated date, newest first.
+  - **repo** (default): repository groups are sorted alphabetically by full name
+    (`owner/repo`), with newest notifications first within each group.
+  - **date**: notifications are grouped by their last-updated calendar day in
+    your local time zone, with newest days and notifications first.
+  Repository names appear on each row in **none** and **date** modes.
 - The canvas loads up to 50 notifications initially. **Load more** fetches up to
   50 more at a time, with no fixed total cap while GitHub has more pages.
   Search covers loaded notifications only.
@@ -135,10 +141,11 @@ including **Auto-open**, **Dark mode**, **Desktop notifications** and
   are shown as errors.
 - The inbox icon to the left of **Settings** opens your
   [GitHub inbox](https://github.com/notifications) in a new tab.
-- The **Settings** gear icon includes matching **Dark mode**, **Auto-open**, and
-  **Desktop notifications** switches. The canvas follows Copilot's theme until
-  you choose light or dark; your choice is saved across sessions and loaded
-  when a panel opens or becomes visible.
+- **Settings > Theme**, above **Group By**, offers **System** (default),
+  **Dark**, and **Light**. System follows Copilot's theme, falling back to the
+  OS theme when the app does not provide one. Choose System again to return
+  to automatic theming. Your choice is saved across sessions and loaded when a
+  panel opens or becomes visible. Existing saved Dark mode choices are preserved.
 - **Auto-open** and **Desktop notifications** are off by default.
   **Sound** offers system-specific sounds
   and defaults to **System default**. These settings are saved across sessions.
@@ -151,6 +158,8 @@ including **Auto-open**, **Dark mode**, **Desktop notifications** and
   on session resume, extension reload, or after you close the panel.
 - A repository's **Mark N as read** immediately starts marking only its shown,
   loaded notifications, narrowed by search. Older unloaded items are not included.
+  This action is available in **repo** mode; individual **Mark as read** buttons
+  remain available in every grouping mode.
 
 ### Desktop notifications
 

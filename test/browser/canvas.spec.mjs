@@ -70,12 +70,13 @@ test("Settings supports keyboard dismissal and persists theme and auto-open acro
   const settings = page.getByLabel("Settings", { exact: true });
   await settings.focus();
   await settings.press("Enter");
-  const dark = page.getByRole("switch", { name: "Dark mode", exact: true });
-  await expect(dark).toBeEnabled();
-  await dark.focus();
-  await dark.press("Space");
-  await expect(dark).toHaveAttribute("aria-checked", "true");
-  await expect(dark).toBeFocused();
+  const theme = page.getByRole("combobox", { name: "Theme", exact: true });
+  await expect(theme).toBeEnabled();
+  await expect(theme).toHaveValue("system");
+  await theme.focus();
+  await theme.selectOption("dark");
+  await expect(page.locator("html")).toHaveAttribute("data-notification-theme", "dark");
+  await expect(theme).toBeFocused();
   const autoOpen = page.getByRole("switch", { name: "Auto-open", exact: true });
   await autoOpen.click();
   await expect(autoOpen).toHaveAttribute("aria-checked", "true");
@@ -85,13 +86,71 @@ test("Settings supports keyboard dismissal and persists theme and auto-open acro
   await page.reload();
   await expect(page.locator("html")).toHaveAttribute("data-notification-theme", "dark");
   await settings.click();
+  await expect(theme).toHaveValue("dark");
   await expect(autoOpen).toHaveAttribute("aria-checked", "true");
   await expect(page.getByRole("switch", { name: "Desktop notifications", exact: true })).toHaveAttribute("aria-checked", "false");
   await expect(page.getByRole("combobox", { name: "Sound", exact: true })).toHaveValue("default");
   expect(await canvas.preferences.read()).toEqual({
-    autoOpen: true, darkMode: true, desktopNotifications: false, desktopSound: "default",
+    autoOpen: true, darkMode: true, desktopNotifications: false, desktopSound: "default", groupBy: "repo",
   });
+  await theme.selectOption("system");
+  await expect.poll(async () => (await canvas.preferences.read()).darkMode).toBeNull();
+  await page.reload();
+  await settings.click();
+  await expect(theme).toHaveValue("system");
+  await expect(page.locator("html")).toHaveAttribute("data-notification-theme", "light");
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect(page.locator("html")).toHaveAttribute("data-notification-theme", "dark");
   expect(canvas.deliveries).toEqual([]);
+});
+
+test("ungrouped notifications stay globally newest first through pagination, search and reload", async ({ page, canvas }) => {
+  await page.goto(canvas.url);
+  await expect(page.locator(".row")).toHaveCount(50);
+  await page.getByLabel("Settings", { exact: true }).click();
+  const grouping = page.getByRole("combobox", { name: "Group By", exact: true });
+  await expect(grouping).toHaveValue("repo");
+  await grouping.selectOption("none");
+  await expect(page.locator(".repo-group")).toHaveCount(0);
+  await expect(page.locator("#collapse")).toBeHidden();
+  await expect(page.locator(".row .title")).toHaveText(canvas.rows.slice(0, 50).map(row => row.subject.title));
+  await expect(page.locator(".row .repository").nth(2)).toHaveText("example/tools");
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Load more (up to 50)", exact: true }).click();
+  await expect(page.locator(".row .title")).toHaveText(canvas.rows.map(row => row.subject.title));
+  await page.getByRole("searchbox", { name: searchName }).fill("Needle");
+  await expect(page.locator(".row .title")).toHaveText(canvas.rows.filter(row => row.subject.title.includes("Needle")).map(row => row.subject.title));
+  await page.reload();
+  await page.getByLabel("Settings", { exact: true }).click();
+  await expect(grouping).toHaveValue("none");
+  await expect(page.locator(".repo-group")).toHaveCount(0);
+  expect(canvas.writes).toEqual([]);
+});
+
+test("date groups span repositories and keep row-action focus in newest-first order", async ({ page, canvas }) => {
+  canvas.rows.splice(4);
+  canvas.rows[0].updated_at = "2026-01-09T23:59:00Z";
+  canvas.rows[1].updated_at = "2026-01-10T00:01:00Z";
+  canvas.rows[2].updated_at = "2026-01-10T00:02:00Z";
+  canvas.rows[3].updated_at = "2026-01-09T00:00:00Z";
+  await page.goto(canvas.url);
+  await page.getByLabel("Settings", { exact: true }).click();
+  await page.getByRole("combobox", { name: "Group By", exact: true }).selectOption("date");
+  await expect(page.locator(".repo-name")).toHaveText(["January 10, 2026", "January 9, 2026"]);
+  await expect(page.locator(".row .title")).toHaveText([2, 1, 0, 3].map(index => canvas.rows[index].subject.title));
+  await expect(page.locator(".repo-read")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  const read = page.getByRole("button", { name: "Mark as read: Needle tool", exact: true });
+  await read.focus();
+  await read.press("Enter");
+  await expect(page.locator(".row")).toHaveCount(3);
+  await expect(page.getByRole("button", { name: "Mark as read: Needle widget 2", exact: true })).toBeFocused();
+  expect(canvas.writes).toEqual(["3"]);
+  const collapse = page.getByRole("button", { name: "Collapse all", exact: true });
+  await collapse.click();
+  await expect(page.locator(".row:visible")).toHaveCount(0);
+  await page.getByRole("button", { name: "Expand all", exact: true }).click();
+  await expect(page.locator(".row:visible")).toHaveCount(3);
 });
 
 for (const width of [320, 480, 960]) {
@@ -110,7 +169,7 @@ for (const width of [320, 480, 960]) {
       await expect(page.locator("footer a")).toHaveCount(0);
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
       await page.getByLabel("Settings", { exact: true }).click();
-      await expect(page.getByRole("switch", { name: "Dark mode", exact: true })).toBeEnabled();
+      await expect(page.getByRole("combobox", { name: "Theme", exact: true })).toBeEnabled();
       const bounds = await page.locator("#settings-panel").boundingBox();
       expect(bounds.x).toBeGreaterThanOrEqual(0);
       expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);

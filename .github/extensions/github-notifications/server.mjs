@@ -7,6 +7,7 @@ import { validSound } from "./notifier.mjs";
 const assets = new Map([
   ["/", ["index.html", "text/html; charset=utf-8"]],
   ["/app.mjs", ["app.mjs", "text/javascript; charset=utf-8"]],
+  ["/model.mjs", ["model.mjs", "text/javascript; charset=utf-8"]],
   ["/styles.css", ["styles.css", "text/css; charset=utf-8"]],
 ]);
 const batchRoutes = new Map([
