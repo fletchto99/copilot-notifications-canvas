@@ -5,6 +5,7 @@ import { build, transform } from "esbuild";
 import { create as createTar } from "tar";
 import { validateReleaseTag } from "./check-release.mjs";
 import { archiveName, encodeBundle, hash, loadPackage, name } from "./package.mjs";
+import metadata from "../version.json" with { type: "json" };
 
 const source = fileURLToPath(new URL("../src/", import.meta.url));
 const nodeOptions = { bundle: true, platform: "node", format: "esm", target: "node22", minify: true, write: false };
@@ -29,7 +30,7 @@ export async function loadAssets() { return new Map(assets); }`,
   };
 }
 
-export async function buildRelease({ tag, directory = resolve("dist") }) {
+export async function buildRelease({ tag = `v${metadata.version}`, directory = resolve("dist") } = {}) {
   validateReleaseTag(tag);
   await mkdir(directory, { recursive: true });
   const stage = await mkdtemp(join(directory, ".package-"));

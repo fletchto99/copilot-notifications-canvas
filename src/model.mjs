@@ -114,11 +114,11 @@ export function groupThreads(threads, { query }) {
     if (search && !`${thread.title}\n${thread.repository}`.toLocaleLowerCase().includes(search)) continue;
     let group = groups.get(thread.repository);
     if (!group) {
-      group = { repository: thread.repository, latestAt: thread.updatedAt, unread: 0, items: [] };
+      group = { repository: thread.repository, unread: 0, items: [] };
       groups.set(thread.repository, group);
     }
     group.items.push(thread);
-    if (thread.unread) group.unread++;
+    group.unread++;
   }
   return [...groups.values()].sort((a, b) => a.repository.localeCompare(b.repository));
 }

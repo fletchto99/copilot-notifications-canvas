@@ -215,6 +215,9 @@ Settings are saved across sessions:
 | **Desktop notifications** | Off by default. Enable native alerts as described below. |
 | **Sound** | System-specific sounds; defaults to **System default**. |
 
+If a legacy `.settings.lock` blocks saves, wait for any active save to finish.
+Stop all older extension processes before inspecting or removing a stale lock.
+
 If local UI files fail to load, the recovery page retries automatically. For
 persistent failures, reload extensions or reinstall while preserving settings.
 
@@ -294,13 +297,15 @@ Unit and HTTP integration tests need no dependency installation:
 node --test test/*.test.mjs
 ```
 
-For lint, coverage and browser checks:
+For lint, coverage, packaging and browser checks:
 
 ```sh
 npm ci --ignore-scripts
 npm run lint
 npm run lint:workflows  # Requires actionlint on PATH.
 npm run test:coverage
+npm run build
+npm run test:package
 npx playwright install --with-deps chromium webkit
 npm run test:browser
 ```
@@ -309,28 +314,16 @@ Coverage also works without `npm ci`. Playwright downloads browser binaries and
 may need permission to install Linux system libraries. Use `-- --project=webkit`
 with `npm run test:browser` to run one engine.
 
-The [test workflow](.github/workflows/tests.yml) defines the platform matrix,
-coverage thresholds, lint and Chromium/WebKit accessibility checks. Tests use
-synthetic GitHub responses and isolated settings: no sign-in, live read updates,
-or OS notifications. SDK stubs do not verify compatibility with a specific
-Copilot build; reload and inspect the real extension after SDK changes.
-Development dependencies are not included in installed extensions.
+See the [test workflow](.github/workflows/tests.yml) for platform coverage and
+required checks. PR/main CI validates packaging but never publishes releases.
+Tests use synthetic GitHub responses and isolated settings: no sign-in, live
+read updates, or OS notifications. SDK stubs do not verify compatibility with a
+specific Copilot build; reload and inspect the real extension after SDK changes.
 
-Ordinary CI does not build or publish release assets. To validate packaging
-locally (not to distribute a development installation):
-
-```sh
-npm ci --ignore-scripts --no-audit --no-fund
-npm run build -- v0.2.0
-npm run test:package
-```
-
-Use the tag matching the repository-root `version.json`. The pinned bundling
-and archive dependencies are build-time only. Generated output goes in ignored
-`dist/`, not Git. Archives use a fixed file order, permissions, and normalized
-ownership/timestamps; tests compare repeated builds byte-for-byte. Reproduction
-assumes the same source and toolchain, not arbitrary compiler/runtime versions.
-Package tests also install into temporary Copilot homes and load a stub host SDK.
+The build defaults to the repository-root `version.json`; an explicit tag must
+match it. Output goes in ignored `dist/`; development dependencies are not
+included in installed extensions. Archives are reproducible with the same
+source and toolchain. Local builds are for validation, not distribution.
 
 ### Publishing releases
 
