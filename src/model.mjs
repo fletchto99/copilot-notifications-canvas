@@ -130,10 +130,10 @@ function searchThreads(threads, query) {
     (!search || `${notificationTitle(thread)}\n${thread.repository}`.toLocaleLowerCase().includes(search)));
 }
 
-export function attentionCounts(threads, { query }) {
-  const matches = searchThreads(threads, query);
+export function attentionCounts(threads) {
+  const unread = orderedThreads(threads).filter(thread => thread.unread);
   return Object.fromEntries(attentionFilters.map(({ value, reasons }) => [
-    value, value === "all" ? matches.length : matches.filter(thread => reasons.includes(thread.reason)).length,
+    value, value === "all" ? unread.length : unread.filter(thread => reasons.includes(thread.reason)).length,
   ]));
 }
 

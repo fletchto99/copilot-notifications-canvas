@@ -41,7 +41,7 @@ export class Inbox {
       loaded: items.length,
       unread: items.length,
       matching: groups.reduce((count, group) => count + group.items.length, 0),
-      attentionCounts: attentionCounts(items, this.filters),
+      attentionCounts: attentionCounts(items),
       hasMore: Boolean(this.pages.at(-1)?.next),
       needsRefresh: this.needsRefresh,
       lastFetchedAt: this.pages.length ? Math.min(...this.pages.map(page => page.fetchedAt)) : null,

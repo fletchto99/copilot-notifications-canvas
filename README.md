@@ -52,8 +52,9 @@ full procedure, verification requirements, and troubleshooting.
   reason, not a full history of your involvement; a thread's reason can change.
   Tabs combine with search in every grouping mode and stay selected during
   refresh and pagination. Each tab's count, such as **Review requested (3)**,
-  includes loaded unread items matching the current search, regardless of
-  which tab is selected. Use Left/Right Arrow or Home/End to switch tabs.
+  includes all loaded unread items in that category, independent of search.
+  The status line reports matches for the selected tab and search.
+  Use Left/Right Arrow or Home/End to switch tabs.
   When tabs do not all fit, edge arrows scroll the strip without changing your
   selected filter. The scrollbar stays hidden; touch and trackpad scrolling
   still work.

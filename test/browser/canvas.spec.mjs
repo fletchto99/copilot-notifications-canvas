@@ -144,7 +144,7 @@ test("attention tabs combine with search and constrain repository reads to match
   await page.getByRole("tab", { name: /^Review requested \(\d+\)$/ }).click();
   await expect(page.locator(".row")).toHaveCount(3);
   await expect(page.locator("#count")).toHaveText("50 unread \u00b7 3 matching");
-  await expect(page.getByRole("tab", { name: "All (4)", exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "All (50)", exact: true })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Review requested (3)", exact: true })).toHaveAttribute("aria-selected", "true");
   await page.getByRole("button", { name: "Mark 2 shown, loaded notifications as read in example/widgets", exact: true }).click();
   await expect(page.locator(".row")).toHaveCount(1);
@@ -155,7 +155,7 @@ test("attention tabs combine with search and constrain repository reads to match
   await page.getByRole("tab", { name: /^Assigned \(\d+\)$/ }).click();
   await expect(page.locator("#empty-title")).toHaveText("No matches in loaded notifications");
   await expect(page.locator("#count")).toHaveText("48 unread \u00b7 0 matching");
-  await expect(page.getByRole("tab", { name: "All (2)", exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "All (48)", exact: true })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Review requested (1)", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Force refresh", exact: true }).click();
   await expect(page.getByRole("tab", { name: /^Assigned \(\d+\)$/ })).toHaveAttribute("aria-selected", "true");
@@ -164,7 +164,7 @@ test("attention tabs combine with search and constrain repository reads to match
   await page.getByRole("button", { name: "Load more (up to 50)", exact: true }).click();
   await expect(page.locator(".row")).toHaveCount(2);
   await expect(page.getByRole("tab", { name: "Review requested (2)", exact: true })).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByRole("tab", { name: "All (3)", exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "All (51)", exact: true })).toBeVisible();
 });
 
 test("attention tabs are keyboard accessible and fit narrow light and dark panels", async ({ page, canvas }, testInfo) => {
@@ -266,7 +266,7 @@ test("overflow arrows scroll without filtering and stay accessible at both ends"
   expect(canvas.writes).toEqual([]);
 });
 
-test("overflow controls appear and disappear as search changes count widths without resizing", async ({ page, canvas }) => {
+test("search preserves total tab counts and overflow controls without resizing", async ({ page, canvas }) => {
   await page.goto(canvas.url);
   const strip = page.getByRole("tablist", { name: "Attention filters" });
   const next = page.getByRole("button", { name: "Scroll attention tabs right", exact: true });
@@ -281,12 +281,14 @@ test("overflow controls appear and disappear as search changes count widths with
   });
   await page.setViewportSize({ width, height: 800 });
   await expect(next).toBeVisible();
-  await page.getByRole("searchbox").fill("Needle");
-  await expect(page.getByRole("tab", { name: "All (3)", exact: true })).toBeVisible();
-  await expect(next).toBeHidden();
-  await page.getByRole("searchbox").fill("");
-  await expect(page.getByRole("tab", { name: "All (50)", exact: true })).toBeVisible();
-  await expect(next).toBeVisible();
+  const counts = await strip.getByRole("tab").allTextContents();
+  for (const [query, matching] of [["Needle", 3], ["No matching notification", 0], ["", 50]]) {
+    await page.getByRole("searchbox").fill(query);
+    await expect(page.locator("#count")).toHaveText(query ? `50 unread \u00b7 ${matching} matching` : "50 unread");
+    await expect(strip.getByRole("tab")).toHaveText(counts);
+    await expect(page.locator(".row")).toHaveCount(matching);
+    await expect(next).toBeVisible();
+  }
   expect(canvas.writes).toEqual([]);
 });
 

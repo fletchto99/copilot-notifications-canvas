@@ -43,14 +43,14 @@ test("attention tabs default to All, combine with search in every grouping, and 
     await ui.fireTimer(250);
     assert.deepEqual(shown(ui), ["3"]);
     assert.equal(ui.ids.get("count").textContent, "7 unread \u00b7 1 matching");
-    assert.equal(tab(ui, "all").textContent, "All (1)");
-    assert.equal(tab(ui, "mentioned").textContent, "Mentioned (1)");
-    assert.equal(tab(ui, "assigned").textContent, "Assigned (0)");
+    assert.equal(tab(ui, "all").textContent, "All (7)");
+    assert.equal(tab(ui, "mentioned").textContent, "Mentioned (2)");
+    assert.equal(tab(ui, "assigned").textContent, "Assigned (1)");
     await tab(ui, "assigned").events.click();
     assert.deepEqual(shown(ui), []);
     assert.equal(search.value, "notification 3");
-    assert.equal(tab(ui, "mentioned").textContent, "Mentioned (1)");
-    assert.equal(tab(ui, "all").textContent, "All (1)");
+    assert.equal(tab(ui, "mentioned").textContent, "Mentioned (2)");
+    assert.equal(tab(ui, "all").textContent, "All (7)");
     assert.equal(ui.ids.get("empty-title").textContent, "No matches in loaded notifications");
     assert.equal(ui.ids.get("count").hidden, false);
     assert.match(ui.ids.get("empty-description").textContent, /another attention filter/);
@@ -143,7 +143,7 @@ test("a failed attention request retains both failed and newer fields for a late
   await ui.fireTimer();
   assert.deepEqual(shown(ui), ["3"]);
   assert.equal(tab(ui, "mentioned").attributes["aria-selected"], "true");
-  assert.equal(tab(ui, "mentioned").textContent, "Mentioned (1)");
+  assert.equal(tab(ui, "mentioned").textContent, "Mentioned (2)");
 });
 
 test("queued tab changes survive a row read, a local poll, and hiding the panel", async () => {

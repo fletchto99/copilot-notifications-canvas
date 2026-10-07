@@ -38,7 +38,7 @@ test("installed bundle supports search, saved settings and exact row writes in a
   await expect(page.locator(".row")).toHaveCount(0);
   await expect(page.locator("#empty-title")).toHaveText("No matches in loaded notifications");
   await page.getByRole("tab", { name: "Review requested (0)", exact: true }).waitFor();
-  await page.getByRole("tab", { name: "All (2)", exact: true }).click();
+  await page.getByRole("tab", { name: "All (49)", exact: true }).click();
   await expect(page.locator(".row")).toHaveCount(2);
   await page.getByRole("searchbox").fill("No matching notification");
   await page.getByRole("button", { name: "Clear filters", exact: true }).click();

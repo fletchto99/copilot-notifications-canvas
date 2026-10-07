@@ -103,12 +103,15 @@ test("attention is panel-local, survives pagination and refresh, and returns onl
   await inbox.refresh({ force: true });
   assert.equal(inbox.summary().matching, 1);
   assert.equal(inbox.summary().loaded, 3);
-  assert.deepEqual(inbox.summary().attentionCounts, { all: 1, review_requested: 1, mentioned: 0, assigned: 0, participating: 0 });
+  assert.deepEqual(inbox.summary().attentionCounts, { all: 3, review_requested: 2, mentioned: 1, assigned: 0, participating: 0 });
   assert.deepEqual(inbox.filters, { mode: "unread", query: "notification 3", attention: "review_requested" });
   await assert.rejects(inbox.setFilters({ attention: "bad" }), { code: "invalid_filters" });
   assert.equal(inbox.filters.attention, "review_requested");
   await inbox.setFilters({ attention: "all" });
   assert.equal(inbox.filters.query, "notification 3");
+  await inbox.setFilters({ query: "no matching title" });
+  assert.equal(inbox.summary().matching, 0);
+  assert.deepEqual(inbox.summary().attentionCounts, { all: 3, review_requested: 2, mentioned: 1, assigned: 0, participating: 0 });
   const prefiltered = new Inbox(client, { attention: "mentioned" });
   t.after(() => prefiltered.close());
   await prefiltered.refresh();
