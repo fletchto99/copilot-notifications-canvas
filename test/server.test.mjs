@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { request } from "node:http";
-import { GitHubClient } from "../.github/extensions/github-notifications/github.mjs";
-import { Inbox } from "../.github/extensions/github-notifications/inbox.mjs";
-import { startServer } from "../.github/extensions/github-notifications/server.mjs";
+import { GitHubClient } from "../src/github.mjs";
+import { Inbox } from "../src/inbox.mjs";
+import { startServer } from "../src/server.mjs";
 import { http, thread } from "./fixtures.mjs";
 
 async function setup(t, run = async () => http([thread()])) {

@@ -8,10 +8,6 @@ const platformSounds = {
   linux: ["message-new-instant", "message-new-email", "complete"],
 };
 
-export function soundValue(value) {
-  return value === true || value === undefined ? "default" : value === false ? "none" : value;
-}
-
 export function validSound(value, platform) {
   return typeof value === "string" && ["none", "default", ...(platform ? platformSounds[platform] ?? [] : Object.values(platformSounds).flat())].includes(value);
 }

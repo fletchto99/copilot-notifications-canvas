@@ -1,10 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { GitHubClient, POLL_MS } from "../.github/extensions/github-notifications/github.mjs";
-import { Inbox } from "../.github/extensions/github-notifications/inbox.mjs";
-import { InboxError, normalizeThreads } from "../.github/extensions/github-notifications/model.mjs";
-import { startServer } from "../.github/extensions/github-notifications/server.mjs";
+import { GitHubClient, POLL_MS } from "../src/github.mjs";
+import { Inbox } from "../src/inbox.mjs";
+import { InboxError, normalizeThreads } from "../src/model.mjs";
+import { startServer } from "../src/server.mjs";
 import { http, next, thread } from "./fixtures.mjs";
 
 const ok = "HTTP/2 205 Reset Content\r\n\r\n";
@@ -307,7 +307,7 @@ test("HTTP start returns before writes finish, status stays readable and cancell
   release();
   await inbox.batch.done;
   assert.equal(writes.length, 1);
-  const source = await readFile(new URL("../.github/extensions/github-notifications/extension.mjs", import.meta.url), "utf8");
+  const source = await readFile(new URL("../src/extension.mjs", import.meta.url), "utf8");
   assert.doesNotMatch(source, /name: "(?:mark_read|batch|bulk|prepare|start_batch)"/);
 });
 

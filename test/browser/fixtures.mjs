@@ -2,12 +2,12 @@ import { test as base, expect } from "@playwright/test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { GitHubClient } from "../../.github/extensions/github-notifications/github.mjs";
-import { Inbox } from "../../.github/extensions/github-notifications/inbox.mjs";
-import { DesktopNotifications } from "../../.github/extensions/github-notifications/desktop.mjs";
-import { Preferences } from "../../.github/extensions/github-notifications/settings.mjs";
-import { startServer } from "../../.github/extensions/github-notifications/server.mjs";
-import { Updates, CURRENT_VERSION } from "../../.github/extensions/github-notifications/updates.mjs";
+import { GitHubClient } from "../../src/github.mjs";
+import { Inbox } from "../../src/inbox.mjs";
+import { DesktopNotifications } from "../../src/desktop.mjs";
+import { Preferences } from "../../src/settings.mjs";
+import { startServer } from "../../src/server.mjs";
+import { Updates, CURRENT_VERSION } from "../../src/updates.mjs";
 import { http, next, thread } from "../fixtures.mjs";
 
 export { expect };

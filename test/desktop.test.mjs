@@ -6,11 +6,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { DesktopNotifications } from "../.github/extensions/github-notifications/desktop.mjs";
-import { Preferences } from "../.github/extensions/github-notifications/settings.mjs";
-import { GitHubClient, POLL_MS } from "../.github/extensions/github-notifications/github.mjs";
-import { InboxError } from "../.github/extensions/github-notifications/model.mjs";
-import { acquireLock } from "../.github/extensions/github-notifications/lock.mjs";
+import { DesktopNotifications } from "../src/desktop.mjs";
+import { Preferences } from "../src/settings.mjs";
+import { GitHubClient, POLL_MS } from "../src/github.mjs";
+import { InboxError } from "../src/model.mjs";
+import { acquireLock } from "../src/lock.mjs";
 import { http, thread, next } from "./fixtures.mjs";
 
 const epoch = Date.parse("2026-01-10T12:00:00Z");
@@ -220,21 +220,65 @@ test("activity seen on a later initial page does not advance the first snapshot'
   assert.deepEqual(f.deliveries.map(alert => alert.body), ["Synthetic notification 51", "Synthetic notification 52"]);
 });
 
-test("legacy completion-clock checkpoints migrate to a silent API-derived baseline", async t => {
+test("unsupported checkpoint versions and missing current fields fail closed without migration", async t => {
+  for (const schema of [{ version: 1 }, { version: 1, cohort: null }, { version: 3, cohort: null }, { version: 2 }]) {
+    const f = await fixture(t);
+    const path = join(f.directory, "desktop-state.json");
+    const content = JSON.stringify({
+      ...schema, watchers: [], generation: null, watermark: epoch + 3_600_000,
+      fingerprints: [], nextPollAt: 0, error: null,
+    });
+    await writeFile(path, content);
+    const watcher = f.make();
+    await watcher.check();
+    assert.equal(watcher.snapshot().state, "error");
+    assert.match(watcher.snapshot().message, /Desktop notification coordination failed/);
+    assert.deepEqual(f.calls, []);
+    assert.deepEqual(f.deliveries, []);
+    assert.equal(f.logs.length, 1);
+    assert.equal(f.logs[0][1].level, "error");
+    assert.equal(await readFile(path, "utf8"), content);
+  }
+});
+
+test("a missing checkpoint creates a current silent baseline after explicit offline cleanup", async t => {
   const f = await fixture(t);
-  await writeFile(join(f.directory, "desktop-state.json"), JSON.stringify({
+  const path = join(f.directory, "desktop-state.json");
+  const content = JSON.stringify({
     version: 1, watchers: [], generation: null, watermark: epoch + 3_600_000,
     fingerprints: [], nextPollAt: 0, error: null,
-  }));
+  });
+  await writeFile(path, content);
+  const backup = join(f.directory, "desktop-state.backup.json");
+  await fs.rename(path, backup);
   const watcher = f.make();
   await watcher.check();
+  assert.equal(watcher.snapshot().state, "watching");
   assert.equal((await f.state()).version, 2);
   assert.equal((await f.state()).watermark, epoch);
   assert.equal(f.deliveries.length, 0);
+  assert.equal(await readFile(backup, "utf8"), content);
   f.rows([updated("2", epoch + 1000), thread()]);
   f.advance();
   await watcher.check();
   assert.deepEqual(f.deliveries.map(alert => alert.body), ["Synthetic notification 2"]);
+});
+
+test("invalid stored sound booleans stop watching without polling, delivery, or checkpoint writes", async t => {
+  for (const desktopSound of [true, false]) {
+    const f = await fixture(t);
+    const settings = JSON.stringify({ ...await f.preferences.document(), desktopSound });
+    await writeFile(f.preferences.path, settings);
+    const watcher = f.make();
+    await watcher.check();
+    assert.equal(watcher.snapshot().state, "error");
+    assert.match(watcher.snapshot().message, /desktopSound must be a supported sound name/);
+    assert.equal(f.logs.length, 1);
+    assert.deepEqual(f.calls, []);
+    assert.deepEqual(f.deliveries, []);
+    assert.equal(await readFile(f.preferences.path, "utf8"), settings);
+    await assert.rejects(readFile(join(f.directory, "desktop-state.json")), { code: "ENOENT" });
+  }
 });
 
 test("bursts group at exactly five new notifications from a repository", async t => {
@@ -720,8 +764,8 @@ test("invalid watcher metadata fails closed without overwriting the marker or fe
 });
 
 async function childWatcher(t, directory) {
-  const module = new URL("../.github/extensions/github-notifications/desktop.mjs", import.meta.url).href;
-  const settings = new URL("../.github/extensions/github-notifications/settings.mjs", import.meta.url).href;
+  const module = new URL("../src/desktop.mjs", import.meta.url).href;
+  const settings = new URL("../src/settings.mjs", import.meta.url).href;
   const child = spawn(process.execPath, ["--input-type=module", "-e", `
     import { DesktopNotifications } from ${JSON.stringify(module)};
     import { Preferences } from ${JSON.stringify(settings)};

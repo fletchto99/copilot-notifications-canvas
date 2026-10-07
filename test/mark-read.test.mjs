@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { GitHubClient, POLL_MS } from "../.github/extensions/github-notifications/github.mjs";
-import { Inbox } from "../.github/extensions/github-notifications/inbox.mjs";
-import { startServer } from "../.github/extensions/github-notifications/server.mjs";
+import { GitHubClient, POLL_MS } from "../src/github.mjs";
+import { Inbox } from "../src/inbox.mjs";
+import { startServer } from "../src/server.mjs";
 import { http, next, thread } from "./fixtures.mjs";
 
 const empty = status => `HTTP/2 ${status} Synthetic\r\n\r\n`;
@@ -35,7 +35,7 @@ test("failed HTTP/auth/rate/network mutations retain rows and counts", async () 
     const client = new GitHubClient({ run: async args => {
       if (!args.includes("PATCH")) return http([thread()]);
       if (result instanceof Error) {
-        const { InboxError } = await import("../.github/extensions/github-notifications/model.mjs");
+        const { InboxError } = await import("../src/model.mjs");
         throw new InboxError("gh_failed", "Synthetic connection failure");
       }
       return result;

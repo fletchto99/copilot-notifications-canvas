@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { notifyDesktop, notificationScript, windowsScript, desktopCapabilities, validSound } from "../.github/extensions/github-notifications/notifier.mjs";
+import { notifyDesktop, notificationScript, windowsScript, desktopCapabilities, validSound } from "../src/notifier.mjs";
 
 const title = "example/widgets";
 const body = 'Fix <widget> & "quotes"; $(do-not-run)\nUnicode: caf\u00e9';
@@ -101,6 +101,11 @@ test("unsupported platforms, sound names, invalid content and missing commands f
   await assert.rejects(command("freebsd"), { code: "desktop_unsupported" });
   for (const [platform, sound] of [["darwin", "Mail"], ["win32", "Glass"], ["linux", "../../sound"], ["darwin", '"do script"']]) {
     await assert.rejects(command(platform, sound), { code: "desktop_sound" });
+  }
+  for (const platform of ["darwin", "win32", "linux"]) {
+    for (const sound of [true, false, null]) {
+      await assert.rejects(command(platform, sound), { code: "desktop_sound" });
+    }
   }
   await assert.rejects(notifyDesktop({ platform: "darwin" }), { code: "desktop_content" });
   for (const platform of ["darwin", "win32", "linux"]) {

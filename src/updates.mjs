@@ -1,38 +1,35 @@
-import metadata from "./version.json" with { type: "json" };
+import metadata from "../version.json" with { type: "json" };
 import { parseResponse, runGh } from "./github.mjs";
 import { InboxError } from "./model.mjs";
+import { compareVersions, versionParts } from "./version.mjs";
+
+export { compareVersions, versionParts } from "./version.mjs";
 
 export const CURRENT_VERSION = metadata.version;
 export const REPOSITORY = "fletchto99/copilot-notifications-canvas";
 export const REPOSITORY_URL = `https://github.com/${REPOSITORY}`;
 export const CHECK_INTERVAL = 15 * 60 * 1000;
 
-export function versionParts(version) {
-  if (typeof version !== "string" || version.length > 64 ||
-      !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) return null;
-  const parts = version.split(".").map(Number);
-  return parts.every(Number.isSafeInteger) ? parts : null;
-}
-
-export function compareVersions(left, right) {
-  const a = versionParts(left);
-  const b = versionParts(right);
-  if (!a || !b) throw new Error("Expected stable major.minor.patch versions.");
-  for (let index = 0; index < a.length; index++) {
-    if (a[index] !== b[index]) return a[index] > b[index] ? 1 : -1;
-  }
-  return 0;
-}
-
 function updatePrompt(version) {
   return `Update my user-wide Unread Notifications canvas to v${version} from
 ${REPOSITORY_URL}.
-Follow the repository's "Installation and Updating" instructions. Fetch the exact release tag
-v${version} into a separate clean checkout or worktree and verify version.json
-matches it before running node scripts/install.mjs with my existing COPILOT_HOME.
+Follow the repository's "Installation and Updating" instructions. Download
+github-notifications-v${version}.tar.gz and SHA256SUMS from the exact stable
+release v${version}. Before extracting or running anything, use gh release verify
+v${version} --repo ${REPOSITORY} to verify the immutable release, then use
+gh release verify-asset v${version} github-notifications-v${version}.tar.gz
+--repo ${REPOSITORY} to verify the downloaded archive. Also verify its
+SHA-256 using SHA256SUMS. Extract into a new directory, then run
+node install.mjs v${version} with my existing COPILOT_HOME.
+Use only the published package, not a source checkout, main, or a local build.
+Stop if verification commands are unavailable, the package is missing, or any
+verification fails; never fall back to checksum-only verification. Do not downgrade a newer
+installed version; report an already-current installation without reinstalling.
 Preserve the entire installed artifacts directory in place, including settings.json
 and unknown settings. Do not delete or recreate it, overwrite locally modified
-runtime files, or bypass installer safeguards. Keep my existing GitHub CLI sign-in.
+runtime files, or bypass installer safeguards. If a legacy/source installation is
+detected, stop and report the one-time migration instructions; do not migrate it
+while old extension processes may be running. Keep my existing GitHub CLI sign-in.
 If installation succeeds, reload extensions in this session and reopen Unread
 Notifications (canvasId: github-notifications). Report the installed version and
 remind me to reload extensions in other already-open sessions. Do not enable

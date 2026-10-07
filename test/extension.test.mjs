@@ -8,10 +8,10 @@ import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { host, CanvasError } from "./fixtures/sdk.mjs";
 import { http, next, thread } from "./fixtures.mjs";
-import { filterSchema, emptySchema, InboxError } from "../.github/extensions/github-notifications/model.mjs";
-import { Inbox } from "../.github/extensions/github-notifications/inbox.mjs";
-import { DesktopNotifications } from "../.github/extensions/github-notifications/desktop.mjs";
-import { CURRENT_VERSION } from "../.github/extensions/github-notifications/updates.mjs";
+import { filterSchema, emptySchema, InboxError } from "../src/model.mjs";
+import { Inbox } from "../src/inbox.mjs";
+import { DesktopNotifications } from "../src/desktop.mjs";
+import { CURRENT_VERSION } from "../src/updates.mjs";
 
 test("the extension entry point wires an isolated session through its complete lifecycle", async t => {
   const home = await fs.mkdtemp(join(tmpdir(), "notification-extension-"));
@@ -180,7 +180,11 @@ test("the extension entry point wires an isolated session through its complete l
     assert.notEqual(first.url, second.url);
     for (const entry of [first, second]) {
       assert.equal(new URL(entry.url).hostname, "127.0.0.1");
-      assert.equal((await fetch(entry.url)).status, 200);
+      for (const [route, file] of [["/", "index.html"], ["/app.mjs", "app.mjs"], ["/model.mjs", "model.mjs"], ["/styles.css", "styles.css"]]) {
+        const response = await fetch(new URL(route, entry.url));
+        assert.equal(response.status, 200);
+        assert.equal(await response.text(), await fs.readFile(new URL(`../src/${file}`, import.meta.url), "utf8"));
+      }
     }
     assert.equal((await invoke("get_state", "one")).loaded, 0);
   });
@@ -258,7 +262,7 @@ test("the extension entry point wires an isolated session through its complete l
   });
 });
 
-const source = await fs.readFile(new URL("../.github/extensions/github-notifications/extension.mjs", import.meta.url), "utf8");
+const source = await fs.readFile(new URL("../src/extension.mjs", import.meta.url), "utf8");
 
 async function fixture() {
   let canvas;

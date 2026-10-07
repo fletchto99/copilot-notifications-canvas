@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { filterSchema, groupThreads, normalizeThreads, notificationLink, orderedThreads, validateFilters } from "../.github/extensions/github-notifications/model.mjs";
+import { filterSchema, groupThreads, normalizeThreads, notificationLink, orderedThreads, validateFilters } from "../src/model.mjs";
 import { thread } from "./fixtures.mjs";
 
 test("groups alphabetically while deduplicating and ordering notifications newest first, then by ID", () => {

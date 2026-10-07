@@ -4,14 +4,14 @@ import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { InboxError } from "./model.mjs";
-import { soundValue, validSound } from "./notifier.mjs";
+import { validSound } from "./notifier.mjs";
 
 const groupingModes = ["none", "repo", "date"];
 const booleanSettings = ["autoOpen", "desktopNotifications"];
 const settingsValue = data => ({
   ...Object.fromEntries(booleanSettings.map(key => [key, data[key] ?? false])),
   darkMode: data.darkMode ?? null,
-  desktopSound: soundValue(data.desktopSound),
+  desktopSound: data.desktopSound ?? "default",
   groupBy: data.groupBy ?? "repo",
 });
 
@@ -32,7 +32,7 @@ export class Preferences {
       const data = JSON.parse(await file.readFile("utf8"));
       if (!data || typeof data !== "object" || Array.isArray(data) ||
           booleanSettings.some(key => data[key] !== undefined && typeof data[key] !== "boolean") ||
-          !validSound(soundValue(data.desktopSound)) ||
+          (data.desktopSound !== undefined && !validSound(data.desktopSound)) ||
           (data.desktopGeneration !== undefined && typeof data.desktopGeneration !== "string") ||
           (data.darkMode !== undefined && data.darkMode !== null && typeof data.darkMode !== "boolean") ||
           (data.groupBy !== undefined && !groupingModes.includes(data.groupBy))) {

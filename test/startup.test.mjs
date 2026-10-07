@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { Startup, STARTUP_INSTANCE, claimStartup } from "../.github/extensions/github-notifications/startup.mjs";
+import { Startup, STARTUP_INSTANCE, claimStartup } from "../src/startup.mjs";
 
 const notificationPanel = {
   canvasId: "github-notifications", extensionId: "user:github-notifications", instanceId: "manual-notifications",

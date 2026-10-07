@@ -1,16 +1,10 @@
 import { createServer } from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { setTimeout as wait } from "node:timers/promises";
+import { assetPaths, loadAssets } from "./assets.mjs";
 import { InboxError } from "./model.mjs";
 import { validSound } from "./notifier.mjs";
 
-const assets = new Map([
-  ["/", ["index.html", "text/html; charset=utf-8"]],
-  ["/app.mjs", ["app.mjs", "text/javascript; charset=utf-8"]],
-  ["/model.mjs", ["model.mjs", "text/javascript; charset=utf-8"]],
-  ["/styles.css", ["styles.css", "text/css; charset=utf-8"]],
-]);
 const batchRoutes = new Map([
   ["/api/batch/start", "start"],
   ["/api/batch/cancel", "cancel"],
@@ -107,7 +101,7 @@ async function readBody(req) {
   return input;
 }
 
-export async function startServer(inbox, { log = () => {}, preferences, desktop, updates, read = readFile } = {}) {
+export async function startServer(inbox, { log = () => {}, preferences, desktop, updates, read } = {}) {
   const secret = randomBytes(32).toString("hex");
   const snapshot = () => ({ ...inbox.snapshot(), ...(updates ? { updates: updates.snapshot() } : {}) });
   const controller = new AbortController();
@@ -119,10 +113,9 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
   let retryTimer;
   let retryDelay = 1000;
   let assetFailureLogged = false;
-  async function loadAssets() {
+  async function recoverAssets() {
     try {
-      const files = new Map(await Promise.all([...assets].map(async ([path, [file, type]]) =>
-        [path, { body: await read(new URL(`./${file}`, import.meta.url), { signal }), type }])));
+      const files = await loadAssets({ read, signal });
       if (!signal.aborted) {
         staticFiles = files;
         resolveReady(true);
@@ -133,7 +126,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         log(`Could not load the notifications canvas assets${failureCode(error)}. Retrying in the background.`, { level: "warning" });
         assetFailureLogged = true;
       }
-      retryTimer = setTimeout(() => { void loadAssets(); }, retryDelay);
+      retryTimer = setTimeout(() => { void recoverAssets(); }, retryDelay);
       retryTimer.unref();
       retryDelay = Math.min(retryDelay * 2, 30_000);
     }
@@ -143,7 +136,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
     resolveReady(false);
   };
   signal.addEventListener("abort", cancelRetry, { once: true });
-  await loadAssets();
+  await recoverAssets();
   assertOpen(signal);
   let origin;
   const server = createServer(async (req, res) => {
@@ -162,7 +155,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         throw new InboxError("invalid_host", "Invalid loopback host.", 403);
       }
       const path = req.url;
-      if (assets.has(path) || path === "/startup.mjs") {
+      if (assetPaths.has(path) || path === "/startup.mjs") {
         if (req.method !== "GET") throw new InboxError("method", "Only GET is supported.", 405);
         const file = path === "/startup.mjs"
           ? { body: recoveryScript, type: "text/javascript; charset=utf-8" }

@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { Updates, CURRENT_VERSION, CHECK_INTERVAL, REPOSITORY, compareVersions, versionParts } from "../.github/extensions/github-notifications/updates.mjs";
+import { Updates, CURRENT_VERSION, CHECK_INTERVAL, REPOSITORY, compareVersions, versionParts } from "../src/updates.mjs";
 import { validateReleaseTag } from "../scripts/check-release.mjs";
-import { InboxError } from "../.github/extensions/github-notifications/model.mjs";
+import { InboxError } from "../src/model.mjs";
 import { http } from "./fixtures.mjs";
 
 const release = (version = "0.2.0", fields = {}) =>
@@ -15,6 +15,12 @@ test("shared installation and update instructions retain links used by older rel
   assert.match(readme, /```text\nInstall or update the Unread Notifications canvas/);
   assert.match(readme, /<a id="installation"><\/a>/);
   assert.match(readme, /<a id="updating"><\/a>/);
+  const verify = readme.indexOf('gh release verify "$tag"');
+  const verifyAsset = readme.indexOf('gh release verify-asset "$tag"');
+  const extract = readme.indexOf('tar -xzf "github-notifications-$tag.tar.gz"');
+  const install = readme.indexOf('node install.mjs "$tag"');
+  assert.ok(verify >= 0 && verifyAsset > verify && extract > verifyAsset && install > extract);
+  assert.match(readme, /do not fall back to source or checksum-only verification/);
 });
 
 test("stable versions compare numerically and reject unsupported versions", () => {
@@ -38,6 +44,14 @@ test("release tags must match the checked-in stable version exactly", () => {
   assert.throws(() => validateReleaseTag("v1.0.0-rc.1", "1.0.0-rc.1"));
 });
 
+test("runtime and release validation use the repository-root version as their single source", async () => {
+  const metadata = JSON.parse(await readFile(new URL("../version.json", import.meta.url), "utf8"));
+  const tooling = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  assert.equal(CURRENT_VERSION, metadata.version);
+  assert.equal(validateReleaseTag(`v${metadata.version}`), `v${metadata.version}`);
+  assert.equal(Object.hasOwn(tooling, "version"), false);
+});
+
 test("release checks use a fixed read-only GitHub endpoint and locally constructed links/prompts", async () => {
   const calls = [];
   const updates = new Updates({ version: "0.1.0", run: async args => {
@@ -52,7 +66,17 @@ test("release checks use a fixed read-only GitHub endpoint and locally construct
   assert.equal(state.releaseUrl, `https://github.com/${REPOSITORY}/releases/tag/v0.2.0`);
   assert.match(state.instructionsUrl, /#installation-and-updating$/);
   assert.match(state.prompt, /"Installation and Updating" instructions/);
-  assert.match(state.prompt, /exact release tag\nv0\.2\.0/);
+  assert.match(state.prompt, /github-notifications-v0\.2\.0\.tar\.gz and SHA256SUMS/);
+  assert.match(state.prompt, /exact stable\nrelease v0\.2\.0/);
+  assert.match(state.prompt, /Before extracting or running anything, use gh release verify/);
+  assert.match(state.prompt, /verify-asset v0\.2\.0 github-notifications-v0\.2\.0\.tar\.gz/);
+  assert.match(state.prompt, /verify the immutable release/);
+  assert.match(state.prompt, /never fall back to checksum-only verification/);
+  assert.match(state.prompt, /SHA-256 using SHA256SUMS/);
+  assert.match(state.prompt, /node install\.mjs v0\.2\.0/);
+  assert.match(state.prompt, /not a source checkout, main, or a local build/);
+  assert.match(state.prompt, /Do not downgrade/);
+  assert.match(state.prompt, /one-time migration/);
   assert.match(state.prompt, /Preserve the entire installed artifacts directory in place/);
   assert.match(state.prompt, /settings\.json\nand unknown settings/);
   assert.match(state.prompt, /Do not delete or recreate it/);
@@ -176,7 +200,7 @@ test("rate-limit retry headers apply even to manual requests", async () => {
   ]) {
     let now = 1000;
     let calls = 0;
-    const updates = new Updates({ now: () => now, run: async () => {
+    const updates = new Updates({ version: "0.1.0", now: () => now, run: async () => {
       calls++;
       return calls === 1 ? http({}, headers, 429) : http(release());
     } });

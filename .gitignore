@@ -1,5 +1,6 @@
-node_modules/
-playwright-report/
-test-results/
-coverage/
-.github/extensions/github-notifications/artifacts/
+/node_modules/
+/dist/
+/playwright-report/
+/test-results/
+/coverage/
+/.github/extensions/github-notifications/artifacts/

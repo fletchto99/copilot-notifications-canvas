@@ -3,15 +3,16 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { createContext, runInContext } from "node:vm";
 import { fileURLToPath } from "node:url";
-import { Inbox } from "../.github/extensions/github-notifications/inbox.mjs";
-import { GitHubClient } from "../.github/extensions/github-notifications/github.mjs";
-import { desktopCapabilities } from "../.github/extensions/github-notifications/notifier.mjs";
-import { orderedThreads } from "../.github/extensions/github-notifications/model.mjs";
+import { Inbox } from "../src/inbox.mjs";
+import { GitHubClient } from "../src/github.mjs";
+import { desktopCapabilities } from "../src/notifier.mjs";
+import { orderedThreads } from "../src/model.mjs";
 import { http, next, thread } from "./fixtures.mjs";
 
-const script = await readFile(new URL("../.github/extensions/github-notifications/app.mjs", import.meta.url), "utf8");
-const html = await readFile(new URL("../.github/extensions/github-notifications/index.html", import.meta.url), "utf8");
-const styles = await readFile(new URL("../.github/extensions/github-notifications/styles.css", import.meta.url), "utf8");
+const script = await readFile(process.env.NOTIFICATIONS_TEST_SCRIPT ??
+  new URL("../src/app.mjs", import.meta.url), "utf8");
+const html = await readFile(new URL("../src/index.html", import.meta.url), "utf8");
+const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
 // Minimal DOM/event/timer doubles exercise the actual renderer without a browser dependency.
@@ -196,10 +197,10 @@ async function renderer({ hidden = false, token = "a".repeat(64), readFailure = 
       return { ok: true, json: async () => ({ ...inbox.snapshot(), updates: releaseMetadata }) };
     },
   });
-  assert.match(script, /^import \{ orderedThreads \} from "\.\/model\.mjs";/);
+  if (!process.env.NOTIFICATIONS_TEST_SCRIPT) assert.match(script, /^import \{ orderedThreads \} from "\.\/model\.mjs";/);
   // Preserve source offsets for the coverage report when removing the injected import.
   runInContext(script.replace(/^import \{ orderedThreads \} from "\.\/model\.mjs";/, match => " ".repeat(match.length)), context, {
-    filename: fileURLToPath(new URL("../.github/extensions/github-notifications/app.mjs", import.meta.url)),
+    filename: process.env.NOTIFICATIONS_TEST_SCRIPT ?? fileURLToPath(new URL("../src/app.mjs", import.meta.url)),
   });
   await settle();
   return {
@@ -227,6 +228,53 @@ async function renderer({ hidden = false, token = "a".repeat(64), readFailure = 
     intersect: value => intersect([{ isIntersecting: value }]),
   };
 }
+
+test("renderer public controls survive bundling and minification", async () => {
+  const ui = await renderer({
+    initialRows: [thread("1"), thread("2")],
+    release: { status: "available", latestVersion: "2.0.0", prompt: "Install the verified v2.0.0 package." },
+  });
+  try {
+    assert.equal(ui.document.querySelectorAll("article").length, 2);
+    await ui.ids.get("copy-update").events.click();
+    assert.deepEqual(ui.copied, ["Install the verified v2.0.0 package."]);
+    ui.ids.get("theme").value = "dark";
+    ui.ids.get("theme").events.change();
+    await settle();
+    assert.equal(ui.document.documentElement.dataset.notificationTheme, "dark");
+    ui.ids.get("auto-open").events.click();
+    await settle();
+    assert.equal(ui.ids.get("auto-open").attributes["aria-checked"], "true");
+    ui.ids.get("group-by").value = "none";
+    ui.ids.get("group-by").events.change();
+    await settle();
+    assert.equal(ui.ids.get("collapse").hidden, true);
+    assert.equal(ui.document.querySelectorAll("article").length, 2);
+    ui.ids.get("group-by").value = "repo";
+    ui.ids.get("group-by").events.change();
+    await settle();
+    await ui.ids.get("force-refresh").events.click();
+    ui.advance();
+    await ui.fireTimer();
+    assert.equal(ui.inbox.summary().status, "ready");
+    const search = ui.ids.get("search");
+    search.value = "notification 2";
+    search.events.input();
+    await ui.fireTimer(250);
+    assert.equal(ui.document.querySelectorAll("article").length, 1);
+    assert.equal(ui.ids.get("count").textContent, "2 unread \u00b7 1 matching");
+    await ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "2").events.click();
+    assert.deepEqual(ui.patches, ["/notifications/threads/2"]);
+    search.value = "";
+    search.events.input();
+    await ui.fireTimer(250);
+    assert.equal(ui.ids.get("count").textContent, "1 unread");
+    assert.equal(ui.document.querySelectorAll("article").length, 1);
+  } finally {
+    ui.window.events.pagehide();
+  }
+  assert.equal(ui.timers.size, 0);
+});
 
 test("update banner sits below the subtitle and above the inbox controls with its prompt collapsed", () => {
   const positions = ['class="subtitle"', 'id="update-banner"', 'class="toolbar"', 'id="count"', 'id="groups"']
@@ -456,7 +504,7 @@ test("Force refresh is an always-enabled link-style footer button beside the che
   assert.match(styles, /a:hover, \.refresh-link:hover \{ text-decoration: underline; \}/);
   assert.match(styles, /button:hover:not\(:disabled, \.repo-toggle, \.refresh-link\)/);
   assert.doesNotMatch(script, /\$\("force-refresh"\)\.disabled\s*=/);
-  const extension = await readFile(new URL("../.github/extensions/github-notifications/extension.mjs", import.meta.url), "utf8");
+  const extension = await readFile(new URL("../src/extension.mjs", import.meta.url), "utf8");
   assert.match(extension, /name: "refresh"/);
   const ui = await renderer();
   assert.equal(ui.ids.get("force-refresh").disabled, false);
@@ -839,7 +887,7 @@ test("Sound is a single settings row with a labeled native select and matching f
   assert.match(row[1], /<label for="desktop-sound">Sound<\/label>/);
   assert.match(row[1], /<select id="desktop-sound"[^>]*aria-describedby="desktop-status"/);
   assert.doesNotMatch(row[1], /<button|role="(?:button|combobox|listbox)"|tabindex/);
-  const css = await readFile(new URL("../.github/extensions/github-notifications/styles.css", import.meta.url), "utf8");
+  const css = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
   assert.match(css, /\.select-setting \{[^}]*min-height: 38px;[^}]*border-radius: 7px;[^}]*padding: 7px 12px;/);
   assert.match(css, /\.select-setting select \{[^}]*border: 0;[^}]*text-align-last: right;[^}]*appearance: none;/);
   assert.match(css, /\.select-setting::after \{[^}]*pointer-events: none;/);

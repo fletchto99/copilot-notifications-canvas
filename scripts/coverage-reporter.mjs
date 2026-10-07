@@ -9,12 +9,12 @@ export function assertCoverageIncludes(files, expected) {
 }
 
 export default async function* coverageReporter(events) {
-  const runtime = new URL("../.github/extensions/github-notifications/", import.meta.url);
+  const runtime = new URL("../src/", import.meta.url);
   const scripts = new URL("./", import.meta.url);
-  const expected = [];
+  const expected = [fileURLToPath(new URL("../.github/extensions/github-notifications/extension.mjs", import.meta.url))];
   for (const directory of [runtime, scripts]) {
     for (const file of await readdir(directory)) {
-      if (file.endsWith(".mjs") && file !== "coverage-reporter.mjs") {
+      if (file.endsWith(".mjs") && !["coverage-reporter.mjs", "build-release.mjs"].includes(file)) {
         expected.push(fileURLToPath(new URL(file, directory)));
       }
     }
