@@ -6,7 +6,7 @@ import { setTimeout as wait } from "node:timers/promises";
 import { GitHubClient, firstPage, POLL_MS } from "./github.mjs";
 import { groupThreads, InboxError, orderedThreads } from "./model.mjs";
 import { acquireLock, ownerPattern, processAlive, removeFile } from "./lock.mjs";
-import { notifyDesktop, desktopCapabilities, soundValue, validSound } from "./notifier.mjs";
+import { notifyDesktop, desktopCapabilities, validSound } from "./notifier.mjs";
 
 const CHECK_MS = 5000;
 const BURST_THRESHOLD = 5;
@@ -33,9 +33,9 @@ async function readState(path) {
     const stat = await file.stat();
     if (!stat.isFile() || stat.size > MAX_STATE_BYTES) throw new Error("Invalid desktop state file");
     const state = JSON.parse(await file.readFile("utf8"));
-    if (!state || ![1, STATE_VERSION].includes(state.version) || !Array.isArray(state.watchers) ||
+    if (!state || state.version !== STATE_VERSION || !Array.isArray(state.watchers) ||
         state.watchers.some(owner => typeof owner !== "string" || !ownerPattern.test(owner)) ||
-        (!(state.version === 1 && state.cohort === undefined) && state.cohort !== null && !cohortID(state.cohort)) ||
+        (state.cohort !== null && !cohortID(state.cohort)) ||
         !(state.generation === null || typeof state.generation === "string") ||
         !(state.watermark === null || timestamp(state.watermark)) ||
         !Array.isArray(state.fingerprints) ||
@@ -80,7 +80,7 @@ function initialBoundary(page) {
 
 function recordActivity(state, items, baseline, initial) {
   const unread = orderedThreads(items).filter(item => item.unread);
-  const previous = state.version === STATE_VERSION ? state.watermark : null;
+  const previous = state.watermark;
   const latest = initial ? Math.max(previous ?? baseline, baseline) :
     Math.max(state.watermark, ...unread.map(item => Date.parse(item.updatedAt)));
   const known = new Set(state.fingerprints);
@@ -287,7 +287,7 @@ export class DesktopNotifications {
         this.capabilities.help);
       return;
     }
-    if (!validSound(soundValue(settings.desktopSound), this.platform)) {
+    if (!validSound(settings.desktopSound ?? "default", this.platform)) {
       throw new InboxError("desktop_sound", "Choose a notification sound supported by this operating system.", 400);
     }
     await this.register();
@@ -301,7 +301,7 @@ export class DesktopNotifications {
     try {
       const state = await readState(this.statePath);
       const previous = JSON.stringify(state);
-      const initial = state.version !== STATE_VERSION || state.watermark === null ||
+      const initial = state.watermark === null ||
         state.cohort !== this.cohort || state.generation !== generation(settings);
       state.watchers = (await this.activeWatchers()).map(watcher => watcher.owner);
       signal.throwIfAborted();
@@ -327,7 +327,6 @@ export class DesktopNotifications {
         }
         signal.throwIfAborted();
         const arrivals = recordActivity(state, items, boundary, initial);
-        state.version = STATE_VERSION;
         state.cohort = this.cohort;
         state.generation = generation(settings);
         state.watchers = (await this.activeWatchers()).map(watcher => watcher.owner);
@@ -339,7 +338,7 @@ export class DesktopNotifications {
           signal.throwIfAborted();
           if (!current.desktopNotifications || generation(current) !== state.generation) break;
           await this.notify({ ...message,
-            sound: soundValue(current.desktopSound), platform: this.platform, signal });
+            sound: current.desktopSound ?? "default", platform: this.platform, signal });
         }
         this.setStatus("watching", watchingMessage);
       } catch (error) {

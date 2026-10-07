@@ -159,13 +159,16 @@ test("desktop settings require a supported backend and wake it only after an exp
   assert.equal((await post({ desktopNotifications: false })).status, 200);
 });
 
-test("legacy desktop sound booleans migrate to named preferences without changing other settings", async t => {
+test("stored desktop sound booleans are rejected without rewriting settings", async t => {
   const preferences = await setup(t);
-  for (const [value, expected] of [[true, "default"], [false, "none"]]) {
-    await fs.writeFile(preferences.path, JSON.stringify({ desktopSound: value, autoOpen: true }));
-    assert.equal((await preferences.read()).desktopSound, expected);
+  for (const value of [true, false]) {
+    const content = JSON.stringify({ desktopSound: value, autoOpen: true, darkMode: false, future: 42 });
+    await fs.writeFile(preferences.path, content);
+    await assert.rejects(preferences.read(), { code: "settings_read" });
+    await assert.rejects(preferences.update({ groupBy: "none" }), { code: "settings_read" });
+    assert.equal(await fs.readFile(preferences.path, "utf8"), content);
+    await assert.rejects(preferences.update({ desktopSound: value }), { code: "invalid_settings" });
   }
-  await assert.rejects(preferences.update({ desktopSound: true }), { code: "invalid_settings" });
   await assert.rejects(preferences.update({ desktopSound: "../../file.wav" }), { code: "invalid_settings" });
 });
 

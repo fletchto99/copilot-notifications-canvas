@@ -159,9 +159,24 @@ those layouts rather than deleting code that an old session might still need.
    **leave `artifacts/` exactly where it is**. Preserve locally modified files
    in the backup; do not delete or overwrite them. The installation directory
    should now contain only `artifacts/` (or be empty).
-3. Install the verified release package using the steps above, restart Copilot,
+3. While all old extension processes are still stopped, check the testing-era
+   data in `artifacts/`:
+   - If `desktop-state.json` uses schema version **1**, move just that file to
+     the backup. The next enabled desktop poll creates a current version **2**
+     checkpoint and establishes a silent baseline. Leave a valid version 2
+     checkpoint untouched; its schema version is independent of the release version.
+   - If `settings.json` has a boolean `desktopSound`, back up that file and
+     explicitly change `true` to `"default"` or `false` to `"none"`. Preserve
+     every other setting and unknown key. Missing sound preferences already
+     default to `"default"`; valid string values need no changes.
+   - Leave all other artifacts in place. Unexpected or malformed data requires
+     inspection, not a blanket reset.
+4. Install the verified release package using the steps above, restart Copilot,
    and open the canvas. Keep the backup until you have confirmed the new
    installation and settings. Future packaged updates need no such migration.
+
+The runtime accepts only current checkpoint and sound formats. It reports
+invalid stored data rather than migrating or overwriting it automatically.
 
 ## Usage
 
