@@ -6,13 +6,39 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { build } from "esbuild";
+import { list as listTar } from "tar";
 import { CURRENT_VERSION } from "../src/updates.mjs";
-import { embeddedAssetsPlugin } from "../scripts/build-release.mjs";
+import { buildRelease, embeddedAssetsPlugin } from "../scripts/build-release.mjs";
 import { encodeBundle, inspectBundle, loadPackage, verifyArchive } from "../scripts/package.mjs";
 import { home } from "./install-fixtures.mjs";
 
 const execute = promisify(execFile);
 const tag = `v${CURRENT_VERSION}`;
+
+test("archives reproduce the same bytes across output paths and filesystem umasks", async t => {
+  const directory = await home(t);
+  const previousMask = process.umask();
+  let one;
+  let two;
+  try {
+    process.umask(0o022);
+    one = await buildRelease({ tag, directory: join(directory, "one") });
+    process.umask(0o077);
+    two = await buildRelease({ tag, directory: join(directory, "two") });
+  } finally {
+    process.umask(previousMask);
+  }
+  assert.deepEqual(await readFile(one), await readFile(two));
+  const entries = [];
+  await listTar({ file: one, onReadEntry: entry => {
+    entries.push(entry.path);
+    assert.equal(entry.type, "File");
+    assert.equal(entry.mode, 0o644);
+    assert.ok(!entry.uid && !entry.gid && !entry.uname && !entry.gname);
+    assert.ok(!entry.mtime || entry.mtime.getTime() === 0);
+  } });
+  assert.deepEqual(entries, ["extension.mjs", "install.mjs", "release.json"]);
+});
 
 test("embedded assets round-trip through the JSON loader without becoming JavaScript", async () => {
   const samples = [

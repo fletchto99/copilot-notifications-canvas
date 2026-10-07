@@ -15,10 +15,15 @@ function updatePrompt(version) {
 ${REPOSITORY_URL}.
 Follow the repository's "Installation and Updating" instructions. Download
 github-notifications-v${version}.tar.gz and SHA256SUMS from the exact stable
-release v${version}. Verify the archive's SHA-256 before extracting it into a new
-directory, then run node install.mjs v${version} with my existing COPILOT_HOME.
+release v${version}. Before extracting or running anything, use gh release verify
+v${version} --repo ${REPOSITORY} to verify the immutable release, then use
+gh release verify-asset v${version} github-notifications-v${version}.tar.gz
+--repo ${REPOSITORY} to verify the downloaded archive. Also verify its
+SHA-256 using SHA256SUMS. Extract into a new directory, then run
+node install.mjs v${version} with my existing COPILOT_HOME.
 Use only the published package, not a source checkout, main, or a local build.
-Stop if the package is missing or verification fails. Do not downgrade a newer
+Stop if verification commands are unavailable, the package is missing, or any
+verification fails; never fall back to checksum-only verification. Do not downgrade a newer
 installed version; report an already-current installation without reinstalling.
 Preserve the entire installed artifacts directory in place, including settings.json
 and unknown settings. Do not delete or recreate it, overwrite locally modified

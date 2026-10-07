@@ -1,14 +1,12 @@
-import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { promisify } from "node:util";
 import { build, transform } from "esbuild";
+import { create as createTar } from "tar";
 import { validateReleaseTag } from "./check-release.mjs";
 import { archiveName, encodeBundle, hash, loadPackage, name } from "./package.mjs";
 
 const source = fileURLToPath(new URL("../src/", import.meta.url));
-const execute = promisify(execFile);
 const nodeOptions = { bundle: true, platform: "node", format: "esm", target: "node22", minify: true, write: false };
 
 export function embeddedAssetsPlugin(assets) {
@@ -69,7 +67,9 @@ export async function buildRelease({ tag, directory = resolve("dist") }) {
     }, null, 2)}\n`);
     await loadPackage(stage, tag);
     const archive = archiveName(tag);
-    await execute("tar", ["-czf", join(stage, archive), "-C", stage, "extension.mjs", "install.mjs", "release.json"]);
+    const files = ["extension.mjs", "install.mjs", "release.json"];
+    for (const file of files) await chmod(join(stage, file), 0o644);
+    await createTar({ file: join(stage, archive), cwd: stage, gzip: true, portable: true, noMtime: true }, files);
     await writeFile(join(stage, "SHA256SUMS"), `${hash(await readFile(join(stage, archive)))}  ${archive}\n`);
     await rename(join(stage, archive), join(directory, archive));
     await rename(join(stage, "SHA256SUMS"), join(directory, "SHA256SUMS"));

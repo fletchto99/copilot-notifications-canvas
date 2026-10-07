@@ -15,6 +15,12 @@ test("shared installation and update instructions retain links used by older rel
   assert.match(readme, /```text\nInstall or update the Unread Notifications canvas/);
   assert.match(readme, /<a id="installation"><\/a>/);
   assert.match(readme, /<a id="updating"><\/a>/);
+  const verify = readme.indexOf('gh release verify "$tag"');
+  const verifyAsset = readme.indexOf('gh release verify-asset "$tag"');
+  const extract = readme.indexOf('tar -xzf "github-notifications-$tag.tar.gz"');
+  const install = readme.indexOf('node install.mjs "$tag"');
+  assert.ok(verify >= 0 && verifyAsset > verify && extract > verifyAsset && install > extract);
+  assert.match(readme, /do not fall back to source or checksum-only verification/);
 });
 
 test("stable versions compare numerically and reject unsupported versions", () => {
@@ -62,7 +68,11 @@ test("release checks use a fixed read-only GitHub endpoint and locally construct
   assert.match(state.prompt, /"Installation and Updating" instructions/);
   assert.match(state.prompt, /github-notifications-v0\.2\.0\.tar\.gz and SHA256SUMS/);
   assert.match(state.prompt, /exact stable\nrelease v0\.2\.0/);
-  assert.match(state.prompt, /SHA-256 before extracting/);
+  assert.match(state.prompt, /Before extracting or running anything, use gh release verify/);
+  assert.match(state.prompt, /verify-asset v0\.2\.0 github-notifications-v0\.2\.0\.tar\.gz/);
+  assert.match(state.prompt, /verify the immutable release/);
+  assert.match(state.prompt, /never fall back to checksum-only verification/);
+  assert.match(state.prompt, /SHA-256 using SHA256SUMS/);
   assert.match(state.prompt, /node install\.mjs v0\.2\.0/);
   assert.match(state.prompt, /not a source checkout, main, or a local build/);
   assert.match(state.prompt, /Do not downgrade/);

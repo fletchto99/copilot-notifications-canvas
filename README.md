@@ -12,7 +12,8 @@ notifications or auto-open.
 - A GitHub Copilot app build with extension canvas support (experimental).
 - Node.js 22 or later.
 - [GitHub CLI](https://cli.github.com/) (`gh`) available to the app and signed
-  into **github.com** with `notifications` or `repo` scope.
+  into **github.com** with `notifications` or `repo` scope. Installation requires
+  a version supporting `gh release verify` and `gh release verify-asset`.
 
 GitHub.com only; fine-grained personal access tokens are not supported.
 Check sign-in with `gh auth status --hostname github.com`.
@@ -37,11 +38,16 @@ If no stable release exists, stop and report that. If already current, report
 that instead of reinstalling. Do not downgrade a newer installed version.
 
 Read the release notes. Download github-notifications-<release-tag>.tar.gz
-and SHA256SUMS from that exact release. Verify the archive's SHA-256 before
-extracting it into a new directory, then run node install.mjs <release-tag>
-from the extracted package. Use my existing COPILOT_HOME and GitHub CLI sign-in.
+and SHA256SUMS from that exact release. Before extracting or executing anything,
+run gh release verify <release-tag> --repo fletchto99/copilot-notifications-canvas,
+then gh release verify-asset <release-tag> github-notifications-<release-tag>.tar.gz
+--repo fletchto99/copilot-notifications-canvas. Require the immutable release and
+an exact archive match to its signed release record. Also verify SHA256SUMS,
+extract into a new directory, and run node install.mjs <release-tag> from there.
+Use my existing COPILOT_HOME and GitHub CLI sign-in.
 Do not install from a source checkout, main, or a local build. Stop if the
-package is missing or verification fails; do not fall back to source.
+package is missing, verification commands are unavailable, or any verification
+fails; do not fall back to source or checksum-only verification.
 
 Preserve the entire installed artifacts directory in place, including
 settings.json, autoOpen, darkMode, groupBy, unknown settings, and other files. Do not
@@ -77,9 +83,13 @@ Use the same `COPILOT_HOME` for an upgrade as for the original installation.
    tag=v0.2.0
    mkdir github-notifications-release &&
    cd github-notifications-release &&
+   gh release verify "$tag" \
+     --repo fletchto99/copilot-notifications-canvas &&
    gh release download "$tag" \
      --repo fletchto99/copilot-notifications-canvas \
      --pattern "github-notifications-$tag.tar.gz" --pattern SHA256SUMS &&
+   gh release verify-asset "$tag" "github-notifications-$tag.tar.gz" \
+     --repo fletchto99/copilot-notifications-canvas &&
    sha256sum -c SHA256SUMS &&
    mkdir package &&
    tar -xzf "github-notifications-$tag.tar.gz" -C package &&
@@ -91,7 +101,12 @@ Use the same `COPILOT_HOME` for an upgrade as for the original installation.
    `shasum -a 256 -c SHA256SUMS`. These are shell commands; on Windows, use
    a shell with `tar` and a SHA-256 utility, or verify with PowerShell's
    `Get-FileHash -Algorithm SHA256` before extracting. Never continue after
-   a failed download or checksum check.
+   a failed download, release verification, or checksum check.
+
+   GitHub's signed release record establishes that the archive is an exact
+   asset of the immutable release. SHA-256 alone is not independent proof of
+   publisher identity. Verification does not prove that the software is safe
+   or provide separate build provenance.
 
    The archive contains only `extension.mjs`, `install.mjs`, and `release.json`.
    No clone, npm install, build tools, or separately installed Copilot SDK
@@ -281,10 +296,12 @@ npm run build -- v0.2.0
 npm run test:package
 ```
 
-Use the tag matching the repository-root `version.json`. The pinned esbuild dependency is
-build-time only. Generated archives and checksums go in ignored `dist/`; build
-output is not committed. The package tests extract the archive, run its
-installer in temporary Copilot homes, and load its provider with a stub host SDK.
+Use the tag matching the repository-root `version.json`. The pinned bundling
+and archive dependencies are build-time only. Generated output goes in ignored
+`dist/`, not Git. Archives use a fixed file order, permissions, and normalized
+ownership/timestamps; tests compare repeated builds byte-for-byte. Reproduction
+assumes the same source and toolchain, not arbitrary compiler/runtime versions.
+Package tests also install into temporary Copilot homes and load a stub host SDK.
 
 ### Publishing releases
 
@@ -293,7 +310,7 @@ tested updates with release notes instead of every merge. Bump
 the repository-root `version.json` in the release PR. This is the single source
 of truth for the release version; `package.json` only describes development tooling.
 
-After merging the version change into `main`, tag that exact commit and push
+After merging the version change into protected `main`, tag that exact commit and push
 the tag. For example, from an up-to-date checkout of the intended release commit:
 
 ```sh
@@ -305,9 +322,14 @@ Only a `v*` tag push triggers the [Release workflow](.github/workflows/release.y
 There is no manual or branch-push release build. The workflow validates the
 stable tag against `version.json`, runs the same test matrix, coverage,
 lint, and browser/accessibility checks as PR CI, then bundles and minifies the
-runtime and tests the actual archive. It verifies the tag still points to the
-**exact tested commit** before publication. It never creates or moves tags,
-bumps a version, or commits generated output.
+runtime and tests the actual archive in a read-only build job. A separate,
+minimal publishing job downloads the exact immutable Actions artifact by ID,
+fails on a digest mismatch, and never installs build dependencies or executes
+the downloaded package. Only this job receives `contents: write`.
+
+Both validation and publication require the tested commit to be on `main`.
+Publication rechecks that the tag still points to the **exact tested commit**.
+The workflow never creates or moves tags, bumps versions, or commits build output.
 
 Publication first checks every page of releases and refuses an existing
 published release or draft with the requested tag. It then uses GitHub CLI's
@@ -318,6 +340,17 @@ looks up a release by tag to edit or publish it. The canvas follows
 `/releases/latest`, so it does not advertise a draft with missing assets.
 Publication is serialized.
 Review the generated notes for behavior changes and update guidance.
+The job also verifies the immutable release and both published assets before
+reporting success. If verification fails after publication, inspect the release;
+do not delete or replace published assets to retry.
+
+Repository settings must keep **release immutability enabled**. The configured
+`v*` tag rules allow creation only by the release maintainer and block updates
+and deletion without bypasses. Existing branch protections remain in place.
+These settings are separate from the workflow and must be configured again
+for a fork. Immutability affects future releases, not older mutable releases.
+This pipeline uses GitHub's automatic release attestations, not separate
+build-provenance attestations.
 
 An existing release or asset is never overwritten. A failure before draft
 creation can be retried. If an upload/publication failure leaves a draft,
@@ -326,8 +359,7 @@ rerunning the job. Never replace assets on an already-published release.
 
 Publish increasing versions; never move a published tag or reuse a version.
 For a bad release, publish a fixed version rather than modifying existing
-release code. Restrict `v*` tag creation with repository rules if more
-contributors gain write access.
+release code. Keep release-tag creation limited to authorized maintainers.
 
 Installations from before the update banner cannot discover releases
 retroactively. Follow the one-time source migration above rather than their

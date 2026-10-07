@@ -22,6 +22,10 @@ export async function publishRelease({ tag, sha, event, ref, directory = resolve
   if (commit?.sha !== sha) {
     throw new Error("The release tag does not point to the tested commit. Refusing to move or publish it.");
   }
+  const comparison = JSON.parse(await run(["api", `repos/{owner}/{repo}/compare/${sha}...main`]));
+  if (!["ahead", "identical"].includes(comparison?.status) || comparison?.merge_base_commit?.sha !== sha) {
+    throw new Error("The tested release commit is not on main. Merge through the protected branch before tagging.");
+  }
   const listing = await run(["api", "--paginate", "repos/{owner}/{repo}/releases?per_page=100",
     "--jq", "map({tag_name, draft}) | tojson"]);
   let pages;
@@ -37,9 +41,14 @@ export async function publishRelease({ tag, sha, event, ref, directory = resolve
   if (pages.some(page => page.some(release => release.tag_name === tag))) {
     throw new Error(`A release or draft already exists for ${tag}. Inspect it before retrying; existing releases are never modified.`);
   }
+  await run(["release", "verify", "--help"]);
+  await run(["release", "verify-asset", "--help"]);
   // With assets, gh creates a draft, uploads, then publishes that exact release by ID.
-  return (await run(["release", "create", tag, ...assets,
+  const url = (await run(["release", "create", tag, ...assets,
     "--verify-tag", "--generate-notes", "--title", tag, "--latest"])).trim();
+  await run(["release", "verify", tag]);
+  for (const asset of assets) await run(["release", "verify-asset", tag, asset]);
+  return url;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
