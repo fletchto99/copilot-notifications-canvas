@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { join, normalize } from "node:path";
 import { acquireLock, processAlive } from "../src/lock.mjs";
 import { home, intercept } from "./install-fixtures.mjs";
 
@@ -90,30 +90,35 @@ test("empty-lock cleanup tolerates disappearance and preserves a replacement own
 });
 
 test("dead-owner recovery never deletes a replacement owner's marker", async t => {
-  const directory = await home(t);
-  const path = join(directory, "lock");
-  const oldOwner = `owner-12345-${randomUUID()}`;
-  const newOwner = `owner-54321-${randomUUID()}`;
-  await fs.mkdir(path);
-  await fs.writeFile(join(path, oldOwner), "");
-  let replaced = false;
-  intercept(t, "unlink", async (unlink, target) => {
-    if (target === join(path, oldOwner) && !replaced) {
-      replaced = true;
-      await unlink(target);
-      await fs.writeFile(join(path, newOwner), "");
-    }
-    return unlink(target);
-  });
-  const probes = [];
-  assert.equal(await acquireLock(path, { alive: pid => {
-    probes.push(pid);
-    return pid === 54321;
-  } }), null);
-  assert.equal(replaced, true);
-  assert.deepEqual(probes, [12345, 54321]);
-  assert.deepEqual(await fs.readdir(path), [newOwner]);
-  assert.deepEqual(await fs.readdir(directory), ["lock"]);
+  for (const spelling of ["native", "equivalent path"]) {
+    await t.test(spelling, async t => {
+      const directory = await home(t);
+      const path = spelling === "native" ? join(directory, "lock") : `${directory}/./lock`;
+      const oldOwner = `owner-12345-${randomUUID()}`;
+      const newOwner = `owner-54321-${randomUUID()}`;
+      await fs.mkdir(path);
+      await fs.writeFile(join(path, oldOwner), "");
+      let replaced = false;
+      intercept(t, "unlink", async (unlink, target) => {
+        if (normalize(target) === join(path, oldOwner) && !replaced) {
+          replaced = true;
+          await unlink(target);
+          await fs.writeFile(join(path, newOwner), "");
+        }
+        return unlink(target);
+      });
+      const probes = [];
+      const release = await acquireLock(path, { alive: pid => {
+        probes.push(pid);
+        return pid === 54321;
+      } });
+      assert.equal(replaced, true, "The replacement-owner race must be injected before checking recovery");
+      assert.equal(release, null);
+      assert.deepEqual(probes, [12345, 54321]);
+      assert.deepEqual(await fs.readdir(path), [newOwner]);
+      assert.deepEqual(await fs.readdir(directory), ["lock"]);
+    });
+  }
 });
 
 test("repeated release leaves a replacement lock intact", async t => {
