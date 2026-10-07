@@ -45,7 +45,7 @@ function parsedURL(value, origin) {
 }
 
 export function notificationLink(subject, repository) {
-  const fallback = { url: "https://github.com/notifications", label: "Open GitHub inbox", direct: false };
+  const fallback = { url: "https://github.com/notifications", label: "Open GitHub inbox", direct: false, number: null };
   if (!repoName(repository)) return fallback;
   const base = `https://github.com/${repository}`;
   const api = parsedURL(subject.url, "https://api.github.com");
@@ -59,16 +59,24 @@ export function notificationLink(subject, repository) {
   };
   const route = Object.hasOwn(routes, subject.type) ? routes[subject.type] : undefined;
   const match = route && path.match(route[0]);
-  if (match) return { url: `${base}/${route[1]}/${match[1]}`, label: "Open on GitHub", direct: true };
+  if (match) return {
+    url: `${base}/${route[1]}/${match[1]}`, label: "Open on GitHub", direct: true,
+    number: ["Issue", "PullRequest"].includes(subject.type) ? match[1] : null,
+  };
 
   // Release IDs are not tags; check-suite IDs are not Actions run IDs.
   if (subject.type === "Release") {
-    return { url: `${base}/releases`, label: "Open repository releases", direct: false };
+    return { url: `${base}/releases`, label: "Open repository releases", direct: false, number: null };
   }
   if (subject.type === "CheckSuite") {
-    return { url: `${base}/actions`, label: "Open repository Actions", direct: false };
+    return { url: `${base}/actions`, label: "Open repository Actions", direct: false, number: null };
   }
   return fallback;
+}
+
+export function notificationTitle(thread, fallback = "") {
+  const title = thread.title || fallback;
+  return thread.number ? `#${thread.number}${title ? ` ${title}` : ""}` : title;
 }
 
 export function normalizeThreads(body) {
@@ -111,7 +119,7 @@ export function groupThreads(threads, { query }) {
   const search = query.trim().toLocaleLowerCase();
   for (const thread of orderedThreads(threads)) {
     if (!thread.unread) continue;
-    if (search && !`${thread.title}\n${thread.repository}`.toLocaleLowerCase().includes(search)) continue;
+    if (search && !`${notificationTitle(thread)}\n${thread.repository}`.toLocaleLowerCase().includes(search)) continue;
     let group = groups.get(thread.repository);
     if (!group) {
       group = { repository: thread.repository, unread: 0, items: [] };

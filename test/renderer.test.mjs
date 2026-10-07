@@ -12,6 +12,10 @@ test("renderer public controls survive bundling and minification", async () => {
   });
   try {
     assert.equal(ui.document.querySelectorAll("article").length, 2);
+    assert.deepEqual(ui.ids.get("groups").querySelectorAll("a").map(link => link.textContent),
+      ["Synthetic notification 1", "Synthetic notification 2"]);
+    assert.deepEqual(ui.ids.get("groups").querySelectorAll("div").filter(node => node.className === "metadata")
+      .map(node => node.children[0].textContent), ["Pull Request #42", "Pull Request #42"]);
     await ui.ids.get("copy-update").events.click();
     assert.deepEqual(ui.copied, ["Install the verified v2.0.0 package."]);
     ui.ids.get("theme").value = "dark";
@@ -198,6 +202,49 @@ test("renderer fetches with a capability, renders untrusted titles as text and e
   assert.equal(ui.document.querySelectorAll("article").length, 1);
 });
 
+test("issue and PR numbers appear in metadata in every grouping and search without changing mark-read IDs", async () => {
+  for (const groupBy of ["repo", "date", "none"]) {
+    const ui = await renderer({ storedSettings: { groupBy }, initialRows: [
+      thread("101", { subject: {
+        title: "<img src=x onerror=alert(1)> Fix login", type: "Issue",
+        url: "https://api.github.com/repos/example/widgets/issues/7",
+      } }),
+      thread("102", { subject: {
+        title: "", type: "PullRequest", url: "https://api.github.com/repos/example/widgets/pulls/8",
+      } }),
+      thread("103", { subject: {
+        title: "New release", type: "Release", url: "https://api.github.com/repos/example/widgets/releases/9",
+      } }),
+    ] });
+    try {
+      const groups = ui.ids.get("groups");
+      assert.deepEqual(groups.querySelectorAll("a").map(link => link.textContent),
+        ["<img src=x onerror=alert(1)> Fix login", "(Untitled notification)", "New release"]);
+      assert.deepEqual(groups.querySelectorAll("div").filter(node => node.className === "metadata")
+        .map(node => node.children.find(child => child.className !== "repository").textContent),
+      ["Issue #7", "Pull Request #8", "Release"]);
+      assert.deepEqual(groups.querySelectorAll("a").map(link => link.href),
+        ["https://github.com/example/widgets/issues/7", "https://github.com/example/widgets/pull/8",
+          "https://github.com/example/widgets/releases"]);
+      assert.deepEqual(groups.querySelectorAll("button").filter(button => button.dataset.threadId)
+        .map(button => button.attributes["aria-label"]), [
+        "Mark as read: #7 <img src=x onerror=alert(1)> Fix login",
+        "Mark as read: #8 Untitled notification", "Mark as read: New release",
+      ]);
+      const search = ui.ids.get("search");
+      search.value = "#7";
+      search.events.input();
+      await ui.fireTimer(250);
+      assert.equal(groups.querySelectorAll("article").length, 1);
+      assert.equal(ui.ids.get("count").textContent, "3 unread \u00b7 1 matching");
+      await groups.querySelectorAll("button").find(button => button.dataset.threadId === "101").events.click();
+      assert.deepEqual(ui.patches, ["/notifications/threads/101"]);
+    } finally {
+      ui.window.events.pagehide();
+    }
+  }
+});
+
 test("canvas is titled Unread Notifications without mode tabs or the old All notice", () => {
   assert.match(html, /<title>Unread Notifications<\/title>/);
   assert.match(html, /<h1>Unread Notifications<\/h1>/);
@@ -219,7 +266,7 @@ test("inbox status leads with unread counts and adds matching counts only while 
   await runInContext('update("filters", { query: "" })', ui.context);
   assert.equal(ui.ids.get("count").textContent, "2 unread");
   assert.match(html, /id="count"[^>]*title="Counts include loaded notifications only\."/);
-  assert.match(html, /Search loaded notification titles and repositories/);
+  assert.match(html, /Search loaded notification titles, issue or PR numbers, and repositories/);
   ui.window.events.pagehide();
 });
 

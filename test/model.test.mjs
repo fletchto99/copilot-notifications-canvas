@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { filterSchema, groupThreads, normalizeThreads, notificationLink, orderedThreads, validateFilters } from "../src/model.mjs";
+import { filterSchema, groupThreads, normalizeThreads, notificationLink, notificationTitle, orderedThreads, validateFilters } from "../src/model.mjs";
 import { thread } from "./fixtures.mjs";
 
 test("groups alphabetically while deduplicating and ordering notifications newest first, then by ID", () => {
@@ -39,15 +39,16 @@ test("group order follows the full repository name regardless of activity, input
 });
 
 test("known API subject links become safe GitHub web links", () => {
-  for (const [type, path, expected] of [
-    ["Issue", "issues/7", "issues/7"],
-    ["PullRequest", "pulls/8", "pull/8"],
-    ["Commit", "commits/abcdef0123456", "commit/abcdef0123456"],
-    ["Discussion", "discussions/9", "discussions/9"],
+  for (const [type, path, expected, number] of [
+    ["Issue", "issues/7", "issues/7", "7"],
+    ["PullRequest", "pulls/8", "pull/8", "8"],
+    ["Commit", "commits/abcdef0123456", "commit/abcdef0123456", null],
+    ["Discussion", "discussions/9", "discussions/9", null],
   ]) {
     const result = notificationLink({ type, url: `https://api.github.com/repos/example/widgets/${path}` }, "example/widgets");
     assert.equal(result.url, `https://github.com/example/widgets/${expected}`);
     assert.equal(result.direct, true);
+    assert.equal(result.number, number);
   }
 });
 
@@ -56,6 +57,7 @@ test("release IDs and check-suite IDs are never mistaken for web tags or run IDs
     const result = notificationLink({ type, url: `https://api.github.com/repos/example/widgets/${suffix}/123` }, "example/widgets");
     assert.equal(result.url, `https://github.com/example/widgets/${suffix}`);
     assert.equal(result.direct, false);
+    assert.equal(result.number, null);
     assert.match(result.label, /^Open repository/);
   }
 });
@@ -69,16 +71,59 @@ test("unsafe, unsupported, null and cross-repository URLs fall back honestly", (
     "https://api.github.com/repos/example/widgets/issues/2?next=https://evil.test",
     "https://api.github.com/repos/example/widgets/issues/2#oops",
     "https://api.github.com/repos/example/widgets/issues/%2e%2e",
+    "https://api.github.com/repos/example/widgets/issues/0",
+    "https://api.github.com/repos/example/widgets/issues/01",
+    "https://api.github.com/repos/example/widgets/issues/7/comments",
+    "https://api.github.com/repos/example/widgets/pulls/7",
   ]) {
     const result = notificationLink({ type: "Issue", url }, "example/widgets");
     assert.equal(result.url, "https://github.com/notifications");
     assert.equal(result.direct, false);
+    assert.equal(result.number, null);
   }
   assert.equal(notificationLink({ type: "Unknown", url: null }, "example/widgets").direct, false);
   for (const type of ["__proto__", "constructor", "toString"]) {
     assert.equal(notificationLink({ type, url: null }, "example/widgets").direct, false);
   }
   assert.equal(notificationLink({ type: "Release" }, "example/..").url, "https://github.com/notifications");
+});
+
+test("issue and PR numbers come from validated subject links, not notification thread IDs", () => {
+  const title = "<img src=x onerror=alert(1)> Fix login";
+  for (const [type, path] of [["Issue", "issues"], ["PullRequest", "pulls"]]) {
+    for (const number of ["42", "9007199254740993"]) {
+      const [item] = normalizeThreads([thread("987654321", {
+        subject: { title, type, url: `https://api.github.com/repos/example/widgets/${path}/${number}` },
+      })]);
+      assert.equal(item.id, "987654321");
+      assert.equal(item.title, title);
+      assert.equal(item.number, number);
+      assert.equal(notificationTitle(item), `#${number} ${title}`);
+      for (const query of [number, `#${number}`]) {
+        assert.deepEqual(groupThreads([item], { query })[0].items, [item]);
+      }
+      assert.deepEqual(groupThreads([item], { query: "#987654321" }), []);
+    }
+  }
+});
+
+test("unnumbered notifications keep their titles and empty titles keep display fallbacks", () => {
+  for (const [type, path] of [
+    ["Issue", null], ["PullRequest", "issues/7"], ["Release", "releases/7"],
+    ["CheckSuite", "check-suites/7"], ["Commit", "commits/abcdef0123456"],
+    ["Discussion", "discussions/7"], ["Unknown", "issues/7"],
+  ]) {
+    const [item] = normalizeThreads([thread("987654321", {
+      subject: { title: "Unnumbered title", type, url: path && `https://api.github.com/repos/example/widgets/${path}` },
+    })]);
+    assert.equal(item.number, null);
+    assert.equal(notificationTitle(item), "Unnumbered title");
+    assert.deepEqual(groupThreads([item], { query: "#7" }), []);
+  }
+  assert.equal(notificationTitle({ title: "", number: "42" }), "#42");
+  assert.equal(notificationTitle({ title: "", number: "42" }, "(Untitled notification)"), "#42 (Untitled notification)");
+  assert.equal(notificationTitle({ title: "", number: null }, "(Untitled notification)"), "(Untitled notification)");
+  assert.equal(notificationTitle({ title: "" }), "");
 });
 
 test("normalization drops API bodies, secrets and unrelated fields, preserving untrusted text as text", () => {
