@@ -152,7 +152,8 @@ export class DesktopNotifications {
       if (!this.enabled) this.controller?.abort();
     }
     if (!this.panels.size) return;
-    this.timer = this.schedule(() => { void this.check(); }, 0);
+    const since = this.client.sequence;
+    this.timer = this.schedule(() => { void this.check({ since }); }, 0);
     this.timer?.unref?.();
   }
 
@@ -181,25 +182,26 @@ export class DesktopNotifications {
     await this.remove();
   }
 
-  sync() {
+  sync({ since = this.client.sequence } = {}) {
     this.foregroundRequested = true;
+    this.foregroundSince = since;
     if (this.foregroundPending) return this.foregroundPending;
     this.foregroundPending = (async () => {
       do {
         await this.pending;
         this.foregroundRequested = false;
-        await this.check({ foreground: true });
+        await this.check({ foreground: true, since: this.foregroundSince });
       } while (this.foregroundRequested && this.panels.size);
     })().finally(() => { this.foregroundPending = undefined; });
     return this.foregroundPending;
   }
 
-  check({ foreground = false } = {}) {
+  check({ foreground = false, since = this.client.sequence } = {}) {
     if (this.pending) return this.pending;
     if (!this.panels.size) return Promise.resolve();
     const controller = new AbortController();
     this.controller = controller;
-    this.pending = this.run(controller.signal, foreground).catch(error => {
+    this.pending = this.run(controller.signal, foreground, since).catch(error => {
       if (!controller.signal.aborted) this.setStatus("error", errorMessage(error));
     }).finally(() => {
       this.pending = undefined;
@@ -292,7 +294,7 @@ export class DesktopNotifications {
     return active;
   }
 
-  async run(signal, foreground) {
+  async run(signal, foreground, since) {
     const settings = await this.preferences.document();
     signal.throwIfAborted();
     this.enabled = settings.desktopNotifications === true;
@@ -328,16 +330,18 @@ export class DesktopNotifications {
         return;
       }
       // Reserve the next poll before network I/O so a crashed poller cannot cause a retry storm.
-      state.nextPollAt = this.now() + POLL_MS;
+      state.nextPollAt = Math.max(state.nextPollAt, this.now() + POLL_MS);
       state.polling = true;
       await saveDocument(this.statePath, state);
       try {
         let next = firstPage();
+        let minSequence = initial ? since + 1 : 0;
         let boundary = initial ? null : state.watermark;
         const items = [];
         while (next) {
-          const page = await this.client.page(next, signal);
+          const page = await this.client.page(next, signal, { minSequence });
           signal.throwIfAborted();
+          minSequence = page.sequence;
           items.push(...page.items);
           state.nextPollAt = Math.max(state.nextPollAt, page.nextRefreshAt);
           if (boundary === null) boundary = initialBoundary(page);
@@ -350,6 +354,7 @@ export class DesktopNotifications {
         state.watchers = (await this.activeWatchers()).map(watcher => watcher.owner);
         state.error = null;
         state.polling = false;
+        state.nextPollAt = Math.max(state.nextPollAt, this.now() + POLL_MS);
         // Claim activity durably before delivery: a crash may lose an alert, but never replay it.
         await saveDocument(this.statePath, state);
         for (const message of notificationMessages(arrivals)) {

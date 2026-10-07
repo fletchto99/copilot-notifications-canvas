@@ -123,8 +123,10 @@ test("only successful foreground refreshes feed the desktop watcher, after updat
   let fail = false;
   let syncs = 0;
   const inbox = new Inbox(new GitHubClient({ run: async () => fail ? http({}, {}, 500) : http([thread()]) }));
-  const desktop = { sync: async () => {
+  const desktop = { sync: async ({ since }) => {
     syncs++;
+    assert.equal(since, 0);
+    assert.equal(inbox.pages[0].sequence, 1);
     assert.equal(inbox.snapshot().groups[0].items[0].id, "1");
   } };
   const server = await startServer(inbox, { desktop });

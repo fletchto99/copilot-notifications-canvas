@@ -160,6 +160,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         throw new InboxError("invalid_host", "Invalid loopback host.", 403);
       }
       const path = req.url;
+      let refreshSequence;
       if (assetPaths.has(path) || path === "/startup.mjs") {
         if (req.method !== "GET") throw new InboxError("method", "Only GET is supported.", 405);
         const file = path === "/startup.mjs"
@@ -204,7 +205,10 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
           void updates.check({ force: true });
           return json(202, updates.snapshot());
         }
-        if (path === "/api/refresh") await inbox.refresh(input);
+        if (path === "/api/refresh") {
+          refreshSequence = inbox.client.sequence;
+          await inbox.refresh(input);
+        }
         if (path === "/api/more") await inbox.more();
         if (path === "/api/filters") await inbox.setFilters(input);
         if (path === "/api/settings") {
@@ -228,7 +232,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
       }
       if (path === "/api/state" || path === "/api/refresh") void updates?.check();
       json(200, snapshot());
-      if (path === "/api/refresh") void desktop?.sync();
+      if (path === "/api/refresh") void desktop?.sync({ since: refreshSequence });
     } catch (error) {
       if (error instanceof InboxError) {
         json(error.status, { error: { code: error.code, message: error.message } });

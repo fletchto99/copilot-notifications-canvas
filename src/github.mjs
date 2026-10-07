@@ -103,6 +103,7 @@ export class GitHubClient {
     this.run = run;
     this.now = now;
     this.cache = new Map();
+    this.sequence = 0;
     this.queue = Promise.resolve();
     this.blockedUntil = 0;
     this.failures = new Map();
@@ -115,12 +116,22 @@ export class GitHubClient {
     this.revision = 0;
   }
 
-  page(endpoint, signal, { force = false } = {}) {
+  page(endpoint, signal, { force = false, minSequence = 0 } = {}) {
     const url = endpointURL(endpoint);
     const path = `${url.pathname}${url.search}`;
     const pending = this.queue.then(() => this.request(path, signal, "GET", { force }));
     this.queue = pending.catch(() => {});
-    return pending;
+    return pending.then(async page => {
+      if (page.sequence >= minSequence) return page;
+      // A scan needs a newer response, but waiting must not hold the request queue.
+      try {
+        await this.sleep(Math.max(0, page.nextRefreshAt - this.now()), undefined, { signal });
+      } catch (error) {
+        if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
+        throw error;
+      }
+      return this.page(endpoint, signal, { force, minSequence });
+    });
   }
 
   reserveReads(ids) {
@@ -195,6 +206,7 @@ export class GitHubClient {
     if (cached?.etag) args.push("-H", `If-None-Match: ${cached.etag}`);
     else if (cached?.modified) args.push("-H", `If-Modified-Since: ${cached.modified}`);
     args.push(endpoint);
+    const sequence = method === "GET" ? ++this.sequence : undefined;
     let response;
     try {
       response = parseResponse(await this.run(args, { signal }));
@@ -239,6 +251,7 @@ export class GitHubClient {
         next = nextPage(headers.link, endpoint);
       }
       const page = {
+        sequence,
         items, next, fetchedAt, nextRefreshAt: Math.max(fetchedAt + poll, this.blockedUntil),
         serverTime: Number.isFinite(serverTime) && serverTime >= 0 ? serverTime : null,
         etag: headers.etag ?? (status === 304 ? cached?.etag : undefined),

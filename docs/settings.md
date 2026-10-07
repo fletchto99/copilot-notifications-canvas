@@ -37,8 +37,10 @@ While the canvas is visible, its checks feed the same results to desktop alerts,
 normally every 30 seconds and immediately on returning to the foreground. The
 watcher uses the same request cache and follows any additional pages needed for
 new activity, independent of search or how many pages the canvas has loaded.
-The first successful baseline remains silent, and OS settings control the
-exact alert timing.
+The first successful baseline uses a fresh response and remains silent. If a
+baseline or continuation page is still cached from an earlier check, the watcher
+waits for GitHub's polling interval before revalidating it. OS settings control
+the exact alert timing.
 
 When the canvas is hidden, its visible-inbox polling pauses but desktop checks
 continue about every two minutes after the last check. GitHub polling intervals,

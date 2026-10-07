@@ -41,7 +41,7 @@ async function fixture(t, { enabled = true } = {}) {
     make(overrides = {}) {
       const watcher = new DesktopNotifications({
         preferences, platform: "darwin", now: () => now,
-        client: new GitHubClient({ now: () => now, run: async args => {
+        client: new GitHubClient({ now: () => now, sleep: async delay => { now += delay; }, run: async args => {
           calls.push(args);
           return response ? response(args) : http(rows);
         } }),
@@ -127,8 +127,9 @@ test("foreground refreshes share results with alerts at 30 seconds and backgroun
   const watcher = f.make();
   const inbox = new Inbox(watcher.client);
   t.after(() => inbox.close());
+  const since = watcher.client.sequence;
   await inbox.refresh();
-  await watcher.sync();
+  await watcher.sync({ since });
   assert.equal(f.calls.length, 1);
   assert.equal(f.deliveries.length, 0);
   const time = f.advance(30_000);
@@ -157,8 +158,9 @@ test("an immediate foreground return feeds new activity to alerts without waitin
   const watcher = f.make();
   const inbox = new Inbox(watcher.client);
   t.after(() => inbox.close());
+  const since = watcher.client.sequence;
   await inbox.refresh();
-  await watcher.sync();
+  await watcher.sync({ since });
   f.rows([updated("2", f.advance(1000)), thread()]);
   await inbox.refresh({ force: true });
   await watcher.sync();
@@ -174,8 +176,9 @@ test("foreground alerts scan all new activity pages without changing the canvas'
   const watcher = f.make();
   const inbox = new Inbox(watcher.client, { query: "notification 2" });
   t.after(() => inbox.close());
+  const since = watcher.client.sequence;
   await inbox.refresh();
-  await watcher.sync();
+  await watcher.sync({ since });
   const time = f.advance(30_000);
   const arrivals = Array.from({ length: 60 }, (_, index) => updated(String(index + 2), time));
   f.response(args => args.at(-1).includes("page=1") ? http(arrivals.slice(0, 50), { link: next }) :
@@ -188,6 +191,93 @@ test("foreground alerts scan all new activity pages without changing the canvas'
   assert.equal(inbox.summary().loaded, 50);
   assert.equal(f.deliveries.length, 1);
   assert.equal(f.deliveries[0].body, "60 new notifications");
+});
+
+test("a fresh first page cannot advance the watermark past arrivals hidden by an older cached continuation", async t => {
+  const f = await fixture(t);
+  const watcher = f.make();
+  const inbox = new Inbox(watcher.client);
+  t.after(() => inbox.close());
+  const backlog = Array.from({ length: 51 }, (_, index) => updated(String(index + 1), epoch));
+  let rows = backlog;
+  f.response(args => {
+    const page = Number(new URL(args.at(-1), "https://api.github.com").searchParams.get("page"));
+    const offset = (page - 1) * 50;
+    return http(rows.slice(offset, offset + 50), offset + 50 < rows.length
+      ? { link: `<https://api.github.com/notifications?all=false&per_page=50&page=${page + 1}>; rel="next"` } : {});
+  });
+  const since = watcher.client.sequence;
+  await inbox.refresh();
+  await watcher.sync({ since });
+  assert.equal(f.calls.length, 2);
+  assert.equal(f.deliveries.length, 0);
+
+  const time = f.advance(1000);
+  rows = [...Array.from({ length: 60 }, (_, index) => updated(String(100 + index), time - index)), ...backlog];
+  await inbox.refresh({ force: true });
+  await watcher.sync();
+  assert.equal(f.calls.length, 5, "the stale continuation must be revalidated before scanning the final page");
+  assert.equal(f.advance(0), epoch + 30_000, "revalidation respects the cached polling deadline");
+  assert.equal((await f.state()).nextPollAt, epoch + 150_000, "the background delay starts after the scan finishes");
+  assert.equal(inbox.pages.length, 1);
+  assert.deepEqual(f.deliveries.map(alert => alert.body), ["60 new notifications"]);
+  f.advance();
+  await inbox.refresh();
+  await watcher.sync();
+  assert.deepEqual(f.deliveries.map(alert => alert.body), ["60 new notifications"]);
+});
+
+test("enabling desktop alerts silently baselines activity missing from a pre-activation foreground cache", async t => {
+  const f = await fixture(t, { enabled: false });
+  const watcher = f.make();
+  const inbox = new Inbox(watcher.client);
+  t.after(() => inbox.close());
+  await inbox.refresh();
+  f.rows([updated("2", f.advance(1000)), thread()]);
+  await f.preferences.update({ desktopNotifications: true });
+  await watcher.check();
+  assert.equal(f.calls.length, 2, "the baseline must revalidate the pre-activation cache");
+  assert.equal(f.advance(0), epoch + 30_000);
+  assert.equal((await f.state()).nextPollAt, epoch + 150_000);
+  assert.equal(f.deliveries.length, 0);
+  f.advance(1000);
+  await inbox.refresh({ force: true });
+  await watcher.sync();
+  assert.equal(f.deliveries.length, 0);
+});
+
+test("closing the final panel cancels an outstanding baseline cache wait without delivering or retrying", async t => {
+  const f = await fixture(t);
+  const watcher = f.make();
+  await watcher.client.page(firstPage());
+  let waiting;
+  const started = new Promise(resolve => { waiting = resolve; });
+  watcher.client.sleep = (_delay, _value, { signal }) => new Promise((_resolve, reject) => {
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    waiting();
+  });
+  const syncing = watcher.sync();
+  await started;
+  await watcher.close();
+  await syncing;
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.deliveries.length, 0);
+  assert.deepEqual(f.logs, []);
+  assert.equal(watcher.pending, undefined);
+  assert.equal(watcher.foregroundPending, undefined);
+  assert.equal((await f.state()).watermark, null);
+});
+
+test("a watcher woken before a fresh foreground response can reuse that response for its silent baseline", async t => {
+  const f = await fixture(t);
+  let scheduled;
+  const watcher = f.make({ schedule: fn => { scheduled = fn; return 0; } });
+  await watcher.client.page(firstPage());
+  scheduled();
+  await watcher.pending;
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.deliveries.length, 0);
+  assert.equal((await f.state()).watermark, epoch);
 });
 
 test("foreground synchronization preserves opt-in and at-most-once delivery across sessions", async t => {

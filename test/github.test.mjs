@@ -70,6 +70,122 @@ test("successful requests cache for at least 30 seconds, including conditional r
   }
 });
 
+test("fresh scan reads wait for the poll deadline outside the shared request queue and revalidate ETags", async () => {
+  let now = 0;
+  let resume;
+  let sleeping;
+  const waiting = new Promise(resolve => { sleeping = resolve; });
+  const calls = [];
+  const client = new GitHubClient({ now: () => now,
+    sleep: async delay => {
+      assert.equal(delay, 60_000);
+      sleeping();
+      await new Promise(resolve => { resume = resolve; });
+      now += delay;
+    },
+    run: async args => {
+      calls.push(args);
+      if (args.at(-1).includes("page=2")) return http([]);
+      return calls.length === 1 ? http([thread()], { etag: '"sample"', "x-poll-interval": "60", link: next })
+        : http(null, {}, 304);
+    },
+  });
+  const first = await client.page(firstPage());
+  const fresh = client.page(firstPage(), undefined, { minSequence: first.sequence + 1 });
+  await waiting;
+  try {
+    const other = await client.page(first.next);
+    assert.equal(other.sequence, 2, "another request can complete during the cache wait");
+    assert.equal(calls.length, 2);
+  } finally {
+    resume();
+  }
+  const revalidated = await fresh;
+  assert.equal(revalidated.sequence, 3);
+  assert.equal(revalidated.fetchedAt, 60_000);
+  assert.equal(revalidated.items.length, 1);
+  assert.ok(calls[2].includes('If-None-Match: "sample"'));
+});
+
+test("fresh scan reads use response sequences even when the clock does not advance", async () => {
+  let calls = 0;
+  const client = new GitHubClient({ now: () => 1000, run: async () => { calls++; return http([]); } });
+  const first = await client.page(firstPage());
+  const refreshed = await client.page(firstPage(), undefined, { force: true });
+  const reused = await client.page(firstPage(), undefined, { minSequence: refreshed.sequence });
+  assert.equal(first.fetchedAt, refreshed.fetchedAt);
+  assert.equal(refreshed.sequence, first.sequence + 1);
+  assert.equal(reused, refreshed);
+  assert.equal(calls, 2);
+});
+
+test("a response already in flight before a freshness boundary cannot establish that boundary's baseline", async () => {
+  let now = 0;
+  let started;
+  let release;
+  const entered = new Promise(resolve => { started = resolve; });
+  let calls = 0;
+  const client = new GitHubClient({ now: () => now, sleep: async delay => { now += delay; },
+    run: async () => {
+      if (++calls === 1) {
+        started();
+        await new Promise(resolve => { release = resolve; });
+      }
+      return http([thread()]);
+    },
+  });
+  const oldRequest = client.page(firstPage());
+  await entered;
+  const minSequence = client.sequence + 1;
+  const baseline = client.page(firstPage(), undefined, { minSequence });
+  release();
+  const [oldPage, freshPage] = await Promise.all([oldRequest, baseline]);
+  assert.ok(oldPage.sequence < minSequence);
+  assert.equal(freshPage.sequence, minSequence);
+  assert.equal(calls, 2);
+  assert.equal(now, 30_000);
+});
+
+test("cancelling a fresh scan's cache wait does not retry or poison the shared client", async () => {
+  const controller = new AbortController();
+  let sleeping;
+  const waiting = new Promise(resolve => { sleeping = resolve; });
+  let calls = 0;
+  const client = new GitHubClient({ now: () => 0, run: async () => { calls++; return http([]); },
+    sleep: (_delay, _value, { signal }) => new Promise((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      sleeping();
+    }),
+  });
+  await client.page(firstPage());
+  const pending = client.page(firstPage(), controller.signal, { minSequence: 2 });
+  const rejected = assert.rejects(pending, { code: "closed" });
+  await waiting;
+  controller.abort();
+  await rejected;
+  assert.equal(calls, 1);
+  assert.equal(client.blockedUntil, 0);
+  assert.equal((await client.page(firstPage())).sequence, 1);
+});
+
+test("fresh scan retries still honor intervening backoff and surface unexpected wait failures", async () => {
+  for (const failWait of [false, true]) {
+    let now = 0;
+    let calls = 0;
+    const client = new GitHubClient({ now: () => now, run: async () => { calls++; return http([]); },
+      sleep: async delay => {
+        if (failWait) throw new Error("Synthetic wait failure");
+        now += delay;
+        client.blockedUntil = now + 120_000;
+      },
+    });
+    await client.page(firstPage());
+    await assert.rejects(client.page(firstPage(), undefined, { minSequence: 2 }),
+      failWait ? { message: "Synthetic wait failure" } : { code: "rate_limited" });
+    assert.equal(calls, 1);
+  }
+});
+
 test("Last-Modified is used when ETag is absent and cacheless 304 fails", async () => {
   let now = 0;
   const calls = [];
