@@ -38,29 +38,17 @@ Use the latest published stable GitHub Release, not main or a prerelease.
 If no stable release exists, stop and report that. If already current, report
 that instead of reinstalling. Do not downgrade a newer installed version.
 
-Read the release notes. Download github-notifications-<release-tag>.tar.gz
+Read the release notes and download github-notifications-<release-tag>.tar.gz
 and SHA256SUMS from that exact release. Before extracting or executing anything,
-run gh release verify <release-tag> --repo fletchto99/copilot-notifications-canvas,
-then gh release verify-asset <release-tag> github-notifications-<release-tag>.tar.gz
---repo fletchto99/copilot-notifications-canvas. Require the immutable release and
-an exact archive match to its signed release record.
-Resolve the tag's commit using gh api --hostname github.com
-repos/fletchto99/copilot-notifications-canvas/commits/<release-tag> --jq .sha.
-Require a full 40-character lowercase hexadecimal commit SHA, not an
-annotated-tag object SHA. Then run gh attestation verify
-github-notifications-<release-tag>.tar.gz
---repo fletchto99/copilot-notifications-canvas --hostname github.com
---signer-workflow fletchto99/copilot-notifications-canvas/.github/workflows/release.yml
---source-ref refs/tags/<release-tag> --source-digest <resolved-commit>
---signer-digest <resolved-commit> --deny-self-hosted-runners
---predicate-type https://slsa.dev/provenance/v1, substituting that commit SHA
-for both digest flags. Require every identity check, not just an attestation.
-Also verify SHA256SUMS. Only after all verification succeeds, extract into a
-new directory and run node install.mjs <release-tag> from there.
-Use my existing COPILOT_HOME and GitHub CLI sign-in.
-Do not install from a source checkout, main, or a local build. Stop if the
-package or build provenance is missing, verification commands or flags are
-unavailable, or any verification fails; do not fall back to source or checksum-only verification.
+follow the manual gh release verify, gh release verify-asset, and
+gh attestation verify commands without omitting flags. Require this repository's
+.github/workflows/release.yml, refs/tags/<release-tag>, and the tag's resolved
+commit for both source and signer digests. Reject self-hosted runners and require
+https://slsa.dev/provenance/v1. Resolve annotated tags to commits, not tag objects.
+After all checks, including SHA256SUMS, pass, extract into a new directory and
+run node install.mjs <release-tag>. Use my existing COPILOT_HOME and GitHub CLI sign-in.
+Stop if packages, attestations, or verification capabilities are missing or any
+check fails; do not fall back to source or checksum-only verification.
 
 Preserve the entire installed artifacts directory in place, including
 settings.json, autoOpen, darkMode, groupBy, unknown settings, and other files. Do not
@@ -127,15 +115,11 @@ Use the same `COPILOT_HOME` for an upgrade as for the original installation.
    checksum check. Missing attestations or unsupported verification flags are
    errors, not reasons to skip a check.
 
-   GitHub's signed release record establishes that the archive is an exact
-   asset of the immutable release. The separate build-provenance check binds
-   the archive's SHA-256 digest to this repository's `release.yml`, the chosen
-   tag, and its resolved source and workflow commit on a GitHub-hosted runner.
-   The commits endpoint resolves both lightweight and annotated tags to a
-   **commit**, not a tag-object digest. Identity flags enforce certificate
-   claims rather than trusting workflow-supplied predicate text.
-   SHA-256 alone is not independent proof of publisher identity, and neither
-   attestation proves that the software is safe.
+   Release verification binds the archive to an immutable release. Build
+   provenance binds its digest to this repository's workflow, tag and commit
+   on a GitHub-hosted runner, using certificate identity. The commits API
+   resolves annotated tags to **commits**, not tag objects. Both checks are
+   required; neither proves that the software is safe.
 
    The archive contains only `extension.mjs`, `install.mjs`, and `release.json`.
    No clone, npm install, build tools, or separately installed Copilot SDK
@@ -362,55 +346,33 @@ git tag -a v0.2.0 -m "Release v0.2.0"
 git push origin v0.2.0
 ```
 
-Only a `v*` tag push triggers the [Release workflow](.github/workflows/release.yml).
-There is no manual or branch-push release build. The workflow validates the
-stable tag against `version.json`, runs the same test matrix, coverage,
-lint, and browser/accessibility checks as PR CI, then bundles and minifies the
-runtime and tests the actual archive in a build job with `contents: read`.
-That job uses SHA-pinned `actions/attest` to generate SLSA v1 build provenance
-for the exact archive, then uploads the tested bytes. It receives only
-`attestations: write` and `id-token: write` in addition to repository read access.
-A separate, minimal publishing job downloads the exact immutable Actions artifact by ID,
-fails on a digest mismatch, and never installs build dependencies or executes
-the downloaded package. Only this job receives `contents: write`; it also gets
-`attestations: read`, but no OIDC signing permission.
+Only `v*` tag pushes trigger the [Release workflow](.github/workflows/release.yml).
+It validates the version and `main` ancestry, runs all PR checks, then builds,
+tests and attests the exact archive with SHA-pinned `actions/attest`.
+The build job has `contents: read`, `attestations: write` and `id-token: write`.
+Only the separate publisher gets `contents: write`, plus `attestations: read`.
+It downloads the exact Actions artifact by ID, rejects digest mismatches, and
+never installs build dependencies or executes the package.
 
-Both validation and publication require the tested commit to be on `main`.
-Publication rechecks that the tag still points to the **exact tested commit**.
+Before creating a release, the publisher rechecks the tag's tested commit and
+`main` ancestry, rejects existing releases or drafts, and enforces the installation
+provenance policy. Missing or failed verification stops publication.
+`SHA256SUMS` must match the attested archive's digest and filename.
 The workflow never creates or moves tags, bumps versions, or commits build output.
 
-Publication first checks every page of releases and refuses an existing
-published release or draft with the requested tag. Before any release creation,
-it requires build provenance for the downloaded archive using the same
-repository, signer workflow, source tag, source/workflow commit and hosted-runner
-policy as installation. Missing or invalid provenance, an unavailable verifier,
-or unsupported policy flags stops publication without a checksum-only fallback.
-The checksum file is not separately build-attested: the publisher requires its
-entire contents to match the attested archive's SHA-256 and filename.
-It then uses GitHub CLI's single upload-and-publish command.
-The CLI creates a draft with generated notes,
-uploads `github-notifications-<tag>.tar.gz` and `SHA256SUMS`, then publishes
-that exact release by ID and marks it **Latest**. The script never
-looks up a release by tag to edit or publish it. The canvas follows
-`/releases/latest`, so it does not advertise a draft with missing assets.
-Publication is serialized.
-Review the generated notes for behavior changes and update guidance.
-The job also verifies the immutable release and both published assets before
-reporting success. If verification fails after publication, inspect the release;
-do not delete or replace published assets to retry.
+Publishing is serialized. GitHub CLI creates a draft, uploads the archive and
+`SHA256SUMS`, then publishes that exact release by ID as **Latest**.
+The job verifies the immutable release and both assets before reporting success.
+Review the generated release notes for behavior changes and update guidance.
 
 Repository settings must keep **release immutability enabled**. The configured
 `v*` tag rules allow creation only by the release maintainer and block updates
 and deletion without bypasses. Existing branch protections remain in place.
 These settings are separate from the workflow and must be configured again
 for a fork. Immutability affects future releases, not older mutable releases.
-This pipeline requires both GitHub's automatic immutable-release attestations
-and separate build-provenance attestations. The attestation step shares the
-build job with build dependencies; it is not an isolated trusted builder and
-does not establish SLSA Build Level 3 or prove that the code is safe.
-Local tests cover verification commands, ordering and failure propagation.
-Generating real GitHub-signed provenance and exercising the tag-only pipeline
-requires a release-tag run; local builds are not attested release packages.
+Provenance signing shares the build job; this is not an isolated trusted builder
+or SLSA Build Level 3. Real signing requires a release-tag run; local builds are
+not attested release packages.
 
 An existing release or asset is never overwritten. A failure before draft
 creation can be retried. If an upload/publication failure leaves a draft,

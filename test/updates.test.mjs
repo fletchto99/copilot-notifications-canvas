@@ -29,13 +29,14 @@ test("shared installation and update instructions retain links used by older rel
   assert.match(readme, /--signer-digest "\$commit" --deny-self-hosted-runners/);
   assert.match(readme, /--predicate-type https:\/\/slsa\.dev\/provenance\/v1 &&/);
   const prompt = readme.match(/```text\n(Install or update[\s\S]+?)```/)[1];
-  for (const text of [prompt, readme.slice(provenance, extract)]) {
-    assert.ok(text.includes(`--repo ${REPOSITORY} --hostname github.com`));
-    assert.ok(text.includes(`--signer-workflow ${REPOSITORY}/.github/workflows/release.yml`));
-  }
-  assert.match(prompt, /--source-ref refs\/tags\/<release-tag> --source-digest <resolved-commit>/);
-  assert.match(prompt, /--signer-digest <resolved-commit> --deny-self-hosted-runners/);
-  assert.match(prompt, /--predicate-type https:\/\/slsa\.dev\/provenance\/v1/);
+  const manual = readme.slice(provenance, extract);
+  assert.ok(manual.includes(`--repo ${REPOSITORY} --hostname github.com`));
+  assert.ok(manual.includes(`--signer-workflow ${REPOSITORY}/.github/workflows/release.yml`));
+  assert.match(prompt, /follow the manual gh release verify, gh release verify-asset, and\ngh attestation verify commands without omitting flags/);
+  assert.match(prompt, /\.github\/workflows\/release\.yml, refs\/tags\/<release-tag>/);
+  assert.match(prompt, /commit for both source and signer digests\. Reject self-hosted runners/);
+  assert.match(prompt, /https:\/\/slsa\.dev\/provenance\/v1/);
+  assert.match(prompt, /Resolve annotated tags to commits, not tag objects/);
   assert.match(readme, /do not fall back to source or checksum-only verification/);
 });
 
