@@ -86,6 +86,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     addEventListener(name, handler) { this.events[name] = handler; }
     removeEventListener(name) { delete this.events[name]; }
     select() { this.selected = true; }
+    getBoundingClientRect() { return this.bounds ?? { left: 0, right: 0 }; }
     scrollIntoView(options) { this.lastScroll = options; }
     scrollBy({ left }) {
       this.scrollLeft = Math.max(0, Math.min(this.scrollWidth - this.clientWidth, this.scrollLeft + left));

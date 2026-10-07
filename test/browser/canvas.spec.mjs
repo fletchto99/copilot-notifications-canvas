@@ -4,6 +4,57 @@ import { CURRENT_VERSION } from "../../src/updates.mjs";
 
 const searchName = "Search loaded notification titles, issue or PR numbers, and repositories";
 
+for (const packaged of [false, true]) {
+  test.describe(`passive tab updates (${packaged ? "packaged" : "source"})`, () => {
+    test.use({ packaged });
+    for (const [label, reason, hiddenSide] of [
+      ["Review requested", "review_requested", "left"],
+      ["Participating", "comment", "right"],
+    ]) {
+      test(`preserve page scroll and reveal a focused tab hidden to the ${hiddenSide}`, async ({ page, canvas }) => {
+        canvas.rows.splice(50);
+        for (const row of canvas.rows) row.reason = reason;
+        await page.setViewportSize({ width: 320, height: 640 });
+        await page.clock.install();
+        await page.goto(canvas.url);
+        await expect(page.locator(".row")).toHaveCount(50);
+        const tab = page.getByRole("tab", { name: new RegExp(`^${label} \\(\\d+\\)$`) });
+        await tab.click();
+        await expect(tab).toHaveAttribute("aria-selected", "true");
+        await tab.focus();
+        await page.locator("#attention-tabs").evaluate((node, side) => {
+          node.scrollLeft = side === "left" ? node.scrollWidth : 0;
+        }, hiddenSide);
+        await page.evaluate(() => window.scrollTo(0, 900));
+        const unchanged = page.waitForResponse(response => response.url().endsWith("/api/state"));
+        await page.clock.fastForward(5000);
+        await unchanged;
+        expect(await page.evaluate(() => scrollY)).toBe(900);
+
+        const url = new URL(canvas.url);
+        const read = await page.request.post(new URL("/api/read", url).href, {
+          headers: { Authorization: `Bearer ${url.hash.slice(1)}`, Origin: url.origin },
+          data: { id: "1" },
+        });
+        expect(read.status()).toBe(200);
+        await page.clock.fastForward(5000);
+        await expect(tab).toHaveText(`${label} (49)`);
+        await expect(page.locator(".row")).toHaveCount(49);
+        expect(await page.evaluate(() => scrollY)).toBe(900);
+        await expect(tab).toBeFocused();
+        const bounds = await tab.evaluate(node => {
+          const tab = node.getBoundingClientRect();
+          const strip = node.parentElement.getBoundingClientRect();
+          return { left: tab.left, right: tab.right, stripLeft: strip.left, stripRight: strip.right };
+        });
+        expect(bounds.left).toBeGreaterThanOrEqual(bounds.stripLeft);
+        expect(bounds.right).toBeLessThanOrEqual(bounds.stripRight);
+        expect(canvas.writes).toEqual(["1"]);
+      });
+    }
+  });
+}
+
 test("the header keeps its typography and spacing while resizing across the compact breakpoint", async ({ page, canvas }) => {
   canvas.rows.splice(1);
   await page.goto(canvas.url);

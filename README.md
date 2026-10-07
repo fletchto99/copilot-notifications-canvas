@@ -57,7 +57,7 @@ full procedure, verification requirements, and troubleshooting.
   Use Left/Right Arrow or Home/End to switch tabs.
   When tabs do not all fit, edge arrows scroll the strip without changing your
   selected filter. The scrollbar stays hidden; touch and trackpad scrolling
-  still work.
+  still work. Passive count updates only scroll the tab strip, not the page.
   Clearing the search leaves the selected attention tab unchanged.
 - **Mark as read:** mark individual rows in any view. In **repo** mode, groups
   with multiple matching notifications also offer **Mark N as read**. This

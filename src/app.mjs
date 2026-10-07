@@ -668,7 +668,7 @@ function render(fallbackFocusKey) {
     tab.tabIndex = (focusedTab ? tab === focusedTab : value === attention) ? 0 : -1;
   }
   renderAttentionOverflow();
-  if (focusedTab && tabsChanged) focusedTab.scrollIntoView({ block: "nearest", inline: "nearest" });
+  if (focusedTab && tabsChanged) revealAttentionTab(focusedTab);
   $("attention-panel").setAttribute("aria-labelledby", `attention-${attention}`);
   $("empty-symbol").hidden = caughtUp;
   $("count").hidden = caughtUp;
@@ -706,6 +706,17 @@ function render(fallbackFocusKey) {
     groupBy === "date" ? "New notifications will appear here, grouped by date." :
     "New notifications will appear here, newest first.";
   renderBatch();
+}
+
+function revealAttentionTab(tab) {
+  const strip = $("attention-tabs");
+  const viewport = strip.getBoundingClientRect();
+  const bounds = tab.getBoundingClientRect();
+  if (bounds.left < viewport.left) {
+    strip.scrollBy({ left: Math.floor(bounds.left - viewport.left) });
+  } else if (bounds.right > viewport.right) {
+    strip.scrollBy({ left: Math.ceil(bounds.right - viewport.right) });
+  }
 }
 
 function renderAttentionOverflow() {

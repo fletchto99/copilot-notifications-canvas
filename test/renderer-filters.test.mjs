@@ -82,6 +82,29 @@ test("keyboard tabs wrap and support Home and End without changing focus on poll
   assert.equal(ui.calls.length, calls);
 });
 
+test("passive count updates reveal focused tabs horizontally without scrolling ancestors", async () => {
+  for (const [bounds, expected] of [
+    [{ left: 10.2, right: 110 }, 80],
+    [{ left: 199, right: 299.3 }, 140],
+    [{ left: 40, right: 140 }, 100],
+  ]) {
+    const ui = await renderer({ initialRows: rows });
+    const strip = ui.ids.get("attention-tabs");
+    ui.ids.get("attention-navigation").clientWidth = 300;
+    Object.assign(strip, { clientWidth: 230, scrollWidth: 600, scrollLeft: 100, bounds: { left: 30, right: 260 } });
+    const focused = tab(ui, "all");
+    focused.bounds = bounds;
+    focused.focus();
+    ui.inbox.onRead("7");
+    await runInContext("update()", ui.context);
+    assert.equal(focused.textContent, "All (6)");
+    assert.equal(strip.scrollLeft, expected);
+    assert.equal(focused.lastScroll, undefined);
+    assert.equal(ui.document.activeElement, focused);
+    ui.window.events.pagehide();
+  }
+});
+
 test("latest tab and search edits are merged while a filter request is in flight", async () => {
   let release;
   let count = 0;
