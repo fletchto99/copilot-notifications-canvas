@@ -173,7 +173,7 @@ function renderUpdates(updates = releaseState) {
     return;
   }
   releaseState = updates;
-  $("installed-version").textContent = `Notification Canvas v${updates.currentVersion}`;
+  $("installed-version").textContent = `Notifications Canvas v${updates.currentVersion}`;
   const messages = {
     unchecked: "",
     no_release: "No stable release yet.",

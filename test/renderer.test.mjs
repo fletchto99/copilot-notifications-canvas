@@ -76,10 +76,10 @@ test("Settings combines the running version and update status in one text row be
     const ui = await renderer({ release });
     const version = ui.ids.get("installed-version");
     const status = ui.ids.get("update-status");
-    assert.equal(version.textContent, "Notification Canvas v0.1.0");
+    assert.equal(version.textContent, "Notifications Canvas v0.1.0");
     assert.equal(status.textContent, message ? ` - ${message}` : "");
     assert.equal(status.hidden, !message);
-    assert.equal(version.textContent + status.textContent, `Notification Canvas v0.1.0${message ? ` - ${message}` : ""}`);
+    assert.equal(version.textContent + status.textContent, `Notifications Canvas v0.1.0${message ? ` - ${message}` : ""}`);
   }
 });
 
@@ -108,7 +108,7 @@ test("update banner shows release links and copies a prompt without installing o
   } });
   assert.equal(ui.ids.get("update-banner").hidden, false);
   assert.match(ui.ids.get("update-title").textContent, /v0\.2\.0.*v0\.1\.0/);
-  assert.equal(ui.ids.get("installed-version").textContent, "Notification Canvas v0.1.0");
+  assert.equal(ui.ids.get("installed-version").textContent, "Notifications Canvas v0.1.0");
   assert.match(ui.ids.get("release-notes").href, /\/releases\/tag\/v0\.2\.0$/);
   assert.match(ui.ids.get("update-instructions").href, /#installation-and-updating$/);
   assert.equal(ui.ids.get("update-prompt").value, "Synthetic safe update prompt");
