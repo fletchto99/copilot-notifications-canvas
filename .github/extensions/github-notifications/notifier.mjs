@@ -63,6 +63,7 @@ $notifier.Show($toast)
 `;
 
 function displayText(value) {
+  // eslint-disable-next-line no-control-regex -- Remove control characters from native notification text.
   const characters = Array.from(value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, ""));
   return characters.length > 500 ? `${characters.slice(0, 497).join("")}...` : characters.join("");
 }

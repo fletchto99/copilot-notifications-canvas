@@ -1,0 +1,19 @@
+{
+  "name": "copilot-notifications-canvas",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "eslint . --max-warnings=0",
+    "lint:workflows": "actionlint",
+    "test": "node --test test/*.test.mjs",
+    "test:coverage": "node --test --experimental-test-coverage --test-coverage-include='.github/extensions/github-notifications/*.mjs' --test-coverage-include='scripts/*.mjs' --test-coverage-exclude='scripts/coverage-reporter.mjs' --test-coverage-lines=90 --test-coverage-branches=85 --test-coverage-functions=90 --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./scripts/coverage-reporter.mjs --test-reporter-destination=stdout test/*.test.mjs",
+    "test:browser": "playwright test"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "@eslint/js": "9.39.5",
+    "@playwright/test": "1.63.0",
+    "eslint": "9.39.5",
+    "globals": "17.12.0"
+  }
+}

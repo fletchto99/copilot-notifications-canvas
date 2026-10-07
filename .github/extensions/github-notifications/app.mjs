@@ -260,7 +260,7 @@ async function markRead(id) {
     readError = `Could not mark the notification as read. ${error.message || "Try again."}`;
   } finally {
     markingRead.delete(id);
-    render();
+    render(nextFocusKey);
     const current = findButton(key);
     if (current) {
       current.disabled = false;
@@ -508,7 +508,7 @@ function displayGroups() {
   return [...dates.values()];
 }
 
-function renderGroups(groups) {
+function renderGroups(groups, fallbackFocusKey) {
   $("collapse").hidden = !groups.length || !groups[0].key;
   $("collapse").textContent = groups.some(group => !collapsed.has(group.key)) ? "Collapse all" : "Expand all";
   // Keep focused controls and disclosure state stable across unchanged polls.
@@ -596,11 +596,11 @@ function renderGroups(groups) {
   }
   $("groups").replaceChildren(fragment);
   if (focused) {
-    (focusKey(focused) ?? $("search")).focus({ preventScroll: true });
+    (focusKey(focused) ?? focusKey(fallbackFocusKey) ?? $("search")).focus({ preventScroll: true });
   }
 }
 
-function render() {
+function render(fallbackFocusKey) {
   renderUpdates(state?.updates);
   renderControls();
   const error = readError || state?.error?.message || connectionError;
@@ -627,7 +627,7 @@ function render() {
     groupBy === "date" ? "Notifications by date" : "Notifications, newest first");
   $("subtitle").textContent = groupBy === "repo" ? "A little less noise. One repository at a time." :
     groupBy === "date" ? "A little less noise. One day at a time." : "A little less noise. Newest notifications first.";
-  renderGroups(displayGroups());
+  renderGroups(displayGroups(), fallbackFocusKey);
   renderControls();
   for (const time of document.querySelectorAll("time")) time.textContent = relativeTime(time.dateTime);
   $("empty").hidden = Boolean(state.groups.length);

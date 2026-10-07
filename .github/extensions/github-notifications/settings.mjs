@@ -104,6 +104,7 @@ export class Preferences {
           await this.io.unlink(lockPath);
         }
       } catch {
+        // eslint-disable-next-line no-unsafe-finally -- Cleanup failures must surface even when the update also failed.
         throw new InboxError("settings_cleanup", "Settings cleanup failed. Check the extension artifacts directory before retrying.", 500);
       }
     }
