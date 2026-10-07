@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { join } from "node:path";
-import { Preferences } from "../.github/extensions/github-notifications/settings.mjs";
+import { Preferences } from "../src/settings.mjs";
 import { inspectBundle } from "../scripts/package.mjs";
 import { fixture, intercept } from "./install-fixtures.mjs";
 
@@ -108,7 +108,7 @@ test("concurrent providers can save settings during an upgrade without moving ar
   let writes = 0;
   intercept(t, "rename", async (rename, from, to) => {
     if (from.includes("-stage-")) {
-      const module = new URL("../.github/extensions/github-notifications/settings.mjs", import.meta.url).href;
+      const module = new URL("../src/settings.mjs", import.meta.url).href;
       await execute(process.execPath, ["--input-type=module", "-e",
         `import { Preferences } from ${JSON.stringify(module)}; await new Preferences({directory:process.argv[1]}).update({autoOpen:true});`,
         directory]);

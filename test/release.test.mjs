@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { normalizeReleaseTag } from "../scripts/check-release.mjs";
 import { publishRelease } from "../scripts/publish-release.mjs";
-import { CURRENT_VERSION } from "../.github/extensions/github-notifications/updates.mjs";
+import { CURRENT_VERSION } from "../src/updates.mjs";
 import { archiveName, hash } from "../scripts/package.mjs";
 import { home } from "./install-fixtures.mjs";
 

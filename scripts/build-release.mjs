@@ -7,7 +7,7 @@ import { build, transform } from "esbuild";
 import { validateReleaseTag } from "./check-release.mjs";
 import { archiveName, encodeBundle, hash, loadPackage, name } from "./package.mjs";
 
-const source = fileURLToPath(new URL("../.github/extensions/github-notifications/", import.meta.url));
+const source = fileURLToPath(new URL("../src/", import.meta.url));
 const execute = promisify(execFile);
 const nodeOptions = { bundle: true, platform: "node", format: "esm", target: "node22", minify: true, write: false };
 

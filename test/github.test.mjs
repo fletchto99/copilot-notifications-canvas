@@ -2,9 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
-import { firstPage, GitHubClient, nextPage, parseResponse, POLL_MS, runGh } from "../.github/extensions/github-notifications/github.mjs";
+import { firstPage, GitHubClient, nextPage, parseResponse, POLL_MS, runGh } from "../src/github.mjs";
 import { http, next, thread } from "./fixtures.mjs";
-import { Inbox } from "../.github/extensions/github-notifications/inbox.mjs";
+import { Inbox } from "../src/inbox.mjs";
 
 test("gh calls use explicit GET, fixed host, safe argument arrays and no auth token extraction", async () => {
   const calls = [];

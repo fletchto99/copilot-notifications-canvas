@@ -2,15 +2,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { createContext, runInContext } from "node:vm";
-import { Inbox } from "../.github/extensions/github-notifications/inbox.mjs";
-import { GitHubClient } from "../.github/extensions/github-notifications/github.mjs";
-import { desktopCapabilities } from "../.github/extensions/github-notifications/notifier.mjs";
+import { Inbox } from "../src/inbox.mjs";
+import { GitHubClient } from "../src/github.mjs";
+import { desktopCapabilities } from "../src/notifier.mjs";
 import { http, next, thread } from "./fixtures.mjs";
 
 const script = await readFile(process.env.NOTIFICATIONS_TEST_SCRIPT ??
-  new URL("../.github/extensions/github-notifications/app.mjs", import.meta.url), "utf8");
-const html = await readFile(new URL("../.github/extensions/github-notifications/index.html", import.meta.url), "utf8");
-const styles = await readFile(new URL("../.github/extensions/github-notifications/styles.css", import.meta.url), "utf8");
+  new URL("../src/app.mjs", import.meta.url), "utf8");
+const html = await readFile(new URL("../src/index.html", import.meta.url), "utf8");
+const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
 // Minimal DOM/event/timer doubles exercise the actual renderer without a browser dependency.
@@ -489,7 +489,7 @@ test("Force refresh is an always-enabled link-style footer button beside the che
   assert.match(styles, /a:hover, \.refresh-link:hover \{ text-decoration: underline; \}/);
   assert.match(styles, /button:hover:not\(:disabled, \.repo-toggle, \.refresh-link\)/);
   assert.doesNotMatch(script, /\$\("force-refresh"\)\.disabled\s*=/);
-  const extension = await readFile(new URL("../.github/extensions/github-notifications/extension.mjs", import.meta.url), "utf8");
+  const extension = await readFile(new URL("../src/extension.mjs", import.meta.url), "utf8");
   assert.match(extension, /name: "refresh"/);
   const ui = await renderer();
   assert.equal(ui.ids.get("force-refresh").disabled, false);
@@ -871,7 +871,7 @@ test("Sound is a single settings row with a labeled native select and matching f
   assert.match(row[1], /<label for="desktop-sound">Sound<\/label>/);
   assert.match(row[1], /<select id="desktop-sound"[^>]*aria-describedby="desktop-status"/);
   assert.doesNotMatch(row[1], /<button|role="(?:button|combobox|listbox)"|tabindex/);
-  const css = await readFile(new URL("../.github/extensions/github-notifications/styles.css", import.meta.url), "utf8");
+  const css = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
   assert.match(css, /\.select-setting \{[^}]*min-height: 38px;[^}]*border-radius: 7px;[^}]*padding: 7px 12px;/);
   assert.match(css, /\.select-setting select \{[^}]*border: 0;[^}]*text-align-last: right;[^}]*appearance: none;/);
   assert.match(css, /\.select-setting::after \{[^}]*pointer-events: none;/);

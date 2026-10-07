@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { startServer } from "../.github/extensions/github-notifications/server.mjs";
-import { Inbox } from "../.github/extensions/github-notifications/inbox.mjs";
-import { GitHubClient } from "../.github/extensions/github-notifications/github.mjs";
-import { Updates } from "../.github/extensions/github-notifications/updates.mjs";
+import { startServer } from "../src/server.mjs";
+import { Inbox } from "../src/inbox.mjs";
+import { GitHubClient } from "../src/github.mjs";
+import { Updates } from "../src/updates.mjs";
 import { http, thread } from "./fixtures.mjs";
 
 const stable = { tag_name: "v0.2.0", draft: false, prerelease: false };

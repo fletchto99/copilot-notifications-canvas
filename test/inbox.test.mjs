@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { GitHubClient, POLL_MS } from "../.github/extensions/github-notifications/github.mjs";
-import { Inbox } from "../.github/extensions/github-notifications/inbox.mjs";
+import { GitHubClient, POLL_MS } from "../src/github.mjs";
+import { Inbox } from "../src/inbox.mjs";
 import { http, next, thread } from "./fixtures.mjs";
 
 test("load-more preserves visible coverage, deduplicates boundary shifts, and refresh reconciles loaded pages", async () => {
@@ -145,7 +145,7 @@ test("concurrent actions fail explicitly and closing aborts outstanding gh work"
   const client = new GitHubClient({ run: async (_args, { signal }) => {
     launched();
     await new Promise(resolve => signal.addEventListener("abort", resolve, { once: true }));
-    const { InboxError } = await import("../.github/extensions/github-notifications/model.mjs");
+    const { InboxError } = await import("../src/model.mjs");
     throw new InboxError("closed", "Closed.", 410);
   } });
   const inbox = new Inbox(client);

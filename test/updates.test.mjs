@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { Updates, CURRENT_VERSION, CHECK_INTERVAL, REPOSITORY, compareVersions, versionParts } from "../.github/extensions/github-notifications/updates.mjs";
+import { Updates, CURRENT_VERSION, CHECK_INTERVAL, REPOSITORY, compareVersions, versionParts } from "../src/updates.mjs";
 import { validateReleaseTag } from "../scripts/check-release.mjs";
-import { InboxError } from "../.github/extensions/github-notifications/model.mjs";
+import { InboxError } from "../src/model.mjs";
 import { http } from "./fixtures.mjs";
 
 const release = (version = "0.2.0", fields = {}) =>

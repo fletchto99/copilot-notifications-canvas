@@ -6,11 +6,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { DesktopNotifications } from "../.github/extensions/github-notifications/desktop.mjs";
-import { Preferences } from "../.github/extensions/github-notifications/settings.mjs";
-import { GitHubClient, POLL_MS } from "../.github/extensions/github-notifications/github.mjs";
-import { InboxError } from "../.github/extensions/github-notifications/model.mjs";
-import { acquireLock } from "../.github/extensions/github-notifications/lock.mjs";
+import { DesktopNotifications } from "../src/desktop.mjs";
+import { Preferences } from "../src/settings.mjs";
+import { GitHubClient, POLL_MS } from "../src/github.mjs";
+import { InboxError } from "../src/model.mjs";
+import { acquireLock } from "../src/lock.mjs";
 import { http, thread, next } from "./fixtures.mjs";
 
 const epoch = Date.parse("2026-01-10T12:00:00Z");
@@ -720,8 +720,8 @@ test("invalid watcher metadata fails closed without overwriting the marker or fe
 });
 
 async function childWatcher(t, directory) {
-  const module = new URL("../.github/extensions/github-notifications/desktop.mjs", import.meta.url).href;
-  const settings = new URL("../.github/extensions/github-notifications/settings.mjs", import.meta.url).href;
+  const module = new URL("../src/desktop.mjs", import.meta.url).href;
+  const settings = new URL("../src/settings.mjs", import.meta.url).href;
   const child = spawn(process.execPath, ["--input-type=module", "-e", `
     import { DesktopNotifications } from ${JSON.stringify(module)};
     import { Preferences } from ${JSON.stringify(settings)};

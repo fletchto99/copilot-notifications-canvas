@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { notifyDesktop, notificationScript, windowsScript, desktopCapabilities, validSound } from "../.github/extensions/github-notifications/notifier.mjs";
+import { notifyDesktop, notificationScript, windowsScript, desktopCapabilities, validSound } from "../src/notifier.mjs";
 
 const title = "example/widgets";
 const body = 'Fix <widget> & "quotes"; $(do-not-run)\nUnicode: caf\u00e9';

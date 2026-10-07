@@ -274,10 +274,15 @@ mark that notification read on GitHub.
 
 ## Development
 
-Runtime files are in `.github/extensions/github-notifications/`. Open this
-repository as a Copilot project to work on its local extension. After edits,
-reload extensions and use extension **list/inspect** to check the provider and
-its log.
+Provider modules and renderer assets live in `src/`. The one-line entry point
+at `.github/extensions/github-notifications/extension.mjs` imports
+`src/extension.mjs`, so opening this repository as a Copilot project loads the
+local source directly without a build. After edits, reload extensions and use
+extension **list/inspect** to check the provider and its log.
+
+Release builds also start from `src/extension.mjs`, not the development entry
+point. The installer still writes only the bundled `extension.mjs` under the
+user-wide `extensions/github-notifications/` directory.
 
 Run the tests:
 
@@ -307,7 +312,7 @@ temporary Copilot homes, and load its provider with a stub host SDK.
 
 Use stable semantic versions (`vMAJOR.MINOR.PATCH`) so users receive deliberate,
 tested updates with release notes instead of every merge. Bump
-`.github/extensions/github-notifications/version.json` in the release PR.
+`src/version.json` in the release PR.
 
 After merging the version change into `main`, tag that exact commit and push
 the tag. For example, from an up-to-date checkout of the intended release commit:

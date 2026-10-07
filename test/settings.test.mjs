@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { Preferences } from "../.github/extensions/github-notifications/settings.mjs";
-import { startServer } from "../.github/extensions/github-notifications/server.mjs";
-import { Inbox } from "../.github/extensions/github-notifications/inbox.mjs";
-import { GitHubClient } from "../.github/extensions/github-notifications/github.mjs";
+import { Preferences } from "../src/settings.mjs";
+import { startServer } from "../src/server.mjs";
+import { Inbox } from "../src/inbox.mjs";
+import { GitHubClient } from "../src/github.mjs";
 
 const defaults = { autoOpen: false, darkMode: null, desktopNotifications: false, desktopSound: "default" };
 

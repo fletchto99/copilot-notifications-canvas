@@ -1,10 +1,59 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { promisify } from "node:util";
 import { runInNewContext } from "node:vm";
-import { InboxError } from "../.github/extensions/github-notifications/model.mjs";
+import { InboxError } from "../src/model.mjs";
+import { home } from "./install-fixtures.mjs";
 
-const source = await readFile(new URL("../.github/extensions/github-notifications/extension.mjs", import.meta.url), "utf8");
+const source = await readFile(new URL("../src/extension.mjs", import.meta.url), "utf8");
+
+test("the development entry point loads source and serves its assets without a build", async t => {
+  const root = await home(t);
+  const entry = new URL("../.github/extensions/github-notifications/extension.mjs", import.meta.url);
+  const assets = new URL("../src/", import.meta.url);
+  const sdk = `export const createCanvas = value => value;
+export class CanvasError extends Error {}
+export async function joinSession(options) {
+  globalThis.developmentCanvas = options.canvases[0];
+  return { workspacePath: process.argv[2], log(message) { throw new Error(message); } };
+}`;
+  const hook = `export async function resolve(specifier, context, next) {
+  if (specifier === "@github/copilot-sdk/extension") return {
+    url: ${JSON.stringify(`data:text/javascript,${encodeURIComponent(sdk)}`)}, shortCircuit: true };
+  return next(specifier, context);
+}`;
+  const script = `
+import assert from "node:assert/strict";
+import childProcess from "node:child_process";
+import { register, syncBuiltinESMExports } from "node:module";
+import { readFile } from "node:fs/promises";
+childProcess.execFile = () => { throw new Error("Development smoke test must not invoke external commands"); };
+syncBuiltinESMExports();
+register(${JSON.stringify(`data:text/javascript,${encodeURIComponent(hook)}`)});
+await import(process.argv[1]);
+const canvas = globalThis.developmentCanvas;
+assert.equal(canvas.id, "github-notifications");
+const instanceId = "development-smoke";
+const { url } = await canvas.open({ instanceId, input: {} });
+try {
+  for (const [route, file] of [["/", "index.html"], ["/app.mjs", "app.mjs"], ["/styles.css", "styles.css"]]) {
+    const response = await fetch(new URL(route, url));
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), await readFile(new URL(file, process.argv[3]), "utf8"));
+  }
+  const settings = await canvas.actions.find(action => action.name === "get_settings").handler({ instanceId });
+  assert.equal(settings.autoOpen, false);
+  assert.equal(settings.desktopNotifications, false);
+} finally {
+  await canvas.onClose({ instanceId });
+}
+`;
+  await promisify(execFile)(process.execPath, ["--input-type=module", "-e", script, entry.href, join(root, "session"), assets.href],
+    { env: { ...process.env, COPILOT_HOME: root }, cwd: root, timeout: 15_000 });
+});
 
 async function fixture() {
   let canvas;

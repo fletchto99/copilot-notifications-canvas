@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { build } from "esbuild";
-import { CURRENT_VERSION } from "../.github/extensions/github-notifications/updates.mjs";
+import { CURRENT_VERSION } from "../src/updates.mjs";
 import { embeddedAssetsPlugin } from "../scripts/build-release.mjs";
 import { encodeBundle, inspectBundle, loadPackage, verifyArchive } from "../scripts/package.mjs";
 import { home } from "./install-fixtures.mjs";
@@ -25,7 +25,7 @@ test("embedded assets round-trip through the JSON loader without becoming JavaSc
   ];
   const assets = samples.map((body, index) => [`/${index}`, { body, type: "text/plain" }]);
   const result = await build({
-    entryPoints: [fileURLToPath(new URL("../.github/extensions/github-notifications/assets.mjs", import.meta.url))],
+    entryPoints: [fileURLToPath(new URL("../src/assets.mjs", import.meta.url))],
     bundle: true, platform: "node", format: "esm", target: "node22", minify: true,
     write: false, metafile: true, plugins: [embeddedAssetsPlugin(assets)],
   });
@@ -158,7 +158,7 @@ try {
   assert.equal(inspectBundle(await readFile(entry)).version, CURRENT_VERSION);
   for (const file of ["app.mjs", "styles.css"]) {
     const built = await readFile(join(root, "served-assets", file));
-    const source = await readFile(new URL(`../.github/extensions/github-notifications/${file}`, import.meta.url));
+    const source = await readFile(new URL(`../src/${file}`, import.meta.url));
     assert.ok(built.length < source.length, `${file} must be minified`);
   }
 });

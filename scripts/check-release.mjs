@@ -1,14 +1,14 @@
 import { appendFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import metadata from "../.github/extensions/github-notifications/version.json" with { type: "json" };
-import { versionParts } from "../.github/extensions/github-notifications/version.mjs";
+import metadata from "../src/version.json" with { type: "json" };
+import { versionParts } from "../src/version.mjs";
 
 const CURRENT_VERSION = metadata.version;
 
 export function validateReleaseTag(tag, version = CURRENT_VERSION) {
   if (!versionParts(version) || tag !== `v${version}`) {
-    throw new Error("Release tag must equal v plus the stable version in .github/extensions/github-notifications/version.json.");
+    throw new Error("Release tag must equal v plus the stable version in src/version.json.");
   }
   return tag;
 }
