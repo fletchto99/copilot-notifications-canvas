@@ -53,8 +53,9 @@ full procedure, verification requirements, and troubleshooting.
   Longer GitHub polling intervals apply to automatic checks. Foreground returns
   and the **Force refresh** icon immediately left of **Settings** check loaded
   pages without waiting for the polling interval, but cannot bypass rate limits
-  or error retry waits. Its tooltip reports how many seconds have passed since
-  the last successful update.
+  or error retry waits. Its theme-matched tooltip appears immediately on hover
+  or keyboard focus and reports seconds since the last successful update.
+  Press Escape to dismiss it.
   When desktop alerts are enabled, foreground checks feed the same results to
   the desktop watcher. It falls back to checking about every two minutes while
   the canvas is hidden; the OS controls when alerts appear.

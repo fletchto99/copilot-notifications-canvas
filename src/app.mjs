@@ -461,8 +461,13 @@ function renderRefreshStatus() {
   const seconds = fetchedAt === null ? null : Math.floor(Math.max(0, Date.now() - fetchedAt) / 1000);
   const updated = seconds === null ? "Not updated yet" : `Last updated ${seconds} second${seconds === 1 ? "" : "s"} ago`;
   const progress = pendingRefresh ? "Refresh queued. " : refreshing ? "Refreshing. " : "";
-  $("force-refresh").title = progress + updated;
+  $("refresh-tooltip-text").textContent = progress + updated;
   $("force-refresh").setAttribute("aria-busy", String(pendingRefresh || refreshing));
+}
+
+function showRefreshTooltip() {
+  delete $("refresh-control").dataset.tooltipDismissed;
+  renderRefreshStatus();
 }
 
 function renderControls() {
@@ -690,7 +695,9 @@ document.addEventListener("click", event => {
   if ($("settings").open && !$("settings").contains(event.target)) closeSettings();
 });
 document.addEventListener("keydown", event => {
-  if (event.key === "Escape" && $("settings").open) {
+  if (event.key !== "Escape") return;
+  $("refresh-control").dataset.tooltipDismissed = "true";
+  if ($("settings").open) {
     event.preventDefault();
     closeSettings(true);
   }
@@ -702,8 +709,8 @@ $("force-refresh").addEventListener("click", () => {
   renderControls();
   return flushPendingUpdates();
 });
-$("force-refresh").addEventListener("pointerenter", renderRefreshStatus);
-$("force-refresh").addEventListener("focus", renderRefreshStatus);
+$("force-refresh").addEventListener("pointerenter", showRefreshTooltip);
+$("force-refresh").addEventListener("focus", showRefreshTooltip);
 $("search").addEventListener("input", () => {
   pendingQuery = $("search").value;
   clearTimeout(searchTimer);

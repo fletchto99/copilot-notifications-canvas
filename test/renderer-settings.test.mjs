@@ -48,8 +48,8 @@ test("GitHub inbox is an accessible icon link before Refresh and Settings in the
   assert.match(attributes, /title="Open GitHub inbox"/);
   assert.doesNotMatch(attributes, /\bhidden\b|\btabindex=/);
   assert.match(content, /<svg\b[^>]*aria-hidden="true"[^>]*focusable="false"/);
-  assert.equal(content.replace(/<[^>]*>/g, "").trim(), "");
-  assert.match(html, /<div class="toolbar">\s*<label class="search">[\s\S]*?<\/label>\s*<a id="open-inbox"[^>]*>[\s\S]*?<\/a>\s*<button id="force-refresh"[^>]*>[\s\S]*?<\/button>\s*<details id="settings"/);
+  assert.match(content, /^\s*<svg\b[^>]*>\s*<path\b[^>]*\/>\s*<path\b[^>]*\/>\s*<\/svg>\s*$/);
+  assert.match(html, /<div class="toolbar">\s*<label class="search">[\s\S]*?<\/label>\s*<a id="open-inbox"[^>]*>[\s\S]*?<\/a>\s*<div id="refresh-control"[^>]*>[\s\S]*?<\/div>\s*<details id="settings"/);
   assert.equal([...html.matchAll(/href="https:\/\/github\.com\/notifications"/g)].length, 1);
 });
 
@@ -63,7 +63,7 @@ test("Settings uses an icon-only toggle with an accessible name and tooltip", ()
   assert.match(attributes, /aria-controls="settings-panel"/);
   assert.match(attributes, /aria-expanded="false"/);
   assert.match(content, /<svg\b[^>]*aria-hidden="true"[^>]*focusable="false"/);
-  assert.equal(content.replace(/<[^>]*>/g, "").trim(), "");
+  assert.match(content, /^\s*<svg\b[^>]*>\s*<path\b[^>]*\/>\s*<circle\b[^>]*\/>\s*<\/svg>\s*$/);
 });
 
 test("Settings puts an Auto-open slider above sound, saves startup preference and closes accessibly", async () => {

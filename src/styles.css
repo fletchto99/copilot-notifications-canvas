@@ -52,6 +52,10 @@ button:disabled { opacity: .55; cursor: default; }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
 .toolbar { display: flex; gap: 12px; margin-top: 24px; }
 .icon-button { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 38px; height: 38px; border: 1px solid var(--border); border-radius: 7px; padding: 9px; color: var(--canvas-text); }
+.refresh-control { position: relative; flex-shrink: 0; }
+.refresh-tooltip { position: absolute; z-index: 3; top: 100%; right: 0; width: max-content; max-width: min(260px, calc(100vw - 80px)); padding-top: 8px; visibility: hidden; }
+.refresh-control:not([data-tooltip-dismissed]):is(:hover, :focus-within) .refresh-tooltip { visibility: visible; }
+.tooltip-content { display: block; border: 1px solid var(--border); border-radius: 7px; padding: 6px 10px; color: var(--canvas-text); background: var(--canvas-background); font-size: 12px; line-height: 16px; overflow-wrap: anywhere; box-shadow: 0 4px 12px #0002; }
 #force-refresh[aria-busy="true"] { color: var(--accent); }
 .settings { position: relative; flex-shrink: 0; margin-left: auto; }
 .settings > summary { list-style: none; }

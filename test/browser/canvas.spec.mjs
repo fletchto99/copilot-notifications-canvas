@@ -125,15 +125,19 @@ test("refresh preserves keyboard focus and collapsed repository state", async ({
   await expect(page.getByRole("link", { name: "Changed during refresh", exact: true })).toBeVisible();
 });
 
-test("the toolbar refresh icon shows the current update age on hover and keyboard focus", async ({ page, canvas }) => {
+test("the toolbar refresh icon shows the current update age on hover and keyboard focus", async ({ page, canvas }, testInfo) => {
   canvas.rows.splice(1);
   await page.setViewportSize({ width: 320, height: 800 });
   const initialResponse = page.waitForResponse(response => response.url().endsWith("/api/refresh"));
   await page.goto(canvas.url);
   const initial = await (await initialResponse).json();
   const refresh = page.getByRole("button", { name: "Force refresh", exact: true });
+  const tooltip = page.locator("#refresh-tooltip");
+  const tooltipText = page.locator("#refresh-tooltip-text");
   await expect(refresh).toHaveAttribute("aria-busy", "false");
-  await expect(page.locator(".toolbar > #force-refresh + #settings")).toHaveCount(1);
+  await expect(page.locator(".toolbar > #refresh-control + #settings")).toHaveCount(1);
+  await expect(refresh).not.toHaveAttribute("title");
+  await expect(tooltip).toBeHidden();
   await expect(refresh.locator("svg")).toHaveCount(1);
   await expect(refresh).toHaveText("");
   await expect(page.locator("#updated, footer button")).toHaveCount(0);
@@ -142,18 +146,41 @@ test("the toolbar refresh icon shows the current update age on hover and keyboar
   canvas.advance(23_000);
   await page.clock.setFixedTime(new Date(initial.lastFetchedAt + 23_000));
   await refresh.hover();
-  await expect(refresh).toHaveAttribute("title", "Last updated 23 seconds ago");
+  expect(await tooltip.isVisible()).toBe(true);
+  await expect(tooltip).toHaveText("Last updated 23 seconds ago");
+  await expect(tooltipText).toHaveCSS("background-color", await page.locator("body").evaluate(node => getComputedStyle(node).backgroundColor));
+  const bounds = await tooltip.boundingBox();
+  expect(bounds.x).toBeGreaterThanOrEqual(0);
+  expect(bounds.x + bounds.width).toBeLessThanOrEqual(320);
+  await page.screenshot({ path: testInfo.outputPath("refresh-tooltip-light.png") });
+  await tooltip.hover();
+  await expect(tooltip).toBeVisible();
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect(page.locator("html")).toHaveAttribute("data-notification-theme", "dark");
+  await expect(tooltipText).toHaveCSS("background-color", await page.locator("body").evaluate(node => getComputedStyle(node).backgroundColor));
+  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+  expect(results.violations).toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath("refresh-tooltip-dark.png") });
+  await page.getByRole("heading", { name: "Unread Notifications", exact: true }).hover();
+  await expect(tooltip).toBeHidden();
   canvas.advance(1000);
   await page.clock.setFixedTime(new Date(initial.lastFetchedAt + 24_000));
   await refresh.focus();
-  await expect(refresh).toHaveAttribute("title", "Last updated 24 seconds ago");
+  expect(await tooltip.isVisible()).toBe(true);
+  await expect(tooltip).toHaveText("Last updated 24 seconds ago");
   await expect(refresh).toHaveAccessibleDescription("Last updated 24 seconds ago");
+  await refresh.press("Escape");
+  await expect(tooltip).toBeHidden();
+  await expect(refresh).toBeFocused();
+  await page.getByRole("searchbox").focus();
+  await refresh.focus();
+  expect(await tooltip.isVisible()).toBe(true);
   const requestCount = canvas.requests.length;
   canvas.rows[0].subject.title = "Updated from the toolbar";
   await refresh.press("Enter");
   await expect(page.getByRole("link", { name: "Updated from the toolbar", exact: true })).toBeVisible();
   await expect(refresh).toHaveAttribute("aria-busy", "false");
-  await expect(refresh).toHaveAttribute("title", "Last updated 0 seconds ago");
+  await expect(tooltip).toHaveText("Last updated 0 seconds ago");
   await expect(refresh).toBeFocused();
   await expect(refresh.locator("svg")).toHaveCount(1);
   expect(canvas.requests.length).toBe(requestCount + 1);
@@ -173,13 +200,13 @@ test("the refresh icon exposes pending state, preserves queued clicks, and respe
   try {
     await refresh.click();
     await expect(refresh).toHaveAttribute("aria-busy", "true");
-    await expect(refresh).toHaveAttribute("title", /^Refreshing\. Last updated /);
+    await expect(page.locator("#refresh-tooltip-text")).toHaveText(/^Refreshing\. Last updated /);
     await expect(refresh).toBeEnabled();
     await expect(refresh.locator("svg")).toHaveCSS("animation-name", "none");
     await page.emulateMedia({ reducedMotion: "no-preference" });
     await expect(refresh.locator("svg")).toHaveCSS("animation-name", "refresh-spin");
     await refresh.click();
-    await expect(refresh).toHaveAttribute("title", /^Refresh queued\. Last updated /);
+    await expect(page.locator("#refresh-tooltip-text")).toHaveText(/^Refresh queued\. Last updated /);
     canvas.setRequestHook(undefined);
     release();
     await expect(refresh).toHaveAttribute("aria-busy", "false");
@@ -198,7 +225,7 @@ test("foreground checks use a 30-second interval, pause while hidden, and refres
   const initial = await (await initialResponse).json();
   await expect(page.locator(".row")).toHaveCount(1);
   expect(initial.nextRefreshAt - initial.lastFetchedAt).toBe(30_000);
-  await expect(page.locator("#force-refresh")).toHaveAttribute("title", /Last updated \d+ seconds? ago/);
+  await expect(page.locator("#refresh-tooltip-text")).toHaveText(/Last updated \d+ seconds? ago/);
   const notificationRequests = () => canvas.requests.filter(path => path.startsWith("/notifications")).length;
   expect(notificationRequests()).toBe(1);
 
@@ -263,7 +290,12 @@ test("Settings supports keyboard dismissal and persists theme and auto-open acro
   await page.goto(canvas.url);
   const settings = page.getByLabel("Settings", { exact: true });
   await settings.focus();
-  await settings.press("Enter");
+  await Promise.all([
+    page.evaluate(() => new Promise(resolve => {
+      document.getElementById("settings").addEventListener("toggle", () => resolve(), { once: true });
+    })),
+    settings.press("Enter"),
+  ]);
   const theme = page.getByRole("combobox", { name: "Theme", exact: true });
   await expect(theme).toBeEnabled();
   await expect(theme).toHaveValue("system");

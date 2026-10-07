@@ -440,9 +440,13 @@ test("Force refresh is an accessible, always-enabled icon immediately before Set
   assert.ok(button);
   assert.match(button[1], /class="icon-button"/);
   assert.match(button[1], /aria-label="Force refresh"/);
+  assert.match(button[1], /aria-describedby="refresh-tooltip"/);
+  assert.doesNotMatch(button[1], /\btitle=/);
   assert.match(button[2], /<svg\b[^>]*aria-hidden="true"[^>]*focusable="false"/);
-  assert.equal(button[2].replace(/<[^>]*>/g, "").trim(), "");
-  assert.match(html, /<button id="force-refresh"[^>]*>[\s\S]*?<\/button>\s*<details id="settings"/);
+  assert.match(button[2], /^\s*<svg\b[^>]*>\s*<path\b[^>]*\/>\s*<\/svg>\s*$/);
+  assert.match(html, /<div id="refresh-control" class="refresh-control">[\s\S]*?<\/div>\s*<details id="settings"/);
+  assert.match(html, /id="refresh-tooltip"[^>]*role="tooltip"/);
+  assert.match(styles, /\.refresh-control:not\(\[data-tooltip-dismissed\]\):is\(:hover, :focus-within\) \.refresh-tooltip \{ visibility: visible; \}/);
   assert.doesNotMatch(script, /\$\("force-refresh"\)\.(?:disabled|textContent)\s*=/);
   assert.match(styles, /@media \(prefers-reduced-motion: no-preference\) \{[\s\S]*#force-refresh\[aria-busy="true"\] svg \{ animation: refresh-spin/);
   const extension = await readFile(new URL("../src/extension.mjs", import.meta.url), "utf8");
@@ -451,29 +455,50 @@ test("Force refresh is an accessible, always-enabled icon immediately before Set
   assert.equal(ui.ids.get("force-refresh").disabled, false);
   assert.ok(ui.calls.some(call => call.path === "/api/refresh"));
   assert.equal(ui.githubCalls.length, 1);
-  assert.equal(ui.ids.get("force-refresh").title, "Last updated 0 seconds ago");
+  assert.equal(ui.ids.get("refresh-tooltip-text").textContent, "Last updated 0 seconds ago");
 });
 
 test("the refresh tooltip reports elapsed whole seconds on hover and focus without fetching", async () => {
   const ui = await renderer();
   const button = ui.ids.get("force-refresh");
+  const tooltip = ui.ids.get("refresh-tooltip-text");
   const calls = ui.calls.length;
   ui.advance(999);
   button.events.pointerenter();
-  assert.equal(button.title, "Last updated 0 seconds ago");
+  assert.equal(tooltip.textContent, "Last updated 0 seconds ago");
   ui.advance(1);
   button.events.focus();
-  assert.equal(button.title, "Last updated 1 second ago");
+  assert.equal(tooltip.textContent, "Last updated 1 second ago");
   ui.advance(60_000);
   button.events.pointerenter();
-  assert.equal(button.title, "Last updated 61 seconds ago");
+  assert.equal(tooltip.textContent, "Last updated 61 seconds ago");
   assert.equal(ui.calls.length, calls);
   await runInContext("state.lastFetchedAt = Date.now() + 1000; render()", ui.context);
-  assert.equal(button.title, "Last updated 0 seconds ago");
+  assert.equal(tooltip.textContent, "Last updated 0 seconds ago");
   await runInContext("state.lastFetchedAt = 0; render()", ui.context);
-  assert.match(button.title, /^Last updated \d+ seconds ago$/);
+  assert.match(tooltip.textContent, /^Last updated \d+ seconds ago$/);
   await runInContext("state.lastFetchedAt = null; render()", ui.context);
-  assert.equal(button.title, "Not updated yet");
+  assert.equal(tooltip.textContent, "Not updated yet");
+});
+
+test("Escape dismisses the refresh tooltip until the next hover or focus", async () => {
+  const ui = await renderer();
+  const button = ui.ids.get("force-refresh");
+  button.focus();
+  button.events.focus();
+  assert.equal(ui.ids.get("refresh-control").dataset.tooltipDismissed, undefined);
+  ui.document.events.keydown({ key: "Escape" });
+  assert.equal(ui.ids.get("refresh-control").dataset.tooltipDismissed, "true");
+  assert.equal(ui.document.activeElement, button);
+  await runInContext("render()", ui.context);
+  assert.equal(ui.ids.get("refresh-control").dataset.tooltipDismissed, "true");
+  button.events.pointerenter();
+  assert.equal(ui.ids.get("refresh-control").dataset.tooltipDismissed, undefined);
+  ui.document.events.keydown({ key: "Escape" });
+  button.events.focus();
+  assert.equal(ui.ids.get("refresh-control").dataset.tooltipDismissed, undefined);
+  ui.document.events.keydown({ key: "Enter" });
+  assert.equal(ui.ids.get("refresh-control").dataset.tooltipDismissed, undefined);
 });
 
 test("failed updates keep the last successful update time in the refresh tooltip", async () => {
@@ -481,16 +506,16 @@ test("failed updates keep the last successful update time in the refresh tooltip
   const ui = await renderer({ onFetch: () => ++fetches === 1 ? http([thread()]) : http({}, {}, 500) });
   ui.advance(15_000);
   await ui.ids.get("force-refresh").events.click();
-  assert.equal(ui.ids.get("force-refresh").title, "Last updated 15 seconds ago");
+  assert.equal(ui.ids.get("refresh-tooltip-text").textContent, "Last updated 15 seconds ago");
   assert.equal(ui.ids.get("notice").hidden, false);
   ui.advance(5000);
   await runInContext("render()", ui.context);
-  assert.equal(ui.ids.get("force-refresh").title, "Last updated 20 seconds ago");
+  assert.equal(ui.ids.get("refresh-tooltip-text").textContent, "Last updated 20 seconds ago");
 });
 
 test("an initial GitHub error does not claim a successful update in the tooltip", async () => {
   const ui = await renderer({ onFetch: () => http({}, {}, 401) });
-  assert.equal(ui.ids.get("force-refresh").title, "Not updated yet");
+  assert.equal(ui.ids.get("refresh-tooltip-text").textContent, "Not updated yet");
   assert.equal(ui.inbox.summary().nextRefreshAt - ui.advance(0), 120_000);
   assert.equal(ui.ids.get("notice").hidden, false);
 });
@@ -514,7 +539,7 @@ test("Force refresh checks GitHub immediately, preserves focus and still leaves 
   assert.equal(ui.calls.at(-1).options.body, '{"force":true}');
   assert.equal(ui.document.querySelectorAll("article").length, 2);
   assert.equal(ui.document.activeElement, button);
-  assert.equal(button.title, "Last updated 0 seconds ago");
+  assert.equal(ui.ids.get("refresh-tooltip-text").textContent, "Last updated 0 seconds ago");
   assert.equal(button.attributes["aria-busy"], "false");
   await button.events.click();
   assert.equal(ui.githubCalls.length, 3);
@@ -536,18 +561,18 @@ test("clicks during a refresh stay enabled and coalesce into one follow-up refre
   const refreshing = button.events.click();
   await settle();
   assert.equal(button.disabled, false);
-  assert.equal(button.title, "Refreshing. Last updated 0 seconds ago");
+  assert.equal(ui.ids.get("refresh-tooltip-text").textContent, "Refreshing. Last updated 0 seconds ago");
   assert.equal(button.attributes["aria-busy"], "true");
   await button.events.click();
   await button.events.click();
-  assert.equal(button.title, "Refresh queued. Last updated 0 seconds ago");
+  assert.equal(ui.ids.get("refresh-tooltip-text").textContent, "Refresh queued. Last updated 0 seconds ago");
   assert.equal(fetches, 2);
   release();
   await refreshing;
   await settle();
   assert.equal(fetches, 3);
   assert.equal(button.disabled, false);
-  assert.equal(button.title, "Last updated 0 seconds ago");
+  assert.equal(ui.ids.get("refresh-tooltip-text").textContent, "Last updated 0 seconds ago");
   assert.equal(button.attributes["aria-busy"], "false");
   assert.equal(ui.document.activeElement, button);
 });
@@ -588,7 +613,7 @@ test("manual and foreground refreshes queue behind row and repository writes wit
       await settle();
     }
     assert.equal(button.disabled, false);
-    assert.equal(button.title, "Refresh queued. Last updated 0 seconds ago");
+    assert.equal(ui.ids.get("refresh-tooltip-text").textContent, "Refresh queued. Last updated 0 seconds ago");
     assert.equal(ui.calls.filter(call => call.path === "/api/refresh").length, 1);
     ui.setRows([]);
     release();
@@ -601,7 +626,7 @@ test("manual and foreground refreshes queue behind row and repository writes wit
     assert.deepEqual(ui.patches, ["/notifications/threads/1"]);
     assert.equal(ui.calls.filter(call => call.path === "/api/refresh").length, 2);
     assert.equal(ui.document.querySelectorAll("article").length, 0);
-    assert.equal(button.title, "Last updated 0 seconds ago");
+    assert.equal(ui.ids.get("refresh-tooltip-text").textContent, "Last updated 0 seconds ago");
   }
 });
 
@@ -620,7 +645,7 @@ test("queued Force refresh preserves the latest search edit during a filter requ
   const button = ui.ids.get("force-refresh");
   await button.events.click();
   assert.equal(button.disabled, false);
-  assert.equal(button.title, "Refresh queued. Last updated 0 seconds ago");
+  assert.equal(ui.ids.get("refresh-tooltip-text").textContent, "Refresh queued. Last updated 0 seconds ago");
   release();
   await filtering;
   await settle();
@@ -641,7 +666,7 @@ test("Force refresh remains clickable during GitHub backoff and reports the wait
   assert.equal(button.disabled, false);
   await button.events.click();
   assert.equal(fetches, 2);
-  assert.equal(button.title, "Last updated 0 seconds ago");
+  assert.equal(ui.ids.get("refresh-tooltip-text").textContent, "Last updated 0 seconds ago");
   assert.equal(button.disabled, false);
   ui.advance(600_000);
   await button.events.click();
@@ -657,13 +682,13 @@ test("automatic polling refreshes at 30 seconds, never before, and repeats on th
     await ui.fireTimer();
     assert.equal(ui.calls.at(-1).path, "/api/state");
     assert.equal(ui.githubCalls.length, refreshes);
-    assert.equal(ui.ids.get("force-refresh").title, "Last updated 29 seconds ago");
+    assert.equal(ui.ids.get("refresh-tooltip-text").textContent, "Last updated 29 seconds ago");
     ui.advance(1);
     await ui.fireTimer();
     assert.equal(ui.calls.at(-1).path, "/api/refresh");
     assert.equal(ui.calls.at(-1).options.body, "{}");
     assert.equal(ui.githubCalls.length, refreshes + 1);
-    assert.equal(ui.ids.get("force-refresh").title, "Last updated 0 seconds ago");
+    assert.equal(ui.ids.get("refresh-tooltip-text").textContent, "Last updated 0 seconds ago");
   }
   ui.window.events.pagehide();
 });
@@ -751,7 +776,7 @@ test("returning to foreground cannot bypass rate limits or error backoff", async
 
 test("automatic polling honors a longer GitHub interval and resumes only when visible", async () => {
   const ui = await renderer({ onFetch: () => http([thread()], { "x-poll-interval": "300" }) });
-  assert.equal(ui.ids.get("force-refresh").title, "Last updated 0 seconds ago");
+  assert.equal(ui.ids.get("refresh-tooltip-text").textContent, "Last updated 0 seconds ago");
   assert.equal(ui.inbox.summary().nextRefreshAt - ui.advance(0), 300_000);
   ui.advance(120_000);
   await ui.fireTimer();
