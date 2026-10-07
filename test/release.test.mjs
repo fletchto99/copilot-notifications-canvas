@@ -18,8 +18,9 @@ const ref = `refs/tags/${tag}`;
 const certificateIdentity = `https://github.com/${REPOSITORY}/.github/workflows/release.yml@${ref}`;
 const url = `https://github.com/example/repo/releases/tag/${tag}`;
 
-function missingAttestation(missingTag = tag) {
-  const stderr = `no attestations for tag ${missingTag} (sha1:${"b".repeat(40)})\n`;
+function missingAttestation(missingTag = tag, operation = "verify") {
+  const message = operation === "verify-asset" ? "no attestations found" : "no attestations";
+  const stderr = `${message} for tag ${missingTag} (sha1:${"b".repeat(40)})\n`;
   return Object.assign(new Error(stderr.trim()), { code: 1, stderr });
 }
 
@@ -155,7 +156,7 @@ test("missing release attestations retry verification with bounded backoff, neve
 test("a missing attestation during either asset check retries only read-only verification", async t => {
   for (const failedAsset of [0, 1]) {
     const item = await fixture(t, {
-      verificationErrors: [...Array(failedAsset + 1).fill(undefined), missingAttestation()],
+      verificationErrors: [...Array(failedAsset + 1).fill(undefined), missingAttestation(tag, "verify-asset")],
     });
     assert.equal(await publishRelease(item.input), url);
     assert.deepEqual(item.waits, [5_000, 5_000]);
@@ -182,12 +183,18 @@ test("attestation verification fails closed after four attempts and 40 seconds o
 });
 
 test("verification errors other than this tag's missing attestation are never retried", async t => {
-  const missing = missingAttestation();
   const errors = [
-    new Error(missing.message),
-    Object.assign(missingAttestation(), { code: 2 }),
-    missingAttestation(`${tag}-other`),
-    Object.assign(missingAttestation(), { stderr: `${missing.stderr}Invalid signature\n` }),
+    ...["verify", "verify-asset"].flatMap(operation => {
+      const missing = missingAttestation(tag, operation);
+      return [
+        new Error(missing.message),
+        Object.assign(missingAttestation(tag, operation), { code: 2 }),
+        missingAttestation(`${tag}-other`, operation),
+        Object.assign(missingAttestation(tag, operation), { stderr: `${missing.stderr}Invalid signature\n` }),
+        Object.assign(missingAttestation(tag, operation), { stderr: missing.stderr.replace("sha1:", "sha256:") }),
+        Object.assign(missingAttestation(tag, operation), { stderr: missing.stderr.replace("b".repeat(40), "b".repeat(39)) }),
+      ];
+    }),
     ...["Invalid signature", "Artifact digest mismatch", "HTTP 403: Forbidden",
       "network timeout", "unknown command verify"].map(stderr =>
       Object.assign(new Error(stderr), { code: 1, stderr })),
@@ -321,7 +328,11 @@ test("the release CLI reads its environment, reports success and stops on comman
   for (const scenario of [
     {}, { fail: "provenance" }, { fail: "create" }, { fail: "verify" },
     { verificationErrors: [missingAttestation()] },
+    { verificationErrors: [undefined, missingAttestation(tag, "verify-asset")] },
+    { verificationErrors: [undefined, undefined, missingAttestation(tag, "verify-asset")] },
     { verificationErrors: Array(4).fill(missingAttestation()), rejects: true },
+    { verificationErrors: Array.from({ length: 4 }, () =>
+      [undefined, missingAttestation(tag, "verify-asset")]).flat(), rejects: true },
   ]) {
     const fails = scenario.fail || scenario.rejects;
     const item = await fixture(t, scenario);

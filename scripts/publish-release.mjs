@@ -66,7 +66,7 @@ export async function publishRelease({
       for (const asset of assets) await run(["release", "verify-asset", tag, asset]);
       return url;
     } catch (error) {
-      const missingTag = error?.stderr?.trim().match(/^no attestations for tag (.+) \(sha1:[a-f0-9]{40}\)$/)?.[1];
+      const missingTag = error?.stderr?.trim().match(/^no attestations(?: found)? for tag (.+) \(sha1:[a-f0-9]{40}\)$/)?.[1];
       if (error?.code !== 1 || missingTag !== tag || attempt === verificationDelays.length - 1) throw error;
     }
   }
