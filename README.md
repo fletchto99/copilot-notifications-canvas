@@ -4,7 +4,7 @@ Unread GitHub notifications in the GitHub Copilot app, grouped by repository or
 date, or shown as a single newest-first list. Search, mark rows or repositories
 as read, and opt into desktop notifications or auto-open.
 
-![Unread Notifications canvas showing a repository group, search, settings, and mark-as-read controls](docs/images/unread-notifications.png)
+![Unread Notifications canvas showing attention tabs with counts, search, settings, and a notification with a mark-as-read action](docs/images/unread-notifications.png)
 
 ## Prerequisites
 
