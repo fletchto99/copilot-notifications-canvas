@@ -19,7 +19,7 @@ const updates = new Updates({ log });
 
 async function action(ctx, run) {
   try {
-    const entry = await instances.get(ctx.instanceId);
+    const entry = await instances.get(ctx.instanceId)?.pending;
     if (!entry) throw new InboxError("not_open", "Open the notifications canvas first.", 404);
     return await run(entry.inbox);
   } catch (error) {
@@ -30,11 +30,16 @@ async function action(ctx, run) {
 }
 
 async function close(instanceId) {
-  const pending = instances.get(instanceId);
-  if (!pending) return;
+  const entry = instances.get(instanceId);
+  if (!entry) return;
   instances.delete(instanceId);
+  entry.inbox.close();
   await desktop.remove(instanceId);
-  await (await pending).close();
+  try {
+    await (await entry.pending).close();
+  } catch (error) {
+    if (!(error instanceof InboxError) || error.code !== "closed") throw error;
+  }
   if (!instances.size) client.clear();
 }
 
@@ -85,24 +90,29 @@ session = await joinSession({
       },
     ],
     open: async ctx => {
-      let pending;
+      let opening;
       try {
         if (!instances.has(ctx.instanceId)) {
           const inbox = new Inbox(client, ctx.input ?? {});
-          instances.set(ctx.instanceId, startServer(inbox, { log, preferences, desktop, updates }).catch(error => {
+          const pending = startServer(inbox, { log, preferences, desktop, updates }).catch(error => {
             inbox.close();
             throw error;
-          }));
+          });
+          instances.set(ctx.instanceId, { inbox, pending });
         }
-        pending = instances.get(ctx.instanceId);
-        const entry = await pending;
-        if (instances.get(ctx.instanceId) !== pending) {
+        opening = instances.get(ctx.instanceId);
+        const entry = await opening.pending;
+        if (instances.get(ctx.instanceId) !== opening) {
           throw new InboxError("closed", "The Notifications canvas was closed while opening.", 410);
         }
-        desktop.add(ctx.instanceId);
+        opening.desktopRegistration ??= entry.ready.then(ready => {
+          if (ready && instances.get(ctx.instanceId) === opening) desktop.add(ctx.instanceId);
+        }).catch(() => {
+          log("Could not start desktop notifications for the canvas.", { level: "error" });
+        });
         return { title: "Unread Notifications", url: entry.url };
       } catch (error) {
-        if (instances.get(ctx.instanceId) === pending) instances.delete(ctx.instanceId);
+        if (instances.get(ctx.instanceId) === opening) instances.delete(ctx.instanceId);
         if (error instanceof InboxError) throw new CanvasError(error.code, error.message);
         log("Could not start the notifications loopback server.", { level: "error" });
         throw new CanvasError("server_start", "Could not start the local notifications server.");
