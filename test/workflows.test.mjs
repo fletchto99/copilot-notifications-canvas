@@ -12,19 +12,18 @@ test("browser CI pins the locked Playwright version without installing browsers 
   const image = browser.match(/^\s+image: mcr\.microsoft\.com\/playwright:v(\d+\.\d+\.\d+)-noble@sha256:[a-f0-9]{64}$/m);
   assert.ok(image, "Browser CI must use a version- and digest-pinned Playwright image");
   assert.equal(image[1], lock.packages["node_modules/@playwright/test"].version);
+  assert.match(browser, /git config --global --add safe\.directory "\$GITHUB_WORKSPACE"/);
+  assert.match(browser, /git rev-parse --verify HEAD/);
   assert.match(browser, /browser: \[chromium, webkit\]/);
   assert.match(browser, /npm run test:browser -- --project="\$\{\{ matrix\.browser \}\}"/);
   assert.doesNotMatch(browser, /playwright install|apt-get/);
 });
 
-test("Copilot reviews use lightweight setup while cloud sessions retain browser tooling", async () => {
-  const [review, cloud] = await Promise.all([
-    readFile(new URL("../.github/workflows/copilot-code-review.yml", import.meta.url), "utf8"),
-    readFile(new URL("../.github/workflows/copilot-setup-steps.yml", import.meta.url), "utf8"),
-  ]);
-  assert.match(review, /\njobs:\n {2}copilot-setup-steps:/);
-  assert.match(review, /npm ci --ignore-scripts --no-fund --no-audit/);
-  assert.match(review, /actionlint --version/);
-  assert.doesNotMatch(review, /playwright install|apt-get|npm run (?:test|build)/);
-  assert.match(cloud, /npx playwright install --with-deps chromium webkit/);
+test("Copilot cloud sessions and reviews share lightweight setup without browser provisioning", async () => {
+  const setup = await readFile(new URL("../.github/workflows/copilot-setup-steps.yml", import.meta.url), "utf8");
+  assert.match(setup, /\njobs:\n {2}copilot-setup-steps:/);
+  assert.match(setup, /npm ci --ignore-scripts --no-fund --no-audit/);
+  assert.match(setup, /actionlint --version/);
+  assert.doesNotMatch(setup, /playwright install|apt-get|npm run (?:test|build)/);
+  await assert.rejects(readFile(new URL("../.github/workflows/copilot-code-review.yml", import.meta.url)), { code: "ENOENT" });
 });
