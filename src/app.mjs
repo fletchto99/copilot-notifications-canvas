@@ -480,6 +480,10 @@ function showTooltip(anchor) {
   if (anchor === "refresh-control") renderRefreshStatus(true);
 }
 
+function dismissTooltips() {
+  for (const [, anchor] of tooltipControls) $(anchor).dataset.tooltipDismissed = "true";
+}
+
 function tickTooltip() {
   clearTimeout(tooltipTimer);
   if (!visible()) return;
@@ -717,8 +721,10 @@ document.addEventListener("keydown", event => {
     event.preventDefault();
     closeSettings(true);
   }
-  for (const [, anchor] of tooltipControls) $(anchor).dataset.tooltipDismissed = "true";
+  dismissTooltips();
 });
+$("open-inbox").addEventListener("click", dismissTooltips);
+window.addEventListener("blur", dismissTooltips);
 $("more").addEventListener("click", () => update("more", {}));
 $("force-refresh").addEventListener("click", () => {
   if (!visible()) return;
@@ -759,6 +765,7 @@ function visibilityChanged() {
     void tick();
     void settingsRequest();
   } else {
+    dismissTooltips();
     for (const controller of requestControllers) controller.abort();
     closeSettings();
   }
@@ -776,6 +783,7 @@ systemTheme.addEventListener("change", renderTheme);
 renderTheme();
 window.addEventListener("pagehide", () => {
   stopped = true;
+  dismissTooltips();
   clearTimeout(timer);
   clearTimeout(tooltipTimer);
   clearTimeout(searchTimer);

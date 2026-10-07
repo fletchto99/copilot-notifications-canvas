@@ -272,6 +272,70 @@ test("all toolbar icons use matching instant tooltips with keyboard and Escape s
   expect(canvas.writes).toEqual([]);
 });
 
+test("opening Settings hides its active tooltip despite hover or keyboard focus", async ({ page, canvas }) => {
+  canvas.rows.splice(1);
+  await page.goto(canvas.url);
+  const settings = page.locator("#settings-toggle");
+  const tooltip = page.locator("#settings-tooltip");
+  const panel = page.locator("#settings-panel");
+  for (const trigger of ["pointer", "keyboard"]) {
+    await page.getByRole("heading", { name: "Unread Notifications", exact: true }).hover();
+    await page.getByRole("searchbox").focus();
+    if (trigger === "pointer") await settings.hover();
+    else await settings.focus();
+    await expect(tooltip).toBeVisible();
+    if (trigger === "pointer") await settings.click();
+    else await settings.press("Enter");
+    await expect(panel).toBeVisible();
+    await expect(tooltip).toBeHidden();
+    await settings.hover();
+    await settings.focus();
+    await expect(tooltip).toBeHidden();
+    await settings.click();
+    await expect(panel).toBeHidden();
+    await expect(tooltip).toBeVisible();
+  }
+  expect(canvas.writes).toEqual([]);
+});
+
+test("activating Open inbox and losing canvas focus dismiss tooltips despite retained element focus", async ({ page, canvas }) => {
+  canvas.rows.splice(1);
+  await page.goto(canvas.url);
+  await expect(page.locator(".row")).toHaveCount(1);
+  const inbox = page.getByRole("link", { name: "Open GitHub inbox", exact: true });
+  const inboxTooltip = page.locator("#inbox-tooltip");
+  await page.evaluate(() => {
+    // Exercise activation without navigating the test browser to the real GitHub inbox.
+    document.getElementById("open-inbox").addEventListener("click", event => event.preventDefault());
+  });
+  for (const trigger of ["pointer", "keyboard"]) {
+    await page.getByRole("heading", { name: "Unread Notifications", exact: true }).hover();
+    await page.getByRole("searchbox").focus();
+    if (trigger === "pointer") await inbox.hover();
+    else await inbox.focus();
+    await expect(inboxTooltip).toBeVisible();
+    if (trigger === "pointer") await inbox.click();
+    else await inbox.press("Enter");
+    await expect(inboxTooltip).toBeHidden();
+    if (trigger === "keyboard") await expect(inbox).toBeFocused();
+    await expect(inbox).toHaveAttribute("href", "https://github.com/notifications");
+    await expect(inbox).toHaveAttribute("target", "_blank");
+  }
+  for (const [control, tooltip] of [
+    ["#open-inbox", "#inbox-tooltip"],
+    ["#force-refresh", "#refresh-tooltip"],
+    ["#settings-toggle", "#settings-tooltip"],
+  ]) {
+    await page.getByRole("searchbox").focus();
+    await page.locator(control).focus();
+    await expect(page.locator(tooltip)).toBeVisible();
+    await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+    await expect(page.locator(tooltip)).toBeHidden();
+    await expect(page.locator(control)).toBeFocused();
+  }
+  expect(canvas.writes).toEqual([]);
+});
+
 test("a stationary tooltip updates at 15-second ticks without fetching notifications", async ({ page, canvas }) => {
   canvas.rows.splice(1);
   await page.clock.install();
@@ -329,9 +393,8 @@ test.describe("synchronized desktop alerts", () => {
   test.use({ desktopEnabled: true });
 
   test("foreground polling updates the inbox and alerts together, then hidden alerts retain the background cadence", async ({ page, canvas }) => {
-    canvas.rows.splice(1);
     await page.goto(canvas.url);
-    await expect(page.locator(".row")).toHaveCount(1);
+    await expect(page.locator(".row")).toHaveCount(50);
     await canvas.desktop.sync();
     expect(canvas.deliveries).toEqual([]);
     const notificationRequests = () => canvas.requests.filter(path => path.startsWith("/notifications")).length;

@@ -66,7 +66,7 @@ test("Settings uses an icon-only toggle with an accessible name and tooltip", ()
   assert.match(attributes, /aria-expanded="false"/);
   assert.match(content, /<svg\b[^>]*aria-hidden="true"[^>]*focusable="false"/);
   assert.match(content, /^\s*<svg\b[^>]*>\s*<path\b[^>]*\/>\s*<circle\b[^>]*\/>\s*<\/svg>\s*<span id="settings-tooltip" class="tooltip" role="tooltip"><span class="tooltip-content">Settings<\/span><\/span>\s*$/);
-  assert.match(styles, /\.settings\[open\] \.tooltip \{ visibility: hidden; \}/);
+  assert.match(styles, /\.settings\[open\] \.tooltip \{ display: none; \}/);
 });
 
 test("Inbox and Settings tooltips share the refresh hover, focus and Escape behavior", async () => {
@@ -80,6 +80,45 @@ test("Inbox and Settings tooltips share the refresh hover, focus and Escape beha
     assert.equal(ui.ids.get(anchor).dataset.tooltipDismissed, undefined);
   }
   ui.window.events.pagehide();
+});
+
+test("opening the inbox dismisses tooltips without cancelling navigation or making local requests", async () => {
+  const ui = await renderer();
+  const link = ui.ids.get("open-inbox");
+  link.focus();
+  link.events.focus();
+  const calls = ui.calls.length;
+  link.events.click({ preventDefault: () => assert.fail("The inbox link must keep its default navigation") });
+  assert.equal(ui.ids.get("inbox-control").dataset.tooltipDismissed, "true");
+  assert.equal(ui.document.activeElement, link);
+  await ui.fireTimer(15_000);
+  assert.equal(ui.ids.get("inbox-control").dataset.tooltipDismissed, "true");
+  assert.equal(ui.calls.length, calls);
+  link.events.pointerenter();
+  assert.equal(ui.ids.get("inbox-control").dataset.tooltipDismissed, undefined);
+  ui.window.events.pagehide();
+});
+
+test("canvas blur, hiding and closing dismiss every toolbar tooltip without moving focus", async () => {
+  for (const action of ["blur", "hidden", "non-intersecting", "close"]) {
+    const ui = await renderer();
+    const controls = [["open-inbox", "inbox-control"], ["force-refresh", "refresh-control"], ["settings-toggle", "settings-toggle"]];
+    for (const [control] of controls) ui.ids.get(control).events.pointerenter();
+    const focus = ui.ids.get("force-refresh");
+    focus.focus();
+    if (action === "hidden") {
+      ui.document.hidden = true;
+      ui.document.events.visibilitychange();
+    } else if (action === "non-intersecting") ui.intersect(false);
+    else ui.window.events[action === "close" ? "pagehide" : "blur"]();
+    for (const [, anchor] of controls) assert.equal(ui.ids.get(anchor).dataset.tooltipDismissed, "true", action);
+    assert.equal(ui.document.activeElement, focus);
+    if (action === "blur") {
+      await ui.fireTimer(15_000);
+      assert.equal(ui.ids.get("refresh-control").dataset.tooltipDismissed, "true");
+    }
+    ui.window.events.pagehide();
+  }
 });
 
 test("Settings puts an Auto-open slider above sound, saves startup preference and closes accessibly", async () => {
