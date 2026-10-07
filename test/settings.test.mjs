@@ -77,6 +77,23 @@ test("malformed stored settings and invalid updates fail explicitly without over
   }
 });
 
+test("missing settings use defaults but explicit undefined and unknown patches are rejected", async t => {
+  const preferences = await setup(t);
+  const stored = JSON.parse('{"future":42,"constructor":"opaque","__proto__":{"keep":true},"desktopGeneration":"retained"}');
+  await fs.writeFile(preferences.path, JSON.stringify(stored));
+  assert.deepEqual(await preferences.read(), defaults);
+  for (const key of Object.keys(defaults)) {
+    await assert.rejects(preferences.update({ [key]: undefined }), { code: "invalid_settings" });
+    const input = Object.defineProperty({ autoOpen: false, groupBy: "repo" }, key, { value: undefined, enumerable: false });
+    await assert.rejects(preferences.update(input), { code: "invalid_settings" });
+  }
+  for (const key of Object.keys(stored)) {
+    await assert.rejects(preferences.update({ [key]: true }), { code: "invalid_settings" });
+  }
+  await preferences.update({ groupBy: "date" });
+  assert.deepEqual(await preferences.document(), { ...stored, groupBy: "date" });
+});
+
 test("storage errors and concurrent-writer locks are actionable, not success-shaped", async t => {
   const preferences = await setup(t);
   await fs.writeFile(join(preferences.directory, ".settings.lock"), "");
@@ -196,6 +213,12 @@ test("settings HTTP routes require capability/origin and persist only permitted 
     [{ autoOpen: "yes" }, 400], [{ darkMode: "dark" }, 400], [{ sound: true }, 400]]) {
     const response = await fetch(`${url.origin}/api/settings`, { method: "POST", headers, body: JSON.stringify(input) });
     assert.equal(response.status, status);
+    if (status === 200) {
+      assert.deepEqual(await response.json(), {
+        ...await preferences.read(),
+        desktopStatus: { supported: false, state: "off", message: "Desktop notifications are unavailable." },
+      });
+    }
   }
   assert.deepEqual(await preferences.read(), { ...defaults, autoOpen: true, darkMode: true, groupBy: "date" });
   assert.deepEqual(await (await fetch(`${url.origin}/api/settings`, { headers })).json(), {

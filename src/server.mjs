@@ -104,6 +104,9 @@ async function readBody(req) {
 export async function startServer(inbox, { log = () => {}, preferences, desktop, updates, read, development } = {}) {
   const secret = randomBytes(32).toString("hex");
   const snapshot = () => ({ ...inbox.snapshot(), development, ...(updates ? { updates: updates.snapshot() } : {}) });
+  const settingsSnapshot = settings => ({
+    ...settings, desktopStatus: desktop?.snapshot() ?? { supported: false, state: "off", message: "Desktop notifications are unavailable." },
+  });
   const controller = new AbortController();
   const signal = AbortSignal.any([inbox.controller.signal, controller.signal]);
   assertOpen(signal);
@@ -189,9 +192,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
       }
       if (path === "/api/state" || (path === "/api/settings" && req.method === "GET")) {
         if (req.method !== "GET") throw new InboxError("method", "Only GET is supported.", 405);
-        if (path === "/api/settings") return json(200, {
-          ...await preferences.read(), desktopStatus: desktop?.snapshot() ?? { supported: false, state: "off", message: "Desktop notifications are unavailable." },
-        });
+        if (path === "/api/settings") return json(200, settingsSnapshot(await preferences.read()));
       } else {
         if (req.method !== "POST") throw new InboxError("method", "Only POST is supported.", 405);
         if (req.headers.origin !== origin) throw new InboxError("origin", "A same-origin request is required.", 403);
@@ -216,9 +217,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
           }
           const settings = await preferences.update(input);
           desktop?.wake(settings);
-          return json(200, {
-            ...settings, desktopStatus: desktop?.snapshot() ?? { supported: false, state: "off", message: "Desktop notifications are unavailable." },
-          });
+          return json(200, settingsSnapshot(settings));
         }
         if (path === "/api/read") await inbox.markRead(input);
         if (batchRoutes.has(path)) {
