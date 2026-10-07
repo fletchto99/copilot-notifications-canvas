@@ -64,6 +64,7 @@ test("missing assets open a protected recovery page and recover on the same URL"
     await wait(20);
   }
   assert.deepEqual(await (await fetch(`${origin}/api/ready`, { headers })).json(), { ready: true });
+  assert.equal(await server.ready, true);
   assert.match(await (await fetch(server.url)).text(), /id="settings"/);
   assert.equal((await fetch(`${origin}/app.mjs`)).status, 200);
   assert.equal(reads, 8, "Recovery must publish one complete asset snapshot");
@@ -98,6 +99,7 @@ test("asset retries back off to 30 seconds, log once and stop on close", async t
   assert.equal(f.logs.length, 1);
   assert.doesNotMatch(JSON.stringify(f.logs), /Synthetic private detail/);
   await server.close();
+  assert.equal(await server.ready, false);
   assert.equal(timers.size, 0);
   schedule.mock.restore();
   cancel.mock.restore();
@@ -126,6 +128,7 @@ test("closing during an asset retry aborts in-flight reads and never schedules a
   assert.equal(signals.length, 4);
   await server.close();
   await settle();
+  assert.equal(await server.ready, false);
   assert.ok(signals.every(signal => signal.aborted));
   assert.equal(scheduled, 1);
   assert.equal(f.logs.length, 1);
@@ -145,6 +148,13 @@ test("closing during the initial asset read cancels opening", async t => {
   f.inbox.close();
   await rejected;
   assert.deepEqual(f.logs, []);
+});
+
+test("an already-closed inbox cannot start asset loading", async t => {
+  const f = fixture(t);
+  f.inbox.close();
+  await assert.rejects(startServer(f.inbox, { read: () => assert.fail("Closed inbox must not read assets") }),
+    { code: "closed" });
 });
 
 test("a transient listen error retries the same loopback server and removes attempt listeners", async t => {

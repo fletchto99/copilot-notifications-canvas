@@ -4,7 +4,7 @@ import { test, expect } from "./fixtures.mjs";
 const searchName = "Search loaded notification titles and repositories";
 
 test.describe("startup recovery", () => {
-  test.use({ assetFailure: true });
+  test.use({ assetFailure: true, desktopEnabled: true });
 
   test("opens an accessible recovery page and loads the inbox automatically on the same URL", async ({ page, canvas }) => {
     await page.goto(canvas.url);

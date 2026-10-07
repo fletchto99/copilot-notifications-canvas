@@ -135,6 +135,8 @@ including **Group By**, **Theme**, **Auto-open**, **Desktop notifications** and
   retries in the background with exponential backoff, up to 30 seconds between
   attempts. The inbox appears automatically after recovery, without reopening
   the panel. Closing the panel stops retries.
+  Desktop polling for this panel starts only after its assets are ready;
+  watchers for other ready panels continue normally.
   Socket-binding failures are retried three times before opening fails: the app
   cannot display a web canvas without a listening local server. Errors include
   a safe operating-system error code when available. For persistent failures,

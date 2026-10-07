@@ -112,6 +112,9 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
   const snapshot = () => ({ ...inbox.snapshot(), ...(updates ? { updates: updates.snapshot() } : {}) });
   const controller = new AbortController();
   const signal = AbortSignal.any([inbox.controller.signal, controller.signal]);
+  assertOpen(signal);
+  let resolveReady;
+  const ready = new Promise(resolve => { resolveReady = resolve; });
   let staticFiles;
   let retryTimer;
   let retryDelay = 1000;
@@ -120,7 +123,10 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
     try {
       const files = new Map(await Promise.all([...assets].map(async ([path, [file, type]]) =>
         [path, { body: await read(new URL(`./${file}`, import.meta.url), { signal }), type }])));
-      if (!signal.aborted) staticFiles = files;
+      if (!signal.aborted) {
+        staticFiles = files;
+        resolveReady(true);
+      }
     } catch (error) {
       if (signal.aborted) return;
       if (!assetFailureLogged) {
@@ -132,7 +138,10 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
       retryDelay = Math.min(retryDelay * 2, 30_000);
     }
   }
-  const cancelRetry = () => clearTimeout(retryTimer);
+  const cancelRetry = () => {
+    clearTimeout(retryTimer);
+    resolveReady(false);
+  };
   signal.addEventListener("abort", cancelRetry, { once: true });
   await loadAssets();
   assertOpen(signal);
@@ -284,6 +293,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
   return {
     url: `${origin}/#${secret}`,
     inbox,
+    ready,
     async close() {
       if (closed) return;
       closed = true;

@@ -14,7 +14,8 @@ export { expect };
 
 export const test = base.extend({
   assetFailure: [false, { option: true }],
-  canvas: async ({ page, context, assetFailure }, use) => {
+  desktopEnabled: [false, { option: true }],
+  canvas: async ({ page, context, assetFailure, desktopEnabled }, use) => {
     const directory = await mkdtemp(join(tmpdir(), "notification-browser-"));
     const writes = [];
     const deliveries = [];
@@ -55,6 +56,7 @@ export const test = base.extend({
     };
     const client = new GitHubClient({ run });
     const preferences = new Preferences({ directory });
+    if (desktopEnabled) await preferences.update({ desktopNotifications: true });
     const desktop = new DesktopNotifications({
       preferences, client: new GitHubClient({ run }), platform: "darwin",
       notify: async message => { deliveries.push(message); },
@@ -65,6 +67,7 @@ export const test = base.extend({
       return http({ tag_name: `v${CURRENT_VERSION}`, draft: false, prerelease: false });
     } });
     let server;
+    let registration;
     try {
       server = await startServer(new Inbox(client), {
         preferences, desktop, updates,
@@ -76,7 +79,9 @@ export const test = base.extend({
           return readFile(path, options);
         },
       });
-      desktop.add("browser-test");
+      registration = server.ready.then(ready => {
+        if (ready) desktop.add("browser-test");
+      });
       const origin = new URL(server.url).origin;
       await context.route("**/*", async route => {
         const url = route.request().url();
@@ -96,9 +101,10 @@ export const test = base.extend({
     } finally {
       await context.unrouteAll({ behavior: "wait" });
       await page.close();
+      await server?.close();
+      await registration;
       await desktop.close();
       updates.close();
-      await server?.close();
       await rm(directory, { recursive: true, force: true });
     }
   },

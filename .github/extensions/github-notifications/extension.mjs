@@ -105,7 +105,11 @@ session = await joinSession({
         if (instances.get(ctx.instanceId) !== opening) {
           throw new InboxError("closed", "The Notifications canvas was closed while opening.", 410);
         }
-        desktop.add(ctx.instanceId);
+        opening.desktopRegistration ??= entry.ready.then(ready => {
+          if (ready && instances.get(ctx.instanceId) === opening) desktop.add(ctx.instanceId);
+        }).catch(() => {
+          log("Could not start desktop notifications for the canvas.", { level: "error" });
+        });
         return { title: "Unread Notifications", url: entry.url };
       } catch (error) {
         if (instances.get(ctx.instanceId) === opening) instances.delete(ctx.instanceId);
