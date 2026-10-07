@@ -13,7 +13,8 @@ notifications or auto-open.
 - Node.js 22 or later.
 - [GitHub CLI](https://cli.github.com/) (`gh`) available to the app and signed
   into **github.com** with `notifications` or `repo` scope. Installation requires
-  a version supporting `gh release verify` and `gh release verify-asset`.
+  a version supporting `gh release verify`, `gh release verify-asset`, and
+  `gh attestation verify` with all identity-policy flags shown below.
 
 GitHub.com only; fine-grained personal access tokens are not supported.
 Check sign-in with `gh auth status --hostname github.com`.
@@ -37,17 +38,18 @@ Use the latest published stable GitHub Release, not main or a prerelease.
 If no stable release exists, stop and report that. If already current, report
 that instead of reinstalling. Do not downgrade a newer installed version.
 
-Read the release notes. Download github-notifications-<release-tag>.tar.gz
+Read the release notes and download github-notifications-<release-tag>.tar.gz
 and SHA256SUMS from that exact release. Before extracting or executing anything,
-run gh release verify <release-tag> --repo fletchto99/copilot-notifications-canvas,
-then gh release verify-asset <release-tag> github-notifications-<release-tag>.tar.gz
---repo fletchto99/copilot-notifications-canvas. Require the immutable release and
-an exact archive match to its signed release record. Also verify SHA256SUMS,
-extract into a new directory, and run node install.mjs <release-tag> from there.
-Use my existing COPILOT_HOME and GitHub CLI sign-in.
-Do not install from a source checkout, main, or a local build. Stop if the
-package is missing, verification commands are unavailable, or any verification
-fails; do not fall back to source or checksum-only verification.
+follow the manual gh release verify, gh release verify-asset, and
+gh attestation verify commands without omitting flags.
+Pin the exact certificate identity to this repository's
+.github/workflows/release.yml, refs/tags/<release-tag>, and the tag's resolved
+commit for both source and signer digests. Reject self-hosted runners and require
+https://slsa.dev/provenance/v1. Resolve annotated tags to commits, not tag objects.
+After all checks, including SHA256SUMS, pass, extract into a new directory and
+run node install.mjs <release-tag>. Use my existing COPILOT_HOME and GitHub CLI sign-in.
+Stop if packages, attestations, or verification capabilities are missing or any
+check fails; do not fall back to source or checksum-only verification.
 
 Preserve the entire installed artifacts directory in place, including
 settings.json, autoOpen, darkMode, groupBy, unknown settings, and other files. Do not
@@ -90,6 +92,15 @@ Use the same `COPILOT_HOME` for an upgrade as for the original installation.
      --pattern "github-notifications-$tag.tar.gz" --pattern SHA256SUMS &&
    gh release verify-asset "$tag" "github-notifications-$tag.tar.gz" \
      --repo fletchto99/copilot-notifications-canvas &&
+   commit=$(gh api --hostname github.com \
+     "repos/fletchto99/copilot-notifications-canvas/commits/$tag" --jq .sha) &&
+   printf '%s\n' "$commit" | grep -Eq '^[0-9a-f]{40}$' &&
+   gh attestation verify "github-notifications-$tag.tar.gz" \
+     --repo fletchto99/copilot-notifications-canvas --hostname github.com \
+     --cert-identity "https://github.com/fletchto99/copilot-notifications-canvas/.github/workflows/release.yml@refs/tags/$tag" \
+     --source-ref "refs/tags/$tag" --source-digest "$commit" \
+     --signer-digest "$commit" --deny-self-hosted-runners \
+     --predicate-type https://slsa.dev/provenance/v1 &&
    sha256sum -c SHA256SUMS &&
    mkdir package &&
    tar -xzf "github-notifications-$tag.tar.gz" -C package &&
@@ -101,12 +112,15 @@ Use the same `COPILOT_HOME` for an upgrade as for the original installation.
    `shasum -a 256 -c SHA256SUMS`. These are shell commands; on Windows, use
    a shell with `tar` and a SHA-256 utility, or verify with PowerShell's
    `Get-FileHash -Algorithm SHA256` before extracting. Never continue after
-   a failed download, release verification, or checksum check.
+   a failed download, commit resolution, release/provenance verification, or
+   checksum check. Missing attestations or unsupported verification flags are
+   errors, not reasons to skip a check.
 
-   GitHub's signed release record establishes that the archive is an exact
-   asset of the immutable release. SHA-256 alone is not independent proof of
-   publisher identity. Verification does not prove that the software is safe
-   or provide separate build provenance.
+   Release verification binds the archive to an immutable release. Build
+   provenance binds its digest to this repository's workflow, tag and commit
+   on a GitHub-hosted runner, using certificate identity. The commits API
+   resolves annotated tags to **commits**, not tag objects. Both checks are
+   required; neither proves that the software is safe.
 
    The archive contains only `extension.mjs`, `install.mjs`, and `release.json`.
    No clone, npm install, build tools, or separately installed Copilot SDK
@@ -326,39 +340,33 @@ git tag -a v0.2.0 -m "Release v0.2.0"
 git push origin v0.2.0
 ```
 
-Only a `v*` tag push triggers the [Release workflow](.github/workflows/release.yml).
-There is no manual or branch-push publication. The workflow validates the
-stable tag against `version.json`, runs the same test matrix, coverage,
-lint, and browser/accessibility checks as PR CI, then bundles and minifies the
-runtime and tests the actual archive in a read-only build job. A separate,
-minimal publishing job downloads the exact immutable Actions artifact by ID,
-fails on a digest mismatch, and never installs build dependencies or executes
-the downloaded package. Only this job receives `contents: write`.
+Only `v*` tag pushes trigger the [Release workflow](.github/workflows/release.yml).
+It validates the version and `main` ancestry, runs all PR checks, then builds,
+tests and attests the exact archive with SHA-pinned `actions/attest`.
+The build job has `contents: read`, `attestations: write` and `id-token: write`.
+Only the separate publisher gets `contents: write`, plus `attestations: read`.
+It downloads the exact Actions artifact by ID, rejects digest mismatches, and
+never installs build dependencies or executes the package.
 
-Both validation and publication require the tested commit to be on `main`.
-Publication rechecks that the tag still points to the **exact tested commit**.
+Before creating a release, the publisher rechecks the tag's tested commit and
+`main` ancestry, rejects existing releases or drafts, and enforces the installation
+provenance policy. Missing or failed verification stops publication.
+`SHA256SUMS` must match the attested archive's digest and filename.
 The workflow never creates or moves tags, bumps versions, or commits build output.
 
-Publication first checks every page of releases and refuses an existing
-published release or draft with the requested tag. It then uses GitHub CLI's
-single upload-and-publish command. The CLI creates a draft with generated notes,
-uploads `github-notifications-<tag>.tar.gz` and `SHA256SUMS`, then publishes
-that exact release by ID and marks it **Latest**. The script never
-looks up a release by tag to edit or publish it. The canvas follows
-`/releases/latest`, so it does not advertise a draft with missing assets.
-Publication is serialized.
-Review the generated notes for behavior changes and update guidance.
-The job also verifies the immutable release and both published assets before
-reporting success. If verification fails after publication, inspect the release;
-do not delete or replace published assets to retry.
+Publishing is serialized. GitHub CLI creates a draft, uploads the archive and
+`SHA256SUMS`, then publishes that exact release by ID as **Latest**.
+The job verifies the immutable release and both assets before reporting success.
+Review the generated release notes for behavior changes and update guidance.
 
 Repository settings must keep **release immutability enabled**. The configured
 `v*` tag rules allow creation only by the release maintainer and block updates
 and deletion without bypasses. Existing branch protections remain in place.
 These settings are separate from the workflow and must be configured again
 for a fork. Immutability affects future releases, not older mutable releases.
-This pipeline uses GitHub's automatic release attestations, not separate
-build-provenance attestations.
+Provenance signing shares the build job; this is not an isolated trusted builder
+or SLSA Build Level 3. Real signing requires a release-tag run; local builds are
+not attested release packages.
 
 An existing release or asset is never overwritten. A failure before draft
 creation can be retried. If an upload/publication failure leaves a draft,
