@@ -24,7 +24,7 @@ repos/${REPOSITORY}/commits/v${version} --jq .sha and require a full
 40-character lowercase hexadecimal commit SHA, not an annotated-tag object SHA.
 Then verify build provenance with gh attestation verify
 github-notifications-v${version}.tar.gz --repo ${REPOSITORY} --hostname github.com
---signer-workflow ${REPOSITORY}/.github/workflows/release.yml
+--cert-identity https://github.com/${REPOSITORY}/.github/workflows/release.yml@refs/tags/v${version}
 --source-ref refs/tags/v${version} --source-digest <resolved-commit>
 --signer-digest <resolved-commit> --deny-self-hosted-runners
 --predicate-type https://slsa.dev/provenance/v1, substituting that commit SHA

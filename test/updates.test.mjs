@@ -31,8 +31,10 @@ test("shared installation and update instructions retain links used by older rel
   const prompt = readme.match(/```text\n(Install or update[\s\S]+?)```/)[1];
   const manual = readme.slice(provenance, extract);
   assert.ok(manual.includes(`--repo ${REPOSITORY} --hostname github.com`));
-  assert.ok(manual.includes(`--signer-workflow ${REPOSITORY}/.github/workflows/release.yml`));
+  assert.ok(manual.includes(`--cert-identity "https://github.com/${REPOSITORY}/.github/workflows/release.yml@refs/tags/$tag"`));
+  assert.doesNotMatch(manual, /--signer-workflow|--cert-identity-regex/);
   assert.match(prompt, /follow the manual gh release verify, gh release verify-asset, and\ngh attestation verify commands without omitting flags/);
+  assert.match(prompt, /Pin the exact certificate identity/);
   assert.match(prompt, /\.github\/workflows\/release\.yml, refs\/tags\/<release-tag>/);
   assert.match(prompt, /commit for both source and signer digests\. Reject self-hosted runners/);
   assert.match(prompt, /https:\/\/slsa\.dev\/provenance\/v1/);
@@ -92,7 +94,8 @@ test("release checks use a fixed read-only GitHub endpoint and locally construct
   assert.match(state.prompt, /40-character lowercase hexadecimal commit SHA, not an annotated-tag object SHA/);
   assert.match(state.prompt, /gh attestation verify\ngithub-notifications-v0\.2\.0\.tar\.gz/);
   assert.ok(state.prompt.includes(`--repo ${REPOSITORY} --hostname github.com`));
-  assert.ok(state.prompt.includes(`--signer-workflow ${REPOSITORY}/.github/workflows/release.yml`));
+  assert.ok(state.prompt.includes(`--cert-identity https://github.com/${REPOSITORY}/.github/workflows/release.yml@refs/tags/v0.2.0`));
+  assert.doesNotMatch(state.prompt, /--signer-workflow|--cert-identity-regex/);
   assert.match(state.prompt, /--source-ref refs\/tags\/v0\.2\.0 --source-digest <resolved-commit>/);
   assert.match(state.prompt, /--signer-digest <resolved-commit> --deny-self-hosted-runners/);
   assert.match(state.prompt, /--predicate-type https:\/\/slsa\.dev\/provenance\/v1/);

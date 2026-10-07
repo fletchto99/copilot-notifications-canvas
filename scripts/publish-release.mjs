@@ -44,10 +44,10 @@ export async function publishRelease({ tag, sha, event, ref, directory = resolve
   }
   await run(["release", "verify", "--help"]);
   await run(["release", "verify-asset", "--help"]);
-  // gh verifies the archive digest and certificate identity, not just predicate claims.
+  // Exact certificate identity avoids older gh versions' workflow-prefix matching.
   await run(["attestation", "verify", assets[0],
     "--repo", repository, "--hostname", "github.com",
-    "--signer-workflow", `${repository}/.github/workflows/release.yml`,
+    "--cert-identity", `https://github.com/${repository}/.github/workflows/release.yml@${ref}`,
     "--source-ref", ref, "--source-digest", sha, "--signer-digest", sha,
     "--deny-self-hosted-runners", "--predicate-type", "https://slsa.dev/provenance/v1"]);
   // With assets, gh creates a draft, uploads, then publishes that exact release by ID.

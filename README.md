@@ -41,7 +41,8 @@ that instead of reinstalling. Do not downgrade a newer installed version.
 Read the release notes and download github-notifications-<release-tag>.tar.gz
 and SHA256SUMS from that exact release. Before extracting or executing anything,
 follow the manual gh release verify, gh release verify-asset, and
-gh attestation verify commands without omitting flags. Require this repository's
+gh attestation verify commands without omitting flags.
+Pin the exact certificate identity to this repository's
 .github/workflows/release.yml, refs/tags/<release-tag>, and the tag's resolved
 commit for both source and signer digests. Reject self-hosted runners and require
 https://slsa.dev/provenance/v1. Resolve annotated tags to commits, not tag objects.
@@ -96,7 +97,7 @@ Use the same `COPILOT_HOME` for an upgrade as for the original installation.
    printf '%s\n' "$commit" | grep -Eq '^[0-9a-f]{40}$' &&
    gh attestation verify "github-notifications-$tag.tar.gz" \
      --repo fletchto99/copilot-notifications-canvas --hostname github.com \
-     --signer-workflow fletchto99/copilot-notifications-canvas/.github/workflows/release.yml \
+     --cert-identity "https://github.com/fletchto99/copilot-notifications-canvas/.github/workflows/release.yml@refs/tags/$tag" \
      --source-ref "refs/tags/$tag" --source-digest "$commit" \
      --signer-digest "$commit" --deny-self-hosted-runners \
      --predicate-type https://slsa.dev/provenance/v1 &&

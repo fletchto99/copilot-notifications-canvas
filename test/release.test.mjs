@@ -15,6 +15,7 @@ import { home } from "./install-fixtures.mjs";
 const tag = `v${CURRENT_VERSION}`;
 const sha = "a".repeat(40);
 const ref = `refs/tags/${tag}`;
+const certificateIdentity = `https://github.com/${REPOSITORY}/.github/workflows/release.yml@${ref}`;
 const url = `https://github.com/example/repo/releases/tag/${tag}`;
 
 test("release input accepts a bare version or one v prefix without weakening version validation", () => {
@@ -46,7 +47,7 @@ test("release validation writes only a validated canonical tag to GitHub Actions
 
 async function fixture(t, {
   remoteSha = sha, comparison = { status: "ahead", merge_base_commit: { sha } },
-  pages = [[]], listResponse, fail,
+  pages = [[]], listResponse, fail, attestedIdentity = certificateIdentity,
 } = {}) {
   const directory = await home(t);
   const archive = archiveName(tag);
@@ -66,6 +67,10 @@ async function fixture(t, {
       result = "Verified\n";
     } else if (args[0] === "attestation" && args[1] === "verify") {
       operation = "provenance";
+      assert.ok(args.includes("--cert-identity"), "The verifier must receive an exact certificate identity.");
+      if (args[args.indexOf("--cert-identity") + 1] !== attestedIdentity) {
+        throw new Error("Synthetic certificate identity mismatch");
+      }
       result = "Verified\n";
     } else if (args[1].includes("/commits/")) {
       operation = "resolve";
@@ -100,7 +105,7 @@ test("tagged releases use one upload-and-publish command without a tag-based edi
     ["release", "verify-asset", "--help"],
     ["attestation", "verify", join(item.directory, archiveName(tag)),
       "--repo", REPOSITORY, "--hostname", "github.com",
-      "--signer-workflow", `${REPOSITORY}/.github/workflows/release.yml`,
+      "--cert-identity", certificateIdentity,
       "--source-ref", ref, "--source-digest", sha, "--signer-digest", sha,
       "--deny-self-hosted-runners", "--predicate-type", "https://slsa.dev/provenance/v1"],
     ["release", "create", tag, join(item.directory, archiveName(tag)), join(item.directory, "SHA256SUMS"),
@@ -225,6 +230,7 @@ test("provenance verification failures never create a release or execute the arc
     "SourceRepository mismatch", "Signer workflow mismatch", "Source ref mismatch",
     "Source digest mismatch", "Signer digest mismatch", "Self-hosted runner denied",
     "Predicate type mismatch", "unknown command attestation", "unknown flag: --source-digest",
+    "unknown flag: --cert-identity",
   ]) {
     const item = await fixture(t);
     const error = new Error(reason);
@@ -238,6 +244,23 @@ test("provenance verification failures never create a release or execute the arc
     assert.equal(item.calls.at(-1)[0], "attestation");
     assert.ok(item.calls.every(args => args[0] === "api" ||
       args[0] === "attestation" || args.includes("--help")), reason);
+  }
+});
+
+test("the publisher's exact certificate policy rejects lookalike workflow names and refs", async t => {
+  for (const attestedIdentity of [
+    certificateIdentity.replace("release.yml@", "release.yml.other.yml@"),
+    certificateIdentity.replace("release.yml@", "release.yaml@"),
+    certificateIdentity.replace(REPOSITORY, "other/repository"),
+    certificateIdentity.replace(ref, "refs/heads/main"),
+    `${certificateIdentity}-rc.1`,
+    `${certificateIdentity}@refs/heads/other`,
+  ]) {
+    const item = await fixture(t, { attestedIdentity });
+    await assert.rejects(publishRelease(item.input), /Synthetic certificate identity mismatch/);
+    assert.equal(item.calls.at(-1)[0], "attestation");
+    assert.equal(item.calls.some(args => args[1] === "create"), false);
+    assert.equal(item.calls.some(args => args.includes("--signer-workflow") || args.includes("--cert-identity-regex")), false);
   }
 });
 
@@ -312,7 +335,7 @@ if (name === "gh" && args[0] === process.env.TEST_FAIL) process.exit(1);
     if (verification) {
       assert.deepEqual(verification, ["gh", "attestation", "verify", `github-notifications-${manualTag}.tar.gz`,
         "--repo", REPOSITORY, "--hostname", "github.com",
-        "--signer-workflow", `${REPOSITORY}/.github/workflows/release.yml`,
+        "--cert-identity", `https://github.com/${REPOSITORY}/.github/workflows/release.yml@refs/tags/${manualTag}`,
         "--source-ref", `refs/tags/${manualTag}`, "--source-digest", sha,
         "--signer-digest", sha, "--deny-self-hosted-runners",
         "--predicate-type", "https://slsa.dev/provenance/v1"]);
