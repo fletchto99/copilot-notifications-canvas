@@ -208,9 +208,16 @@ test("the extension entry point wires an isolated session through its complete l
     assert.equal(filtered.searchActive, true);
     assert.doesNotMatch(JSON.stringify(filtered), /Synthetic|example\/widgets|notification 2/);
     assert.deepEqual(await invoke("get_state", "one"), filtered);
+    const attention = await invoke("set_filters", "one", { attention: "mentioned" });
+    assert.equal(attention.attention, "mentioned");
+    assert.equal(attention.matching, 0);
+    assert.equal(attention.loaded, 2);
+    assert.doesNotMatch(JSON.stringify(attention), /Synthetic|example\/widgets|notification 2/);
+    await invoke("set_filters", "one", { attention: "all" });
     assert.equal((await invoke("check_for_updates", "one")).status, "current");
     await assert.rejects(invoke("get_state", "missing"), error => error instanceof CanvasError && error.code === "not_open");
     await assert.rejects(invoke("set_filters", "one", { mode: "all" }), { code: "invalid_filters" });
+    await assert.rejects(invoke("set_filters", "one", { attention: "unknown" }), { code: "invalid_filters" });
   });
 
   await t.test("unexpected action errors are sanitized and logged", async subtest => {

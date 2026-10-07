@@ -27,10 +27,23 @@
         </details>
         <p id="copy-status" class="settings-help" role="status" aria-live="polite"></p>
       </section>
+      <div id="attention-navigation" class="attention-navigation">
+        <button id="attention-previous" class="attention-scroll" type="button" aria-label="Scroll attention tabs left" aria-controls="attention-tabs" aria-disabled="true" hidden>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+            <path d="m14 6-6 6 6 6"/>
+          </svg>
+        </button>
+        <div id="attention-tabs" class="attention-tabs" role="tablist" aria-label="Attention filters"></div>
+        <button id="attention-next" class="attention-scroll" type="button" aria-label="Scroll attention tabs right" aria-controls="attention-tabs" aria-disabled="true" hidden>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+            <path d="m10 6 6 6-6 6"/>
+          </svg>
+        </button>
+      </div>
       <div class="toolbar">
         <label class="search">
           <span class="sr-only">Search loaded notification titles, issue or PR numbers, and repositories</span>
-          <input id="search" type="search" maxlength="200" placeholder="Search titles, numbers or repositories" autocomplete="off" spellcheck="false">
+          <input id="search" type="search" maxlength="200" placeholder="Search..." autocomplete="off" spellcheck="false">
         </label>
         <div id="inbox-control" class="tooltip-anchor">
           <a id="open-inbox" class="icon-button" href="https://github.com/notifications" target="_blank" rel="noopener noreferrer" aria-label="Open GitHub inbox" aria-describedby="inbox-tooltip">
@@ -98,26 +111,28 @@
         <button id="collapse" class="text-button" type="button">Collapse all</button>
       </div>
     </header>
-    <div id="settings-error" class="notice" role="alert" hidden></div>
-    <div id="notice" class="notice" role="alert" hidden></div>
-    <section id="batch-progress" class="batch-progress" aria-label="Repository read operation" tabindex="-1" hidden>
-      <h2 id="batch-title"></h2>
-      <p id="batch-counts"></p>
-      <p id="batch-error" role="alert" hidden></p>
-      <div class="batch-buttons">
-        <button id="batch-stop" type="button">Stop remaining</button>
-        <button id="batch-retry" type="button">Retry remaining</button>
-        <button id="batch-dismiss" type="button">Dismiss result</button>
+    <div id="attention-panel" role="tabpanel" aria-labelledby="attention-all" tabindex="0">
+      <div id="settings-error" class="notice" role="alert" hidden></div>
+      <div id="notice" class="notice" role="alert" hidden></div>
+      <section id="batch-progress" class="batch-progress" aria-label="Repository read operation" tabindex="-1" hidden>
+        <h2 id="batch-title"></h2>
+        <p id="batch-counts"></p>
+        <p id="batch-error" role="alert" hidden></p>
+        <div class="batch-buttons">
+          <button id="batch-stop" type="button">Stop remaining</button>
+          <button id="batch-retry" type="button">Retry remaining</button>
+          <button id="batch-dismiss" type="button">Dismiss result</button>
+        </div>
+      </section>
+      <section id="empty" class="empty" aria-live="polite">
+        <div id="empty-symbol" class="empty-symbol" aria-hidden="true">/</div>
+        <h2 id="empty-title">Connecting to GitHub</h2>
+        <p id="empty-description">Using your existing GitHub CLI sign-in.</p>
+      </section>
+      <section id="groups" aria-label="Notifications by repository"></section>
+      <div class="pagination">
+        <button id="more" type="button" hidden>Load more</button>
       </div>
-    </section>
-    <section id="empty" class="empty" aria-live="polite">
-      <div id="empty-symbol" class="empty-symbol" aria-hidden="true">/</div>
-      <h2 id="empty-title">Connecting to GitHub</h2>
-      <p id="empty-description">Using your existing GitHub CLI sign-in.</p>
-    </section>
-    <section id="groups" aria-label="Notifications by repository"></section>
-    <div class="pagination">
-      <button id="more" type="button" hidden>Load more</button>
     </div>
     <footer>
       <p id="development-build" hidden></p>

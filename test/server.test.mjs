@@ -61,6 +61,8 @@ test("methods, paths, origins, hosts, JSON, filter input and oversized bodies ar
     ["/api/state", "OPTIONS", undefined, 405],
     ["/api/filters", "POST", '{"mode":"done"}', 400],
     ["/api/filters", "POST", '{"mode":"all"}', 400],
+    ["/api/filters", "POST", '{"attention":"bad"}', 400],
+    ["/api/filters", "POST", '{"attention":null}', 400],
     ["/api/filters", "POST", '{"unexpected":true}', 400],
     ["/api/refresh", "POST", '{"unexpected":true}', 400],
     ["/api/refresh", "POST", '{"force":"true"}', 400],
@@ -95,6 +97,27 @@ test("methods, paths, origins, hosts, JSON, filter input and oversized bodies ar
     req.end();
   });
   assert.equal(hostStatus, 403);
+});
+
+test("HTTP filters combine attention and search without fetching or writing GitHub state", async t => {
+  const calls = [];
+  const { origin, headers } = await setup(t, async args => {
+    calls.push(args);
+    return http([thread("1", { reason: "review_requested" }), thread("2", { reason: "mention" })]);
+  });
+  const options = { method: "POST", headers: { ...headers, "Content-Type": "application/json" } };
+  await fetch(`${origin}/api/refresh`, { ...options, body: "{}" });
+  const response = await fetch(`${origin}/api/filters`, {
+    ...options, body: JSON.stringify({ attention: "review_requested", query: "widgets" }),
+  });
+  assert.equal(response.status, 200);
+  const state = await response.json();
+  assert.deepEqual(state.filters, { mode: "unread", query: "widgets", attention: "review_requested" });
+  assert.equal(state.loaded, 2);
+  assert.equal(state.matching, 1);
+  assert.deepEqual(state.groups[0].items.map(item => item.id), ["1"]);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].includes("PATCH"), false);
 });
 
 test("separate panels have separate ephemeral ports/capabilities, and close releases the listener", async t => {
