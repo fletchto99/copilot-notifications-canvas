@@ -9,20 +9,25 @@ import { Preferences } from "../../src/settings.mjs";
 import { startServer } from "../../src/server.mjs";
 import { Updates, CURRENT_VERSION } from "../../src/updates.mjs";
 import { http, next, thread } from "../fixtures.mjs";
+import { startPackagedCanvas } from "./package-fixtures.mjs";
 
 export { expect };
 
 export const test = base.extend({
   assetFailure: [false, { option: true }],
   desktopEnabled: [false, { option: true }],
-  canvas: async ({ page, context, assetFailure, desktopEnabled }, use) => {
-    const directory = await mkdtemp(join(tmpdir(), "notification-browser-"));
+  packaged: [false, { option: true }],
+  canvas: async ({ page, context, assetFailure, desktopEnabled, packaged }, use) => {
+    const root = await mkdtemp(join(tmpdir(), "notification-browser-"));
+    const directory = join(root, "home", "extensions", "github-notifications", "artifacts");
     const writes = [];
     const deliveries = [];
     const requests = [];
     const errors = [];
     const warnings = [];
     let assetsUnavailable = assetFailure;
+    let requestHook;
+    let offset = 0;
     const rows = Array.from({ length: 53 }, (_, index) => {
       const id = String(index + 1);
       const titles = {
@@ -40,6 +45,11 @@ export const test = base.extend({
     const run = async args => {
       const endpoint = args.at(-1);
       requests.push(endpoint);
+      const intercepted = await requestHook?.(args);
+      if (intercepted !== undefined) return intercepted;
+      if (endpoint.endsWith("/releases/latest")) {
+        return http({ tag_name: `v${CURRENT_VERSION}`, draft: false, prerelease: false });
+      }
       if (args.includes("PATCH")) {
         const match = /^\/notifications\/threads\/(\d+)$/.exec(endpoint);
         const row = rows.find(item => item.id === match?.[1]);
@@ -54,7 +64,7 @@ export const test = base.extend({
       const unread = rows.filter(row => row.unread);
       return http(unread.slice(offset, offset + 50), offset + 50 < unread.length ? { link: next } : {});
     };
-    const client = new GitHubClient({ run });
+    const client = new GitHubClient({ run, now: () => Date.now() + offset });
     const preferences = new Preferences({ directory });
     if (desktopEnabled) await preferences.update({ desktopNotifications: true });
     const desktop = new DesktopNotifications({
@@ -68,10 +78,11 @@ export const test = base.extend({
     } });
     let server;
     let registration;
+    const log = (message, options) => (options.level === "warning" ? warnings : errors).push(message);
     try {
-      server = await startServer(new Inbox(client), {
+      server = packaged ? await startPackagedCanvas(root, run, log) : await startServer(new Inbox(client), {
         preferences, desktop, updates,
-        log: (message, options) => (options.level === "warning" ? warnings : errors).push(message),
+        log,
         read: (path, options) => {
           if (assetsUnavailable && path.pathname.endsWith("/app.mjs")) {
             throw Object.assign(new Error("Synthetic asset failure"), { code: "ENOENT" });
@@ -79,7 +90,7 @@ export const test = base.extend({
           return readFile(path, options);
         },
       });
-      registration = server.ready.then(ready => {
+      registration = server.ready?.then(ready => {
         if (ready) desktop.add("browser-test");
       });
       const origin = new URL(server.url).origin;
@@ -94,6 +105,8 @@ export const test = base.extend({
         if (message.type() === "error") errors.push(message.text());
       });
       await use({ url: server.url, rows, writes, requests, preferences, deliveries,
+        setRequestHook: hook => { requestHook = hook; },
+        advance: ms => { offset += ms; return Date.now() + offset; },
         recoverAssets: () => { assetsUnavailable = false; } });
       expect(errors, "Browser execution, CSP, and external-network errors").toEqual([]);
       expect(warnings).toEqual(assetFailure
@@ -105,7 +118,7 @@ export const test = base.extend({
       await registration;
       await desktop.close();
       updates.close();
-      await rm(directory, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true });
     }
   },
 });

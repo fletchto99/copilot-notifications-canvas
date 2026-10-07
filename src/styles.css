@@ -44,7 +44,6 @@ h1 { font-size: var(--text-title-large, 26px); line-height: var(--leading-title-
 h1, h2, summary { font-weight: var(--font-weight-semibold, 600); }
 h2 { font-size: 18px; }
 .eyebrow { font-size: 10px; font-weight: 600; letter-spacing: .13em; color: var(--muted); margin-bottom: 6px; }
-.badge { display: inline-block; vertical-align: middle; font-size: 10px; line-height: 20px; letter-spacing: 0; font-weight: 500; color: var(--muted); border: 1px solid var(--border); padding: 0 7px; border-radius: 20px; }
 .subtitle { color: var(--muted); margin-top: 8px; font-size: 13px; }
 button, input, select, textarea { font: inherit; color: inherit; }
 button { background: transparent; border: 1px solid var(--border); border-radius: 7px; padding: 7px 12px; cursor: pointer; white-space: nowrap; }
@@ -109,7 +108,6 @@ summary::marker { color: var(--muted); }
 .metadata .repository { overflow-wrap: anywhere; min-width: 0; }
 .mark-read { font-size: 12px; padding: 3px 7px; }
 .dot { height: 6px; width: 6px; border-radius: 50%; margin-top: 8px; background: var(--accent); }
-.dot.read { background: transparent; border: 1px solid var(--border); }
 a, .refresh-link { color: var(--accent); text-decoration: none; }
 a:hover, .refresh-link:hover { text-decoration: underline; }
 .title { color: var(--canvas-text); font-weight: 500; overflow-wrap: anywhere; }
@@ -129,7 +127,6 @@ footer { color: var(--muted); font-size: 11px; margin-top: 24px; }
 @media (max-width: 480px) {
   main { padding: 18px 14px; }
   input { height: 38px; }
-  .badge { display: none; }
   .row { padding: 12px; grid-template-columns: 8px minmax(0, 1fr); gap: 8px; }
   .row time { grid-column: 2; padding: 0; }
   .mark-read { grid-column: 2; justify-self: start; }

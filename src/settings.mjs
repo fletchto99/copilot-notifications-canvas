@@ -5,7 +5,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { InboxError } from "./model.mjs";
 import { validSound } from "./notifier.mjs";
+import { acquireLock } from "./lock.mjs";
 
+const MAX_SETTINGS_BYTES = 16_384;
 const groupingModes = ["none", "repo", "date"];
 const booleanSettings = ["autoOpen", "desktopNotifications"];
 const settingsValue = data => ({
@@ -28,7 +30,7 @@ export class Preferences {
     try {
       file = await this.io.open(this.path, constants.O_RDONLY | constants.O_NOFOLLOW);
       const stat = await file.stat();
-      if (!stat.isFile() || stat.size > 16_384) throw new Error("Invalid settings file");
+      if (!stat.isFile() || stat.size > MAX_SETTINGS_BYTES) throw new Error("Invalid settings file");
       const data = JSON.parse(await file.readFile("utf8"));
       if (!data || typeof data !== "object" || Array.isArray(data) ||
           booleanSettings.some(key => data[key] !== undefined && typeof data[key] !== "boolean") ||
@@ -64,29 +66,31 @@ export class Preferences {
     }
     const lockPath = join(this.directory, ".settings.lock");
     const temporary = join(this.directory, `.settings-${randomUUID()}.tmp`);
-    let lock;
+    let release;
     let temporaryCreated = false;
     try {
       await this.io.mkdir(this.directory, { recursive: true, mode: 0o700 });
       try {
-        lock = await this.io.open(lockPath, "wx", 0o600);
-      } catch (error) {
-        if (error.code === "EEXIST") {
-          throw new InboxError("settings_busy", "Notification settings are being updated. Retry shortly; a lock left after a crash may need manual removal.", 409);
+        const stat = await this.io.lstat(lockPath);
+        if (!stat.isDirectory() || stat.isSymbolicLink()) {
+          throw new InboxError("settings_busy", "A legacy or unrecognized settings lock exists. Wait for any settings save to finish. If it remains, stop all older extension processes before inspecting or removing artifacts/.settings.lock.", 409);
         }
-        throw error;
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
       }
+      release = await acquireLock(lockPath, { label: "settings" });
+      if (!release) throw new InboxError("settings_busy", "Notification settings are being updated. Retry shortly.", 409);
       const current = await this.document();
       const updated = { ...current, ...input };
       if (input.desktopNotifications === true && !current.desktopNotifications) {
         updated.desktopGeneration = randomUUID();
       }
-      const content = JSON.stringify(updated, null, 2);
-      if (Buffer.byteLength(content) > 16_384) throw new Error("Settings size limit");
+      const content = `${JSON.stringify(updated, null, 2)}\n`;
+      if (Buffer.byteLength(content) > MAX_SETTINGS_BYTES) throw new Error("Settings size limit");
       const output = await this.io.open(temporary, "wx", 0o600);
       temporaryCreated = true;
       try {
-        await output.writeFile(`${content}\n`);
+        await output.writeFile(content);
       } finally {
         await output.close();
       }
@@ -95,13 +99,13 @@ export class Preferences {
       return settingsValue(updated);
     } catch (error) {
       if (error instanceof InboxError) throw error;
-      throw new InboxError("settings_write", "Could not save notification settings. Check permissions and free disk space in the extension artifacts directory.", 500);
+      throw new InboxError("settings_write", "Could not save notification settings. Check permissions, free disk space and unrecognized .settings.lock contents in the extension artifacts directory.", 500);
     } finally {
       try {
-        if (temporaryCreated) await this.io.unlink(temporary);
-        if (lock) {
-          await lock.close();
-          await this.io.unlink(lockPath);
+        try {
+          if (temporaryCreated) await this.io.unlink(temporary);
+        } finally {
+          await release?.();
         }
       } catch {
         // eslint-disable-next-line no-unsafe-finally -- Cleanup failures must surface even when the update also failed.

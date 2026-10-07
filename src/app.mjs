@@ -561,8 +561,8 @@ function renderGroups(groups, fallbackFocusKey) {
       fragment.append(rows);
     }
     for (const item of group.items) {
-      const row = element("article", `row${item.unread ? " unread" : ""}`);
-      const dot = element("span", `dot${item.unread ? "" : " read"}`);
+      const row = element("article", "row unread");
+      const dot = element("span", "dot");
       dot.setAttribute("aria-hidden", "true");
       const content = element("div");
       const link = element("a", "title", item.title || "(Untitled notification)");
@@ -576,7 +576,7 @@ function renderGroups(groups, fallbackFocusKey) {
       if (!group.repository) metadata.append(element("span", "repository", item.repository));
       metadata.append(element("span", "", item.type.replace(/([a-z])([A-Z])/g, "$1 $2")),
         element("span", "", item.reason.replaceAll("_", " ")),
-        element("span", "", item.unread ? "Unread" : "Read"));
+        element("span", "", "Unread"));
       if (!item.direct) metadata.append(element("span", "destination", item.label));
       content.append(metadata);
       const time = element("time", "", relativeTime(item.updatedAt));

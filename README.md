@@ -201,6 +201,13 @@ Settings are saved across sessions:
 | **Desktop notifications** | Off by default. Enable native alerts as described below. |
 | **Sound** | System-specific sounds; defaults to **System default**. |
 
+Settings saves use an owner-tracked directory lock and recover a crashed writer
+on the next save. Live writers are never interrupted. An older, ownerless
+`.settings.lock` file is not removed automatically: wait for the save to finish,
+or stop all older extension processes before inspecting and removing a stale
+lock. Settings files are limited to 16,384 bytes, including their final newline;
+an oversized update leaves the existing file unchanged.
+
 If local UI files fail to load, the recovery page retries automatically. For
 persistent failures, reload extensions or reinstall while preserving settings.
 
@@ -287,6 +294,8 @@ npm ci --ignore-scripts
 npm run lint
 npm run lint:workflows  # Requires actionlint on PATH.
 npm run test:coverage
+npm run build
+npm run test:package
 npx playwright install --with-deps chromium webkit
 npm run test:browser
 ```
@@ -296,27 +305,36 @@ may need permission to install Linux system libraries. Use `-- --project=webkit`
 with `npm run test:browser` to run one engine.
 
 The [test workflow](.github/workflows/tests.yml) defines the platform matrix,
-coverage thresholds, lint and Chromium/WebKit accessibility checks. Tests use
+coverage thresholds, lint and Chromium/WebKit accessibility checks. Both
+existing required browser jobs also build and validate the package before
+testing source and installed-bundle browser behavior. A Windows job exercises
+installation, settings, crash-recoverable locks and notification argument
+construction without displaying native notifications. Tests use
 synthetic GitHub responses and isolated settings: no sign-in, live read updates,
 or OS notifications. SDK stubs do not verify compatibility with a specific
 Copilot build; reload and inspect the real extension after SDK changes.
 Development dependencies are not included in installed extensions.
 
-Ordinary CI does not build or publish release assets. To validate packaging
-locally (not to distribute a development installation):
+PR/main CI validates packaging but never publishes release assets. To validate
+packaging locally (not to distribute a development installation):
 
 ```sh
 npm ci --ignore-scripts --no-audit --no-fund
-npm run build -- v0.2.0
+npm run build
 npm run test:package
 ```
 
-Use the tag matching the repository-root `version.json`. The pinned bundling
-and archive dependencies are build-time only. Generated output goes in ignored
+The build defaults to the repository-root `version.json`; an explicit tag must
+match it. The pinned bundling and archive dependencies are build-time only.
+Generated output goes in ignored
 `dist/`, not Git. Archives use a fixed file order, permissions, and normalized
 ownership/timestamps; tests compare repeated builds byte-for-byte. Reproduction
 assumes the same source and toolchain, not arbitrary compiler/runtime versions.
 Package tests also install into temporary Copilot homes and load a stub host SDK.
+Browser checks include the installed minified bundle, delayed refresh recovery,
+and batch cancellation and error recovery. Renderer unit tests share a DOM
+harness and are split into core, settings and action suites. Release CLI tests
+use a separate synthetic `gh` process and never contact GitHub.
 
 ### Publishing releases
 
@@ -334,7 +352,7 @@ git push origin v0.2.0
 ```
 
 Only a `v*` tag push triggers the [Release workflow](.github/workflows/release.yml).
-There is no manual or branch-push release build. The workflow validates the
+There is no manual or branch-push publication. The workflow validates the
 stable tag against `version.json`, runs the same test matrix, coverage,
 lint, and browser/accessibility checks as PR CI, then bundles and minifies the
 runtime and tests the actual archive in a read-only build job. A separate,

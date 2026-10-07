@@ -39,7 +39,7 @@ export class Inbox {
         this.pages.length ? "ready" : "idle",
       error: this.error,
       loaded: items.length,
-      unread: items.filter(item => item.unread).length,
+      unread: items.length,
       matching: groups.reduce((count, group) => count + group.items.length, 0),
       hasMore: Boolean(this.pages.at(-1)?.next),
       needsRefresh: this.needsRefresh,

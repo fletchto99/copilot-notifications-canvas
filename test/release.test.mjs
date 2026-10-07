@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -54,6 +54,7 @@ async function fixture(t, {
   await writeFile(join(directory, archive), content);
   await writeFile(join(directory, "SHA256SUMS"), `${hash(content)}  ${archive}\n`);
   const calls = [];
+  const responses = [];
   const run = async args => {
     calls.push(args);
     let operation;
@@ -76,11 +77,12 @@ async function fixture(t, {
     } else {
       throw new Error(`Unexpected gh invocation: ${JSON.stringify(args)}`);
     }
+    responses.push({ args, stdout: result, code: fail === operation ? 1 : 0 });
     if (fail === operation) throw new Error(`Synthetic ${operation} failure`);
     return result;
   };
   return {
-    calls, directory,
+    calls, responses, directory,
     input: { tag, sha, event: "push", ref, directory, run },
   };
 }
@@ -211,12 +213,48 @@ test("GitHub errors stop publication without fallback tag writes or extra releas
   }
 });
 
-test("only the tag workflow builds releases, and packaged checks precede publication", async () => {
+test("the release CLI reads its environment, reports success and stops on command failures", async t => {
+  const script = fileURLToPath(new URL("../scripts/publish-release.mjs", import.meta.url));
+  const preload = fileURLToPath(new URL("./fixtures/gh-preload.mjs", import.meta.url));
+  for (const fail of [undefined, "create", "verify"]) {
+    const item = await fixture(t, { fail });
+    if (fail) await assert.rejects(publishRelease(item.input), /Synthetic/);
+    else await publishRelease(item.input);
+    const state = join(item.directory, "fake-gh.json");
+    // The CLI uses dist/ relative to its cwd.
+    const cwd = await realpath(await home(t));
+    await mkdir(join(cwd, "dist"));
+    for (const file of [archiveName(tag), "SHA256SUMS"]) {
+      await copyFile(join(item.directory, file), join(cwd, "dist", file));
+    }
+    const expected = item.responses.map(response => ({
+      ...response, args: response.args.map(arg => arg.replace(item.directory, join(cwd, "dist"))),
+    }));
+    await writeFile(state, JSON.stringify({ responses: expected, calls: [] }));
+    const options = { cwd, env: { ...process.env, NOTIFICATIONS_TEST_GH: state,
+      GITHUB_SHA: sha, GITHUB_EVENT_NAME: "push", GITHUB_REF: ref } };
+    const run = () => promisify(execFile)(process.execPath, ["--import", preload, script, tag], options);
+    if (fail) {
+      await assert.rejects(run(), error => error.code === 1 && error.stderr.includes("Release stopped:"));
+    } else {
+      assert.equal((await run()).stdout, `${url}\n`);
+    }
+    assert.deepEqual(JSON.parse(await readFile(state, "utf8")).calls, expected.map(response => response.args));
+    options.env.GITHUB_REF = "refs/heads/main";
+    await assert.rejects(run(), error => error.code === 1 && error.stderr.includes("matching release-tag push"));
+    assert.deepEqual(JSON.parse(await readFile(state, "utf8")).calls, expected.map(response => response.args));
+  }
+});
+
+test("PR checks validate packages without publishing, and tag checks precede publication", async () => {
   const workflow = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
   const tests = await readFile(new URL("../.github/workflows/tests.yml", import.meta.url), "utf8");
   assert.match(workflow, /on:\n {2}push:\n {4}tags: \["v\*"\]/);
   assert.doesNotMatch(workflow, /workflow_dispatch|branches:/);
-  assert.doesNotMatch(tests, /build-release|publish-release|npm run build/);
+  assert.doesNotMatch(tests, /publish-release|contents: write|GH_TOKEN/);
+  assert.match(tests, /name: Validate release packaging\n {8}run: \|\n {10}npm run build\n {10}npm run test:package/);
+  assert.match(tests, /runs-on: windows-latest/);
+  assert.match(tests, /node --test test\/platform\.test\.mjs test\/settings\.test\.mjs test\/notifier\.test\.mjs/);
   assert.match(workflow, /checks:\n {4}needs: validate\n {4}uses: \.\/\.github\/workflows\/tests\.yml/);
   assert.match(workflow, /build:\n {4}needs: \[validate, checks\]/);
   assert.match(workflow, /publish:\n {4}needs: \[validate, build\]/);

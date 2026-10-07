@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Preferences } from "../src/settings.mjs";
@@ -26,7 +28,7 @@ test("settings default to auto-open off, app theme and repo grouping, persist ac
   assert.deepEqual(JSON.parse(await fs.readFile(preferences.path, "utf8")).future, { theme: "custom" });
   await other.update({ autoOpen: false });
   assert.deepEqual(await preferences.read(), defaults);
-  assert.equal((await fs.stat(preferences.path)).mode & 0o777, 0o600);
+  if (process.platform !== "win32") assert.equal((await fs.stat(preferences.path)).mode & 0o777, 0o600);
 });
 
 test("dark mode persists across instances without replacing auto-open or unknown preferences", async t => {
@@ -90,7 +92,91 @@ test("storage errors and concurrent-writer locks are actionable, not success-sha
     ...fs, open: async () => { throw Object.assign(new Error("denied"), { code: "EACCES" }); },
   } });
   await assert.rejects(denied.read(), { code: "settings_read" });
-  await assert.rejects(denied.update({ autoOpen: true }), { code: "settings_write" });
+  await assert.rejects(denied.update({ autoOpen: true }), { code: "settings_read" });
+});
+
+test("a crashed settings writer releases ownership on the next save without losing preferences", async t => {
+  const preferences = await setup(t);
+  await fs.writeFile(preferences.path, '{"autoOpen":false,"future":{"keep":true}}');
+  const module = new URL("../src/settings.mjs", import.meta.url).href;
+  const script = `
+    import * as fs from "node:fs/promises";
+    import { Preferences } from ${JSON.stringify(module)};
+    const preferences = new Preferences({ directory: process.argv[1], io: {
+      ...fs, rename: async () => process.exit(73),
+    } });
+    await preferences.update({ autoOpen: true });
+  `;
+  await assert.rejects(promisify(execFile)(process.execPath,
+    ["--input-type=module", "-e", script, preferences.directory]), { code: 73 });
+  assert.equal((await preferences.read()).autoOpen, false);
+  await new Preferences({ directory: preferences.directory }).update({ darkMode: true });
+  assert.equal((await preferences.read()).darkMode, true);
+  assert.deepEqual((await preferences.document()).future, { keep: true });
+  assert.equal((await fs.readdir(preferences.directory)).includes(".settings.lock"), false);
+});
+
+test("live settings writers and legacy ownerless locks are never removed", async t => {
+  const preferences = await setup(t);
+  let entered;
+  let finish;
+  const ready = new Promise(resolve => { entered = resolve; });
+  const waiting = new Promise(resolve => { finish = resolve; });
+  const writer = new Preferences({ directory: preferences.directory, io: {
+    ...fs, rename: async (...args) => { entered(); await waiting; return fs.rename(...args); },
+  } });
+  const saving = writer.update({ autoOpen: true });
+  try {
+    await ready;
+    await assert.rejects(preferences.update({ darkMode: true }), { code: "settings_busy" });
+  } finally {
+    finish();
+    await saving;
+  }
+  const lock = join(preferences.directory, ".settings.lock");
+  await fs.writeFile(lock, "");
+  await assert.rejects(preferences.update({ darkMode: true }),
+    error => error.code === "settings_busy" && /legacy/i.test(error.message));
+  assert.equal(await fs.readFile(lock, "utf8"), "");
+  assert.equal((await preferences.read()).autoOpen, true);
+});
+
+test("settings size limits include the final newline and preserve oversized updates", async t => {
+  const preferences = await setup(t);
+  const overhead = Buffer.byteLength(`${JSON.stringify({ future: "", autoOpen: true }, null, 2)}\n`);
+  for (const bytes of [16_383, 16_384, 16_385]) {
+    const future = "x".repeat(bytes - overhead);
+    const before = JSON.stringify({ future });
+    await fs.writeFile(preferences.path, before);
+    if (bytes > 16_384) {
+      await assert.rejects(preferences.update({ autoOpen: true }), { code: "settings_write" });
+      assert.equal(await fs.readFile(preferences.path, "utf8"), before);
+    } else {
+      await preferences.update({ autoOpen: true });
+      assert.equal((await fs.stat(preferences.path)).size, bytes);
+      assert.equal((await preferences.read()).autoOpen, true);
+    }
+  }
+});
+
+test("unknown settings lock contents are preserved and cleanup errors still release ownership", async t => {
+  const preferences = await setup(t);
+  const lock = join(preferences.directory, ".settings.lock");
+  await fs.mkdir(lock);
+  await fs.writeFile(join(lock, "keep.txt"), "unrecognized");
+  await assert.rejects(preferences.update({ autoOpen: true }), { code: "settings_write" });
+  assert.equal(await fs.readFile(join(lock, "keep.txt"), "utf8"), "unrecognized");
+  await fs.unlink(join(lock, "keep.txt"));
+  await fs.rmdir(lock);
+  const failing = new Preferences({ directory: preferences.directory, io: {
+    ...fs,
+    rename: async () => { throw new Error("Synthetic publication failure"); },
+    unlink: async () => { throw new Error("Synthetic cleanup failure"); },
+  } });
+  await assert.rejects(failing.update({ autoOpen: true }), { code: "settings_cleanup" });
+  assert.equal((await fs.readdir(preferences.directory)).includes(".settings.lock"), false);
+  await preferences.update({ autoOpen: true });
+  assert.equal((await preferences.read()).autoOpen, true);
 });
 
 test("settings HTTP routes require capability/origin and persist only permitted preferences", async t => {
