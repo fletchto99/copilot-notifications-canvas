@@ -636,7 +636,9 @@ function renderGroups(groups, fallbackFocusKey) {
   }
   $("groups").replaceChildren(fragment);
   if (focused) {
-    restoreFocus(previousFocus, focusKey(focused) ?? focusKey(fallbackFocusKey));
+    const target = focusKey(focused) ?? focusKey(fallbackFocusKey);
+    // Pending actions restore focus once their replacement controls are enabled.
+    if (!target?.disabled) restoreFocus(previousFocus, target);
   }
 }
 
