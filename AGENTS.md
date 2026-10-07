@@ -2,8 +2,9 @@
 
 These instructions apply to the whole repository. Keep shared guidance here;
 `.github/copilot-instructions.md` is the Copilot entry point. Read the relevant
-implementation and tests before changing behavior. The [README](README.md)
-documents the user-facing contract, installation safeguards, and release process.
+implementation and tests before changing behavior. The [README](README.md) and
+[guides](README.md#documentation) document the user-facing contract,
+installation safeguards, and release process.
 
 ## Project and source layout
 
@@ -46,8 +47,8 @@ output. Development loads source without a build; release builds bundle
   carries JSON-RPC; use the injected logger or `session.log` with sanitized
   messages. CLI scripts may print their intended command output.
 - Wire behavior changes through every affected schema, provider/HTTP handler,
-  renderer control, persistence path, and test. Update the README when behavior,
-  settings, prerequisites, or installation steps change.
+  renderer control, persistence path, and test. Update the README or relevant
+  guide when behavior, settings, prerequisites, or installation steps change.
 
 ## Invariants to preserve
 
@@ -164,9 +165,11 @@ actually ran and any checks that could not run.
   `artifacts/` in place. Preserve refusal of downgrades, modified runtimes,
   same-version content changes, and legacy layouts.
 - Update checks only discover release metadata; they must not download, execute,
-  or install release code. Installation requires the README's complete release,
-  asset, provenance, and checksum verification. Never fall back to source or
+  or install release code. Installation requires the complete release, asset,
+  provenance, and checksum verification in the
+  [installation guide](docs/installation.md). Never fall back to source or
   checksum-only installation.
 - Do not publish, create/move release tags, replace release assets, or migrate a
-  user's installation as part of routine code validation. Follow the README's
-  release process only when explicitly requested.
+  user's installation as part of routine code validation. Follow the
+  [release process](docs/development.md#publishing-releases) only when explicitly
+  requested.

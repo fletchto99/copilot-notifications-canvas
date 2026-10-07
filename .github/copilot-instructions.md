@@ -14,5 +14,6 @@ Quick orientation:
   `AGENTS.md` to select lint, browser, coverage, and packaged checks.
 - Keep notification content out of agent results and logs. Validate with
   synthetic fixtures, not live notification writes or real desktop alerts.
-- Consult the [README](../README.md) for user-facing behavior, installation,
-  development setup, and the release process.
+- Consult the [README](../README.md) for user-facing behavior, the
+  [installation guide](../docs/installation.md) for setup safeguards, and the
+  [development guide](../docs/development.md) for development and releases.

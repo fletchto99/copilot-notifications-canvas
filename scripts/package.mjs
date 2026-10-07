@@ -26,7 +26,7 @@ export function inspectBundle(content) {
   const text = content.toString("utf8");
   const end = text.indexOf("\n");
   if (!text.startsWith(prefix) || end < 0 || end > 1024) {
-    throw new Error("Unrecognized or legacy runtime. Follow the README's one-time migration; do not overwrite it.");
+    throw new Error("Unrecognized or legacy runtime. Preserve its files; refusing to overwrite it.");
   }
   let metadata;
   try {
