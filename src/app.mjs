@@ -515,7 +515,6 @@ function renderControls() {
     }
   }
   $("search").disabled = batchBusy || batchLocked();
-  $("clear-filters").disabled = !hasCapability || batchBusy || batchLocked();
   for (const tab of attentionTabs.values()) tab.disabled = !hasCapability || batchBusy || batchLocked();
   $("batch-stop").disabled = batchBusy || busy || state?.batch?.status === "stopping";
   $("batch-retry").disabled = batchBusy || busy || (state?.batch?.retryAt ?? 0) > Date.now();
@@ -656,7 +655,6 @@ function render(fallbackFocusKey) {
   const loading = state?.status === "idle" || state?.status === "loading";
   const filtered = Boolean(state?.filters.query || (state && state.filters.attention !== "all"));
   const caughtUp = Boolean(state && !error && !loading && !filtered && !state.groups.length);
-  $("clear-filters").hidden = !state || !filtered || Boolean(state.groups.length) || loading || Boolean(error);
   const attention = state?.filters.attention ?? "all";
   const focusedTab = [...attentionTabs.values()].find(tab => tab === document.activeElement);
   let tabsChanged = false;
@@ -832,12 +830,6 @@ $("search").addEventListener("input", () => {
   searchTimer = setTimeout(() => {
     void flushPendingUpdates();
   }, 250);
-});
-$("clear-filters").addEventListener("click", () => {
-  if ($("clear-filters").disabled) return;
-  $("search").value = "";
-  attentionTabs.get("all").scrollIntoView({ block: "nearest", inline: "nearest" });
-  return update("filters", { query: "", attention: "all" });
 });
 $("collapse").addEventListener("click", () => {
   const groups = displayGroups();

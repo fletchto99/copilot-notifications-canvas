@@ -58,8 +58,7 @@ full procedure, verification requirements, and troubleshooting.
   When tabs do not all fit, edge arrows scroll the strip without changing your
   selected filter. The scrollbar stays hidden; touch and trackpad scrolling
   still work.
-  If no loaded notifications match, **Clear filters** clears the search and
-  returns to **All** without fetching more notifications or changing read state.
+  Clearing the search leaves the selected attention tab unchanged.
 - **Mark as read:** mark individual rows in any view. In **repo** mode, groups
   with multiple matching notifications also offer **Mark N as read**. This
   marks only that repository's loaded items matching your attention tab and

@@ -181,8 +181,6 @@ test("tabs cannot change the selection during a repository batch or without a ca
   await ui.ids.get("groups").querySelectorAll("button").find(button => button.dataset.repository).events.click();
   await settle();
   assert.equal(tab(ui, "mentioned").disabled, true);
-  assert.equal(ui.ids.get("clear-filters").disabled, true);
-  await ui.ids.get("clear-filters").events.click();
   await tab(ui, "mentioned").events.click();
   await tab(ui, "review_requested").events.keydown({ key: "ArrowRight", preventDefault: () => assert.fail("Disabled tab") });
   assert.equal(ui.inbox.filters.attention, "review_requested");
@@ -190,7 +188,6 @@ test("tabs cannot change the selection during a repository batch or without a ca
   await ui.inbox.batch.done;
   await runInContext("update()", ui.context);
   assert.equal(tab(ui, "mentioned").disabled, false);
-  assert.equal(ui.ids.get("clear-filters").disabled, false);
   assert.equal(ui.ids.get("empty-title").textContent, "No matches in loaded notifications");
   assert.equal(ui.ids.get("count").textContent, "6 unread \u00b7 0 matching");
   assert.equal(tab(ui, "review_requested").textContent, "Review requested (0)");
@@ -205,58 +202,55 @@ test("tabs cannot change the selection during a repository batch or without a ca
   assert.deepEqual(missing.calls, []);
 });
 
-test("Clear filters resets search and attention locally and restores keyboard focus", async () => {
-  for (const focusSearch of [false, true]) {
+test("clearing search preserves the selected attention tab and focus without fetching or writing", async () => {
+  for (const [attention, ids] of [
+    ["review_requested", ["1"]], ["mentioned", ["2", "3"]], ["assigned", ["4"]], ["participating", ["5", "6"]],
+  ]) {
     const ui = await renderer({ initialRows: rows });
-    const clear = ui.ids.get("clear-filters");
-    assert.equal(clear.hidden, true);
-    await runInContext('update("filters", { query: "no matching title", attention: "assigned" })', ui.context);
-    assert.equal(clear.hidden, false);
+    assert.equal(ui.ids.has("clear-filters"), false);
+    await runInContext(`update("filters", ${JSON.stringify({ query: "no matching title", attention })})`, ui.context);
+    assert.deepEqual(shown(ui), []);
     const search = ui.ids.get("search");
-    (focusSearch ? search : clear).focus();
+    search.focus();
     const requests = ui.githubCalls.length;
     search.value = "pending search";
     search.events.input();
-    await clear.events.click();
-    assert.deepEqual(ui.inbox.filters, { mode: "unread", query: "", attention: "all" });
+    search.value = "";
+    search.events.input();
+    await ui.fireTimer(250);
+    assert.deepEqual(ui.inbox.filters, { mode: "unread", query: "", attention });
     assert.equal(search.value, "");
-    assert.equal(tab(ui, "all").attributes["aria-selected"], "true");
-    assert.equal(tab(ui, "all").lastScroll.inline, "nearest");
-    assert.equal(clear.hidden, true);
+    assert.equal(tab(ui, attention).attributes["aria-selected"], "true");
     assert.equal(ui.document.activeElement, search);
-    assert.equal(shown(ui).length, rows.length);
+    assert.deepEqual(shown(ui), ids);
     assert.equal(ui.githubCalls.length, requests);
     assert.equal([...ui.timers.values()].some(timer => timer.delay === 250), false);
     assert.deepEqual(ui.patches, []);
   }
 });
 
-test("Clear filters is limited to no-results states and failed clears remain retryable", async () => {
+test("a failed search clear retries without changing the attention tab", async () => {
   let fail = false;
   const ui = await renderer({ initialRows: rows, onFilters: () => {
     if (fail) throw new Error("Synthetic filter failure");
   } });
-  const clear = ui.ids.get("clear-filters");
-  await runInContext('update("filters", { query: "no match" })', ui.context);
-  assert.equal(clear.hidden, false);
-  for (const status of ["idle", "loading", "error"]) {
-    await runInContext(`state.status = "${status}"; state.error = ${status === "error" ? '{ message: "Synthetic failure" }' : "null"}; render()`, ui.context);
-    assert.equal(clear.hidden, true);
-  }
-  await runInContext("update()", ui.context);
+  await runInContext('update("filters", { query: "no match", attention: "mentioned" })', ui.context);
   fail = true;
-  clear.focus();
-  await clear.events.click();
+  const search = ui.ids.get("search");
+  search.focus();
+  search.value = "";
+  search.events.input();
+  await ui.fireTimer(250);
   assert.equal(ui.ids.get("notice").hidden, false);
-  assert.equal(clear.hidden, true);
   assert.equal(ui.inbox.filters.query, "no match");
-  assert.equal(ui.ids.get("search").value, "");
+  assert.equal(ui.inbox.filters.attention, "mentioned");
+  assert.equal(search.value, "");
   fail = false;
   await ui.fireTimer();
-  assert.equal(ui.inbox.filters.query, "");
-  assert.equal(shown(ui).length, rows.length);
-  const empty = await renderer({ initialRows: [] });
-  assert.equal(empty.ids.get("clear-filters").hidden, true);
+  assert.deepEqual(ui.inbox.filters, { mode: "unread", query: "", attention: "mentioned" });
+  assert.deepEqual(shown(ui), ["2", "3"]);
+  assert.equal(ui.document.activeElement, search);
+  assert.deepEqual(ui.patches, []);
 });
 
 test("overflow arrows reveal tabs without requests, retain focus at the ends, and follow manual scrolling", async () => {

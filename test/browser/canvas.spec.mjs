@@ -87,26 +87,25 @@ test("real assets load under CSP, render titles as text, and support search and 
   expect(canvas.writes).toEqual([]);
 });
 
-test("Clear filters recovers from an empty search and attention tab without fetching or writing", async ({ page, canvas }) => {
+test("clearing search leaves the selected attention tab unchanged", async ({ page, canvas }) => {
   await page.setViewportSize({ width: 320, height: 800 });
   await page.goto(canvas.url);
-  const clear = page.getByRole("button", { name: "Clear filters", exact: true });
   await expect(page.locator(".row")).toHaveCount(50);
-  await expect(clear).toBeHidden();
-  await page.getByRole("searchbox").fill("No matching notification");
-  await page.getByRole("tab", { name: /^Assigned \(\d+\)$/ }).click();
-  await expect(clear).toBeVisible();
   const requests = canvas.requests.length;
+  const search = page.getByRole("searchbox");
+  for (const [label, count] of [["Review requested", 50], ["Assigned", 0]]) {
+    const tab = page.getByRole("tab", { name: `${label} (${count})`, exact: true });
+    await tab.click();
+    await search.fill("No matching notification");
+    await expect(page.locator(".row")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Clear filters", exact: true })).toHaveCount(0);
+    await search.fill("");
+    await expect(search).toBeFocused();
+    await expect(tab).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator(".row")).toHaveCount(count);
+  }
   const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
   expect(results.violations).toEqual([]);
-  await clear.focus();
-  await clear.press("Enter");
-  await expect(page.getByRole("searchbox")).toHaveValue("");
-  await expect(page.getByRole("searchbox")).toBeFocused();
-  await expect(page.getByRole("tab", { name: "All (50)", exact: true })).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByRole("tab", { name: "All (50)", exact: true })).toBeInViewport({ ratio: 1 });
-  await expect(page.locator(".row")).toHaveCount(50);
-  await expect(clear).toBeHidden();
   expect(canvas.requests.length).toBe(requests);
   expect(canvas.writes).toEqual([]);
 });

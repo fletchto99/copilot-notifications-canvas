@@ -133,7 +133,6 @@ time { color: var(--muted); font-size: 12px; white-space: nowrap; padding-top: 1
 .empty { text-align: center; padding: 55px 20px; border: 1px dashed var(--border); border-radius: 10px; }
 .empty-symbol { width: 42px; height: 42px; display: grid; place-items: center; margin: 0 auto 16px; color: var(--accent); background: var(--accent-muted); border-radius: 12px; font-family: var(--font-mono, monospace); font-size: 24px; }
 .empty p { color: var(--muted); margin-top: 9px; max-width: 340px; margin-inline: auto; }
-.empty button { margin-top: 16px; }
 .pagination { text-align: center; color: var(--muted); font-size: 12px; }
 footer { color: var(--muted); font-size: 11px; margin-top: 24px; }
 footer:has(#development-build[hidden]) { display: none; }

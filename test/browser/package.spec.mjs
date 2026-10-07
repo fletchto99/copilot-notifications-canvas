@@ -37,12 +37,11 @@ test("installed bundle supports search, saved settings and exact row writes in a
   await page.getByRole("button", { name: "Mark as read: Needle widget 2", exact: true }).click();
   await expect(page.locator(".row")).toHaveCount(0);
   await expect(page.locator("#empty-title")).toHaveText("No matches in loaded notifications");
-  await page.getByRole("tab", { name: "Review requested (0)", exact: true }).waitFor();
-  await page.getByRole("tab", { name: "All (49)", exact: true }).click();
-  await expect(page.locator(".row")).toHaveCount(2);
-  await page.getByRole("searchbox").fill("No matching notification");
-  await page.getByRole("button", { name: "Clear filters", exact: true }).click();
+  await page.getByRole("searchbox").fill("");
   await expect(page.getByRole("searchbox")).toHaveValue("");
+  await expect(page.getByRole("tab", { name: "Review requested (0)", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(".row")).toHaveCount(0);
+  await page.getByRole("tab", { name: "All (49)", exact: true }).click();
   await expect(page.locator(".row")).toHaveCount(49);
   expect(canvas.writes).toEqual(["2"]);
   await page.reload();
