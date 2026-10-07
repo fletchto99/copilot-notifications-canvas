@@ -194,7 +194,7 @@ export async function install(home = process.env.COPILOT_HOME || join(homedir(),
         try {
           const current = await fileHash(join(target, file));
           if (current === previous.files.get(file)) continue;
-          if (current !== undefined && current !== staged.get(file)) throw new Error("Runtime changed during rollback.");
+          if (current !== undefined && current !== staged.get(file)) throw new Error("Runtime changed during rollback.", { cause: error });
           if (previous.files.has(file)) await rename(join(backup, file), join(target, file));
           else if (current !== undefined) await unlink(join(target, file));
         } catch {
