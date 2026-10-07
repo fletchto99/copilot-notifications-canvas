@@ -1,14 +1,14 @@
 import { appendFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import metadata from "../src/version.json" with { type: "json" };
+import metadata from "../version.json" with { type: "json" };
 import { versionParts } from "../src/version.mjs";
 
 const CURRENT_VERSION = metadata.version;
 
 export function validateReleaseTag(tag, version = CURRENT_VERSION) {
   if (!versionParts(version) || tag !== `v${version}`) {
-    throw new Error("Release tag must equal v plus the stable version in src/version.json.");
+    throw new Error("Release tag must equal v plus the stable version in the repository-root version.json.");
   }
   return tag;
 }

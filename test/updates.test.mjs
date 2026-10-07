@@ -38,6 +38,14 @@ test("release tags must match the checked-in stable version exactly", () => {
   assert.throws(() => validateReleaseTag("v1.0.0-rc.1", "1.0.0-rc.1"));
 });
 
+test("runtime and release validation use the repository-root version as their single source", async () => {
+  const metadata = JSON.parse(await readFile(new URL("../version.json", import.meta.url), "utf8"));
+  const tooling = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  assert.equal(CURRENT_VERSION, metadata.version);
+  assert.equal(validateReleaseTag(`v${metadata.version}`), `v${metadata.version}`);
+  assert.equal(Object.hasOwn(tooling, "version"), false);
+});
+
 test("release checks use a fixed read-only GitHub endpoint and locally constructed links/prompts", async () => {
   const calls = [];
   const updates = new Updates({ version: "0.1.0", run: async args => {

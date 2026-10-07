@@ -1,4 +1,4 @@
-import metadata from "./version.json" with { type: "json" };
+import metadata from "../version.json" with { type: "json" };
 import { parseResponse, runGh } from "./github.mjs";
 import { InboxError } from "./model.mjs";
 import { compareVersions, versionParts } from "./version.mjs";

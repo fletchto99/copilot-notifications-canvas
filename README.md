@@ -376,7 +376,7 @@ npm run build -- v0.2.0
 npm run test:package
 ```
 
-Use the tag matching `src/version.json`. The pinned esbuild dependency is
+Use the tag matching the repository-root `version.json`. The pinned esbuild dependency is
 build-time only. Generated archives and checksums go in ignored `dist/`; build
 output is not committed. The package tests extract the archive, run its
 installer in temporary Copilot homes, and load its provider with a stub host SDK.
@@ -385,7 +385,8 @@ installer in temporary Copilot homes, and load its provider with a stub host SDK
 
 Use stable semantic versions (`vMAJOR.MINOR.PATCH`) so users receive deliberate,
 tested updates with release notes instead of every merge. Bump
-`src/version.json` in the release PR.
+the repository-root `version.json` in the release PR. This is the single source
+of truth for the release version; `package.json` only describes development tooling.
 
 After merging the version change into `main`, tag that exact commit and push
 the tag. For example, from an up-to-date checkout of the intended release commit:
@@ -397,7 +398,7 @@ git push origin v0.2.0
 
 Only a `v*` tag push triggers the [Release workflow](.github/workflows/release.yml).
 There is no manual or branch-push release build. The workflow validates the
-stable tag against `src/version.json`, runs the same test matrix, coverage,
+stable tag against `version.json`, runs the same test matrix, coverage,
 lint, and browser/accessibility checks as PR CI, then bundles and minifies the
 runtime and tests the actual archive. It verifies the tag still points to the
 **exact tested commit** before publication. It never creates or moves tags,
