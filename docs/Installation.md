@@ -16,26 +16,8 @@ Check sign-in with `gh auth status --hostname github.com`.
 
 ## Install or update with Copilot
 
-Use this prompt for a fresh installation or a packaged-release upgrade:
-
-```text
-Install or update the Unread Notifications canvas as a user-wide Copilot
-extension using the latest stable release from:
-https://github.com/fletchto99/copilot-notifications-canvas
-
-Follow "Manual installation and updates" in docs/Installation.md. Complete all
-release, provenance, and checksum checks before extracting or running anything.
-Stop if a required check is unavailable or fails; do not fall back to source
-or checksum-only verification.
-
-Use my existing COPILOT_HOME and GitHub CLI sign-in. Preserve all settings and
-artifacts without changing preferences. Stop if the installer reports an
-unsupported installation; do not bypass its safeguards.
-
-After installation succeeds, reload extensions and open Unread Notifications
-(canvasId: github-notifications). Report the installed version and remind me
-to reload extensions in other already-open sessions.
-```
+Use the [installation prompt in the README](../README.md#installation-and-updating)
+for a fresh installation or a packaged-release upgrade.
 
 ## Manual installation and updates
 

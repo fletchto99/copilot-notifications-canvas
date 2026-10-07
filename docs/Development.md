@@ -50,75 +50,52 @@ specific Copilot build; reload and inspect the real extension after SDK changes.
 
 Release builds start from `src/extension.mjs`, not the development entry point.
 The build defaults to the repository-root `version.json`; an explicit tag must
-match it. Output goes in ignored `dist/`. Archives are reproducible with the same
-source and toolchain. Local builds are for validation, not distribution.
+match it. Output goes in ignored `dist/`; archives are reproducible with the same
+source and toolchain. Local builds are for validation, not distribution, and are
+not attested release packages.
 
-The installed runtime is one self-contained `extension.mjs` beside `artifacts/`.
-It bundles HTML, minified browser JavaScript and CSS, provider code, version,
-and ownership metadata. Development dependencies are not included; the Copilot
-SDK remains host-provided.
-
-Upgrades stage and verify the replacement, then activate it with one atomic
-file rename. There is no separate installed manifest or accumulating runtime
-directory. An error before activation leaves the previous bundle intact; an
-interruption after activation leaves a complete new bundle. A retry recognizes
-whichever version is installed. Already-running providers retain their loaded
-code and embedded assets, even when opening another panel, until reloaded.
+The installed `extension.mjs` bundles provider code, renderer assets, version,
+and ownership metadata. Development dependencies are excluded; the Copilot SDK
+is host-provided. Upgrades replace the bundle atomically and leave `artifacts/`
+in place. Existing sessions keep their loaded code and assets until reloaded.
 
 ## Publishing releases
 
-Use stable semantic versions (`vMAJOR.MINOR.PATCH`). Bump the repository-root
-`version.json` in the release PR; it is the release version's single source of
-truth. `package.json` only describes development tooling.
+1. Bump the repository-root `version.json` in a release PR, using a stable
+   semantic version (`vMAJOR.MINOR.PATCH` for the tag). This file is the release
+   version's source of truth; `package.json` only describes development tooling.
+2. Merge into protected `main`, then tag that exact commit and push the tag.
+   From an up-to-date checkout of the intended release commit, for example:
 
-After merging the version change into protected `main`, tag that exact commit
-and push the tag. From an up-to-date checkout of the intended release commit:
+   ```sh
+   git tag -a v0.2.0 -m "Release v0.2.0"
+   git push origin v0.2.0
+   ```
 
-```sh
-git tag -a v0.2.0 -m "Release v0.2.0"
-git push origin v0.2.0
-```
+3. Monitor the [release workflow](../.github/workflows/release.yml). It runs all
+   PR checks, builds and attests the archive, enforces the
+   [installation verification policy](Installation.md#manual-installation-and-updates),
+   then publishes and verifies an immutable release as **Latest**.
+4. Review the generated release notes for behavior changes and update guidance.
 
-Only `v*` tag pushes trigger the [release workflow](../.github/workflows/release.yml).
-It validates the version and `main` ancestry, runs all PR checks, then builds,
-tests, and attests the exact archive with SHA-pinned `actions/attest`.
-
-The build job has `contents: read`, `attestations: write`, and `id-token: write`.
-The separate publisher gets `contents: write` and `attestations: read`. It
-downloads the exact Actions artifact by ID, rejects digest mismatches, and never
-installs build dependencies or executes the package.
-
-Before publishing, it rechecks the tag's tested commit and `main` ancestry,
-rejects existing releases or drafts, and enforces the
-[installation provenance policy](Installation.md#manual-installation-and-updates).
-`SHA256SUMS` must match the attested archive's digest and filename. Missing or
-failed verification stops publication. The workflow never creates or moves tags,
-bumps versions, or commits build output.
-
-Publishing is serialized. GitHub CLI creates a draft, uploads the archive and
-`SHA256SUMS`, then publishes that exact release by ID as **Latest**. The job
-verifies the immutable release and both assets before reporting success.
-Review the generated release notes for behavior changes and update guidance.
+Only `v*` tag pushes publish releases; PR/main checks do not. The workflow
+never creates or moves tags, bumps versions, or commits build output.
 
 ### Repository requirements
 
-Keep **release immutability enabled**. The `v*` tag rules must allow creation
-only by the release maintainer and block updates and deletion without bypasses.
-Existing branch protections remain in place. These settings are separate from
-the workflow and must be configured again for a fork. Immutability affects
-future releases, not older mutable releases.
+- Enable **release immutability**; it applies to future releases, not older ones.
+- Restrict `v*` tag creation to the release maintainer and block updates and
+  deletion without bypasses.
+- Keep `main` protected. Configure these repository settings again for a fork;
+  the workflow does not configure them.
 
 Provenance signing shares the build job; this is not an isolated trusted builder
-or SLSA Build Level 3. Real signing requires a release-tag run; local builds are
-not attested release packages.
+or SLSA Build Level 3.
 
 ### Failed or incorrect releases
 
-An existing release or asset is never overwritten. A failure before draft
-creation can be retried. If an upload/publication failure leaves a draft,
-inspect it first; remove only that incomplete draft (not its tag) before
-rerunning the job. Never replace assets on an already-published release.
-
-Publish increasing versions; never move a published tag or reuse a version.
-For a bad release, publish a fixed version rather than modifying existing
-release code. Keep release-tag creation limited to authorized maintainers.
+- Retry failures before draft creation. If an upload/publication failure leaves
+  a draft, inspect it first; remove only that incomplete draft, not its tag,
+  before rerunning the job.
+- Never overwrite published assets, move published tags, or reuse versions.
+  Fix a bad release by publishing a higher version.

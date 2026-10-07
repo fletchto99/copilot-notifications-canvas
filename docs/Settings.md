@@ -63,8 +63,5 @@ See [Privacy](../README.md#privacy).
   errors appear in Settings and the extension log.
 - **Sender icon and clicks:** the OS controls the sender icon; clicking an alert
   cannot focus the canvas.
-- **Settings will not save:** if a legacy `.settings.lock` blocks saves, wait
-  for any active save to finish. Stop all older extension processes before
-  inspecting or removing a stale lock.
 - **The canvas will not load:** see
   [installation troubleshooting](Installation.md#upgrades-and-troubleshooting).

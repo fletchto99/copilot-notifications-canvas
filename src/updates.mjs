@@ -11,41 +11,22 @@ export const REPOSITORY_URL = `https://github.com/${REPOSITORY}`;
 export const CHECK_INTERVAL = 15 * 60 * 1000;
 
 function updatePrompt(version) {
-  return `Update my user-wide Unread Notifications canvas to v${version} from
-${REPOSITORY_URL}.
-Follow the repository's "Installation and Updating" instructions. Download
-github-notifications-v${version}.tar.gz and SHA256SUMS from the exact stable
-release v${version}. Before extracting or running anything, use gh release verify
-v${version} --repo ${REPOSITORY} to verify the immutable release, then use
-gh release verify-asset v${version} github-notifications-v${version}.tar.gz
---repo ${REPOSITORY} to verify the downloaded archive.
-Resolve the tag's commit using gh api --hostname github.com
-repos/${REPOSITORY}/commits/v${version} --jq .sha and require a full
-40-character lowercase hexadecimal commit SHA, not an annotated-tag object SHA.
-Then verify build provenance with gh attestation verify
-github-notifications-v${version}.tar.gz --repo ${REPOSITORY} --hostname github.com
---cert-identity https://github.com/${REPOSITORY}/.github/workflows/release.yml@refs/tags/v${version}
---source-ref refs/tags/v${version} --source-digest <resolved-commit>
---signer-digest <resolved-commit> --deny-self-hosted-runners
---predicate-type https://slsa.dev/provenance/v1, substituting that commit SHA
-for both digest flags. Require every identity check; attestation existence alone
-is insufficient. Also verify its SHA-256 using SHA256SUMS.
-Only after all verification succeeds, extract into a new directory, then run
-node install.mjs v${version} with my existing COPILOT_HOME.
-Use only the published package, not a source checkout, main, or a local build.
-Stop if verification commands or flags are unavailable, the package or build
-provenance is missing, or any verification fails; never fall back to checksum-only verification.
-Do not downgrade a newer
-installed version; report an already-current installation without reinstalling.
-Preserve the entire installed artifacts directory in place, including settings.json
-and unknown settings. Do not delete or recreate it, overwrite locally modified
-runtime files, or bypass installer safeguards. If a legacy/source installation is
-detected, stop and report that it is unsupported; do not modify its files.
-Keep my existing GitHub CLI sign-in.
-If installation succeeds, reload extensions in this session and reopen Unread
-Notifications (canvasId: github-notifications). Report the installed version and
-remind me to reload extensions in other already-open sessions. Do not enable
-auto-update or change any preferences.`;
+  return `Update my user-wide Unread Notifications canvas to v${version} from:
+${REPOSITORY_URL}
+
+Follow "Manual installation and updates" in docs/Installation.md with
+tag=v${version}. Use only that published stable release package.
+Complete all release, provenance, and checksum checks before extracting or
+running anything. Stop if a required check is unavailable or fails; do not
+fall back to source or checksum-only verification.
+
+Use my existing COPILOT_HOME and GitHub CLI sign-in. Preserve all settings and
+artifacts in place. Do not bypass installer safeguards, enable auto-update,
+or change preferences.
+
+After installation succeeds, reload extensions and reopen Unread Notifications
+(canvasId: github-notifications). Report the installed version and remind me
+to reload extensions in other already-open sessions.`;
 }
 
 function rateLimitUntil(headers, now) {
