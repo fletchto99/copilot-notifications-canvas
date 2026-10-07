@@ -18,6 +18,12 @@ const ref = `refs/tags/${tag}`;
 const certificateIdentity = `https://github.com/${REPOSITORY}/.github/workflows/release.yml@${ref}`;
 const url = `https://github.com/example/repo/releases/tag/${tag}`;
 
+function missingAttestation(missingTag = tag, operation = "verify") {
+  const message = operation === "verify-asset" ? "no attestations found" : "no attestations";
+  const stderr = `${message} for tag ${missingTag} (sha1:${"b".repeat(40)})\n`;
+  return Object.assign(new Error(stderr.trim()), { code: 1, stderr });
+}
+
 test("release input accepts a bare version or one v prefix without weakening version validation", () => {
   for (const input of [CURRENT_VERSION, tag]) assert.equal(normalizeReleaseTag(input), tag);
   for (const input of [undefined, null, "", `v${tag}`, `${tag}-rc.1`, "999.0.0",
@@ -48,6 +54,7 @@ test("release validation writes only a validated canonical tag to GitHub Actions
 async function fixture(t, {
   remoteSha = sha, comparison = { status: "ahead", merge_base_commit: { sha } },
   pages = [[]], listResponse, fail, attestedIdentity = certificateIdentity,
+  verificationErrors = [],
 } = {}) {
   const directory = await home(t);
   const archive = archiveName(tag);
@@ -56,6 +63,8 @@ async function fixture(t, {
   await writeFile(join(directory, "SHA256SUMS"), `${hash(content)}  ${archive}\n`);
   const calls = [];
   const responses = [];
+  const waits = [];
+  const logs = [];
   const run = async args => {
     calls.push(args);
     let operation;
@@ -85,19 +94,29 @@ async function fixture(t, {
     } else {
       throw new Error(`Unexpected gh invocation: ${JSON.stringify(args)}`);
     }
-    responses.push({ args, stdout: result, code: fail === operation ? 1 : 0 });
-    if (fail === operation) throw new Error(`Synthetic ${operation} failure`);
+    const error = fail === operation ? new Error(`Synthetic ${operation} failure`) :
+      ["verify", "verify-asset"].includes(operation) ? verificationErrors.shift() : undefined;
+    responses.push({ args, stdout: result, stderr: error?.stderr, code: error ? error.code ?? 1 : 0 });
+    if (error) throw error;
     return result;
   };
   return {
-    calls, responses, directory,
-    input: { tag, sha, event: "push", ref, directory, run },
+    calls, responses, directory, waits, logs,
+    input: { tag, sha, event: "push", ref, directory, run,
+      sleep: async delay => { waits.push(delay); }, log: message => logs.push(message) },
   };
 }
 
 test("tagged releases use one upload-and-publish command without a tag-based edit", async t => {
   const item = await fixture(t);
-  assert.equal(await publishRelease(item.input), url);
+  assert.equal(await publishRelease({ ...item.input, sleep: async delay => {
+    assert.equal(item.calls.at(-1)[1], "create", "The initial delay must follow successful publication.");
+    await item.input.sleep(delay);
+  } }), url);
+  assert.deepEqual(item.waits, [5_000]);
+  assert.deepEqual(item.logs, [
+    `Waiting 5s before verifying published release ${tag} (attempt 1/4).`,
+  ]);
   assert.deepEqual(item.calls, [
     ["api", `repos/{owner}/{repo}/commits/${tag}`],
     ["api", `repos/{owner}/{repo}/compare/${sha}...main`],
@@ -116,6 +135,82 @@ test("tagged releases use one upload-and-publish command without a tag-based edi
     ["release", "verify-asset", tag, join(item.directory, archiveName(tag))],
     ["release", "verify-asset", tag, join(item.directory, "SHA256SUMS")],
   ]);
+});
+
+test("missing release attestations retry verification with bounded backoff, never publication", async t => {
+  for (const failures of [1, 3]) {
+    const item = await fixture(t, { verificationErrors: Array(failures).fill(missingAttestation()) });
+    assert.equal(await publishRelease(item.input), url);
+    assert.deepEqual(item.waits, [5_000, 5_000, 10_000, 20_000].slice(0, failures + 1));
+    assert.equal(item.logs.length, failures + 1);
+    assert.match(item.logs.at(-1), new RegExp(`attempt ${failures + 1}/4`));
+    assert.equal(item.calls.filter(args => args[1] === "create").length, 1);
+    assert.deepEqual(item.calls.slice(7), [
+      ...Array.from({ length: failures + 1 }, () => ["release", "verify", tag]),
+      ["release", "verify-asset", tag, join(item.directory, archiveName(tag))],
+      ["release", "verify-asset", tag, join(item.directory, "SHA256SUMS")],
+    ]);
+  }
+});
+
+test("a missing attestation during either asset check retries only read-only verification", async t => {
+  for (const failedAsset of [0, 1]) {
+    const item = await fixture(t, {
+      verificationErrors: [...Array(failedAsset + 1).fill(undefined), missingAttestation(tag, "verify-asset")],
+    });
+    assert.equal(await publishRelease(item.input), url);
+    assert.deepEqual(item.waits, [5_000, 5_000]);
+    assert.equal(item.calls.filter(args => args[1] === "create").length, 1);
+    const verification = [
+      ["release", "verify", tag],
+      ["release", "verify-asset", tag, join(item.directory, archiveName(tag))],
+      ["release", "verify-asset", tag, join(item.directory, "SHA256SUMS")],
+    ];
+    assert.deepEqual(item.calls.slice(7), [...verification.slice(0, failedAsset + 2), ...verification]);
+  }
+});
+
+test("attestation verification fails closed after four attempts and 40 seconds of waiting", async t => {
+  const error = missingAttestation();
+  const item = await fixture(t, { verificationErrors: Array(4).fill(error) });
+  await assert.rejects(publishRelease(item.input), received => received === error);
+  assert.deepEqual(item.waits, [5_000, 5_000, 10_000, 20_000]);
+  assert.equal(item.waits.reduce((total, delay) => total + delay, 0), 40_000);
+  assert.equal(item.logs.length, 4);
+  assert.match(item.logs.at(-1), /attempt 4\/4/);
+  assert.equal(item.calls.filter(args => args[1] === "create").length, 1);
+  assert.deepEqual(item.calls.slice(7), Array.from({ length: 4 }, () => ["release", "verify", tag]));
+});
+
+test("verification errors other than this tag's missing attestation are never retried", async t => {
+  const errors = [
+    ...["verify", "verify-asset"].flatMap(operation => {
+      const missing = missingAttestation(tag, operation);
+      return [
+        new Error(missing.message),
+        Object.assign(missingAttestation(tag, operation), { code: 2 }),
+        missingAttestation(`${tag}-other`, operation),
+        Object.assign(missingAttestation(tag, operation), { stderr: `${missing.stderr}Invalid signature\n` }),
+        Object.assign(missingAttestation(tag, operation), { stderr: missing.stderr.replace("sha1:", "sha256:") }),
+        Object.assign(missingAttestation(tag, operation), { stderr: missing.stderr.replace("b".repeat(40), "b".repeat(39)) }),
+      ];
+    }),
+    ...["Invalid signature", "Artifact digest mismatch", "HTTP 403: Forbidden",
+      "network timeout", "unknown command verify"].map(stderr =>
+      Object.assign(new Error(stderr), { code: 1, stderr })),
+  ];
+  for (const error of errors) {
+    for (const successfulChecks of [0, 1, 2]) {
+      const item = await fixture(t, {
+        verificationErrors: [...Array(successfulChecks).fill(undefined), error],
+      });
+      await assert.rejects(publishRelease(item.input), received => received === error);
+      assert.deepEqual(item.waits, [5_000], error.message);
+      assert.equal(item.logs.length, 1);
+      assert.equal(item.calls.length, 8 + successfulChecks);
+      assert.equal(item.calls.filter(args => args[1] === "create").length, 1);
+    }
+  }
 });
 
 test("version, commit and event validation reject invalid requests before contacting GitHub", async t => {
@@ -220,6 +315,7 @@ test("GitHub errors stop publication without fallback tag writes or extra releas
     const item = await fixture(t, { fail });
     await assert.rejects(publishRelease(item.input), new RegExp(`Synthetic ${fail} failure`));
     assert.equal(item.calls.length, count);
+    assert.deepEqual(item.waits, count < 8 ? [] : [5_000]);
     assert.equal(item.calls.some(args => args.includes("--clobber") || args.includes("DELETE") || args.includes("POST")), false);
     assert.equal(item.calls.some(args => args[0] === "release" && !["create", "verify", "verify-asset"].includes(args[1])), false);
     assert.ok(item.calls.filter(args => args[1] === "create").length <= 1);
@@ -229,9 +325,18 @@ test("GitHub errors stop publication without fallback tag writes or extra releas
 test("the release CLI reads its environment, reports success and stops on command failures", async t => {
   const script = fileURLToPath(new URL("../scripts/publish-release.mjs", import.meta.url));
   const preload = fileURLToPath(new URL("./fixtures/gh-preload.mjs", import.meta.url));
-  for (const fail of [undefined, "provenance", "create", "verify"]) {
-    const item = await fixture(t, { fail });
-    if (fail) await assert.rejects(publishRelease(item.input), /Synthetic/);
+  for (const scenario of [
+    {}, { fail: "provenance" }, { fail: "create" }, { fail: "verify" },
+    { verificationErrors: [missingAttestation()] },
+    { verificationErrors: [undefined, missingAttestation(tag, "verify-asset")] },
+    { verificationErrors: [undefined, undefined, missingAttestation(tag, "verify-asset")] },
+    { verificationErrors: Array(4).fill(missingAttestation()), rejects: true },
+    { verificationErrors: Array.from({ length: 4 }, () =>
+      [undefined, missingAttestation(tag, "verify-asset")]).flat(), rejects: true },
+  ]) {
+    const fails = scenario.fail || scenario.rejects;
+    const item = await fixture(t, scenario);
+    if (fails) await assert.rejects(publishRelease(item.input), /Synthetic|no attestations/);
     else await publishRelease(item.input);
     const state = join(item.directory, "fake-gh.json");
     // The CLI uses dist/ relative to its cwd.
@@ -243,19 +348,23 @@ test("the release CLI reads its environment, reports success and stops on comman
     const expected = item.responses.map(response => ({
       ...response, args: response.args.map(arg => arg.replace(item.directory, join(cwd, "dist"))),
     }));
-    await writeFile(state, JSON.stringify({ responses: expected, calls: [] }));
+    await writeFile(state, JSON.stringify({ responses: expected, calls: [], waits: [] }));
     const options = { cwd, env: { ...process.env, NOTIFICATIONS_TEST_GH: state,
       GITHUB_SHA: sha, GITHUB_EVENT_NAME: "push", GITHUB_REF: ref } };
     const run = () => promisify(execFile)(process.execPath, ["--import", preload, script, tag], options);
-    if (fail) {
+    if (fails) {
       await assert.rejects(run(), error => error.code === 1 && error.stderr.includes("Release stopped:"));
     } else {
-      assert.equal((await run()).stdout, `${url}\n`);
+      const { stdout, stderr } = await run();
+      assert.equal(stdout, `${url}\n`);
+      assert.equal(stderr, item.logs.map(message => `${message}\n`).join(""));
     }
     assert.deepEqual(JSON.parse(await readFile(state, "utf8")).calls, expected.map(response => response.args));
+    assert.deepEqual(JSON.parse(await readFile(state, "utf8")).waits, item.waits);
     options.env.GITHUB_REF = "refs/heads/main";
     await assert.rejects(run(), error => error.code === 1 && error.stderr.includes("matching release-tag push"));
     assert.deepEqual(JSON.parse(await readFile(state, "utf8")).calls, expected.map(response => response.args));
+    assert.deepEqual(JSON.parse(await readFile(state, "utf8")).waits, item.waits);
   }
 });
 
