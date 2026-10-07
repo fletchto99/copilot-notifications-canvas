@@ -36,6 +36,27 @@ test("row reads focus the next row whether disabling a button blurs it immediate
   }
 });
 
+test("row reads fall back to Search when the next row belongs to a collapsed group", async t => {
+  for (const groupBy of ["repo", "date"]) {
+    for (const retainDisabledFocus of [false, true]) {
+      const ui = await renderer({ retainDisabledFocus, storedSettings: { groupBy }, initialRows: [
+        thread("1", { repository: { full_name: "example/alpha" }, updated_at: "2026-01-11T12:00:00Z" }),
+        thread("2", { repository: { full_name: "example/zulu" } }),
+      ] });
+      t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+      const buttons = () => ui.ids.get("groups").querySelectorAll("button");
+      buttons().filter(node => node.dataset.disclosure)[1].events.click();
+      const first = buttons().find(node => node.dataset.threadId === "1");
+      first.focus();
+      await first.events.click();
+      assert.deepEqual(ui.patches, ["/notifications/threads/1"]);
+      assert.equal(ui.document.activeElement, ui.ids.get("search"));
+      assert.equal(buttons().find(node => node.dataset.disclosure).attributes["aria-expanded"], "false");
+      assert.equal(ui.ids.get("groups").children[0].children[1].hidden, true);
+    }
+  }
+});
+
 test("a row read never steals focus moved to Search while the write is pending", async () => {
   let release;
   const ui = await renderer({ retainDisabledFocus: true, initialRows: [thread("1"), thread("2")],
@@ -306,6 +327,37 @@ test("a row action clicked during a delayed local poll runs after the poll inste
   assert.equal(ui.document.querySelectorAll("article").length, 1);
   assert.equal(ui.document.activeElement.dataset.focusKey, "read:2");
   assert.equal(ui.document.activeElement.disabled, false);
+});
+
+test("changed local polls do not steal focus from pending row reads", async t => {
+  for (const retainDisabledFocus of [false, true]) {
+    for (const moveFocus of [false, true]) {
+      let release;
+      const ui = await renderer({
+        retainDisabledFocus,
+        initialRows: [thread("1"), thread("2")],
+        onState: () => new Promise(resolve => { release = resolve; }),
+      });
+      t.after(() => { release?.(); ui.window.events.pagehide(); ui.inbox.close(); });
+      const buttons = () => ui.ids.get("groups").querySelectorAll("button");
+      const button = buttons().find(node => node.dataset.threadId === "1");
+      button.focus();
+      ui.inbox.pages[0].items[0].title = "Changed during status polling";
+      const polling = ui.fireTimer();
+      await settle();
+      const reading = button.events.click();
+      assert.equal(button.disabled, true);
+      assert.deepEqual(ui.patches, []);
+      if (moveFocus) ui.ids.get("search").focus();
+      release();
+      await polling;
+      await reading;
+      assert.deepEqual(ui.patches, ["/notifications/threads/1"]);
+      assert.equal(ui.document.querySelectorAll("article").length, 1);
+      assert.equal(ui.document.activeElement, moveFocus ? ui.ids.get("search")
+        : buttons().find(node => node.dataset.threadId === "2"));
+    }
+  }
 });
 
 test("a repository action clicked during local polling is not dropped and cannot receive a stale poll response afterward", async () => {

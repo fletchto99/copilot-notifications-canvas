@@ -90,6 +90,26 @@ test("keyboard row actions mark exactly one notification and move focus to the n
   expect(canvas.writes).toEqual(["2"]);
 });
 
+for (const groupBy of ["repo", "date"]) {
+  test(`keyboard row reads retain focus beside a collapsed ${groupBy} group`, async ({ page, canvas }) => {
+    canvas.rows.splice(2);
+    canvas.rows[0].repository.full_name = "example/alpha";
+    canvas.rows[0].updated_at = "2026-01-11T12:00:00Z";
+    canvas.rows[1].repository.full_name = "example/zulu";
+    await canvas.preferences.update({ groupBy });
+    await page.goto(canvas.url);
+    await page.locator(".repo-toggle").nth(1).click();
+    const button = page.locator('[data-thread-id="1"]');
+    await button.focus();
+    await button.press("Enter");
+    await expect(page.locator(".row")).toHaveCount(1);
+    await expect(page.getByRole("searchbox", { name: searchName })).toBeFocused();
+    await expect(page.locator(".repo-toggle")).toHaveAttribute("aria-expanded", "false");
+    await expect(page.locator(".row")).toBeHidden();
+    expect(canvas.writes).toEqual(["1"]);
+  });
+}
+
 test("repository actions affect only shown loaded matches, not another repository or unloaded rows", async ({ page, canvas }) => {
   await page.goto(canvas.url);
   await expect(page.locator(".row")).toHaveCount(50);

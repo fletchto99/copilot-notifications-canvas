@@ -37,6 +37,7 @@ While the canvas is visible, its checks feed the same results to desktop alerts,
 normally every 60 seconds and immediately on returning to the foreground. The
 watcher uses the same request cache and follows any additional pages needed for
 new activity, independent of search or how many pages the canvas has loaded.
+Reusing cached results does not postpone the next background polling deadline.
 The first successful baseline uses a response started after the current desktop
 notification activation and remains silent, even if alerts are enabled during an
 in-flight foreground refresh. If a baseline or continuation page is still cached
@@ -70,8 +71,10 @@ separate machines or homes do not. A foreground check that finds another session
 holding the desktop lock retries on the next five-second watcher tick, rather
 than waiting for the next background polling deadline.
 Delivery is **at most once**: failed or interrupted batches are not replayed,
-so alerts can be lost. Reload older
-sessions after upgrades; a changed checkpoint format starts a fresh silent baseline.
+so alerts can be lost. Reload older sessions after upgrades. Unsupported or
+malformed checkpoints stop desktop watching with a coordination error; they
+are never reset or migrated automatically. See [Troubleshooting](#troubleshooting)
+for recovery.
 
 Desktop alerts send repository names and titles to the OS, which may retain
 them in notification history or show them on the lock screen.
@@ -82,6 +85,13 @@ See [Privacy](../README.md#privacy).
 - **No alerts or sound:** OS permissions, sound settings, and Focus/Do Not
   Disturb can suppress delivery, which the extension cannot confirm. Detected
   errors appear in Settings and the extension log.
+- **Desktop coordination error after an upgrade:** preserve the artifacts and
+  inspect the error before changing anything. If you explicitly choose to reset
+  an unsupported or malformed `desktop-state.json`, first stop all extension
+  processes sharing that `COPILOT_HOME`, then move only that file to a backup
+  location. Leave settings and other artifacts intact. Reopen the canvas to
+  establish a fresh silent baseline; activity received before that baseline
+  will not produce alerts.
 - **Sender icon and clicks:** the OS controls the sender icon; clicking an alert
   cannot focus the canvas.
 - **The canvas will not load:** see

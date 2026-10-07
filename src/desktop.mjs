@@ -357,6 +357,7 @@ export class DesktopNotifications {
         return;
       }
       // Reserve the next poll before network I/O so a crashed poller cannot cause a retry storm.
+      let nextPollAt = state.nextPollAt;
       state.nextPollAt = Math.max(state.nextPollAt, this.now() + POLL_MS);
       state.polling = true;
       await saveDocument(this.statePath, state);
@@ -370,7 +371,7 @@ export class DesktopNotifications {
           signal.throwIfAborted();
           minSequence = page.sequence;
           items.push(...page.items);
-          state.nextPollAt = Math.max(state.nextPollAt, page.nextRefreshAt);
+          nextPollAt = Math.max(nextPollAt, page.nextRefreshAt);
           if (boundary === null) boundary = initialBoundary(page);
           next = page.items.some(item => item.unread && Date.parse(item.updatedAt) < boundary) ? null : page.next;
         }
@@ -381,7 +382,7 @@ export class DesktopNotifications {
         state.watchers = (await this.activeWatchers()).map(watcher => watcher.owner);
         state.error = null;
         state.polling = false;
-        state.nextPollAt = Math.max(state.nextPollAt, this.now() + POLL_MS);
+        state.nextPollAt = nextPollAt;
         // Claim activity durably before delivery: a crash may lose an alert, but never replay it.
         await saveDocument(this.statePath, state);
         for (const message of notificationMessages(arrivals)) {
@@ -394,7 +395,7 @@ export class DesktopNotifications {
         this.setStatus("watching", watchingMessage);
       } catch (error) {
         if (signal.aborted) throw error;
-        state.nextPollAt = Math.max(state.nextPollAt, this.now() + RETRY_MS, this.client.blockedUntil);
+        state.nextPollAt = Math.max(state.nextPollAt, nextPollAt, this.now() + RETRY_MS, this.client.blockedUntil);
         state.error = errorMessage(error);
         await saveDocument(this.statePath, state);
         throw error;

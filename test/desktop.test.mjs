@@ -189,6 +189,57 @@ test("an immediate foreground return feeds new activity to alerts without waitin
   assert.equal(f.deliveries.length, 1);
 });
 
+test("opening another panel with cached results does not postpone the background poll", async t => {
+  for (const interval of [60, 300]) {
+    const f = await fixture(t);
+    const watcher = f.make();
+    const first = new Inbox(watcher.client);
+    const second = new Inbox(watcher.client);
+    t.after(() => { first.close(); second.close(); });
+    f.response(() => http([thread()], { "x-poll-interval": String(interval) }));
+    await watcher.prepareForeground();
+    await first.refresh();
+    await watcher.sync();
+    const deadline = epoch + interval * 1000;
+    assert.equal((await f.state()).nextPollAt, deadline);
+
+    f.advance(interval * 1000 - 30_000);
+    watcher.add("second-panel");
+    await watcher.prepareForeground();
+    await second.refresh();
+    await watcher.sync();
+    assert.equal(f.calls.length, 1, "the second panel and watcher reuse the original response");
+    assert.equal((await f.state()).nextPollAt, deadline);
+    assert.equal((await f.state()).polling, false);
+    assert.deepEqual(f.deliveries, []);
+
+    f.response(undefined);
+    f.rows([updated("2", f.advance(29_999)), thread()]);
+    await watcher.check();
+    assert.equal(f.calls.length, 1);
+    f.advance(1);
+    await watcher.check();
+    assert.equal(f.calls.length, 2, "the original polling deadline still triggers a network request");
+    assert.deepEqual(f.deliveries.map(alert => alert.body), ["#42 Synthetic notification 2"]);
+  }
+});
+
+test("a delayed silent baseline preserves the cached response's polling deadline", async t => {
+  const f = await fixture(t);
+  const watcher = f.make();
+  await watcher.prepareForeground();
+  await watcher.client.page(firstPage());
+  f.rows([updated("2", f.advance(30_000)), thread()]);
+  await watcher.sync();
+  assert.equal(f.calls.length, 1);
+  assert.deepEqual(f.deliveries, []);
+  assert.equal((await f.state()).nextPollAt, epoch + 60_000);
+  f.advance(30_000);
+  await watcher.check();
+  assert.equal(f.calls.length, 2);
+  assert.deepEqual(f.deliveries.map(alert => alert.body), ["#42 Synthetic notification 2"]);
+});
+
 test("quota-exhausting foreground responses establish silent baselines without hiding later arrivals", async t => {
   for (const initialRows of [[], [thread()]]) {
     const f = await fixture(t);
@@ -1274,6 +1325,29 @@ test("longer polling intervals and rate limits are shared by every watcher", asy
   await one.check();
   assert.equal(f.calls.length, 3);
   assert.equal(f.deliveries.length, 1);
+});
+
+test("a failed continuation preserves the successful page's longer shared polling deadline", async t => {
+  const f = await fixture(t);
+  const watcher = f.make();
+  f.response(args => args.at(-1).includes("page=1")
+    ? http([thread()], { link: next, "x-poll-interval": "300" })
+    : http({}, {}, 500));
+  await watcher.check();
+  assert.equal(f.calls.length, 2);
+  assert.equal((await f.state()).watermark, null);
+  assert.equal((await f.state()).nextPollAt, epoch + 300_000);
+  const other = f.make();
+  f.advance(299_999);
+  await other.sync();
+  assert.equal(other.snapshot().state, "error");
+  assert.equal(f.calls.length, 2);
+  f.response(undefined);
+  f.advance(1);
+  await other.check();
+  assert.equal(f.calls.length, 3);
+  assert.equal(other.snapshot().state, "watching");
+  assert.deepEqual(f.deliveries, []);
 });
 
 test("failed checkpoint writes preserve the last published state and prevent native delivery", async t => {
