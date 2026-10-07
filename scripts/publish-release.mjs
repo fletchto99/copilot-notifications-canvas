@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { resolve } from "node:path";
+import { setTimeout as wait } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { validateReleaseTag } from "./check-release.mjs";
@@ -11,7 +12,10 @@ const runGh = async args => (await execute("gh", args, {
   timeout: 30_000, maxBuffer: 1024 * 1024, encoding: "utf8",
 })).stdout;
 
-export async function publishRelease({ tag, sha, event, ref, directory = resolve("dist"), run = runGh }) {
+export async function publishRelease({
+  tag, sha, event, ref, directory = resolve("dist"), run = runGh,
+  sleep = wait, log = message => process.stderr.write(`${message}\n`),
+}) {
   validateReleaseTag(tag);
   if (!/^[a-f0-9]{40}$/.test(sha ?? "")) throw new Error("A full tested commit SHA is required.");
   if (event !== "push" || ref !== `refs/tags/${tag}`) {
@@ -53,9 +57,19 @@ export async function publishRelease({ tag, sha, event, ref, directory = resolve
   // With assets, gh creates a draft, uploads, then publishes that exact release by ID.
   const url = (await run(["release", "create", tag, ...assets,
     "--verify-tag", "--generate-notes", "--title", tag, "--latest"])).trim();
-  await run(["release", "verify", tag]);
-  for (const asset of assets) await run(["release", "verify-asset", tag, asset]);
-  return url;
+  const verificationDelays = [5_000, 5_000, 10_000, 20_000];
+  for (const [attempt, delay] of verificationDelays.entries()) {
+    log(`Waiting ${delay / 1000}s before verifying published release ${tag} (attempt ${attempt + 1}/${verificationDelays.length}).`);
+    await sleep(delay);
+    try {
+      await run(["release", "verify", tag]);
+      for (const asset of assets) await run(["release", "verify-asset", tag, asset]);
+      return url;
+    } catch (error) {
+      const missingTag = error?.stderr?.trim().match(/^no attestations for tag (.+) \(sha1:[a-f0-9]{40}\)$/)?.[1];
+      if (error?.code !== 1 || missingTag !== tag || attempt === verificationDelays.length - 1) throw error;
+    }
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
