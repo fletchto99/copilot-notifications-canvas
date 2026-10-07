@@ -142,6 +142,12 @@ changing SDK wiring, consult the installed SDK guide/types through
 provider/log. Use `extensionId: project:github-notifications` when needed to
 select the local provider. Report when real-host validation is unavailable.
 
+The [cloud-agent setup workflow](.github/workflows/copilot-setup-steps.yml)
+preinstalls development tools for Copilot cloud sessions, not local app/CLI
+sessions. Keep its Node version, action pins, browser installation, and verified
+`actionlint` version aligned with the test workflow. Setup prepares tools; the
+agent still selects and runs the checks relevant to its changes.
+
 Documentation-only changes do not need runtime tests unless they affect a
 tested contract. Check paths, commands, and consistency; report which checks
 actually ran and any checks that could not run.
