@@ -12,7 +12,27 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate:
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          package-manager-cache: false
+      - name: Validate release tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: node scripts/check-release.mjs "$RELEASE_TAG"
+  checks:
+    needs: validate
+    uses: ./.github/workflows/tests.yml
   release:
+    needs: [validate, checks]
     runs-on: ubuntu-slim
     timeout-minutes: 10
     permissions:
@@ -30,8 +50,6 @@ jobs:
           package-manager-cache: false
       - name: Validate release tag
         run: node scripts/check-release.mjs "$RELEASE_TAG"
-      - name: Run source and installer tests
-        run: node --test test/*.test.mjs
       - name: Install pinned build tools
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Build release package

@@ -53,7 +53,7 @@ session = await joinSession({
       },
       {
         name: "get_settings",
-        description: "Read saved auto-open, dark-mode and desktop notification settings and status. Settings are changed through the panel.",
+        description: "Read saved grouping, theme, auto-open and desktop notification settings and status. Settings are changed through the panel.",
         inputSchema: emptySchema,
         handler: ctx => action(ctx, async () => ({
           ...await preferences.read(), desktopStatus: desktop.snapshot(), startupStatus: startup?.status ?? "initializing",

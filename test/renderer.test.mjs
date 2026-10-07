@@ -2,9 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { createContext, runInContext } from "node:vm";
+import { fileURLToPath } from "node:url";
 import { Inbox } from "../src/inbox.mjs";
 import { GitHubClient } from "../src/github.mjs";
 import { desktopCapabilities } from "../src/notifier.mjs";
+import { orderedThreads } from "../src/model.mjs";
 import { http, next, thread } from "./fixtures.mjs";
 
 const script = await readFile(process.env.NOTIFICATIONS_TEST_SCRIPT ??
@@ -16,7 +18,7 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
 // Minimal DOM/event/timer doubles exercise the actual renderer without a browser dependency.
 async function renderer({ hidden = false, token = "a".repeat(64), readFailure = false,
   initialRows, onWrite, onFetch, onState, onFilters, initialOffline = false, release,
-  onUpdates, clipboardFailure = false, onSettings, desktopPlatform = "darwin", desktopStatus = {},
+  onUpdates, clipboardFailure = false, onSettings, retainDisabledFocus = false, desktopPlatform = "darwin", desktopStatus = {},
   storedSettings = { autoOpen: false, darkMode: null, desktopNotifications: false, desktopSound: "default" },
   appColorMode = "light", systemDark = false } = {}) {
   const calls = [];
@@ -56,7 +58,7 @@ async function renderer({ hidden = false, token = "a".repeat(64), readFailure = 
     get disabled() { return this._disabled; }
     set disabled(value) {
       this._disabled = Boolean(value);
-      if (value && document.activeElement === this) document.activeElement = document.body;
+      if (value && !retainDisabledFocus && document.activeElement === this) document.activeElement = document.body;
     }
     get hidden() { return this._hidden; }
     set hidden(value) {
@@ -111,7 +113,7 @@ async function renderer({ hidden = false, token = "a".repeat(64), readFailure = 
     ["batch-progress", "batch-stop", "batch-retry", "batch-dismiss"].some(id => ids.get(id) === node);
   ids.get("settings").contains = node =>
     node === ids.get("settings") ||
-    ["settings-toggle", "settings-panel", "auto-open", "dark-mode", "check-updates", "desktop-notifications", "desktop-sound"].some(id => ids.get(id).contains(node));
+    ["settings-toggle", "settings-panel", "auto-open", "theme", "group-by", "check-updates", "desktop-notifications", "desktop-sound"].some(id => ids.get(id).contains(node));
   const document = {
     hidden,
     body: new Node("body"),
@@ -143,7 +145,7 @@ async function renderer({ hidden = false, token = "a".repeat(64), readFailure = 
     return onFetch ? onFetch(args) : http(rows);
   } }));
   const context = createContext({
-    document, window, location: { hash: `#${token}` }, Intl, AbortController,
+    document, window, location: { hash: `#${token}` }, Intl, AbortController, orderedThreads,
     navigator: { clipboard: { writeText: async text => {
       if (clipboardFailure) throw new Error("Clipboard denied");
       copied.push(text);
@@ -195,7 +197,11 @@ async function renderer({ hidden = false, token = "a".repeat(64), readFailure = 
       return { ok: true, json: async () => ({ ...inbox.snapshot(), updates: releaseMetadata }) };
     },
   });
-  runInContext(script, context);
+  if (!process.env.NOTIFICATIONS_TEST_SCRIPT) assert.match(script, /^import \{ orderedThreads \} from "\.\/model\.mjs";/);
+  // Preserve source offsets for the coverage report when removing the injected import.
+  runInContext(script.replace(/^import \{ orderedThreads \} from "\.\/model\.mjs";/, match => " ".repeat(match.length)), context, {
+    filename: process.env.NOTIFICATIONS_TEST_SCRIPT ?? fileURLToPath(new URL("../src/app.mjs", import.meta.url)),
+  });
   await settle();
   return {
     calls, document, window, ids, timers, context, inbox, patches, githubCalls, copied, media,
@@ -232,12 +238,21 @@ test("renderer public controls survive bundling and minification", async () => {
     assert.equal(ui.document.querySelectorAll("article").length, 2);
     await ui.ids.get("copy-update").events.click();
     assert.deepEqual(ui.copied, ["Install the verified v2.0.0 package."]);
-    ui.ids.get("dark-mode").events.click();
+    ui.ids.get("theme").value = "dark";
+    ui.ids.get("theme").events.change();
     await settle();
     assert.equal(ui.document.documentElement.dataset.notificationTheme, "dark");
     ui.ids.get("auto-open").events.click();
     await settle();
     assert.equal(ui.ids.get("auto-open").attributes["aria-checked"], "true");
+    ui.ids.get("group-by").value = "none";
+    ui.ids.get("group-by").events.change();
+    await settle();
+    assert.equal(ui.ids.get("collapse").hidden, true);
+    assert.equal(ui.document.querySelectorAll("article").length, 2);
+    ui.ids.get("group-by").value = "repo";
+    ui.ids.get("group-by").events.change();
+    await settle();
     await ui.ids.get("force-refresh").events.click();
     ui.advance();
     await ui.fireTimer();
@@ -866,7 +881,8 @@ test("the per-panel Web Audio option is replaced by the native notification soun
 });
 
 test("Sound is a single settings row with a labeled native select and matching focus and disabled styling", async () => {
-  const row = html.match(/<div class="select-setting">([\s\S]*?)<\/div>/);
+  const row = [...html.matchAll(/<div class="select-setting">([\s\S]*?)<\/div>/g)]
+    .find(([, content]) => content.includes('for="desktop-sound"'));
   assert.ok(row);
   assert.match(row[1], /<label for="desktop-sound">Sound<\/label>/);
   assert.match(row[1], /<select id="desktop-sound"[^>]*aria-describedby="desktop-status"/);
@@ -877,6 +893,15 @@ test("Sound is a single settings row with a labeled native select and matching f
   assert.match(css, /\.select-setting::after \{[^}]*pointer-events: none;/);
   assert.match(css, /\.select-setting:focus-within \{[^}]*outline: 2px solid var\(--focus\)/);
   assert.match(css, /\.select-setting:has\(select:disabled\) \{[^}]*opacity: \.55/);
+});
+
+test("enabled toggle rows keep neutral text and borders while the switch indicates their state", () => {
+  assert.match(styles, /button, input, select, textarea \{ font: inherit; color: inherit; \}/);
+  assert.match(styles, /(?:^|\n)button \{[^}]*border: 1px solid var\(--border\);/);
+  assert.doesNotMatch(styles, /\.settings-panel button\[aria-checked="true"\]/);
+  assert.match(styles, /\.switch-toggle\[aria-checked="true"\] \.switch-track \{ background: var\(--accent\); \}/);
+  assert.match(styles, /\.switch-toggle\[aria-checked="true"\] \.switch-thumb \{ transform: translateX\(14px\); \}/);
+  assert.match(styles, /:focus-visible \{ outline: 2px solid var\(--focus\); outline-offset: 3px; \}/);
 });
 
 test("GitHub inbox is an accessible icon link immediately before Settings in the toolbar", () => {
@@ -1111,7 +1136,8 @@ test("settings failures are visible and do not claim a saved toggle", async () =
   ui.ids.get("settings").events.toggle();
   await settle();
   assert.equal(ui.ids.get("auto-open").disabled, true);
-  assert.equal(ui.ids.get("dark-mode").disabled, true);
+  assert.equal(ui.ids.get("theme").disabled, true);
+  assert.equal(ui.ids.get("group-by").disabled, true);
   assert.equal(ui.ids.get("settings-error").hidden, false);
   assert.equal(ui.ids.get("settings-status").hidden, false);
   assert.match(ui.ids.get("settings-status").textContent, /retry/);
@@ -1119,82 +1145,390 @@ test("settings failures are visible and do not claim a saved toggle", async () =
   ui.ids.get("settings").events.toggle();
   await settle();
   assert.equal(ui.ids.get("auto-open").disabled, false);
-  assert.equal(ui.ids.get("dark-mode").disabled, false);
+  assert.equal(ui.ids.get("theme").disabled, false);
+  assert.equal(ui.ids.get("group-by").disabled, false);
   assert.equal(ui.ids.get("settings-error").hidden, true);
   assert.equal(ui.ids.get("settings-status").hidden, true);
 });
 
-test("dark mode uses an accessible slider-style switch and follows the app until explicitly saved", async () => {
-  assert.match(html, /<button\b[^>]*id="dark-mode"[^>]*role="switch"/);
-  assert.match(html, /<span>Dark mode<\/span>\s*<span class="switch-track" aria-hidden="true"><span class="switch-thumb"><\/span><\/span>/);
-  const ui = await renderer({ appColorMode: "dark" });
-  assert.equal(ui.ids.get("dark-mode").disabled, false);
-  assert.equal(ui.ids.get("dark-mode").attributes["aria-checked"], "true");
+test("Group By is a labeled select immediately above Check for updates and defaults to repo", async () => {
+  assert.match(html, /<div class="select-setting">\s*<label for="group-by">Group By<\/label>\s*<select id="group-by" disabled>/);
+  assert.match(html, /<option value="none">none<\/option>\s*<option value="repo" selected>repo<\/option>\s*<option value="date">date<\/option>/);
+  assert.match(html, /<select id="group-by"[^>]*>[\s\S]*?<\/select>\s*<\/div>\s*<button id="check-updates"/);
+  const ui = await renderer();
+  assert.equal(ui.ids.get("group-by").value, "repo");
+  assert.equal(ui.ids.get("group-by").disabled, false);
+  ui.ids.get("settings").open = true;
+  ui.document.events.click({ target: ui.ids.get("group-by") });
+  assert.equal(ui.ids.get("settings").open, true);
+});
+
+test("none lists all notifications globally newest first with repository metadata and no group controls", async () => {
+  const ui = await renderer({ storedSettings: { groupBy: "none" }, initialRows: [
+    thread("1", { repository: { full_name: "example/alpha" }, updated_at: "2026-01-01T00:00:00Z" }),
+    thread("4", { repository: { full_name: "example/zulu" }, updated_at: "2026-01-03T00:00:00Z" }),
+    thread("2", { repository: { full_name: "example/zulu" }, updated_at: "2026-01-03T00:00:00Z" }),
+    thread("3", { repository: { full_name: "example/alpha" }, updated_at: "2026-01-02T00:00:00Z" }),
+    thread("5", { unread: false, updated_at: "2026-01-04T00:00:00Z" }),
+  ] });
+  const list = ui.ids.get("groups");
+  assert.equal(ui.ids.get("group-by").value, "none");
+  assert.equal(list.children.length, 1);
+  assert.equal(list.children[0].className, "notification-list");
+  assert.equal(list.querySelectorAll("section").length, 0);
+  assert.deepEqual(list.querySelectorAll("button").map(node => node.dataset.threadId), ["2", "4", "3", "1"]);
+  assert.deepEqual(list.querySelectorAll("span").filter(node => node.className === "repository").map(node => node.textContent),
+    ["example/zulu", "example/zulu", "example/alpha", "example/alpha"]);
+  assert.equal(ui.ids.get("collapse").hidden, true);
+  assert.equal(list.attributes["aria-label"], "Notifications, newest first");
+  assert.match(ui.ids.get("subtitle").textContent, /Newest notifications first/);
+  const first = list.querySelectorAll("a")[0];
+  first.focus();
+  await runInContext("update()", ui.context);
+  assert.equal(ui.document.activeElement, first);
+  assert.equal(list.querySelectorAll("a")[0], first);
+  assert.deepEqual(ui.patches, []);
+});
+
+test("date groups by local calendar day across repositories, newest first, with independent collapse state", async () => {
+  const localDate = (month, day, hour) => new Date(2026, month - 1, day, hour).toISOString();
+  const ui = await renderer({ storedSettings: { groupBy: "date" }, initialRows: [
+    thread("1", { repository: { full_name: "example/zulu" }, updated_at: localDate(1, 31, 23) }),
+    thread("2", { repository: { full_name: "example/alpha" }, updated_at: localDate(2, 1, 0) }),
+    thread("3", { repository: { full_name: "example/zulu" }, updated_at: localDate(2, 1, 23) }),
+    thread("4", { repository: { full_name: "example/alpha" }, updated_at: localDate(1, 31, 0) }),
+    thread("5", { updated_at: new Date(2025, 11, 31, 12).toISOString() }),
+  ] });
+  const list = ui.ids.get("groups");
+  const disclosures = () => list.querySelectorAll("button").filter(node => node.dataset.disclosure);
+  assert.deepEqual(disclosures().map(node => node.dataset.focusKey), ["date:2026-2-1", "date:2026-1-31", "date:2025-12-31"]);
+  assert.deepEqual(list.children.map(section => section.querySelectorAll("a").map(node => node.dataset.focusKey)),
+    [["thread:3", "thread:2"], ["thread:1", "thread:4"], ["thread:5"]]);
+  assert.equal(disclosures()[0].children[0].textContent,
+    new Date(2026, 1, 1).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" }));
+  assert.equal(disclosures()[0].children[1].textContent, "2 / 2 unread");
+  assert.equal(list.querySelectorAll("button").some(node => node.dataset.repository), false);
+  assert.equal(list.querySelectorAll("span").filter(node => node.className === "repository").length, 5);
+  assert.equal(list.attributes["aria-label"], "Notifications by date");
+  disclosures()[0].focus();
+  disclosures()[0].events.click();
+  assert.equal(list.children[0].children[1].hidden, true);
+  await runInContext("update()", ui.context);
+  assert.equal(ui.document.activeElement, disclosures()[0]);
+  assert.equal(list.children[0].children[1].hidden, true);
+  ui.ids.get("collapse").events.click();
+  assert.ok(disclosures().every(node => node.attributes["aria-expanded"] === "false"));
+  assert.equal(ui.ids.get("collapse").textContent, "Expand all");
+  ui.ids.get("collapse").events.click();
+  assert.ok(disclosures().every(node => node.attributes["aria-expanded"] === "true"));
+  assert.equal(ui.ids.get("collapse").textContent, "Collapse all");
+});
+
+test("grouping changes apply immediately, persist across panels and restore repository batch actions", async () => {
+  const storedSettings = { autoOpen: true, darkMode: false };
+  const ui = await renderer({ storedSettings, initialRows: [
+    thread("1", { repository: { full_name: "example/zulu" } }),
+    thread("2", { repository: { full_name: "example/alpha" } }),
+  ] });
+  const select = ui.ids.get("group-by");
+  const list = ui.ids.get("groups");
+  list.querySelectorAll("button").find(node => node.dataset.focusKey === "repo:example/alpha").events.click();
+  for (const groupBy of ["none", "date", "repo"]) {
+    select.focus();
+    select.value = groupBy;
+    select.events.change();
+    assert.equal(select.disabled, true);
+    await settle();
+    assert.equal(select.disabled, false);
+    assert.equal(ui.document.activeElement, select);
+    assert.deepEqual(storedSettings, { autoOpen: true, darkMode: false, groupBy });
+    const reopened = await renderer({ storedSettings });
+    assert.equal(reopened.ids.get("group-by").value, groupBy);
+    assert.equal(reopened.ids.get("collapse").hidden, groupBy === "none");
+    reopened.window.events.pagehide();
+  }
+  assert.deepEqual(list.querySelectorAll("button").filter(node => node.dataset.repository).map(node => node.dataset.repository),
+    ["example/alpha", "example/zulu"]);
+  assert.equal(list.querySelectorAll("button").find(node => node.dataset.focusKey === "repo:example/alpha").attributes["aria-expanded"], "false");
+  const posts = ui.calls.filter(call => call.path === "/api/settings" && call.options.body);
+  assert.deepEqual(posts.map(call => JSON.parse(call.options.body)), [{ groupBy: "none" }, { groupBy: "date" }, { groupBy: "repo" }]);
+  assert.equal(ui.githubCalls.length, 1);
+  assert.deepEqual(ui.patches, []);
+});
+
+test("failed grouping saves retain the prior list, restore the select and report a retryable error", async () => {
+  let fail = true;
+  const storedSettings = { groupBy: "repo" };
+  const ui = await renderer({ storedSettings, onSettings: input => {
+    if (input && fail) throw new Error("Could not save notification settings.");
+  } });
+  const select = ui.ids.get("group-by");
+  const previous = ui.ids.get("groups").children[0];
+  select.focus();
+  select.value = "none";
+  select.events.change();
+  await settle();
+  assert.equal(select.value, "repo");
+  assert.equal(select.disabled, false);
+  assert.equal(ui.document.activeElement, select);
+  assert.equal(ui.ids.get("groups").children[0], previous);
+  assert.equal(storedSettings.groupBy, "repo");
+  assert.equal(ui.ids.get("settings-error").hidden, false);
+  assert.match(ui.ids.get("settings-status").textContent, /Could not save.*retry/);
+  fail = false;
+  select.value = "none";
+  select.events.change();
+  await settle();
+  assert.equal(select.value, "none");
+  assert.equal(ui.ids.get("collapse").hidden, true);
+  assert.equal(ui.ids.get("settings-error").hidden, true);
+});
+
+test("a pending grouping save blocks duplicates and does not steal newly moved focus", async () => {
+  let release;
+  const ui = await renderer({ onSettings: input =>
+    input ? new Promise(resolve => { release = resolve; }) : undefined });
+  const select = ui.ids.get("group-by");
+  const previous = ui.ids.get("groups").children[0];
+  select.focus();
+  select.value = "none";
+  select.events.change();
+  select.events.change();
+  assert.equal(ui.calls.filter(call => call.path === "/api/settings" && call.options.body).length, 1);
+  assert.equal(ui.ids.get("groups").children[0], previous);
+  ui.ids.get("search").focus();
+  release();
+  await settle();
+  assert.equal(ui.ids.get("groups").children[0].className, "notification-list");
+  assert.equal(ui.document.activeElement, ui.ids.get("search"));
+});
+
+test("a grouping change during a background settings read is queued without changing desktop preferences", async () => {
+  let reads = 0;
+  let finish;
+  const storedSettings = { groupBy: "repo", desktopNotifications: true, desktopSound: "Ping" };
+  const ui = await renderer({ storedSettings, onSettings: input => {
+    if (!input && ++reads === 3) return new Promise(resolve => { finish = resolve; });
+  } });
+  ui.ids.get("settings").open = true;
+  ui.ids.get("settings").events.toggle();
+  await settle();
+  await ui.fireTimer();
+  const select = ui.ids.get("group-by");
+  assert.equal(select.disabled, false);
+  select.focus();
+  select.value = "none";
+  select.events.change();
+  assert.equal(select.disabled, true);
+  assert.equal(ui.ids.get("groups").children[0].className, "repo-group");
+  finish();
+  await settle();
+  assert.equal(ui.document.activeElement, select);
+  assert.equal(select.value, "none");
+  assert.equal(ui.ids.get("groups").children[0].className, "notification-list");
+  assert.deepEqual(storedSettings, { groupBy: "none", desktopNotifications: true, desktopSound: "Ping" });
+  assert.deepEqual(ui.calls.filter(call => call.path === "/api/settings" && call.options.body)
+    .map(call => JSON.parse(call.options.body)), [{ groupBy: "none" }]);
+});
+
+test("grouping refreshes when a panel becomes visible and empty copy matches the saved mode", async () => {
+  const storedSettings = { groupBy: "repo" };
+  const ui = await renderer({ storedSettings, initialRows: [] });
+  for (const groupBy of ["none", "date", "repo"]) {
+    ui.intersect(false);
+    storedSettings.groupBy = groupBy;
+    ui.intersect(true);
+    await settle();
+    assert.equal(ui.ids.get("group-by").value, groupBy);
+    assert.equal(ui.ids.get("groups").children.length, 0);
+    assert.equal(ui.ids.get("collapse").hidden, true);
+    assert.equal(ui.ids.get("empty").hidden, false);
+    assert.equal(ui.ids.get("empty-description").textContent, groupBy === "none" ?
+      "New notifications will appear here, newest first." :
+      `New notifications will appear here, grouped by ${groupBy === "repo" ? "repository" : "date"}.`);
+  }
+});
+
+test("none and date regroup loaded pages and filtered results without including unloaded or read items", async () => {
+  for (const groupBy of ["none", "date"]) {
+    const ui = await renderer({ storedSettings: { groupBy }, onFetch: args => args.at(-1).includes("page=2") ?
+      http([
+        thread("3", { repository: { full_name: "example/alpha" }, updated_at: "2026-01-03T12:00:00Z" }),
+        thread("4", { unread: false }),
+      ]) : http([
+        thread("1", { repository: { full_name: "example/alpha" }, updated_at: "2026-01-01T12:00:00Z" }),
+        thread("2", { repository: { full_name: "example/zulu" }, updated_at: "2026-01-02T12:00:00Z" }),
+      ], { link: next }) });
+    const order = () => ui.ids.get("groups").querySelectorAll("a").map(node => node.dataset.focusKey);
+    assert.deepEqual(order(), ["thread:2", "thread:1"]);
+    await ui.ids.get("more").events.click();
+    assert.deepEqual(order(), ["thread:3", "thread:2", "thread:1"]);
+    assert.equal(ui.ids.get("count").textContent, "3 unread");
+    await runInContext('update("filters", { query: "alpha" })', ui.context);
+    assert.deepEqual(order(), ["thread:3", "thread:1"]);
+    assert.match(ui.ids.get("count").textContent, /3 unread.*2 matching/);
+    await runInContext('update("filters", { query: "no match" })', ui.context);
+    assert.deepEqual(order(), []);
+    assert.equal(ui.ids.get("collapse").hidden, true);
+    assert.equal(ui.ids.get("empty-title").textContent, "No matches in loaded notifications");
+    await runInContext('update("filters", { query: "" })', ui.context);
+    assert.deepEqual(order(), ["thread:3", "thread:2", "thread:1"]);
+    assert.equal(ui.githubCalls.length, 2);
+    ui.window.events.pagehide();
+  }
+});
+
+test("row reads in none and date modes follow the displayed order for focus", async () => {
+  for (const groupBy of ["none", "date"]) {
+    const ui = await renderer({ storedSettings: { groupBy }, initialRows: [
+      thread("1", { repository: { full_name: "example/alpha" }, updated_at: "2026-01-01T12:00:00Z" }),
+      thread("2", { repository: { full_name: "example/zulu" }, updated_at: "2026-01-03T12:00:00Z" }),
+      thread("3", { repository: { full_name: "example/alpha" }, updated_at: "2026-01-02T12:00:00Z" }),
+    ] });
+    const readButtons = () => ui.ids.get("groups").querySelectorAll("button").filter(node => node.dataset.threadId);
+    const first = readButtons()[0];
+    first.focus();
+    await first.events.click();
+    assert.deepEqual(ui.patches, ["/notifications/threads/2"]);
+    assert.deepEqual(readButtons().map(node => node.dataset.threadId), ["3", "1"]);
+    assert.equal(ui.document.activeElement.dataset.focusKey, "read:3");
+    const last = readButtons()[1];
+    last.focus();
+    await last.events.click();
+    assert.equal(ui.document.activeElement.dataset.focusKey, "read:3");
+    await readButtons()[0].events.click();
+    assert.equal(ui.document.activeElement, ui.ids.get("search"));
+    assert.equal(ui.ids.get("empty").hidden, false);
+    ui.window.events.pagehide();
+  }
+});
+
+test("Theme is a labeled System, Dark and Light select immediately above Group By", async () => {
+  assert.match(html, /<div class="select-setting">\s*<label for="theme">Theme<\/label>\s*<select id="theme" disabled>/);
+  assert.match(html, /<option value="system" selected>System<\/option>\s*<option value="dark">Dark<\/option>\s*<option value="light">Light<\/option>/);
+  assert.match(html, /<select id="theme"[^>]*>[\s\S]*?<\/select>\s*<\/div>\s*<div class="select-setting">\s*<label for="group-by">/);
+  assert.doesNotMatch(html, /id="dark-mode"/);
+  for (const [darkMode, theme] of [[undefined, "system"], [null, "system"], [true, "dark"], [false, "light"]]) {
+    const storedSettings = darkMode === undefined ? {} : { darkMode };
+    const ui = await renderer({ storedSettings });
+    assert.equal(ui.ids.get("theme").disabled, false);
+    assert.equal(ui.ids.get("theme").value, theme);
+    assert.equal(ui.document.documentElement.dataset.notificationTheme, theme === "system" ? undefined : theme);
+    assert.equal(ui.calls.some(call => call.path === "/api/settings" && call.options.body), false);
+    ui.ids.get("settings").open = true;
+    ui.document.events.click({ target: ui.ids.get("theme") });
+    assert.equal(ui.ids.get("settings").open, true);
+    ui.window.events.pagehide();
+  }
+});
+
+test("System follows the app theme and falls back to OS changes only when no app theme is provided", async () => {
+  const ui = await renderer({ appColorMode: "dark", systemDark: false });
+  assert.equal(ui.ids.get("theme").value, "system");
+  assert.equal(ui.document.documentElement.dataset.notificationTheme, undefined);
+  ui.setSystemTheme(true);
   assert.equal(ui.document.documentElement.dataset.notificationTheme, undefined);
   ui.setAppTheme("light");
-  assert.equal(ui.ids.get("dark-mode").attributes["aria-checked"], "false");
+  assert.equal(ui.document.documentElement.dataset.notificationTheme, undefined);
   ui.setAppTheme(null);
-  ui.setSystemTheme(true);
-  assert.equal(ui.ids.get("dark-mode").attributes["aria-checked"], "true");
+  assert.equal(ui.document.documentElement.dataset.notificationTheme, "dark");
+  ui.setSystemTheme(false);
+  assert.equal(ui.document.documentElement.dataset.notificationTheme, "light");
   ui.document.body.setAttribute("data-color-mode", "light");
   ui.setSystemTheme(true);
-  assert.equal(ui.ids.get("dark-mode").attributes["aria-checked"], "false");
+  assert.equal(ui.document.documentElement.dataset.notificationTheme, undefined);
+  assert.equal(ui.ids.get("theme").value, "system");
+  assert.equal(ui.calls.some(call => call.path === "/api/settings" && call.options.body), false);
+  ui.window.events.pagehide();
 });
 
-test("dark and light choices persist across panels, preserve auto-open and ignore host theme changes", async () => {
-  const storedSettings = { autoOpen: true, darkMode: null };
+test("Dark, Light and System choices persist across panels without changing other preferences", async () => {
+  const storedSettings = { autoOpen: true, darkMode: null, groupBy: "date", desktopNotifications: true, desktopSound: "Ping" };
   const ui = await renderer({ storedSettings });
-  const toggle = ui.ids.get("dark-mode");
-  toggle.focus();
-  toggle.events.click();
-  assert.equal(toggle.disabled, true);
-  await settle();
-  assert.equal(toggle.attributes["aria-checked"], "true");
-  assert.equal(ui.document.documentElement.dataset.notificationTheme, "dark");
-  assert.deepEqual(storedSettings, { autoOpen: true, darkMode: true });
-  assert.equal(ui.document.activeElement, toggle);
-  assert.equal(ui.ids.get("settings-status").textContent, "");
-  ui.document.events.click({ target: toggle });
-  ui.setAppTheme("light");
-  assert.equal(toggle.attributes["aria-checked"], "true");
-  const reopened = await renderer({ storedSettings });
-  assert.equal(reopened.document.documentElement.dataset.notificationTheme, "dark");
-  reopened.ids.get("dark-mode").events.click();
-  await settle();
-  assert.deepEqual(storedSettings, { autoOpen: true, darkMode: false });
-  assert.equal(reopened.document.documentElement.dataset.notificationTheme, "light");
-  reopened.setAppTheme("dark");
-  reopened.setSystemTheme(true);
-  assert.equal(reopened.ids.get("dark-mode").attributes["aria-checked"], "false");
-  assert.equal(reopened.document.documentElement.dataset.notificationTheme, "light");
-  const lightPanel = await renderer({ storedSettings, appColorMode: "dark" });
-  assert.equal(lightPanel.document.documentElement.dataset.notificationTheme, "light");
+  const select = ui.ids.get("theme");
+  for (const [theme, darkMode] of [["dark", true], ["light", false], ["system", null]]) {
+    select.focus();
+    select.value = theme;
+    select.events.change();
+    assert.equal(select.disabled, true);
+    await settle();
+    assert.equal(select.value, theme);
+    assert.equal(select.disabled, false);
+    assert.equal(ui.document.activeElement, select);
+    assert.deepEqual(storedSettings, { autoOpen: true, darkMode, groupBy: "date", desktopNotifications: true, desktopSound: "Ping" });
+    assert.equal(ui.ids.get("settings-status").hidden, true);
+    for (const mode of ["dark", "light"]) {
+      ui.setAppTheme(mode);
+      ui.setSystemTheme(mode === "dark");
+      assert.equal(select.value, theme);
+      assert.equal(ui.document.documentElement.dataset.notificationTheme, theme === "system" ? undefined : theme);
+    }
+    const reopened = await renderer({ storedSettings, appColorMode: "dark", systemDark: true });
+    assert.equal(reopened.ids.get("theme").value, theme);
+    assert.equal(reopened.document.documentElement.dataset.notificationTheme, theme === "system" ? undefined : theme);
+    reopened.window.events.pagehide();
+  }
+  assert.deepEqual(ui.calls.filter(call => call.path === "/api/settings" && call.options.body)
+    .map(call => JSON.parse(call.options.body)), [{ darkMode: true }, { darkMode: false }, { darkMode: null }]);
   assert.equal(ui.patches.length, 0);
+  ui.window.events.pagehide();
 });
 
-test("failed dark-mode saves retain the prior theme and focus with an explicit retryable error", async () => {
+test("failed Theme saves restore the selected choice and focus with an explicit retryable error", async () => {
   const storedSettings = { autoOpen: false, darkMode: true };
   let fail = true;
   const ui = await renderer({ storedSettings, onSettings: input => {
     if (input && fail) throw new Error("Could not save notification settings.");
   } });
-  const toggle = ui.ids.get("dark-mode");
-  toggle.focus();
-  toggle.events.click();
+  const select = ui.ids.get("theme");
+  select.focus();
+  select.value = "system";
+  select.events.change();
   await settle();
-  assert.equal(toggle.disabled, false);
-  assert.equal(toggle.attributes["aria-checked"], "true");
+  assert.equal(select.disabled, false);
+  assert.equal(select.value, "dark");
   assert.equal(ui.document.documentElement.dataset.notificationTheme, "dark");
   assert.equal(storedSettings.darkMode, true);
-  assert.equal(ui.document.activeElement, toggle);
+  assert.equal(ui.document.activeElement, select);
   assert.match(ui.ids.get("settings-status").textContent, /Could not save.*retry/);
   assert.doesNotMatch(ui.ids.get("settings-status").textContent, /Saved\./);
   assert.equal(ui.ids.get("settings-error").hidden, false);
   fail = false;
-  toggle.events.click();
+  select.value = "system";
+  select.events.change();
   await settle();
-  assert.equal(storedSettings.darkMode, false);
+  assert.equal(storedSettings.darkMode, null);
+  assert.equal(select.value, "system");
+  assert.equal(ui.document.documentElement.dataset.notificationTheme, undefined);
   assert.equal(ui.ids.get("settings-error").hidden, true);
+});
+
+test("settings saves keep status text hidden for toggles and dropdowns", async () => {
+  for (const [id, event, value] of [
+    ["auto-open", "click"],
+    ["theme", "change", "dark"],
+    ["desktop-notifications", "click"],
+    ["desktop-sound", "change", "Ping"],
+    ["group-by", "change", "none"],
+  ]) {
+    let finish;
+    const ui = await renderer({
+      storedSettings: { autoOpen: false, darkMode: false, desktopNotifications: true, desktopSound: "default", groupBy: "repo" },
+      onSettings: input => input ? new Promise(resolve => { finish = resolve; }) : undefined,
+    });
+    const control = ui.ids.get(id);
+    if (value !== undefined) control.value = value;
+    control.events[event]();
+    assert.equal(control.disabled, true);
+    assert.equal(ui.ids.get("settings-status").textContent, "");
+    assert.equal(ui.ids.get("settings-status").hidden, true);
+    finish();
+    await settle();
+    assert.equal(ui.ids.get("settings-status").textContent, "");
+    assert.equal(ui.ids.get("settings-status").hidden, true);
+    assert.equal(ui.ids.get("settings-error").hidden, true);
+    ui.window.events.pagehide();
+  }
 });
 
 test("a pending theme save blocks duplicate changes without stealing focus", async () => {
@@ -1202,10 +1536,11 @@ test("a pending theme save blocks duplicate changes without stealing focus", asy
   const storedSettings = { autoOpen: false, darkMode: false };
   const ui = await renderer({ storedSettings, onSettings: input =>
     input ? new Promise(resolve => { release = resolve; }) : undefined });
-  const toggle = ui.ids.get("dark-mode");
-  toggle.focus();
-  toggle.events.click();
-  toggle.events.click();
+  const select = ui.ids.get("theme");
+  select.focus();
+  select.value = "dark";
+  select.events.change();
+  select.events.change();
   assert.equal(ui.calls.filter(call => call.path === "/api/settings" && call.options.body).length, 1);
   assert.equal(ui.document.documentElement.dataset.notificationTheme, "light");
   ui.ids.get("search").focus();
@@ -1213,6 +1548,34 @@ test("a pending theme save blocks duplicate changes without stealing focus", asy
   await settle();
   assert.equal(ui.document.documentElement.dataset.notificationTheme, "dark");
   assert.equal(ui.document.activeElement, ui.ids.get("search"));
+});
+
+test("a Theme change during a background settings read is queued and saved once", async () => {
+  let reads = 0;
+  let finish;
+  const storedSettings = { darkMode: true };
+  const ui = await renderer({ storedSettings, onSettings: input => {
+    if (!input && ++reads === 3) return new Promise(resolve => { finish = resolve; });
+  } });
+  ui.ids.get("settings").open = true;
+  ui.ids.get("settings").events.toggle();
+  await settle();
+  await ui.fireTimer();
+  const select = ui.ids.get("theme");
+  select.focus();
+  select.value = "system";
+  select.events.change();
+  assert.equal(select.disabled, true);
+  assert.equal(ui.document.documentElement.dataset.notificationTheme, "dark");
+  finish();
+  await settle();
+  assert.equal(select.value, "system");
+  assert.equal(ui.document.documentElement.dataset.notificationTheme, undefined);
+  assert.equal(ui.document.activeElement, select);
+  assert.equal(storedSettings.darkMode, null);
+  assert.deepEqual(ui.calls.filter(call => call.path === "/api/settings" && call.options.body)
+    .map(call => JSON.parse(call.options.body)), [{ darkMode: null }]);
+  ui.window.events.pagehide();
 });
 
 test("settings refresh on visibility and theme observers are cleaned up on close", async () => {
@@ -1223,7 +1586,7 @@ test("settings refresh on visibility and theme observers are cleaned up on close
   ui.intersect(true);
   await settle();
   assert.equal(ui.document.documentElement.dataset.notificationTheme, "dark");
-  assert.equal(ui.ids.get("dark-mode").attributes["aria-checked"], "true");
+  assert.equal(ui.ids.get("theme").value, "dark");
   ui.window.events.pagehide();
   assert.equal(ui.themeDisconnected, true);
   assert.equal(ui.media.events.change, undefined);
@@ -1241,6 +1604,37 @@ test("mark-read requires a click and removes only on confirmation", async () => 
   await marking;
   assert.equal(ui.calls.filter(call => call.path === "/api/read").length, 1);
   assert.equal(ui.document.querySelectorAll("article").length, 0);
+  assert.equal(ui.document.activeElement, ui.ids.get("search"));
+  ui.window.events.pagehide();
+});
+
+test("row reads focus the next row whether disabling a button blurs it immediately or retains focus", async () => {
+  for (const retainDisabledFocus of [false, true]) {
+    const ui = await renderer({ retainDisabledFocus, initialRows: [
+      thread("1", { updated_at: "2026-01-11T12:00:00Z" }),
+      thread("2"),
+    ] });
+    const readButton = id => ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === id);
+    const first = readButton("1");
+    first.focus();
+    await first.events.click();
+    assert.equal(ui.document.activeElement, readButton("2"));
+    assert.equal(ui.ids.get("search").value, "");
+    ui.window.events.pagehide();
+  }
+});
+
+test("a row read never steals focus moved to Search while the write is pending", async () => {
+  let release;
+  const ui = await renderer({ retainDisabledFocus: true, initialRows: [thread("1"), thread("2")],
+    onWrite: () => new Promise(resolve => { release = () => resolve("HTTP/2 205 Reset Content\r\n\r\n"); }) });
+  const button = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "1");
+  button.focus();
+  const marking = button.events.click();
+  await settle();
+  ui.ids.get("search").focus();
+  release();
+  await marking;
   assert.equal(ui.document.activeElement, ui.ids.get("search"));
   ui.window.events.pagehide();
 });

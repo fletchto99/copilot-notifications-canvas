@@ -12,7 +12,7 @@
     <header>
       <p class="eyebrow">YOUR GITHUB INBOX</p>
       <h1>Unread Notifications</h1>
-      <p class="subtitle">A little less noise. One repository at a time.</p>
+      <p id="subtitle" class="subtitle">A little less noise. One repository at a time.</p>
       <section id="update-banner" class="update-banner" aria-label="Canvas update" hidden>
         <p id="update-title" role="status" aria-live="polite"></p>
         <div class="update-actions">
@@ -46,10 +46,6 @@
             </svg>
           </summary>
           <div id="settings-panel" class="settings-panel" role="group" aria-label="Notification settings">
-            <button id="dark-mode" class="switch-toggle" type="button" role="switch" aria-checked="false" disabled>
-              <span>Dark mode</span>
-              <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
-            </button>
             <button id="auto-open" class="switch-toggle" type="button" role="switch" aria-checked="false" disabled>
               <span>Auto-open</span>
               <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
@@ -64,6 +60,22 @@
             </div>
             <p id="desktop-status" class="settings-help" role="status" aria-live="polite" hidden></p>
             <p id="settings-status" class="settings-help" role="status" aria-live="polite" hidden></p>
+            <div class="select-setting">
+              <label for="theme">Theme</label>
+              <select id="theme" disabled>
+                <option value="system" selected>System</option>
+                <option value="dark">Dark</option>
+                <option value="light">Light</option>
+              </select>
+            </div>
+            <div class="select-setting">
+              <label for="group-by">Group By</label>
+              <select id="group-by" disabled>
+                <option value="none">none</option>
+                <option value="repo" selected>repo</option>
+                <option value="date">date</option>
+              </select>
+            </div>
             <button id="check-updates" type="button">Check for updates</button>
             <p class="settings-help"><span id="installed-version">Canvas version loading...</span><span id="update-status" role="status" aria-live="polite" hidden></span></p>
           </div>

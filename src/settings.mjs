@@ -6,11 +6,13 @@ import { join } from "node:path";
 import { InboxError } from "./model.mjs";
 import { soundValue, validSound } from "./notifier.mjs";
 
+const groupingModes = ["none", "repo", "date"];
 const booleanSettings = ["autoOpen", "desktopNotifications"];
 const settingsValue = data => ({
   ...Object.fromEntries(booleanSettings.map(key => [key, data[key] ?? false])),
   darkMode: data.darkMode ?? null,
   desktopSound: soundValue(data.desktopSound),
+  groupBy: data.groupBy ?? "repo",
 });
 
 export class Preferences {
@@ -32,13 +34,14 @@ export class Preferences {
           booleanSettings.some(key => data[key] !== undefined && typeof data[key] !== "boolean") ||
           !validSound(soundValue(data.desktopSound)) ||
           (data.desktopGeneration !== undefined && typeof data.desktopGeneration !== "string") ||
-          (data.darkMode !== undefined && data.darkMode !== null && typeof data.darkMode !== "boolean")) {
+          (data.darkMode !== undefined && data.darkMode !== null && typeof data.darkMode !== "boolean") ||
+          (data.groupBy !== undefined && !groupingModes.includes(data.groupBy))) {
         throw new Error("Invalid settings object");
       }
       return data;
     } catch (error) {
       if (error.code === "ENOENT") return {};
-      throw new InboxError("settings_read", "Could not read notification settings. Check artifacts/settings.json; autoOpen and desktopNotifications must be booleans, darkMode must be a boolean or null, and desktopSound must be a supported sound name.", 500);
+      throw new InboxError("settings_read", "Could not read notification settings. Check artifacts/settings.json; autoOpen and desktopNotifications must be booleans, darkMode must be a boolean or null, desktopSound must be a supported sound name, and groupBy must be none, repo, or date.", 500);
     } finally {
       await file?.close();
     }
@@ -52,11 +55,12 @@ export class Preferences {
   async update(input) {
     if (!input || typeof input !== "object" || Array.isArray(input) ||
         Object.keys(input).length === 0 ||
-        Object.keys(input).some(key => ![...booleanSettings, "darkMode", "desktopSound"].includes(key)) ||
+        Object.keys(input).some(key => ![...booleanSettings, "darkMode", "desktopSound", "groupBy"].includes(key)) ||
         booleanSettings.some(key => Object.hasOwn(input, key) && typeof input[key] !== "boolean") ||
         (Object.hasOwn(input, "darkMode") && input.darkMode !== null && typeof input.darkMode !== "boolean") ||
-        (Object.hasOwn(input, "desktopSound") && !validSound(input.desktopSound))) {
-      throw new InboxError("invalid_settings", "Settings accept autoOpen and desktopNotifications booleans, darkMode as a boolean or null, and desktopSound as a supported sound name.", 400);
+        (Object.hasOwn(input, "desktopSound") && !validSound(input.desktopSound)) ||
+        (Object.hasOwn(input, "groupBy") && !groupingModes.includes(input.groupBy))) {
+      throw new InboxError("invalid_settings", "Settings accept autoOpen and desktopNotifications booleans, darkMode as a boolean or null, desktopSound as a supported sound name, and groupBy set to none, repo, or date.", 400);
     }
     const lockPath = join(this.directory, ".settings.lock");
     const temporary = join(this.directory, `.settings-${randomUUID()}.tmp`);
@@ -100,6 +104,7 @@ export class Preferences {
           await this.io.unlink(lockPath);
         }
       } catch {
+        // eslint-disable-next-line no-unsafe-finally -- Cleanup failures must surface even when the update also failed.
         throw new InboxError("settings_cleanup", "Settings cleanup failed. Check the extension artifacts directory before retrying.", 500);
       }
     }

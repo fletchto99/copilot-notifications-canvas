@@ -127,10 +127,12 @@ test("GitHub errors and existing drafts stop publication without tag writes or a
 test("only the tag workflow builds releases, and packaged checks precede publication", async () => {
   const workflow = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
   const tests = await readFile(new URL("../.github/workflows/tests.yml", import.meta.url), "utf8");
-  assert.match(workflow, /on:\n  push:\n    tags: \["v\*"\]/);
+  assert.match(workflow, /on:\n {2}push:\n {4}tags: \["v\*"\]/);
   assert.doesNotMatch(workflow, /workflow_dispatch|branches:/);
   assert.doesNotMatch(tests, /build-release|publish-release|npm run build/);
-  const commands = ["scripts/check-release.mjs", "node --test test/*.test.mjs", "npm ci",
+  assert.match(workflow, /checks:\n {4}needs: validate\n {4}uses: \.\/\.github\/workflows\/tests\.yml/);
+  assert.match(workflow, /release:\n {4}needs: \[validate, checks\]/);
+  const commands = ["scripts/check-release.mjs", "npm ci",
     "scripts/build-release.mjs", "node --test test/package.integration.mjs", "scripts/publish-release.mjs"];
   const positions = commands.map(command => workflow.indexOf(command));
   assert.ok(positions.every((position, index) => position >= 0 && (!index || position > positions[index - 1])));

@@ -102,7 +102,7 @@ test("concurrent providers can save settings during an upgrade without moving ar
   const next = await fixture(t, { root: old.root, version: "2.0.0" });
   const directory = join(old.target, "artifacts");
   const preferences = new Preferences({ directory });
-  await preferences.update({ autoOpen: false });
+  await preferences.update({ autoOpen: false, groupBy: "none" });
   await fs.writeFile(join(directory, "keep.txt"), "keep");
   const before = await fs.stat(directory);
   let writes = 0;
@@ -119,6 +119,7 @@ test("concurrent providers can save settings during an upgrade without moving ar
   await next.install();
   assert.equal(writes, 1);
   assert.equal((await preferences.read()).autoOpen, true);
+  assert.equal((await preferences.read()).groupBy, "none");
   assert.equal((await fs.stat(directory)).ino, before.ino);
   assert.equal(await fs.readFile(join(directory, "keep.txt"), "utf8"), "keep");
 });

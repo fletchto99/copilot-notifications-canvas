@@ -8,7 +8,7 @@ import { startServer } from "../src/server.mjs";
 import { Inbox } from "../src/inbox.mjs";
 import { GitHubClient } from "../src/github.mjs";
 
-const defaults = { autoOpen: false, darkMode: null, desktopNotifications: false, desktopSound: "default" };
+const defaults = { autoOpen: false, darkMode: null, desktopNotifications: false, desktopSound: "default", groupBy: "repo" };
 
 async function setup(t, io) {
   const directory = await fs.mkdtemp(join(tmpdir(), "notification-settings-test-"));
@@ -16,7 +16,7 @@ async function setup(t, io) {
   return new Preferences({ directory, io });
 }
 
-test("settings default to auto-open off and app theme, persist across instances and preserve unknown keys", async t => {
+test("settings default to auto-open off, app theme and repo grouping, persist across instances and preserve unknown keys", async t => {
   const preferences = await setup(t);
   assert.deepEqual(await preferences.read(), defaults);
   await fs.writeFile(preferences.path, '{"future":{"theme":"custom"},"autoOpen":false}');
@@ -43,17 +43,34 @@ test("dark mode persists across instances without replacing auto-open or unknown
   assert.deepEqual(await other.read(), { ...defaults, autoOpen: true });
 });
 
+test("all grouping choices persist across instances and survive unrelated settings updates", async t => {
+  const preferences = await setup(t);
+  await fs.writeFile(preferences.path, '{"autoOpen":true,"darkMode":false,"future":42}');
+  const other = new Preferences({ directory: preferences.directory });
+  for (const groupBy of ["none", "date", "repo"]) {
+    assert.deepEqual(await preferences.update({ groupBy }), { ...defaults, autoOpen: true, darkMode: false, groupBy });
+    assert.deepEqual(await other.read(), { ...defaults, autoOpen: true, darkMode: false, groupBy });
+    await other.update({ darkMode: true });
+    assert.deepEqual(await preferences.read(), { ...defaults, autoOpen: true, darkMode: true, groupBy });
+    await other.update({ darkMode: false });
+    assert.equal(JSON.parse(await fs.readFile(preferences.path, "utf8")).future, 42);
+  }
+});
+
 test("malformed stored settings and invalid updates fail explicitly without overwriting data", async t => {
   const preferences = await setup(t);
   for (const data of ["{", "[]", "null", '{"autoOpen":"yes"}', '{"desktopNotifications":1}',
-    '{"desktopSound":null}', '{"desktopGeneration":false}', '{"darkMode":"dark"}', '{"darkMode":0}', " ".repeat(17000)]) {
+    '{"desktopSound":null}', '{"desktopGeneration":false}', '{"darkMode":"dark"}', '{"darkMode":0}',
+    '{"groupBy":null}', '{"groupBy":"unknown"}', '{"groupBy":false}', '{"groupBy":[]}', " ".repeat(17000)]) {
     await fs.writeFile(preferences.path, data);
     await assert.rejects(preferences.read(), { code: "settings_read" });
     await assert.rejects(preferences.update({ autoOpen: true }), { code: "settings_read" });
     assert.equal(await fs.readFile(preferences.path, "utf8"), data);
   }
   for (const input of [null, [], {}, { autoOpen: "yes" }, { darkMode: "dark" }, { darkMode: 0 },
-    { darkMode: undefined }, { autoOpen: null }, { autoOpen: true, token: "not accepted" }]) {
+    { darkMode: undefined }, { autoOpen: null }, { autoOpen: true, token: "not accepted" },
+    { groupBy: undefined }, { groupBy: null }, { groupBy: "unknown" }, { groupBy: "Repo" },
+    { groupBy: false }, { groupBy: [] }, { groupBy: { value: "date" } }]) {
     await assert.rejects(preferences.update(input), { code: "invalid_settings" });
   }
 });
@@ -88,13 +105,15 @@ test("settings HTTP routes require capability/origin and persist only permitted 
     desktopStatus: { supported: false, state: "off", message: "Desktop notifications are unavailable." },
   });
   for (const [input, status] of [[{ autoOpen: true }, 200], [{ darkMode: true }, 200],
+    [{ groupBy: "none" }, 200], [{ groupBy: "repo" }, 200], [{ groupBy: "date" }, 200],
+    [{ groupBy: "unknown" }, 400], [{ groupBy: null }, 400],
     [{ autoOpen: "yes" }, 400], [{ darkMode: "dark" }, 400], [{ sound: true }, 400]]) {
     const response = await fetch(`${url.origin}/api/settings`, { method: "POST", headers, body: JSON.stringify(input) });
     assert.equal(response.status, status);
   }
-  assert.deepEqual(await preferences.read(), { ...defaults, autoOpen: true, darkMode: true });
+  assert.deepEqual(await preferences.read(), { ...defaults, autoOpen: true, darkMode: true, groupBy: "date" });
   assert.deepEqual(await (await fetch(`${url.origin}/api/settings`, { headers })).json(), {
-    ...defaults, autoOpen: true, darkMode: true,
+    ...defaults, autoOpen: true, darkMode: true, groupBy: "date",
     desktopStatus: { supported: false, state: "off", message: "Desktop notifications are unavailable." },
   });
   assert.equal((await fetch(`${url.origin}/api/settings`, {
@@ -104,14 +123,14 @@ test("settings HTTP routes require capability/origin and persist only permitted 
 
 test("desktop preference patches preserve other settings and create a fresh generation only on enabling", async t => {
   const preferences = await setup(t);
-  await preferences.update({ autoOpen: true });
+  await preferences.update({ autoOpen: true, groupBy: "none" });
   await preferences.update({ desktopNotifications: true });
   const initial = (await preferences.document()).desktopGeneration;
   assert.equal(typeof initial, "string");
   await preferences.update({ desktopSound: "Ping" });
   await preferences.update({ desktopNotifications: true });
   assert.equal((await preferences.document()).desktopGeneration, initial);
-  assert.deepEqual(await preferences.read(), { ...defaults, autoOpen: true, desktopNotifications: true, desktopSound: "Ping" });
+  assert.deepEqual(await preferences.read(), { ...defaults, autoOpen: true, desktopNotifications: true, desktopSound: "Ping", groupBy: "none" });
   await preferences.update({ desktopNotifications: false });
   await preferences.update({ desktopNotifications: true });
   assert.notEqual((await preferences.document()).desktopGeneration, initial);

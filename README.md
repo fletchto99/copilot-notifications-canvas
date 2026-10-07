@@ -1,6 +1,7 @@
 # Unread Notifications
 
-Unread GitHub notifications in the GitHub Copilot app, grouped by repository.
+Unread GitHub notifications in the GitHub Copilot app, grouped by repository or
+date, or shown as a single newest-first list.
 Search, mark rows or repositories as read, and opt into desktop
 notifications or auto-open.
 
@@ -43,7 +44,7 @@ Do not install from a source checkout, main, or a local build. Stop if the
 package is missing or verification fails; do not fall back to source.
 
 Preserve the entire installed artifacts directory in place, including
-settings.json, autoOpen, darkMode, unknown settings, and other files. Do not
+settings.json, autoOpen, darkMode, groupBy, unknown settings, and other files. Do not
 delete or recreate that directory, overwrite locally modified runtime files,
 or bypass installer safeguards. Report missing prerequisites or permissions
 without changing credentials.
@@ -125,7 +126,7 @@ new bundle. A retry recognizes whichever version is installed.
 Updates use the user-wide installer. A project-local checkout shadows a
 user-wide installation in that repository; update that checkout deliberately
 instead of expecting a user-wide install to replace it. Persisted settings,
-including **Auto-open**, **Dark mode**, **Desktop notifications** and
+including **Group By**, **Theme**, **Auto-open**, **Desktop notifications** and
 **Sound**, are retained.
 
 ### One-time migration from source installations
@@ -149,9 +150,14 @@ those layouts rather than deleting code that an old session might still need.
 
 ## Usage
 
-- Repository groups are always sorted alphabetically by full name (`owner/repo`),
-  so marking notifications as read does not reorder the remaining groups.
-  Notifications within each group remain newest first.
+- **Settings > Group By** has three saved options:
+  - **none**: no group headers; all loaded, matching notifications are sorted
+    globally by their last-updated date, newest first.
+  - **repo** (default): repository groups are sorted alphabetically by full name
+    (`owner/repo`), with newest notifications first within each group.
+  - **date**: notifications are grouped by their last-updated calendar day in
+    your local time zone, with newest days and notifications first.
+  Repository names appear on each row in **none** and **date** modes.
 - The canvas loads up to 50 notifications initially. **Load more** fetches up to
   50 more at a time, with no fixed total cap while GitHub has more pages.
   Search covers loaded notifications only.
@@ -168,10 +174,11 @@ those layouts rather than deleting code that an old session might still need.
   are shown as errors.
 - The inbox icon to the left of **Settings** opens your
   [GitHub inbox](https://github.com/notifications) in a new tab.
-- The **Settings** gear icon includes matching **Dark mode**, **Auto-open**, and
-  **Desktop notifications** switches. The canvas follows Copilot's theme until
-  you choose light or dark; your choice is saved across sessions and loaded
-  when a panel opens or becomes visible.
+- **Settings > Theme**, above **Group By**, offers **System** (default),
+  **Dark**, and **Light**. System follows Copilot's theme, falling back to the
+  OS theme when the app does not provide one. Choose System again to return
+  to automatic theming. Your choice is saved across sessions and loaded when a
+  panel opens or becomes visible. Existing saved Dark mode choices are preserved.
 - **Auto-open** and **Desktop notifications** are off by default.
   **Sound** offers system-specific sounds
   and defaults to **System default**. These settings are saved across sessions.
@@ -184,6 +191,8 @@ those layouts rather than deleting code that an old session might still need.
   on session resume, extension reload, or after you close the panel.
 - A repository's **Mark N as read** immediately starts marking only its shown,
   loaded notifications, narrowed by search. Older unloaded items are not included.
+  This action is available in **repo** mode; individual **Mark as read** buttons
+  remain available in every grouping mode.
 
 ### Desktop notifications
 
@@ -284,18 +293,59 @@ Release builds also start from `src/extension.mjs`, not the development entry
 point. The installer still writes only the bundled `extension.mjs` under the
 user-wide `extensions/github-notifications/` directory.
 
-Run the tests:
+Run the unit and HTTP integration tests without installing dependencies:
 
 ```sh
 node --test test/*.test.mjs
 ```
 
-The [test workflow](.github/workflows/tests.yml) runs the same suite on pull
-requests and pushes to `main`. Tests use synthetic fixtures and need no dependency
-installation, GitHub sign-in, or external network access. Ordinary CI does not
-build or publish release assets.
+The [test workflow](.github/workflows/tests.yml) runs on pull requests, pushes to
+`main`, and before publication by the release workflow:
 
-To validate packaging locally (not to distribute a development installation):
+- Unit and integration tests on Linux with Node.js 22 and 24, and macOS with
+  Node.js 24.
+- Source-only Node.js coverage on Linux/Node.js 22, requiring at least 90% lines,
+  85% branches, and 90% functions. Tests and development tooling do not count.
+  A separate guard fails if any runtime, installer, or publication module is
+  missing from the report, including the renderer and development entry point.
+  The release-only builder is exercised separately by package integration tests.
+- Correctness-focused ESLint and checksum-verified actionlint. Browser and Node
+  globals are checked separately; extension providers must not use `console`.
+- Chromium and WebKit smoke tests against the real loopback server, including
+  WCAG 2.1 A/AA axe checks and light/dark layouts at 320, 480, and 960 pixels.
+  Browser reports, layout screenshots, and failure traces are retained for 14 days.
+
+All tests use synthetic GitHub responses. They need no GitHub sign-in, make no
+live GitHub requests, and cannot mark real notifications read. Browser tests
+stub native desktop delivery, block unexpected external requests, and fail on
+browser errors. Tests never show operating-system notifications. Temporary
+settings and lifecycle-test `COPILOT_HOME` directories are isolated and removed
+after each test. The SDK-boundary stub tests our registration and lifecycle
+wiring, not compatibility with a particular Copilot build; still reload and
+inspect the real extension when changing SDK integration.
+
+The repository's `.npmrc` selects the public npm registry for development
+dependencies. Install them and run the checks locally:
+
+```sh
+npm ci --ignore-scripts
+npm run lint
+npm run lint:workflows  # Requires actionlint on PATH (CI uses v1.7.12).
+npm run test:coverage
+npx playwright install --with-deps chromium webkit
+npm run test:browser
+```
+
+The coverage command also works without `npm ci`. Playwright's install command
+downloads browser binaries and, on Linux, may require permission to install
+system libraries. To run one engine, use
+`npm run test:browser -- --project=webkit`. The extension itself remains
+dependency-free apart from the SDK supplied by Copilot; development packages
+are never copied by the installer. Dependabot groups weekly updates for pinned
+GitHub Actions and npm development dependencies.
+
+Ordinary CI does not build or publish release assets. To validate packaging
+locally (not to distribute a development installation):
 
 ```sh
 npm ci --ignore-scripts --no-audit --no-fund
@@ -303,10 +353,10 @@ npm run build -- v0.2.0
 npm run test:package
 ```
 
-Use the tag matching `version.json`. The pinned esbuild dependency is build-time
-only. Generated archives and checksums go in ignored `dist/`; build output is
-not committed. The packaged tests extract the archive, run its installer in
-temporary Copilot homes, and load its provider with a stub host SDK.
+Use the tag matching `src/version.json`. The pinned esbuild dependency is
+build-time only. Generated archives and checksums go in ignored `dist/`; build
+output is not committed. The package tests extract the archive, run its
+installer in temporary Copilot homes, and load its provider with a stub host SDK.
 
 ### Publishing releases
 
@@ -324,10 +374,11 @@ git push origin v0.2.0
 
 Only a `v*` tag push triggers the [Release workflow](.github/workflows/release.yml).
 There is no manual or branch-push release build. The workflow validates the
-stable tag against `version.json`, runs the source/installer tests, installs
-the locked build tools, bundles and minifies the runtime, and tests the actual
-archive. It then verifies the tag still points to the **exact tested commit**.
-It never creates or moves tags, bumps a version, or commits generated output.
+stable tag against `src/version.json`, runs the same test matrix, coverage,
+lint, and browser/accessibility checks as PR CI, then bundles and minifies the
+runtime and tests the actual archive. It verifies the tag still points to the
+**exact tested commit** before publication. It never creates or moves tags,
+bumps a version, or commits generated output.
 
 Publication creates a draft with generated notes and uploads
 `github-notifications-<tag>.tar.gz` and `SHA256SUMS` before making the release
