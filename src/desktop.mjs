@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { setTimeout as wait } from "node:timers/promises";
 import { GitHubClient, firstPage, POLL_MS } from "./github.mjs";
-import { groupThreads, InboxError, orderedThreads } from "./model.mjs";
+import { groupThreads, InboxError, notificationTitle, orderedThreads } from "./model.mjs";
 import { acquireLock, ownerPattern, processAlive, removeFile } from "./lock.mjs";
 import { notifyDesktop, desktopCapabilities, validSound } from "./notifier.mjs";
 
@@ -101,7 +101,7 @@ function notificationMessages(arrivals) {
   return groupThreads(arrivals, { query: "" }).flatMap(group =>
     group.items.length >= BURST_THRESHOLD
       ? [{ title: group.repository, body: `${group.items.length} new notifications` }]
-      : group.items.map(item => ({ title: group.repository, body: item.title })));
+      : group.items.map(item => ({ title: group.repository, body: notificationTitle(item) })));
 }
 
 export class DesktopNotifications {

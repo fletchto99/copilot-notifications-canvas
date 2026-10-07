@@ -2,6 +2,10 @@
 
 [README](../README.md) | [Installation](installation.md) | [Settings](settings.md)
 
+Coding agents should follow [AGENTS.md](../AGENTS.md). Copilot also loads
+[`.github/copilot-instructions.md`](../.github/copilot-instructions.md), which
+points to the shared repository guidance.
+
 ## Local development
 
 Provider modules and renderer assets live in `src/`. The entry point at
@@ -45,6 +49,20 @@ required checks. PR/main CI validates packaging but never publishes releases.
 Tests use synthetic GitHub responses and isolated settings: no sign-in, live
 read updates, or OS notifications. SDK stubs do not verify compatibility with a
 specific Copilot build; reload and inspect the real extension after SDK changes.
+
+## Copilot cloud agent
+
+[Copilot setup steps](../.github/workflows/copilot-setup-steps.yml) prepare an
+Ubuntu 24.04 environment with Node.js 22, locked development dependencies,
+Chromium and WebKit with their system libraries, and checksum-verified
+`actionlint`. The workflow checks tool availability without running the test
+suite, installing the extension, or publishing a release. It needs no
+notification credentials or separately installed Copilot SDK.
+
+Copilot uses these steps once the workflow is on the default branch. They do
+not configure local Copilot app/CLI sessions. Manual runs and path-filtered
+pull-request/main runs validate setup when the workflow or dependency manifests
+change; the agent still runs the checks relevant to its task.
 
 ## Packaging
 

@@ -37,7 +37,8 @@ Checks run about every two minutes, subject to GitHub limits and independent of
 search or loaded pages. For each repository:
 
 - **1-4 new or updated unread threads** produce individual alerts with the
-  repository name and notification title.
+  repository name and notification title. Titles include the issue or PR number
+  when available (for example, `#42 Fix login`).
 - **5 or more in one poll** produce a single `<count> new notifications` summary
   with one sound request.
 

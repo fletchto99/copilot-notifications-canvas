@@ -84,8 +84,8 @@ test("initial backlog is silent and small batches retain each thread's title and
   assert.deepEqual(Object.keys(f.deliveries[0]).sort(), ["body", "platform", "signal", "sound", "title"]);
   assert.equal(f.deliveries[0].sound, "default");
   assert.equal(f.deliveries[0].title, "example/widgets");
-  assert.equal(f.deliveries[0].body, "Synthetic notification 2");
-  assert.equal(f.deliveries[1].body, "Synthetic notification 3");
+  assert.equal(f.deliveries[0].body, "#42 Synthetic notification 2");
+  assert.equal(f.deliveries[1].body, "#42 Synthetic notification 3");
   f.advance();
   await watcher.check();
   assert.equal(f.deliveries.length, 2);
@@ -99,6 +99,35 @@ test("initial backlog is silent and small batches retain each thread's title and
   assert.match(state.fingerprints[0], /^[a-f0-9]{64}$/);
   assert.doesNotMatch(JSON.stringify(state), /Synthetic|example\/widgets|updatedAt|repository|title/);
   assert.equal((await stat(join(f.directory, "desktop-state.json"))).mode & 0o777, 0o600);
+});
+
+test("individual desktop alerts include issue and PR numbers but not unrelated IDs on every platform", async t => {
+  for (const platform of ["darwin", "win32", "linux"]) {
+    const f = await fixture(t);
+    const watcher = f.make({ platform });
+    await watcher.check();
+    const updated_at = new Date(f.advance()).toISOString();
+    f.rows([
+      thread("101", { updated_at, subject: {
+        type: "Issue", title: "Fix login", url: "https://api.github.com/repos/example/widgets/issues/7",
+      } }),
+      thread("102", { updated_at, subject: {
+        type: "PullRequest", title: "Update tests", url: "https://api.github.com/repos/example/widgets/pulls/8",
+      } }),
+      thread("103", { updated_at, subject: { type: "Issue", title: "Missing link", url: null } }),
+      thread("104", { updated_at, subject: {
+        type: "Release", title: "New release", url: "https://api.github.com/repos/example/widgets/releases/9",
+      } }),
+    ]);
+    await watcher.check();
+    assert.deepEqual(f.deliveries.map(({ title, body }) => ({ title, body })), [
+      { title: "example/widgets", body: "#7 Fix login" },
+      { title: "example/widgets", body: "#8 Update tests" },
+      { title: "example/widgets", body: "Missing link" },
+      { title: "example/widgets", body: "New release" },
+    ]);
+    assert.ok(f.deliveries.every(alert => alert.platform === platform));
+  }
 });
 
 test("a delayed initial response cannot hide activity that arrives before local fetch completion", async t => {
@@ -116,7 +145,7 @@ test("a delayed initial response cannot hide activity that arrives before local 
   rows = [updated("2", epoch + 1000), ...rows];
   f.advance();
   await watcher.check();
-  assert.deepEqual(f.deliveries.map(alert => alert.body), ["Synthetic notification 2"]);
+  assert.deepEqual(f.deliveries.map(alert => alert.body), ["#42 Synthetic notification 2"]);
 });
 
 test("initial baselines preserve same-second arrivals even when the local clock is ahead", async t => {
@@ -129,7 +158,7 @@ test("initial baselines preserve same-second arrivals even when the local clock 
     f.rows([thread(), thread("2")]);
     f.advance();
     await watcher.check();
-    assert.deepEqual(f.deliveries.map(alert => alert.body), ["Synthetic notification 2"]);
+    assert.deepEqual(f.deliveries.map(alert => alert.body), ["#42 Synthetic notification 2"]);
   }
 });
 
@@ -145,7 +174,7 @@ test("an empty initial inbox uses server time and does not skip same-second or d
     rows = [updated("2", epoch + delta), updated("1", epoch - 1000)];
     f.advance();
     await watcher.check();
-    assert.deepEqual(f.deliveries.map(alert => alert.body), ["Synthetic notification 2"]);
+    assert.deepEqual(f.deliveries.map(alert => alert.body), ["#42 Synthetic notification 2"]);
   }
 });
 
@@ -183,7 +212,7 @@ test("initial pagination records every boundary fingerprint before allowing same
   rows = [updated("61", epoch), ...rows.slice(40)];
   f.advance();
   await watcher.check();
-  assert.deepEqual(f.deliveries.map(alert => alert.body), ["Synthetic notification 61"]);
+  assert.deepEqual(f.deliveries.map(alert => alert.body), ["#42 Synthetic notification 61"]);
 });
 
 test("a failed initial boundary page does not commit a partial baseline", async t => {
@@ -217,7 +246,7 @@ test("activity seen on a later initial page does not advance the first snapshot'
   later = true;
   f.advance();
   await watcher.check();
-  assert.deepEqual(f.deliveries.map(alert => alert.body), ["Synthetic notification 51", "Synthetic notification 52"]);
+  assert.deepEqual(f.deliveries.map(alert => alert.body), ["#42 Synthetic notification 51", "#42 Synthetic notification 52"]);
 });
 
 test("unsupported checkpoint versions and missing current fields fail closed without migration", async t => {
@@ -261,7 +290,7 @@ test("a missing checkpoint creates a current silent baseline after explicit offl
   f.rows([updated("2", epoch + 1000), thread()]);
   f.advance();
   await watcher.check();
-  assert.deepEqual(f.deliveries.map(alert => alert.body), ["Synthetic notification 2"]);
+  assert.deepEqual(f.deliveries.map(alert => alert.body), ["#42 Synthetic notification 2"]);
 });
 
 test("invalid stored sound booleans stop watching without polling, delivery, or checkpoint writes", async t => {
@@ -294,7 +323,7 @@ test("bursts group at exactly five new notifications from a repository", async t
     assert.ok(f.deliveries.every(alert => alert.title === "example/widgets"));
     if (count >= 5) assert.equal(f.deliveries[0].body, `${count} new notifications`);
     else assert.deepEqual(new Set(f.deliveries.map(alert => alert.body)),
-      new Set(arrivals.map(item => item.subject.title)));
+      new Set(arrivals.map(item => `#42 ${item.subject.title}`)));
     f.advance();
     await watcher.check();
     assert.equal(f.deliveries.length, count < 5 ? count : 1, "unchanged activity stays silent");
@@ -333,7 +362,7 @@ test("large initial backlogs are silent and a later small update does not summar
   f.rows([...backlog, updated("1", time)]);
   await watcher.check();
   assert.equal(f.deliveries.length, 1);
-  assert.equal(f.deliveries[0].body, "Synthetic notification 1");
+  assert.equal(f.deliveries[0].body, "#42 Synthetic notification 1");
 });
 
 test("equal-timestamp arrivals are detected without replaying known IDs or older promoted rows", async t => {
@@ -456,7 +485,7 @@ test("watchers joining during delivery retain continuity when the original close
       await closing;
       f.rows([updated("3", f.advance()), updated("2", time), thread()]);
       await survivor.check();
-      assert.deepEqual(f.deliveries.map(alert => alert.body), ["Synthetic notification 3"]);
+      assert.deepEqual(f.deliveries.map(alert => alert.body), ["#42 Synthetic notification 3"]);
       assert.equal((await f.state()).cohort, cohort);
     } finally {
       finish();
@@ -491,7 +520,7 @@ test("a genuine gap creates a new cohort without replaying previously claimed ac
   assert.equal(f.deliveries.length, 0);
   f.rows([updated("3", f.advance()), updated("2", time), thread()]);
   await two.check();
-  assert.deepEqual(f.deliveries.map(alert => alert.body), ["Synthetic notification 3"]);
+  assert.deepEqual(f.deliveries.map(alert => alert.body), ["#42 Synthetic notification 3"]);
 });
 
 test("closing cannot unregister a panel reopened while its registration lock is busy", async t => {
@@ -513,7 +542,7 @@ test("closing cannot unregister a panel reopened while its registration lock is 
   assert.equal(watcher.cohort, cohort);
   f.rows([updated("2", f.advance()), thread()]);
   await watcher.check();
-  assert.deepEqual(f.deliveries.map(alert => alert.body), ["Synthetic notification 2"]);
+  assert.deepEqual(f.deliveries.map(alert => alert.body), ["#42 Synthetic notification 2"]);
 });
 
 test("reopening during marker removal preserves registration, its cohort and subsequent alerts", async t => {
@@ -552,7 +581,7 @@ test("reopening during marker removal preserves registration, its cohort and sub
       assert.equal(JSON.parse(await readFile(marker, "utf8")).cohort, cohort);
       f.rows([updated("2", f.advance()), thread()]);
       await watcher.check();
-      assert.deepEqual(f.deliveries.map(alert => alert.body), ["Synthetic notification 2"]);
+      assert.deepEqual(f.deliveries.map(alert => alert.body), ["#42 Synthetic notification 2"]);
       assert.equal((await f.state()).cohort, cohort);
       await watcher.close();
       assert.equal(watcher.registered, false);
