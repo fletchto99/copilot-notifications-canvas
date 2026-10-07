@@ -357,11 +357,6 @@ The workflow never creates or moves tags, bumps versions, or commits build outpu
 Publishing is serialized. GitHub CLI creates a draft, uploads the archive and
 `SHA256SUMS`, then publishes that exact release by ID as **Latest**.
 The job verifies the immutable release and both assets before reporting success.
-It waits 5 seconds after publication for GitHub's release attestation to become
-available. If verification reports that the tag's attestation is missing, it retries
-the read-only checks up to three times, waiting 5, 10, then 20 seconds (40 seconds
-of waiting in total, including the initial delay). Other verification errors fail
-immediately; publication is never retried by this loop.
 Review the generated release notes for behavior changes and update guidance.
 
 Repository settings must keep **release immutability enabled**. The configured
@@ -377,8 +372,6 @@ An existing release or asset is never overwritten. A failure before draft
 creation can be retried. If an upload/publication failure leaves a draft,
 inspect it first; remove only that incomplete draft (not its tag) before
 rerunning the job. Never replace assets on an already-published release.
-If verification fails after publication, leave the release and tag intact,
-investigate the failure, and rerun verification rather than publication.
 
 Publish increasing versions; never move a published tag or reuse a version.
 For a bad release, publish a fixed version rather than modifying existing
