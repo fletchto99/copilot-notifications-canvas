@@ -295,8 +295,14 @@ function restoreFocus(previous, preferred) {
   const key = previous.dataset?.focusKey;
   if (current && current !== previous && current !== document.body && current !== document.documentElement &&
       !(key && current.dataset?.focusKey === key)) return;
-  const target = preferred ?? (key ? focusKey(key) : $(previous.id));
-  (target && !target.disabled && !target.hidden ? target : $("search")).focus({ preventScroll: true });
+  let target = preferred ?? (key ? focusKey(key) : $(previous.id));
+  for (let node = target; node; node = node.parentNode) {
+    if (node.hidden) {
+      target = null;
+      break;
+    }
+  }
+  (target && !target.disabled ? target : $("search")).focus({ preventScroll: true });
 }
 
 async function batchRequest(action, input) {
@@ -547,7 +553,8 @@ function renderGroups(groups, fallbackFocusKey) {
   const key = JSON.stringify(groups);
   if (key === listKey) return;
   listKey = key;
-  const focused = document.activeElement?.dataset.focusKey;
+  const previousFocus = document.activeElement;
+  const focused = previousFocus?.dataset.focusKey;
   const fragment = document.createDocumentFragment();
   for (const [index, group] of groups.entries()) {
     const rows = element("div", group.key ? "repo-items" : "notification-list");
@@ -629,7 +636,7 @@ function renderGroups(groups, fallbackFocusKey) {
   }
   $("groups").replaceChildren(fragment);
   if (focused) {
-    (focusKey(focused) ?? focusKey(fallbackFocusKey) ?? $("search")).focus({ preventScroll: true });
+    restoreFocus(previousFocus, focusKey(focused) ?? focusKey(fallbackFocusKey));
   }
 }
 

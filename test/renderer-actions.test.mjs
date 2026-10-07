@@ -36,6 +36,27 @@ test("row reads focus the next row whether disabling a button blurs it immediate
   }
 });
 
+test("row reads fall back to Search when the next row belongs to a collapsed group", async t => {
+  for (const groupBy of ["repo", "date"]) {
+    for (const retainDisabledFocus of [false, true]) {
+      const ui = await renderer({ retainDisabledFocus, storedSettings: { groupBy }, initialRows: [
+        thread("1", { repository: { full_name: "example/alpha" }, updated_at: "2026-01-11T12:00:00Z" }),
+        thread("2", { repository: { full_name: "example/zulu" } }),
+      ] });
+      t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+      const buttons = () => ui.ids.get("groups").querySelectorAll("button");
+      buttons().filter(node => node.dataset.disclosure)[1].events.click();
+      const first = buttons().find(node => node.dataset.threadId === "1");
+      first.focus();
+      await first.events.click();
+      assert.deepEqual(ui.patches, ["/notifications/threads/1"]);
+      assert.equal(ui.document.activeElement, ui.ids.get("search"));
+      assert.equal(buttons().find(node => node.dataset.disclosure).attributes["aria-expanded"], "false");
+      assert.equal(ui.ids.get("groups").children[0].children[1].hidden, true);
+    }
+  }
+});
+
 test("a row read never steals focus moved to Search while the write is pending", async () => {
   let release;
   const ui = await renderer({ retainDisabledFocus: true, initialRows: [thread("1"), thread("2")],
