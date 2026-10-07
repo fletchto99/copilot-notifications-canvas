@@ -176,3 +176,39 @@ test("rate-limited writes block subsequent writes until GitHub's retry time", as
   assert.equal(writes, 1);
   assert.equal(inbox.summary().loaded, 2);
 });
+
+test("a read in another panel invalidates queued pagination without losing the remaining loaded rows", async () => {
+  let started;
+  let finish;
+  let read = false;
+  const ready = new Promise(resolve => { started = resolve; });
+  const client = new GitHubClient({ run: async args => {
+    if (args.includes("PATCH")) {
+      started();
+      await new Promise(resolve => { finish = resolve; });
+      read = true;
+      return empty(205);
+    }
+    if (args.at(-1).includes("page=2")) return http([thread("3")]);
+    return read ? http([thread("2")]) : http([thread("1"), thread("2")], { link: next });
+  } });
+  const one = new Inbox(client);
+  const two = new Inbox(client);
+  await one.refresh();
+  await two.refresh();
+  const marking = two.markRead({ id: "1" });
+  await ready;
+  const loading = assert.rejects(one.more(), { code: "inbox_changed" });
+  finish();
+  await marking;
+  await loading;
+  assert.deepEqual(one.loadedItems().map(item => item.id), ["2"]);
+  assert.equal(one.summary().status, "stale");
+  assert.equal(one.summary().needsRefresh, true);
+  await one.refresh({ force: true });
+  assert.deepEqual(one.loadedItems().map(item => item.id), ["2"]);
+  assert.equal(one.summary().status, "ready");
+  assert.equal(one.summary().needsRefresh, false);
+  one.close();
+  two.close();
+});

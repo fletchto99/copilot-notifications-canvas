@@ -417,7 +417,7 @@ test("PR checks validate packages without publishing, and tag checks precede pub
   assert.doesNotMatch(tests, /publish-release|contents: write|GH_TOKEN/);
   assert.match(tests, /name: Validate release packaging\n {8}run: \|\n {10}npm run build\n {10}npm run test:package/);
   assert.match(tests, /runs-on: windows-latest/);
-  assert.match(tests, /node --test test\/platform\.test\.mjs test\/settings\.test\.mjs test\/notifier\.test\.mjs/);
+  assert.match(tests, /node --test test\/platform\.test\.mjs test\/lock\.test\.mjs test\/settings\.test\.mjs test\/notifier\.test\.mjs/);
   assert.match(workflow, /checks:\n {4}needs: validate\n {4}uses: \.\/\.github\/workflows\/tests\.yml/);
   assert.match(workflow, /build:\n {4}needs: \[validate, checks\]/);
   assert.match(workflow, /publish:\n {4}needs: \[validate, build\]/);

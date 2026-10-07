@@ -160,6 +160,115 @@ test("concurrent actions fail explicitly and closing aborts outstanding gh work"
   assert.equal(inbox.summary().loaded, 0);
 });
 
+test("closed inbox actions reject without queuing requests or restoring loaded rows", async () => {
+  const calls = [];
+  const client = new GitHubClient({ run: async args => {
+    calls.push(args);
+    return http([thread()], { link: next });
+  } });
+  const inbox = new Inbox(client);
+  await inbox.refresh();
+  inbox.close();
+  for (const action of [
+    () => inbox.refresh(),
+    () => inbox.refresh({ force: true }),
+    () => inbox.more(),
+    () => inbox.setFilters({ query: "widgets" }),
+    () => inbox.markRead({ id: "1" }),
+  ]) {
+    await assert.rejects(action(), { code: "closed" });
+  }
+  assert.equal(calls.length, 1);
+  assert.equal(inbox.summary().loaded, 0);
+  assert.equal(client.readListeners.size, 0);
+  assert.equal(client.pendingReads.size, 0);
+});
+
+test("pending refreshes report loading with the previous rows and reject row writes", async () => {
+  let started;
+  let finish;
+  const ready = new Promise(resolve => { started = resolve; });
+  const calls = [];
+  const client = new GitHubClient({ run: async args => {
+    calls.push(args);
+    if (calls.length === 1) return http([thread("1")]);
+    started();
+    return new Promise(resolve => { finish = () => resolve(http([thread("2")])); });
+  } });
+  const inbox = new Inbox(client);
+  await inbox.refresh();
+  const pending = inbox.refresh({ force: true });
+  try {
+    await ready;
+    assert.equal(inbox.summary().status, "loading");
+    assert.equal(inbox.summary().loaded, 1);
+    await assert.rejects(inbox.markRead({ id: "1" }), { code: "busy" });
+    assert.equal(calls.length, 2);
+    assert.ok(calls.every(args => args.includes("GET")));
+  } finally {
+    finish();
+    await pending;
+  }
+  assert.equal(inbox.summary().status, "ready");
+  assert.deepEqual(inbox.loadedItems().map(item => item.id), ["2"]);
+  inbox.close();
+});
+
+test("active repository batches block refresh, pagination and row reads without additional requests", async () => {
+  let started;
+  let finish;
+  const ready = new Promise(resolve => { started = resolve; });
+  const calls = [];
+  const client = new GitHubClient({ run: async args => {
+    calls.push(args);
+    if (!args.includes("PATCH")) return http([thread("1"), thread("2")], { link: next });
+    started();
+    return new Promise(resolve => { finish = () => resolve("HTTP/2 205 Reset Content\r\n\r\n"); });
+  } });
+  const inbox = new Inbox(client);
+  await inbox.refresh();
+  const { repository, selectionKey } = inbox.groups()[0];
+  inbox.batch.start({ repository, selectionKey });
+  const token = { token: inbox.batch.snapshot().token };
+  try {
+    await ready;
+    for (const action of [
+      () => inbox.refresh(),
+      () => inbox.refresh({ force: true }),
+      () => inbox.more(),
+      () => inbox.markRead({ id: "2" }),
+    ]) {
+      await assert.rejects(action(), { code: "busy" });
+    }
+    assert.equal(calls.length, 2);
+    assert.equal(inbox.summary().loaded, 2);
+  } finally {
+    inbox.batch.cancel(token);
+    finish();
+    await inbox.batch.done;
+    inbox.close();
+  }
+  assert.equal(calls.length, 2);
+  assert.equal(client.readReservations.size, 0);
+  assert.equal(client.pendingReads.size, 0);
+});
+
+test("pagination rejects an unopened inbox and an exhausted page without requesting more data", async () => {
+  let calls = 0;
+  const inbox = new Inbox(new GitHubClient({ run: async () => {
+    calls++;
+    return http([thread()]);
+  } }));
+  await assert.rejects(inbox.more(), { code: "no_more_pages" });
+  assert.equal(calls, 0);
+  await inbox.refresh();
+  await assert.rejects(inbox.more(), { code: "no_more_pages" });
+  assert.equal(calls, 1);
+  assert.equal(inbox.summary().status, "ready");
+  assert.equal(inbox.summary().loaded, 1);
+  inbox.close();
+});
+
 test("loading an older page cannot hide a stale error on existing pages", async () => {
   let now = 0;
   let fail = false;

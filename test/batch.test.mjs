@@ -71,9 +71,51 @@ test("strict bounded selection requests reject unknown, forged, stale, cross-rep
   await inbox.setFilters({ query: "notification 1" });
   assert.throws(() => inbox.batch.start({ repository: group.repository, selectionKey: group.selectionKey }),
     { code: "selection_changed" });
-  for (const input of [{}, { token: 1 }, { token: "a".repeat(36) }, { token: "a".repeat(36), ids: ["1"] }]) {
-    assert.throws(() => inbox.batch.start(input));
+  assert.deepEqual(writes, []);
+});
+
+test("batch controls reject malformed, missing and stale operation tokens without changing the current selection", async () => {
+  const { inbox, client, writes } = await fixture();
+  const unknown = { token: "00000000-0000-4000-8000-000000000000" };
+  for (const action of ["cancel", "retry", "dismiss"]) {
+    for (const input of [undefined, null, [], {}, { token: 1 }, { token: "invalid" }, { ...unknown, ids: ["1"] }]) {
+      assert.throws(() => inbox.batch[action](input), { code: "invalid_batch" });
+      assert.equal(inbox.batch.snapshot(), null);
+    }
+    assert.throws(() => inbox.batch[action](unknown), { code: "unknown_batch" });
   }
+  const stale = start(inbox);
+  inbox.batch.cancel(stale);
+  await inbox.batch.done;
+  const current = start(inbox);
+  inbox.batch.cancel(current);
+  await inbox.batch.done;
+  assert.notEqual(current.token, stale.token);
+  const before = inbox.batch.snapshot();
+  for (const action of ["cancel", "retry", "dismiss"]) {
+    for (const input of [stale, unknown]) {
+      assert.throws(() => inbox.batch[action](input), { code: "unknown_batch" });
+      assert.deepEqual(inbox.batch.snapshot(), before);
+    }
+  }
+  assert.equal(inbox.summary().loaded, 3);
+  assert.equal(client.readReservations.size, 0);
+  assert.deepEqual(writes, []);
+});
+
+test("dismissal is blocked during a batch and clears cancelled progress without changing unread rows", async () => {
+  const { inbox, client, writes } = await fixture();
+  const token = start(inbox);
+  assert.throws(() => inbox.batch.dismiss(token), { code: "busy" });
+  assert.equal(inbox.batch.snapshot().token, token.token);
+  inbox.batch.cancel(token);
+  await inbox.batch.done;
+  assert.equal(inbox.batch.snapshot().status, "cancelled");
+  inbox.batch.dismiss(token);
+  assert.equal(inbox.batch.snapshot(), null);
+  assert.throws(() => inbox.batch.dismiss(token), { code: "unknown_batch" });
+  assert.equal(inbox.summary().loaded, 3);
+  assert.equal(client.readReservations.size, 0);
   assert.deepEqual(writes, []);
 });
 
@@ -224,6 +266,28 @@ test("retry keeps the old selection and respects a newly narrowed search", async
   await inbox.batch.done;
   assert.equal(inbox.loadedItems().some(item => item.id === "2"), false);
   assert.equal(inbox.summary().loaded, 2);
+});
+
+test("retry rejects an entirely hidden or changed selection without writing or replacing its partial result", async t => {
+  for (const change of ["hidden", "updated"]) {
+    await t.test(change, async () => {
+      const { inbox, client, writes } = await fixture({
+        run: async args => args.includes("PATCH") ? http({}, {}, 500) : http([thread("1")]),
+      });
+      const token = start(inbox);
+      await inbox.batch.done;
+      assert.equal(inbox.batch.snapshot().failed, 1);
+      client.blockedUntil = 0;
+      if (change === "hidden") await inbox.setFilters({ query: "no matching notifications" });
+      else inbox.pages = [{ ...inbox.pages[0], items: normalizeThreads([laterThread("1")]) }];
+      const before = inbox.batch.snapshot();
+      assert.throws(() => inbox.batch.retry(token), { code: "no_remaining" });
+      assert.deepEqual(inbox.batch.snapshot(), before);
+      assert.equal(inbox.summary().loaded, 1);
+      assert.equal(client.readReservations.size, 0);
+      assert.deepEqual(writes, ["/notifications/threads/1"]);
+    });
+  }
 });
 
 test("cancellation while a request is in flight waits for its confirmation but sends no remaining requests", async () => {

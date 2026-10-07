@@ -9,7 +9,7 @@
     "lint": "eslint . --max-warnings=0",
     "lint:workflows": "actionlint",
     "test": "node --test test/*.test.mjs",
-    "test:coverage": "node --test --experimental-test-coverage --test-coverage-include='src/*.mjs' --test-coverage-include='.github/extensions/github-notifications/extension.mjs' --test-coverage-include='scripts/*.mjs' --test-coverage-exclude='scripts/coverage-reporter.mjs' --test-coverage-exclude='scripts/build-release.mjs' --test-coverage-lines=90 --test-coverage-branches=85 --test-coverage-functions=90 --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./scripts/coverage-reporter.mjs --test-reporter-destination=stdout test/*.test.mjs",
+    "test:coverage": "node --test --experimental-test-coverage --test-coverage-include='src/*.mjs' --test-coverage-include='.github/extensions/github-notifications/extension.mjs' --test-coverage-include='scripts/*.mjs' --test-coverage-exclude='scripts/coverage-reporter.mjs' --test-coverage-exclude='scripts/build-release.mjs' --test-coverage-lines=95 --test-coverage-branches=95 --test-coverage-functions=95 --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./scripts/coverage-reporter.mjs --test-reporter-destination=stdout test/*.test.mjs",
     "test:browser": "playwright test",
     "build": "node scripts/build-release.mjs",
     "test:package": "node --test test/package.integration.mjs"

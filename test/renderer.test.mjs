@@ -148,6 +148,28 @@ test("current, ahead, absent and failed release checks keep the banner out of th
   assert.equal(ui.document.querySelectorAll("article").length, 1);
 });
 
+test("a last-known available update stays usable but warns when its latest check failed", async () => {
+  const ui = await renderer({ release: {
+    status: "available", latestVersion: "0.2.0", prompt: "Synthetic verified update prompt",
+    error: "Synthetic release check failure.",
+  } });
+  assert.equal(ui.ids.get("update-banner").hidden, false);
+  assert.match(ui.ids.get("update-title").textContent, /v0\.2\.0.*Last known release; the latest check failed/);
+  assert.match(ui.ids.get("update-status").textContent, /Synthetic release check failure/);
+  assert.equal(ui.ids.get("notice").hidden, true);
+  await ui.ids.get("copy-update").events.click();
+  assert.deepEqual(ui.copied, ["Synthetic verified update prompt"]);
+  ui.setRelease({ error: null });
+  await ui.fireTimer();
+  assert.equal(ui.ids.get("update-banner").hidden, false);
+  assert.doesNotMatch(ui.ids.get("update-title").textContent, /Last known release/);
+  assert.equal(ui.ids.get("update-status").textContent, " - Update available: v0.2.0.");
+  assert.equal(ui.document.querySelectorAll("article").length, 1);
+  assert.equal(ui.calls.some(call => call.path === "/api/settings" && call.options.body), false);
+  assert.deepEqual(ui.patches, []);
+  ui.window.events.pagehide();
+});
+
 test("manual release checks stay available while checking and immediately after a result", async () => {
   const ui = await renderer({ onUpdates: async () => ({
     currentVersion: "0.1.0", latestVersion: null, checking: true, status: "unchecked",
@@ -218,6 +240,81 @@ test("renderer fetches with a capability, renders untrusted titles as text and e
   assert.equal(ui.ids.get("empty").hidden, true);
   assert.equal(ui.document.querySelectorAll("time")[0].attributes["aria-label"].length > 0, true);
   assert.equal(ui.document.querySelectorAll("article").length, 1);
+});
+
+test("HTTP failures use the server message or status fallback without discarding the inbox", async t => {
+  for (const [body, message] of [
+    [{ error: { message: "Synthetic request denied." } }, "Synthetic request denied."],
+    [{ error: {} }, "Canvas returned HTTP 503."],
+    [{}, "Canvas returned HTTP 503."],
+  ]) {
+    await t.test(JSON.stringify(body), async () => {
+      const ui = await renderer();
+      const fetch = ui.context.fetch;
+      ui.context.fetch = (path, options) => path === "/api/refresh"
+        ? { ok: false, status: 503, json: async () => body }
+        : fetch(path, options);
+      try {
+        await ui.ids.get("force-refresh").events.click();
+        assert.equal(ui.ids.get("notice").hidden, false);
+        assert.equal(ui.ids.get("notice").textContent, `Showing previously loaded notifications. ${message}`);
+        assert.equal(ui.document.querySelectorAll("article").length, 1);
+        assert.deepEqual(ui.patches, []);
+      } finally {
+        ui.context.fetch = fetch;
+      }
+      await ui.ids.get("force-refresh").events.click();
+      assert.equal(ui.ids.get("notice").hidden, true);
+      ui.window.events.pagehide();
+    });
+  }
+});
+
+test("poll timeouts are retryable while hiding or closing aborts silently and clears request timers", async t => {
+  for (const action of ["timeout", "hide", "close"]) {
+    await t.test(action, async () => {
+      const ui = await renderer();
+      const fetch = ui.context.fetch;
+      let started;
+      let signal;
+      const ready = new Promise(resolve => { started = resolve; });
+      ui.context.fetch = (path, options) => {
+        if (path !== "/api/state") return fetch(path, options);
+        signal = options.signal;
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener("abort",
+            () => reject(Object.assign(new Error("Synthetic abort"), { name: "AbortError" })), { once: true });
+          started();
+        });
+      };
+      const polling = ui.fireTimer();
+      try {
+        await ready;
+        assert.equal(signal.aborted, false);
+        if (action === "timeout") await ui.fireTimer(35_000);
+        else if (action === "hide") {
+          ui.document.hidden = true;
+          ui.document.events.visibilitychange();
+        } else ui.window.events.pagehide();
+        await polling;
+        assert.equal(signal.aborted, true);
+        assert.equal([...ui.timers.values()].some(timer => timer.delay === 35_000), false);
+        assert.equal(ui.document.querySelectorAll("article").length, 1);
+        if (action === "timeout") {
+          assert.match(ui.ids.get("notice").textContent, /request timed out.*retries automatically/);
+          assert.ok([...ui.timers.values()].some(timer => timer.delay === 5000));
+        } else {
+          assert.equal(ui.ids.get("notice").hidden, true);
+          assert.equal(ui.timers.size, 0);
+        }
+        assert.deepEqual(ui.patches, []);
+      } finally {
+        ui.context.fetch = fetch;
+        ui.window.events.pagehide();
+        await polling;
+      }
+    });
+  }
 });
 
 test("issue and PR numbers appear in metadata in every grouping and search without changing mark-read IDs", async () => {
@@ -663,6 +760,31 @@ test("renderer preserves focus and collapsed groups across unchanged data and up
   await runInContext("state.groups[0].items[0].title = 'Updated synthetic title'; render()", ui.context);
   assert.equal(ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.disclosure).attributes["aria-expanded"], "false");
   assert.equal(ui.document.activeElement.dataset.focusKey, "repo:example/widgets");
+});
+
+test("an individual repository can expand again without changing another repository or its keyboard focus", async () => {
+  const ui = await renderer({ initialRows: [
+    thread("1", { repository: { full_name: "example/alpha" } }),
+    thread("2", { repository: { full_name: "example/beta" } }),
+  ] });
+  const groups = ui.ids.get("groups");
+  const [first, second] = groups.querySelectorAll("button").filter(button => button.dataset.disclosure);
+  first.focus();
+  first.events.click();
+  assert.equal(first.attributes["aria-expanded"], "false");
+  assert.equal(groups.children[0].children[1].hidden, true);
+  assert.equal(second.attributes["aria-expanded"], "true");
+  first.events.click();
+  assert.equal(first.attributes["aria-expanded"], "true");
+  assert.equal(groups.children[0].children[1].hidden, false);
+  assert.equal(ui.document.activeElement, first);
+  await ui.fireTimer();
+  assert.equal(first.attributes["aria-expanded"], "true");
+  assert.equal(second.attributes["aria-expanded"], "true");
+  assert.equal(ui.ids.get("collapse").textContent, "Collapse all");
+  assert.equal(ui.document.activeElement, first);
+  assert.deepEqual(ui.patches, []);
+  ui.window.events.pagehide();
 });
 
 test("search and clearing search keep working without mode controls", async () => {
