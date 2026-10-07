@@ -10,6 +10,7 @@ import { host, CanvasError } from "./fixtures/sdk.mjs";
 import { http, next, thread } from "./fixtures.mjs";
 import { filterSchema, emptySchema, InboxError } from "../.github/extensions/github-notifications/model.mjs";
 import { Inbox } from "../.github/extensions/github-notifications/inbox.mjs";
+import { DesktopNotifications } from "../.github/extensions/github-notifications/desktop.mjs";
 import { CURRENT_VERSION } from "../.github/extensions/github-notifications/updates.mjs";
 
 test("the extension entry point wires an isolated session through its complete lifecycle", async t => {
@@ -115,6 +116,60 @@ test("the extension entry point wires an isolated session through its complete l
     }
   });
 
+  await t.test("enabled desktop notifications wait for recovery without stopping healthy panels", async subtest => {
+    const registrations = [];
+    const deliveries = [];
+    let desktop;
+    let failing = true;
+    const readFile = fs.readFile;
+    const add = DesktopNotifications.prototype.add;
+    const mocked = subtest.mock.method(fs, "readFile", (path, ...args) => {
+      if (failing && path instanceof URL && path.pathname.endsWith("/app.mjs")) {
+        throw new Error("Synthetic missing assets");
+      }
+      return readFile(path, ...args);
+    });
+    subtest.mock.method(DesktopNotifications.prototype, "add", function (id) {
+      desktop = this;
+      this.notify = async message => { deliveries.push(message); };
+      registrations.push(id);
+      return add.call(this, id);
+    });
+    syncBuiltinESMExports();
+    try {
+      await fs.writeFile(join(artifacts, "settings.json"),
+        '{"autoOpen":true,"darkMode":false,"desktopNotifications":true}');
+      const before = calls.length;
+      const opened = await canvas.open({ instanceId: "desktop-recovery" });
+      assert.match(await (await fetch(opened.url)).text(), /Retrying in the background/);
+      assert.deepEqual(await canvas.open({ instanceId: "desktop-recovery" }), opened);
+      await new Promise(resolve => setTimeout(resolve, 50));
+      assert.equal(calls.length, before, "Recovery must not start desktop polling");
+      assert.deepEqual(registrations, []);
+      failing = false;
+      for (let count = 0; count < 250 && !registrations.length; count++) {
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      assert.deepEqual(registrations, ["desktop-recovery"]);
+      await desktop.check();
+      assert.ok(calls.length > before, "The recovered panel should start the enabled watcher");
+      await canvas.open({ instanceId: "desktop-recovery" });
+      assert.deepEqual(registrations, ["desktop-recovery"], "Repeated opens must not register twice");
+      failing = true;
+      await canvas.open({ instanceId: "closed-recovery" });
+      assert.deepEqual([...desktop.panels], ["desktop-recovery"]);
+      await canvas.onClose({ instanceId: "closed-recovery" });
+      assert.deepEqual([...desktop.panels], ["desktop-recovery"]);
+      assert.deepEqual(deliveries, [], "The first successful desktop poll establishes a silent baseline");
+    } finally {
+      await canvas.onClose({ instanceId: "closed-recovery" });
+      await canvas.onClose({ instanceId: "desktop-recovery" });
+      mocked.mock.restore();
+      syncBuiltinESMExports();
+      await fs.writeFile(join(artifacts, "settings.json"), '{"autoOpen":true,"darkMode":false}');
+    }
+  });
+
   let first;
   let second;
   await t.test("concurrent repeated opens share a server while different panels remain isolated", async () => {
@@ -150,7 +205,7 @@ test("the extension entry point wires an isolated session through its complete l
     assert.doesNotMatch(JSON.stringify(logs), /Synthetic private detail/);
   });
 
-  await t.test("failed opens report errors and allow a later retry", async subtest => {
+  await t.test("asset failures open a recovery page and keep repeated opens on the same server", async subtest => {
     await assert.rejects(canvas.open({ instanceId: "invalid", input: { mode: "all" } }), { code: "invalid_filters" });
     const readFile = fs.readFile;
     const mocked = subtest.mock.method(fs, "readFile", (path, ...args) => {
@@ -159,11 +214,15 @@ test("the extension entry point wires an isolated session through its complete l
     });
     syncBuiltinESMExports();
     try {
-      await assert.rejects(canvas.open({ instanceId: "retry" }), { code: "server_start", message: "Could not start the local notifications server." });
-      assert.equal(logs.at(-1).message, "Could not start the notifications loopback server.");
+      const opened = await canvas.open({ instanceId: "retry" });
+      assert.match(await (await fetch(opened.url)).text(), /Retrying in the background/);
+      assert.deepEqual(await canvas.open({ instanceId: "retry" }), opened);
+      assert.equal(logs.at(-1).message, "Could not load the notifications canvas assets. Retrying in the background.");
+      assert.doesNotMatch(JSON.stringify(logs), /Synthetic private path/);
     } finally {
       mocked.mock.restore();
       syncBuiltinESMExports();
+      await canvas.onClose({ instanceId: "retry" });
     }
     const retried = await canvas.open({ instanceId: "retry" });
     assert.equal((await fetch(retried.url)).status, 200);
@@ -206,7 +265,8 @@ async function fixture() {
   let desktop;
   const servers = [];
   const inboxes = [];
-  const session = { log() {} };
+  const logs = [];
+  const session = { log: message => logs.push(message) };
   class CanvasError extends Error {
     constructor(code, message) { super(message); this.code = code; }
   }
@@ -222,19 +282,19 @@ async function fixture() {
       close() { this.closed = true; }
     },
     DesktopNotifications: class {
-      constructor() { desktop = this; this.panels = new Set(); }
-      add(id) { this.panels.add(id); }
+      constructor() { desktop = this; this.panels = new Set(); this.registrations = []; }
+      add(id) { this.panels.add(id); this.registrations.push(id); }
       async remove(id) { this.panels.delete(id); }
     },
     Startup: class { async start() {} },
     startServer: () => new Promise((resolve, reject) => {
-      const server = { url: `http://127.0.0.1:${1000 + servers.length}/`, closed: false,
+      const server = { url: `http://127.0.0.1:${1000 + servers.length}/`, closed: false, ready: Promise.resolve(true),
         async close() { this.closed = true; } };
       servers.push({ server, ready: () => resolve(server), reject });
     }),
     process: { once() {} },
   });
-  return { canvas, desktop, servers, inboxes };
+  return { canvas, desktop, servers, inboxes, logs };
 }
 
 test("concurrent opens use one server and closing during startup cannot leave a desktop watcher", async () => {
@@ -277,4 +337,61 @@ test("a failed server releases inbox resources and never starts desktop watching
   await rejected;
   assert.equal(f.inboxes[0].closed, true);
   assert.equal(f.desktop.panels.size, 0);
+});
+
+test("closing while startup is cancelled handles the rejection without leaving a panel", async () => {
+  const f = await fixture();
+  const opening = f.canvas.open({ instanceId: "panel", input: {} });
+  const rejected = assert.rejects(opening, { code: "closed" });
+  const closing = f.canvas.onClose({ instanceId: "panel" });
+  assert.equal(f.inboxes[0].closed, true);
+  f.servers[0].reject(new InboxError("closed", "The canvas was closed.", 410));
+  await rejected;
+  await closing;
+  assert.equal(f.desktop.panels.size, 0);
+});
+
+test("asset readiness from a closed or replaced panel cannot register a desktop watcher", async () => {
+  const f = await fixture();
+  let recovered;
+  const old = f.canvas.open({ instanceId: "panel" });
+  f.servers[0].server.ready = new Promise(resolve => { recovered = resolve; });
+  f.servers[0].ready();
+  await old;
+  await f.canvas.open({ instanceId: "panel" });
+  assert.equal(f.desktop.registrations.length, 0);
+  await f.canvas.onClose({ instanceId: "panel" });
+  const replacement = f.canvas.open({ instanceId: "panel" });
+  f.servers[1].ready();
+  await replacement;
+  recovered(true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual([...f.desktop.registrations], ["panel"]);
+  assert.equal(f.desktop.panels.has("panel"), true);
+  await f.canvas.onClose({ instanceId: "panel" });
+  assert.equal(f.desktop.panels.size, 0);
+});
+
+test("a close racing with asset readiness cannot register a desktop watcher", async () => {
+  const f = await fixture();
+  let recovered;
+  const opening = f.canvas.open({ instanceId: "panel" });
+  f.servers[0].server.ready = new Promise(resolve => { recovered = resolve; });
+  f.servers[0].ready();
+  await opening;
+  recovered(true);
+  await f.canvas.onClose({ instanceId: "panel" });
+  assert.equal(f.desktop.registrations.length, 0);
+  assert.equal(f.desktop.panels.size, 0);
+});
+
+test("unexpected desktop registration failures are logged without exposing details", async () => {
+  const f = await fixture();
+  f.desktop.add = () => { throw new Error("Synthetic private detail"); };
+  const opening = f.canvas.open({ instanceId: "panel" });
+  f.servers[0].ready();
+  await opening;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(f.logs, ["Could not start desktop notifications for the canvas."]);
+  await f.canvas.onClose({ instanceId: "panel" });
 });
