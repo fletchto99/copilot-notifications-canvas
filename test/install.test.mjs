@@ -56,7 +56,7 @@ test("downgrades and different contents under the same version are refused", asy
   assert.equal(await readFile(join(f.target, "extension.mjs"), "utf8"), f.content);
 });
 
-test("legacy flat and versioned installations require explicit offline migration and are never changed", async t => {
+test("legacy flat and versioned installations are rejected without changing files", async t => {
   for (const version of [1, 2]) {
     const f = await fixture(t);
     await mkdir(f.target, { recursive: true });
@@ -65,7 +65,7 @@ test("legacy flat and versioned installations require explicit offline migration
     if (version === 2) await mkdir(join(f.target, "runtimes"));
     else await writeFile(join(f.target, "sound.mjs"), "old sound");
     const before = await readdir(f.target);
-    await assert.rejects(f.install(), /Legacy installation.*one-time migration/);
+    await assert.rejects(f.install(), /Legacy installation.*cannot be upgraded automatically/);
     assert.deepEqual(await readdir(f.target), before);
     assert.equal(await readFile(join(f.target, "extension.mjs"), "utf8"), "old provider with local edits");
   }
