@@ -244,7 +244,13 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
             server.removeListener("listening", listening);
           };
           const failed = error => { cleanup(); reject(error); };
-          const listening = () => { cleanup(); resolve(); };
+          const listening = () => {
+            cleanup();
+            server.on("error", error => {
+              log(`Notifications loopback server error${failureCode(error)}.`, { level: "error" });
+            });
+            resolve();
+          };
           server.once("error", failed);
           server.once("listening", listening);
           try {

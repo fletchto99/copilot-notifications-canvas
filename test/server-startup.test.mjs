@@ -164,13 +164,42 @@ test("a transient listen error retries the same loopback server and removes atte
   const server = await startServer(f.inbox, { log: f.log });
   t.after(() => server.close());
   assert.equal(attempts, 2);
-  assert.equal(listener.listenerCount("error"), 0);
+  assert.equal(listener.listenerCount("error"), 1);
+  assert.equal(listener.listeners("error").some(handler => handler.name === "failed"), false);
   assert.equal(listener.listeners("listening").some(handler => handler.name === "listening"), false);
   assert.equal((await fetch(server.url)).status, 200);
   assert.deepEqual(f.logs, [{
     message: "Could not bind the notifications loopback server (EADDRINUSE). Retrying.",
     options: { level: "warning" },
   }]);
+});
+
+test("post-start errors are handled repeatedly without exposing details or interrupting panels", async t => {
+  const first = fixture(t);
+  const second = fixture(t);
+  const listen = Server.prototype.listen;
+  const listeners = [];
+  t.mock.method(Server.prototype, "listen", function (...args) {
+    listeners.push(this);
+    return listen.apply(this, args);
+  });
+  const one = await startServer(first.inbox, { log: first.log });
+  t.after(() => one.close());
+  const two = await startServer(second.inbox, { log: second.log });
+  t.after(() => two.close());
+  for (const code of ["ENOBUFS", "Synthetic private code", undefined]) {
+    assert.doesNotThrow(() => listeners[0].emit("error",
+      Object.assign(new Error("Synthetic private address"), { code })));
+    assert.equal((await fetch(one.url)).status, 200);
+    assert.equal((await fetch(two.url)).status, 200);
+    assert.equal(listeners[0].listenerCount("error"), 1);
+  }
+  assert.deepEqual(first.logs, [
+    { message: "Notifications loopback server error (ENOBUFS).", options: { level: "error" } },
+    { message: "Notifications loopback server error.", options: { level: "error" } },
+    { message: "Notifications loopback server error.", options: { level: "error" } },
+  ]);
+  assert.deepEqual(second.logs, []);
 });
 
 test("persistent listen failures are bounded, sanitized and can be retried by another open", async t => {
