@@ -1,4 +1,4 @@
-import { firstPage, POLL_MS } from "./github.mjs";
+import { firstPage, RETRY_MS } from "./github.mjs";
 import { groupThreads, InboxError, orderedThreads, validateFilters } from "./model.mjs";
 import { ReadBatch, selectionKey } from "./batch.mjs";
 
@@ -71,7 +71,7 @@ export class Inbox {
         : { code: "internal_error", message: "An unexpected inbox error occurred. Inspect the extension log." };
       this.errorSource = source;
       const now = this.client.now();
-      this.nextRefreshAt = this.client.blockedUntil > now ? this.client.blockedUntil : now + POLL_MS;
+      this.nextRefreshAt = this.client.blockedUntil > now ? this.client.blockedUntil : now + RETRY_MS;
       throw error;
     } finally {
       if (this.controller.signal.aborted) this.pages = [];

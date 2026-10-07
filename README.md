@@ -48,16 +48,17 @@ full procedure, verification requirements, and troubleshooting.
 - **Mark as read:** mark individual rows in any view. In **repo** mode,
   **Mark N as read** marks only that repository's loaded items matching your search,
   not older unloaded notifications.
-- **Refresh:** automatic checks run about every 30 seconds while the canvas is
+- **Refresh:** automatic checks run about every 60 seconds while the canvas is
   visible and pause while hidden. Returning to the foreground refreshes immediately.
   Longer GitHub polling intervals apply to automatic checks. Foreground returns
   and the **Force refresh** icon immediately left of **Settings** check loaded
   pages without waiting for the polling interval, but cannot bypass rate limits
   or error retry waits. Its theme-matched tooltip appears immediately on hover
   or keyboard focus and reports seconds since the last successful update.
-  Press Escape to dismiss it.
+  Its elapsed time updates every 15 seconds while visible. Inbox and Settings
+  use the same immediate tooltips; press Escape to dismiss them.
   When desktop alerts are enabled, foreground checks feed the same results to
-  the desktop watcher. It falls back to checking about every two minutes while
+  the desktop watcher. It continues checking about every minute while
   the canvas is hidden; the OS controls when alerts appear.
 - **Open GitHub:** the inbox icon beside **Settings** opens your
   [GitHub inbox](https://github.com/notifications).

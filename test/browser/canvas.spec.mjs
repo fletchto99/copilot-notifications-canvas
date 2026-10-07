@@ -218,13 +218,89 @@ test("the refresh icon exposes pending state, preserves queued clicks, and respe
   }
 });
 
-test("foreground checks use a 30-second interval, pause while hidden, and refresh immediately on return", async ({ page, canvas }) => {
+test("all toolbar icons use matching instant tooltips with keyboard and Escape support", async ({ page, canvas }) => {
+  canvas.rows.splice(1);
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.goto(canvas.url);
+  await expect(page.locator(".row")).toHaveCount(1);
+  const heading = page.getByRole("heading", { name: "Unread Notifications", exact: true });
+  for (const dark of [false, true]) {
+    await page.emulateMedia({ colorScheme: dark ? "dark" : "light" });
+    await expect(page.locator("html")).toHaveAttribute("data-notification-theme", dark ? "dark" : "light");
+    for (const [id, tooltipId, label] of [
+      ["open-inbox", "inbox-tooltip", "Open GitHub inbox"],
+      ["force-refresh", "refresh-tooltip", null],
+      ["settings-toggle", "settings-tooltip", "Settings"],
+    ]) {
+      const control = page.locator(`#${id}`);
+      const tooltip = page.locator(`#${tooltipId}`);
+      await expect(control).not.toHaveAttribute("title");
+      await heading.hover();
+      await page.getByRole("searchbox").focus();
+      await expect(tooltip).toBeHidden();
+      await control.hover();
+      expect(await tooltip.isVisible()).toBe(true);
+      if (label) await expect(tooltip).toHaveText(label);
+      await expect(control).toHaveAccessibleDescription(await tooltip.textContent());
+      const text = tooltip.locator(".tooltip-content");
+      await expect(text).toHaveCSS("background-color", await page.locator("body").evaluate(node => getComputedStyle(node).backgroundColor));
+      await expect(text).toHaveCSS("font-weight", "400");
+      const bounds = await tooltip.boundingBox();
+      expect(bounds.x).toBeGreaterThanOrEqual(0);
+      expect(bounds.x + bounds.width).toBeLessThanOrEqual(320);
+      await tooltip.hover();
+      await expect(tooltip).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(tooltip).toBeHidden();
+      await heading.hover();
+      await control.focus();
+      expect(await tooltip.isVisible()).toBe(true);
+      await control.press("Escape");
+      await expect(tooltip).toBeHidden();
+      await expect(control).toBeFocused();
+    }
+  }
+  const settings = page.locator("#settings-toggle");
+  await settings.press("Enter");
+  await expect(settings).toHaveAttribute("aria-expanded", "true");
+  await expect(page.locator("#settings-tooltip")).toBeHidden();
+  await page.getByRole("combobox", { name: "Theme", exact: true }).focus();
+  await page.keyboard.press("Escape");
+  await expect(settings).toHaveAttribute("aria-expanded", "false");
+  await expect(settings).toBeFocused();
+  await expect(page.locator("#settings-tooltip")).toBeHidden();
+  expect(canvas.writes).toEqual([]);
+});
+
+test("a stationary tooltip updates at 15-second ticks without fetching notifications", async ({ page, canvas }) => {
+  canvas.rows.splice(1);
+  await page.clock.install();
+  await page.clock.pauseAt(new Date());
+  const initialResponse = page.waitForResponse(response => response.url().endsWith("/api/refresh"));
+  await page.goto(canvas.url);
+  const initial = await (await initialResponse).json();
+  const tooltip = page.locator("#refresh-tooltip-text");
+  await page.getByRole("button", { name: "Force refresh", exact: true }).hover();
+  await expect(tooltip).toHaveText("Last updated 0 seconds ago");
+  for (let tick = 0; tick < 3; tick++) {
+    const previous = await tooltip.textContent();
+    await page.clock.runFor(14_999);
+    await expect(tooltip).toHaveText(previous);
+    await page.clock.runFor(1);
+    const age = await page.evaluate(fetchedAt => Math.floor(Math.max(0, Date.now() - fetchedAt) / 1000), initial.lastFetchedAt);
+    await expect(tooltip).toHaveText(`Last updated ${age} seconds ago`);
+    expect(canvas.requests.filter(path => path.startsWith("/notifications")).length).toBe(1);
+  }
+  expect(canvas.writes).toEqual([]);
+});
+
+test("foreground checks use a 60-second interval, pause while hidden, and refresh immediately on return", async ({ page, canvas }) => {
   canvas.rows.splice(1);
   const initialResponse = page.waitForResponse(response => response.url().endsWith("/api/refresh"));
   await page.goto(canvas.url);
   const initial = await (await initialResponse).json();
   await expect(page.locator(".row")).toHaveCount(1);
-  expect(initial.nextRefreshAt - initial.lastFetchedAt).toBe(30_000);
+  expect(initial.nextRefreshAt - initial.lastFetchedAt).toBe(60_000);
   await expect(page.locator("#refresh-tooltip-text")).toHaveText(/Last updated \d+ seconds? ago/);
   const notificationRequests = () => canvas.requests.filter(path => path.startsWith("/notifications")).length;
   expect(notificationRequests()).toBe(1);
@@ -243,7 +319,7 @@ test("foreground checks use a 30-second interval, pause while hidden, and refres
   expect(notificationRequests()).toBe(2);
 
   canvas.rows[0].subject.title = "Updated on the next foreground check";
-  await page.clock.setFixedTime(new Date(canvas.advance(31_000)));
+  await page.clock.setFixedTime(new Date(canvas.advance(61_000)));
   await expect(page.getByRole("link", { name: "Updated on the next foreground check", exact: true })).toBeVisible({ timeout: 10_000 });
   expect(notificationRequests()).toBe(3);
   expect(canvas.writes).toEqual([]);
@@ -261,7 +337,7 @@ test.describe("synchronized desktop alerts", () => {
     const notificationRequests = () => canvas.requests.filter(path => path.startsWith("/notifications")).length;
     expect(notificationRequests()).toBe(1);
 
-    const time = canvas.advance(31_000);
+    const time = canvas.advance(61_000);
     canvas.rows[0].updated_at = new Date(time).toISOString();
     canvas.rows[0].subject.title = "Synchronized foreground notification";
     await page.clock.setFixedTime(new Date(time));
@@ -276,7 +352,7 @@ test.describe("synchronized desktop alerts", () => {
     await canvas.desktop.check();
     expect(canvas.deliveries).toHaveLength(1);
     expect(notificationRequests()).toBe(2);
-    canvas.advance(91_000);
+    canvas.advance(31_000);
     await canvas.desktop.check();
     expect(canvas.deliveries.map(alert => alert.body)).toEqual([
       "Synchronized foreground notification", "Background notification",

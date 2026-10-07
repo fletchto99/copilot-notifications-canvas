@@ -45,11 +45,12 @@ test("GitHub inbox is an accessible icon link before Refresh and Settings in the
   assert.match(attributes, /target="_blank"/);
   assert.match(attributes, /rel="noopener noreferrer"/);
   assert.match(attributes, /aria-label="Open GitHub inbox"/);
-  assert.match(attributes, /title="Open GitHub inbox"/);
+  assert.match(attributes, /aria-describedby="inbox-tooltip"/);
+  assert.doesNotMatch(attributes, /\btitle=/);
   assert.doesNotMatch(attributes, /\bhidden\b|\btabindex=/);
   assert.match(content, /<svg\b[^>]*aria-hidden="true"[^>]*focusable="false"/);
   assert.match(content, /^\s*<svg\b[^>]*>\s*<path\b[^>]*\/>\s*<path\b[^>]*\/>\s*<\/svg>\s*$/);
-  assert.match(html, /<div class="toolbar">\s*<label class="search">[\s\S]*?<\/label>\s*<a id="open-inbox"[^>]*>[\s\S]*?<\/a>\s*<div id="refresh-control"[^>]*>[\s\S]*?<\/div>\s*<details id="settings"/);
+  assert.match(html, /<div class="toolbar">\s*<label class="search">[\s\S]*?<\/label>\s*<div id="inbox-control"[^>]*>[\s\S]*?<\/div>\s*<div id="refresh-control"[^>]*>[\s\S]*?<\/div>\s*<details id="settings"/);
   assert.equal([...html.matchAll(/href="https:\/\/github\.com\/notifications"/g)].length, 1);
 });
 
@@ -57,13 +58,28 @@ test("Settings uses an icon-only toggle with an accessible name and tooltip", ()
   const summary = html.match(/<summary\b([^>]*\bid="settings-toggle"[^>]*)>([\s\S]*?)<\/summary>/);
   assert.ok(summary);
   const [, attributes, content] = summary;
-  assert.match(attributes, /class="icon-button"/);
+  assert.match(attributes, /class="icon-button tooltip-anchor"/);
   assert.match(attributes, /aria-label="Settings"/);
-  assert.match(attributes, /title="Settings"/);
+  assert.match(attributes, /aria-describedby="settings-tooltip"/);
+  assert.doesNotMatch(attributes, /\btitle=/);
   assert.match(attributes, /aria-controls="settings-panel"/);
   assert.match(attributes, /aria-expanded="false"/);
   assert.match(content, /<svg\b[^>]*aria-hidden="true"[^>]*focusable="false"/);
-  assert.match(content, /^\s*<svg\b[^>]*>\s*<path\b[^>]*\/>\s*<circle\b[^>]*\/>\s*<\/svg>\s*$/);
+  assert.match(content, /^\s*<svg\b[^>]*>\s*<path\b[^>]*\/>\s*<circle\b[^>]*\/>\s*<\/svg>\s*<span id="settings-tooltip" class="tooltip" role="tooltip"><span class="tooltip-content">Settings<\/span><\/span>\s*$/);
+  assert.match(styles, /\.settings\[open\] \.tooltip \{ visibility: hidden; \}/);
+});
+
+test("Inbox and Settings tooltips share the refresh hover, focus and Escape behavior", async () => {
+  const ui = await renderer();
+  for (const [control, anchor] of [["open-inbox", "inbox-control"], ["settings-toggle", "settings-toggle"]]) {
+    ui.ids.get(control).events.pointerenter();
+    assert.equal(ui.ids.get(anchor).dataset.tooltipDismissed, undefined);
+    ui.document.events.keydown({ key: "Escape" });
+    assert.equal(ui.ids.get(anchor).dataset.tooltipDismissed, "true");
+    ui.ids.get(control).events.focus();
+    assert.equal(ui.ids.get(anchor).dataset.tooltipDismissed, undefined);
+  }
+  ui.window.events.pagehide();
 });
 
 test("Settings puts an Auto-open slider above sound, saves startup preference and closes accessibly", async () => {

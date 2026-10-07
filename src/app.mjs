@@ -11,6 +11,8 @@ let busy = false;
 let stopped = false;
 let intersecting = true;
 let timer;
+let tooltipTimer;
+let refreshStatusKey;
 let searchTimer;
 let pendingQuery;
 let pendingRefresh = false;
@@ -30,6 +32,11 @@ const markingRead = new Set();
 let readError = "";
 let batchBusy = false;
 let batchFocusKey;
+const tooltipControls = [
+  ["open-inbox", "inbox-control"],
+  ["force-refresh", "refresh-control"],
+  ["settings-toggle", "settings-toggle"],
+];
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -456,18 +463,28 @@ async function tick() {
   }
 }
 
-function renderRefreshStatus() {
+function renderRefreshStatus(updateAge = false) {
   const fetchedAt = state?.lastFetchedAt ?? null;
+  const progress = pendingRefresh ? "Refresh queued. " : refreshing ? "Refreshing. " : "";
+  const key = `${fetchedAt}:${progress}`;
+  if (!updateAge && key === refreshStatusKey) return;
+  refreshStatusKey = key;
   const seconds = fetchedAt === null ? null : Math.floor(Math.max(0, Date.now() - fetchedAt) / 1000);
   const updated = seconds === null ? "Not updated yet" : `Last updated ${seconds} second${seconds === 1 ? "" : "s"} ago`;
-  const progress = pendingRefresh ? "Refresh queued. " : refreshing ? "Refreshing. " : "";
   $("refresh-tooltip-text").textContent = progress + updated;
   $("force-refresh").setAttribute("aria-busy", String(pendingRefresh || refreshing));
 }
 
-function showRefreshTooltip() {
-  delete $("refresh-control").dataset.tooltipDismissed;
-  renderRefreshStatus();
+function showTooltip(anchor) {
+  delete $(anchor).dataset.tooltipDismissed;
+  if (anchor === "refresh-control") renderRefreshStatus(true);
+}
+
+function tickTooltip() {
+  clearTimeout(tooltipTimer);
+  if (!visible()) return;
+  renderRefreshStatus(true);
+  tooltipTimer = setTimeout(tickTooltip, 15_000);
 }
 
 function renderControls() {
@@ -696,11 +713,11 @@ document.addEventListener("click", event => {
 });
 document.addEventListener("keydown", event => {
   if (event.key !== "Escape") return;
-  $("refresh-control").dataset.tooltipDismissed = "true";
   if ($("settings").open) {
     event.preventDefault();
     closeSettings(true);
   }
+  for (const [, anchor] of tooltipControls) $(anchor).dataset.tooltipDismissed = "true";
 });
 $("more").addEventListener("click", () => update("more", {}));
 $("force-refresh").addEventListener("click", () => {
@@ -709,8 +726,10 @@ $("force-refresh").addEventListener("click", () => {
   renderControls();
   return flushPendingUpdates();
 });
-$("force-refresh").addEventListener("pointerenter", showRefreshTooltip);
-$("force-refresh").addEventListener("focus", showRefreshTooltip);
+for (const [control, anchor] of tooltipControls) {
+  $(control).addEventListener("pointerenter", () => showTooltip(anchor));
+  $(control).addEventListener("focus", () => showTooltip(anchor));
+}
 $("search").addEventListener("input", () => {
   pendingQuery = $("search").value;
   clearTimeout(searchTimer);
@@ -735,6 +754,7 @@ function visibilityChanged() {
   if (isVisible && !wasVisible) pendingRefresh = true;
   wasVisible = isVisible;
   clearTimeout(timer);
+  tickTooltip();
   if (isVisible) {
     void tick();
     void settingsRequest();
@@ -757,6 +777,7 @@ renderTheme();
 window.addEventListener("pagehide", () => {
   stopped = true;
   clearTimeout(timer);
+  clearTimeout(tooltipTimer);
   clearTimeout(searchTimer);
   for (const controller of requestControllers) controller.abort();
   observer.disconnect();
@@ -764,6 +785,7 @@ window.addEventListener("pagehide", () => {
   systemTheme.removeEventListener("change", renderTheme);
 });
 if (hasCapability) {
+  tickTooltip();
   void tick();
   void settingsRequest();
 } else {

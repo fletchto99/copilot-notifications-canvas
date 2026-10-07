@@ -34,7 +34,7 @@ remote sessions do not automatically notify your local computer.
 ### Polling and delivery
 
 While the canvas is visible, its checks feed the same results to desktop alerts,
-normally every 30 seconds and immediately on returning to the foreground. The
+normally every 60 seconds and immediately on returning to the foreground. The
 watcher uses the same request cache and follows any additional pages needed for
 new activity, independent of search or how many pages the canvas has loaded.
 The first successful baseline uses a response started after the current desktop
@@ -46,8 +46,10 @@ the exact alert timing. Rate-limit backoff pauses upstream requests, but the
 watcher can still process sufficiently fresh results already in its cache.
 
 When the canvas is hidden, its visible-inbox polling pauses but desktop checks
-continue about every two minutes after the last check. GitHub polling intervals,
-rate limits, and retry waits still apply.
+continue about every minute after the last check. GitHub's
+[`X-Poll-Interval` header](https://docs.github.com/en/rest/activity/notifications#about-github-notifications)
+can require a longer wait, especially under high server load. Rate limits and
+error retry waits still apply; error backoff starts at two minutes.
 Closing all Notifications canvases in a session stops that session's watcher;
 other sessions with open canvases can continue watching. For each repository:
 

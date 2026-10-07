@@ -19,10 +19,10 @@ test("load-more preserves visible coverage, deduplicates boundary shifts, and re
   await inbox.more();
   assert.equal(inbox.summary().loaded, 3);
   assert.equal(inbox.summary().hasMore, false);
-  now = 29_999;
+  now = 59_999;
   await inbox.refresh();
   assert.equal(calls, 2);
-  now = 30_000;
+  now = 60_000;
   await inbox.refresh();
   assert.equal(calls, 4);
   assert.equal(inbox.summary().loaded, 3);
@@ -75,7 +75,7 @@ test("forced refresh rechecks every loaded page before the next poll without los
   assert.equal(inbox.summary().loaded, 2);
   assert.equal(inbox.summary().matching, 1);
   assert.equal(inbox.summary().lastFetchedAt, now);
-  assert.equal(inbox.summary().nextRefreshAt, now + 30_000);
+  assert.equal(inbox.summary().nextRefreshAt, now + 60_000);
   await inbox.refresh({ force: false });
   assert.equal(calls.length, 4);
 });
@@ -285,7 +285,7 @@ test("loading an older page cannot hide a stale error on existing pages", async 
   now = POLL_MS;
   fail = true;
   await assert.rejects(inbox.refresh());
-  now = 2 * POLL_MS;
+  now = client.blockedUntil;
   await inbox.more();
   assert.equal(inbox.summary().loaded, 2);
   assert.equal(inbox.summary().status, "stale");

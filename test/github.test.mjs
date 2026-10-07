@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
-import { firstPage, GitHubClient, nextPage, parseResponse, POLL_MS, runGh } from "../src/github.mjs";
+import { firstPage, GitHubClient, nextPage, parseResponse, POLL_MS, RETRY_MS, runGh } from "../src/github.mjs";
 import { http, next, thread } from "./fixtures.mjs";
 import { Inbox } from "../src/inbox.mjs";
 
@@ -42,8 +42,8 @@ test("poll floor and server interval are enforced even across concurrent panels;
   assert.equal(page.nextRefreshAt, 700_000);
 });
 
-test("successful requests cache for at least 30 seconds, including conditional responses", async () => {
-  for (const headers of [{}, { "x-poll-interval": "10" }, { "x-poll-interval": "30" }]) {
+test("successful requests cache for at least 60 seconds, including conditional responses", async () => {
+  for (const headers of [{}, { "x-poll-interval": "10" }, { "x-poll-interval": "30" }, { "x-poll-interval": "60" }]) {
     let now = 1000;
     const calls = [];
     const client = new GitHubClient({ now: () => now, run: async args => {
@@ -51,17 +51,17 @@ test("successful requests cache for at least 30 seconds, including conditional r
       return calls.length === 1 ? http([thread()], { ...headers, etag: '"sample"' }) : http(null, headers, 304);
     } });
     const first = await client.page(firstPage());
-    assert.equal(first.nextRefreshAt, now + 30_000);
-    now += 29_999;
+    assert.equal(first.nextRefreshAt, now + 60_000);
+    now += 59_999;
     await client.page(firstPage());
     assert.equal(calls.length, 1);
     now += 1;
     const pages = await Promise.all([client.page(firstPage()), client.page(firstPage())]);
     assert.equal(calls.length, 2);
     assert.ok(calls[1].includes('If-None-Match: "sample"'));
-    assert.equal(pages[0].nextRefreshAt, now + 30_000);
+    assert.equal(pages[0].nextRefreshAt, now + 60_000);
     assert.equal(pages[0].items.length, 1);
-    now += 29_999;
+    now += 59_999;
     await client.page(firstPage());
     assert.equal(calls.length, 2);
     now += 1;
@@ -143,7 +143,7 @@ test("a response already in flight before a freshness boundary cannot establish 
   assert.ok(oldPage.sequence < minSequence);
   assert.equal(freshPage.sequence, minSequence);
   assert.equal(calls, 2);
-  assert.equal(now, 30_000);
+  assert.equal(now, 60_000);
 });
 
 test("cancelling a fresh scan's cache wait does not retry or poison the shared client", async () => {
@@ -498,7 +498,7 @@ test("later-page failures back off exponentially despite earlier-page successes,
   fail = true;
   now += POLL_MS;
   await assert.rejects(inbox.refresh(), { code: "rate_limited" });
-  assert.equal(client.blockedUntil - now, POLL_MS);
+  assert.equal(client.blockedUntil - now, RETRY_MS);
 });
 
 test("a successful write does not reset another endpoint's failure history or bypass the global gate", async () => {
@@ -516,5 +516,5 @@ test("a successful write does not reset another endpoint's failure history or by
   assert.equal(writes, 1);
   assert.equal([...client.failures.values()][0], 1);
   await assert.rejects(client.page(firstPage()));
-  assert.equal(client.blockedUntil - now, 2 * POLL_MS);
+  assert.equal(client.blockedUntil - now, 2 * RETRY_MS);
 });

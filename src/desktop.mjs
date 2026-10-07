@@ -3,7 +3,7 @@ import { lstat, mkdir, open, readdir, rename } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { setTimeout as wait } from "node:timers/promises";
-import { GitHubClient, firstPage, POLL_MS } from "./github.mjs";
+import { GitHubClient, firstPage, POLL_MS, RETRY_MS } from "./github.mjs";
 import { groupThreads, InboxError, notificationTitle, orderedThreads } from "./model.mjs";
 import { acquireLock, ownerPattern, processAlive, removeFile } from "./lock.mjs";
 import { notifyDesktop, desktopCapabilities, validSound } from "./notifier.mjs";
@@ -387,7 +387,7 @@ export class DesktopNotifications {
         this.setStatus("watching", watchingMessage);
       } catch (error) {
         if (signal.aborted) throw error;
-        state.nextPollAt = Math.max(state.nextPollAt, this.now() + POLL_MS, this.client.blockedUntil);
+        state.nextPollAt = Math.max(state.nextPollAt, this.now() + RETRY_MS, this.client.blockedUntil);
         state.error = errorMessage(error);
         await saveDocument(this.statePath, state);
         throw error;

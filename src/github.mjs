@@ -2,8 +2,8 @@ import { execFile } from "node:child_process";
 import { setTimeout as wait } from "node:timers/promises";
 import { InboxError, normalizeThreads } from "./model.mjs";
 
-export const POLL_MS = 120_000;
-const FOREGROUND_POLL_MS = 30_000;
+export const POLL_MS = 60_000;
+export const RETRY_MS = 120_000;
 const API_ORIGIN = "https://api.github.com";
 
 export function firstPage() {
@@ -216,8 +216,8 @@ export class GitHubClient {
       const { status, headers } = response;
       const fetchedAt = this.now();
       const serverTime = Date.parse(headers.date ?? "");
-      const poll = Math.max(FOREGROUND_POLL_MS, seconds(headers["x-poll-interval"]));
-      const retryPoll = Math.max(POLL_MS, poll);
+      const poll = Math.max(POLL_MS, seconds(headers["x-poll-interval"]));
+      const retryPoll = Math.max(RETRY_MS, poll);
       const reset = seconds(headers["x-ratelimit-reset"]);
       const retry = seconds(headers["retry-after"]) ||
         Math.max(0, Date.parse(headers["retry-after"]) - fetchedAt) || 0;
@@ -268,7 +268,7 @@ export class GitHubClient {
         const failureCount = (this.failures.get(requestKey) ?? 0) + 1;
         this.failures.set(requestKey, failureCount);
         this.blockedUntil = Math.max(this.blockedUntil,
-          this.now() + Math.min(30 * 60_000, POLL_MS * 2 ** Math.min(failureCount - 1, 4)),
+          this.now() + Math.min(30 * 60_000, RETRY_MS * 2 ** Math.min(failureCount - 1, 4)),
           this.now() + seconds(response?.headers["x-poll-interval"]));
         this.lastError = error;
       }

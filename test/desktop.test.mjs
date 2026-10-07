@@ -8,7 +8,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { DesktopNotifications } from "../src/desktop.mjs";
 import { Preferences } from "../src/settings.mjs";
-import { firstPage, GitHubClient, POLL_MS } from "../src/github.mjs";
+import { firstPage, GitHubClient, POLL_MS, RETRY_MS } from "../src/github.mjs";
 import { Inbox } from "../src/inbox.mjs";
 import { InboxError } from "../src/model.mjs";
 import { acquireLock } from "../src/lock.mjs";
@@ -34,7 +34,7 @@ async function fixture(t, { enabled = true } = {}) {
   });
   return {
     directory, preferences, calls, deliveries, logs,
-    advance(ms = POLL_MS) { now += ms; return now; },
+    advance(ms = RETRY_MS) { now += ms; return now; },
     rows(value) { rows = value; },
     response(value) { response = value; },
     async state() { return JSON.parse(await readFile(join(directory, "desktop-state.json"), "utf8")); },
@@ -102,18 +102,18 @@ test("initial backlog is silent and small batches retain each thread's title and
   assert.equal((await stat(join(f.directory, "desktop-state.json"))).mode & 0o777, 0o600);
 });
 
-test("desktop checks retain their two-minute cadence despite the shorter foreground cache interval", async t => {
+test("background desktop checks run at one minute, never earlier", async t => {
   const f = await fixture(t);
   const watcher = f.make();
   await watcher.check();
-  assert.equal((await f.state()).nextPollAt, epoch + 120_000);
+  assert.equal((await f.state()).nextPollAt, epoch + 60_000);
   for (let checks = 0; checks < 3; checks++) {
-    f.rows([updated("2", f.advance(30_000)), thread()]);
+    f.rows([updated("2", f.advance(15_000)), thread()]);
     await watcher.check();
     assert.equal(f.calls.length, 1);
     assert.equal(f.deliveries.length, 0);
   }
-  f.advance(29_999);
+  f.advance(14_999);
   await watcher.check();
   assert.equal(f.calls.length, 1);
   f.advance(1);
@@ -122,7 +122,7 @@ test("desktop checks retain their two-minute cadence despite the shorter foregro
   assert.equal(f.deliveries.length, 1);
 });
 
-test("foreground refreshes share results with alerts at 30 seconds and background checks resume at two minutes", async t => {
+test("foreground refreshes share results with alerts at one minute and background checks retain that cadence", async t => {
   const f = await fixture(t);
   const watcher = f.make();
   const inbox = new Inbox(watcher.client);
@@ -132,19 +132,19 @@ test("foreground refreshes share results with alerts at 30 seconds and backgroun
   await watcher.sync();
   assert.equal(f.calls.length, 1);
   assert.equal(f.deliveries.length, 0);
-  const time = f.advance(30_000);
+  const time = f.advance(60_000);
   f.rows([updated("2", time), thread()]);
   await inbox.refresh();
   await watcher.sync();
   assert.equal(f.calls.length, 2, "desktop delivery reuses the foreground response");
   assert.equal(inbox.snapshot().groups[0].items[0].id, "2");
   assert.deepEqual(f.deliveries.map(alert => alert.body), ["#42 Synthetic notification 2"]);
-  assert.equal((await f.state()).nextPollAt, time + 120_000);
+  assert.equal((await f.state()).nextPollAt, time + 60_000);
   assert.equal((await f.state()).polling, false);
   f.rows([updated("3", f.advance(30_000)), thread()]);
   await watcher.check();
   assert.equal(f.calls.length, 2);
-  f.advance(89_999);
+  f.advance(29_999);
   await watcher.check();
   assert.equal(f.calls.length, 2);
   f.advance(1);
@@ -207,7 +207,7 @@ test("an established watcher immediately delivers fresh cached activity even whe
   await watcher.check();
   const inbox = new Inbox(watcher.client);
   t.after(() => inbox.close());
-  const time = f.advance(30_000);
+  const time = f.advance(60_000);
   f.response(() => http([updated("2", time), thread()], { "x-ratelimit-remaining": "0" }));
   await inbox.refresh();
   await watcher.sync();
@@ -232,7 +232,7 @@ test("complete foreground scans can deliver across cached pages when the final r
   await inbox.refresh();
   await inbox.more();
   await watcher.sync();
-  const time = f.advance(30_000);
+  const time = f.advance(60_000);
   const arrivals = Array.from({ length: 51 }, (_, index) => updated(String(100 + index), time - index));
   f.response(args => args.at(-1).includes("page=1") ? http(arrivals.slice(0, 50), { link: next })
     : http(arrivals.slice(50), { "x-ratelimit-remaining": "0" }));
@@ -279,7 +279,7 @@ test("foreground alerts scan all new activity pages without changing the canvas'
   await watcher.prepareForeground();
   await inbox.refresh();
   await watcher.sync();
-  const time = f.advance(30_000);
+  const time = f.advance(60_000);
   const arrivals = Array.from({ length: 60 }, (_, index) => updated(String(index + 2), time));
   f.response(args => args.at(-1).includes("page=1") ? http(arrivals.slice(0, 50), { link: next }) :
     http([...arrivals.slice(50), thread()]));
@@ -317,8 +317,8 @@ test("a fresh first page cannot advance the watermark past arrivals hidden by an
   await inbox.refresh({ force: true });
   await watcher.sync();
   assert.equal(f.calls.length, 5, "the stale continuation must be revalidated before scanning the final page");
-  assert.equal(f.advance(0), epoch + 30_000, "revalidation respects the cached polling deadline");
-  assert.equal((await f.state()).nextPollAt, epoch + 150_000, "the background delay starts after the scan finishes");
+  assert.equal(f.advance(0), epoch + 60_000, "revalidation respects the cached polling deadline");
+  assert.equal((await f.state()).nextPollAt, epoch + 120_000, "the background delay starts after the scan finishes");
   assert.equal(inbox.pages.length, 1);
   assert.deepEqual(f.deliveries.map(alert => alert.body), ["60 new notifications"]);
   f.advance();
@@ -337,8 +337,8 @@ test("enabling desktop alerts silently baselines activity missing from a pre-act
   await f.preferences.update({ desktopNotifications: true });
   await watcher.check();
   assert.equal(f.calls.length, 2, "the baseline must revalidate the pre-activation cache");
-  assert.equal(f.advance(0), epoch + 30_000);
-  assert.equal((await f.state()).nextPollAt, epoch + 150_000);
+  assert.equal(f.advance(0), epoch + 60_000);
+  assert.equal((await f.state()).nextPollAt, epoch + 120_000);
   assert.equal(f.deliveries.length, 0);
   f.advance(1000);
   await inbox.refresh({ force: true });
@@ -391,7 +391,7 @@ test("foreground synchronization preserves opt-in and at-most-once delivery acro
   const two = f.make();
   await Promise.all([one.sync(), two.sync()]);
   assert.equal(f.deliveries.length, 0);
-  f.rows([updated("2", f.advance(30_000)), thread()]);
+  f.rows([updated("2", f.advance(60_000)), thread()]);
   await Promise.all([one.client.page(firstPage()), two.client.page(firstPage())]);
   await Promise.all([one.sync(), two.sync()]);
   await two.sync();
@@ -405,7 +405,7 @@ test("foreground synchronization honors interrupted, legacy and failed-delivery 
     const watcher = f.make({ notify: async () => { attempts++; throw new Error("Synthetic delivery failure"); } });
     await watcher.sync();
     if (kind === "delivery") {
-      f.rows([updated("2", f.advance(30_000)), thread()]);
+      f.rows([updated("2", f.advance(60_000)), thread()]);
       await watcher.sync();
       assert.equal(attempts, 1);
     } else {
@@ -440,11 +440,11 @@ test("foreground requests arriving during delivery coalesce into a follow-up che
     }
   } });
   await watcher.sync();
-  f.rows([updated("2", f.advance(30_000)), thread()]);
+  f.rows([updated("2", f.advance(60_000)), thread()]);
   const first = watcher.sync();
   try {
     await delivering;
-    f.rows([updated("3", f.advance(30_000)), thread()]);
+    f.rows([updated("3", f.advance(60_000)), thread()]);
     const second = watcher.sync();
     assert.equal(second, first);
     release();
