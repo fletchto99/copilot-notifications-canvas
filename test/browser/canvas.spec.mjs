@@ -1,7 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { test, expect } from "./fixtures.mjs";
 
-const searchName = "Search loaded notification titles and repositories";
+const searchName = "Search loaded notification titles, issue or PR numbers, and repositories";
 
 test.describe("startup recovery", () => {
   test.use({ assetFailure: true, desktopEnabled: true });
@@ -35,6 +35,26 @@ test("real assets load under CSP, render titles as text, and support search and 
   await page.getByRole("searchbox", { name: searchName }).fill("");
   await expect(page.locator(".row")).toHaveCount(53);
   expect(canvas.writes).toEqual([]);
+});
+
+test("issue and PR numbers render in metadata and search selects the notification thread, not its issue number", async ({ page, canvas }) => {
+  canvas.rows.splice(3);
+  canvas.rows[0].subject.url = "https://api.github.com/repos/example/widgets/issues/7";
+  canvas.rows[1].subject.type = "PullRequest";
+  canvas.rows[1].subject.url = "https://api.github.com/repos/example/widgets/pulls/8";
+  await page.goto(canvas.url);
+  await expect(page.getByRole("link", { name: "<img src=x onerror=alert(1)> Needle widget 1", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Needle widget 2", exact: true })).toHaveAttribute("href", "https://github.com/example/widgets/pull/8");
+  await expect(page.locator(".metadata").getByText("Issue #7", { exact: true })).toBeVisible();
+  await expect(page.locator(".metadata").getByText("Pull Request #8", { exact: true })).toBeVisible();
+  await expect(page.locator(".metadata").getByText("Issue", { exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Needle tool", exact: true })).toBeVisible();
+  await expect(page.locator(".row img")).toHaveCount(0);
+  await page.getByRole("searchbox", { name: searchName }).fill("#7");
+  await expect(page.locator(".row")).toHaveCount(1);
+  await page.getByRole("button", { name: "Mark as read: #7 <img src=x onerror=alert(1)> Needle widget 1", exact: true }).click();
+  await expect(page.locator(".row")).toHaveCount(0);
+  expect(canvas.writes).toEqual(["1"]);
 });
 
 test("keyboard row actions mark exactly one notification and move focus to the next row", async ({ page, canvas }) => {
@@ -176,6 +196,7 @@ for (const width of [320, 480, 960]) {
     test(`${theme} mode at ${width}px has no horizontal overflow and passes accessibility checks`, async ({ page, canvas }, testInfo) => {
       canvas.rows.splice(4);
       canvas.rows[0].subject.title = `A long notification title ${"without-spaces-".repeat(15)}`;
+      canvas.rows[0].subject.url = "https://api.github.com/repos/example/widgets/issues/42";
       await canvas.preferences.update({ darkMode: theme === "dark" });
       await page.setViewportSize({ width, height: 800 });
       await page.goto(canvas.url);

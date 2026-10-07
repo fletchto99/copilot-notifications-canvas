@@ -195,7 +195,11 @@ invalid stored data rather than migrating or overwriting it automatically.
 ## Usage
 
 - **Browse and search:** loads up to 50 notifications at a time; **Load more**
-  continues while GitHub has more pages. Search and counts cover loaded items only.
+  continues while GitHub has more pages. Issue and PR numbers appear beside the
+  type below each title (for example, `Issue #42` or `Pull Request #42`).
+  Search matches titles, numbers and repositories;
+  search and counts cover loaded items only. Numbers are omitted when GitHub
+  does not provide a valid issue or PR link.
 - **Mark as read:** mark individual rows in any view. In **repo** mode,
   **Mark N as read** marks only that repository's loaded items matching your search,
   not older unloaded notifications.
@@ -239,7 +243,8 @@ remote sessions do not automatically notify your local computer.
 
 Checks run about every two minutes, subject to GitHub limits and independent of
 search or loaded pages. For each repository, **1-4 new or updated unread threads**
-produce individual alerts with the repository name and notification title.
+produce individual alerts with the repository name and notification title,
+prefixed with the issue or PR number when available (for example, `#42 Fix login`).
 **5 or more in one poll** produce a single `<count> new notifications` summary
 with one sound request. Counts reflect new activity, not the whole unread inbox.
 

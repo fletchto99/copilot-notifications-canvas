@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { Inbox } from "../src/inbox.mjs";
 import { GitHubClient } from "../src/github.mjs";
 import { desktopCapabilities } from "../src/notifier.mjs";
-import { orderedThreads } from "../src/model.mjs";
+import { notificationTitle, orderedThreads } from "../src/model.mjs";
 import { http, thread } from "./fixtures.mjs";
 
 export const script = await readFile(process.env.NOTIFICATIONS_TEST_SCRIPT ??
@@ -144,7 +144,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     return onFetch ? onFetch(args) : http(rows);
   } }));
   const context = createContext({
-    document, window, location: { hash: `#${token}` }, Intl, AbortController, orderedThreads,
+    document, window, location: { hash: `#${token}` }, Intl, AbortController, notificationTitle, orderedThreads,
     navigator: { clipboard: { writeText: async text => {
       if (clipboardFailure) throw new Error("Clipboard denied");
       copied.push(text);
@@ -196,9 +196,9 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       return { ok: true, json: async () => ({ ...inbox.snapshot(), updates: releaseMetadata }) };
     },
   });
-  if (!process.env.NOTIFICATIONS_TEST_SCRIPT) assert.match(script, /^import \{ orderedThreads \} from "\.\/model\.mjs";/);
+  if (!process.env.NOTIFICATIONS_TEST_SCRIPT) assert.match(script, /^import \{ notificationTitle, orderedThreads \} from "\.\/model\.mjs";/);
   // Preserve source offsets for the coverage report when removing the injected import.
-  runInContext(script.replace(/^import \{ orderedThreads \} from "\.\/model\.mjs";/, match => " ".repeat(match.length)), context, {
+  runInContext(script.replace(/^import \{ notificationTitle, orderedThreads \} from "\.\/model\.mjs";/, match => " ".repeat(match.length)), context, {
     filename: process.env.NOTIFICATIONS_TEST_SCRIPT ?? fileURLToPath(new URL("../src/app.mjs", import.meta.url)),
   });
   await settle();

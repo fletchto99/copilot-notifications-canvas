@@ -1,4 +1,4 @@
-import { orderedThreads } from "./model.mjs";
+import { notificationTitle, orderedThreads } from "./model.mjs";
 
 const $ = id => document.getElementById(id);
 const token = location.hash.slice(1);
@@ -574,7 +574,8 @@ function renderGroups(groups, fallbackFocusKey) {
       content.append(link);
       const metadata = element("div", "metadata");
       if (!group.repository) metadata.append(element("span", "repository", item.repository));
-      metadata.append(element("span", "", item.type.replace(/([a-z])([A-Z])/g, "$1 $2")),
+      const type = item.type.replace(/([a-z])([A-Z])/g, "$1 $2");
+      metadata.append(element("span", "", item.number ? `${type} #${item.number}` : type),
         element("span", "", item.reason.replaceAll("_", " ")),
         element("span", "", "Unread"));
       if (!item.direct) metadata.append(element("span", "destination", item.label));
@@ -588,7 +589,7 @@ function renderGroups(groups, fallbackFocusKey) {
       read.dataset.focusKey = `read:${item.id}`;
       read.dataset.threadId = item.id;
       read.disabled = busy || markingRead.has(item.id) || batchBusy || batchLocked();
-      read.setAttribute("aria-label", `Mark as read: ${item.title || "Untitled notification"}`);
+      read.setAttribute("aria-label", `Mark as read: ${notificationTitle(item, "Untitled notification")}`);
       read.addEventListener("click", () => markRead(item.id));
       row.append(dot, content, time, read);
       rows.append(row);
@@ -635,7 +636,7 @@ function render(fallbackFocusKey) {
     loading ? "Loading your inbox" :
     state.filters.query ? "No matches in loaded notifications" : "All caught up \u{1F389}";
   $("empty-description").textContent = error ? "Resolve the message above. This view retries automatically while visible when the retry time arrives." :
-    state.filters.query ? "Try another title or repository, or load more notifications." :
+    state.filters.query ? "Try another title, number or repository, or load more notifications." :
     loading ? "Using your existing GitHub CLI sign-in." :
     groupBy === "repo" ? "New notifications will appear here, grouped by repository." :
     groupBy === "date" ? "New notifications will appear here, grouped by date." :
