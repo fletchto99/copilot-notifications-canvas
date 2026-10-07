@@ -144,10 +144,18 @@ provider/log. Use `extensionId: project:github-notifications` when needed to
 select the local provider. Report when real-host validation is unavailable.
 
 The [cloud-agent setup workflow](.github/workflows/copilot-setup-steps.yml)
-preinstalls development tools for Copilot cloud sessions, not local app/CLI
-sessions. Keep its Node version, action pins, browser installation, and verified
-`actionlint` version aligned with the test workflow. Setup prepares tools; the
-agent still selects and runs the checks relevant to its changes.
+preinstalls development tools and browsers for Copilot cloud sessions, not local
+app/CLI sessions. The separate
+[code-review setup workflow](.github/workflows/copilot-code-review.yml) installs
+development tools without browsers or system packages so reviews do not wait
+for browser provisioning. Keep both workflows' Node versions, action pins, and
+verified `actionlint` versions aligned with the test workflow. Setup prepares
+tools; the agent still selects and runs the checks relevant to its task.
+
+Browser CI uses a digest-pinned Playwright image with browsers and system
+libraries already installed. When updating Playwright, update the image's
+version and verified digest in `.github/workflows/tests.yml` together with the
+locked npm dependency. Preserve both browser engines and packaged checks.
 
 Documentation-only changes do not need runtime tests unless they affect a
 tested contract. Check paths, commands, and consistency; report which checks
