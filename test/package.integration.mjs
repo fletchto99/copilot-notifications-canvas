@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import childProcess, { execFile } from "node:child_process";
+import { once } from "node:events";
+import { syncBuiltinESMExports } from "node:module";
 import { mkdir, readFile, readdir, symlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,9 +13,48 @@ import { CURRENT_VERSION } from "../src/updates.mjs";
 import { buildRelease, embeddedAssetsPlugin } from "../scripts/build-release.mjs";
 import { encodeBundle, inspectBundle, loadPackage, verifyArchive } from "../scripts/package.mjs";
 import { home } from "./install-fixtures.mjs";
+import { startPackagedCanvas } from "./browser/package-fixtures.mjs";
 
 const execute = promisify(execFile);
 const tag = `v${CURRENT_VERSION}`;
+
+test("packaged browser teardown rejects an already-crashed provider and allows repeated clean closes", { timeout: 15_000 }, async t => {
+  for (const crash of [false, true]) {
+    await t.test(crash ? "provider killed before teardown" : "clean teardown", async t => {
+      const root = await home(t);
+      const fork = childProcess.fork;
+      let child;
+      t.mock.method(childProcess, "fork", (...args) => {
+        child = fork(...args);
+        return child;
+      });
+      syncBuiltinESMExports();
+      try {
+        const canvas = await startPackagedCanvas(root,
+          async () => assert.fail("Teardown must not contact GitHub"),
+          message => assert.fail(message));
+        if (crash) {
+          const exited = once(child, "exit");
+          child.kill("SIGKILL");
+          await exited;
+          await assert.rejects(canvas.close(), /Packaged provider failed \(SIGKILL\)/);
+        } else {
+          await canvas.close();
+          await canvas.close();
+          assert.equal(child.exitCode, 0);
+        }
+      } finally {
+        if (child && child.exitCode === null && child.signalCode === null) {
+          const exited = once(child, "exit");
+          child.kill("SIGKILL");
+          await exited;
+        }
+        t.mock.restoreAll();
+        syncBuiltinESMExports();
+      }
+    });
+  }
+});
 
 test("archives reproduce the same bytes across output paths and filesystem umasks", async t => {
   const directory = await home(t);

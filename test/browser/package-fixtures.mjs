@@ -35,15 +35,18 @@ export async function startPackagedCanvas(root, run, log) {
     if (child.connected) child.send({ type: "response", id: message.id, ...response });
   });
   async function close() {
-    if (child.exitCode !== null || child.signalCode !== null) return;
-    const exited = once(child, "exit");
-    const timeout = setTimeout(() => child.kill("SIGKILL"), 5000);
-    try {
-      child.send({ type: "close" });
-      const [code, signal] = await exited;
-      if (code !== 0) throw new Error(`Packaged provider failed (${signal ?? code}): ${stderr}`);
-    } finally {
-      clearTimeout(timeout);
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = once(child, "exit");
+      const timeout = setTimeout(() => child.kill("SIGKILL"), 5000);
+      try {
+        child.send({ type: "close" });
+        await exited;
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+    if (child.exitCode !== 0) {
+      throw new Error(`Packaged provider failed (${child.signalCode ?? child.exitCode}): ${stderr}`);
     }
   }
   try {
