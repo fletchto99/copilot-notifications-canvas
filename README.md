@@ -380,10 +380,14 @@ runtime and tests the actual archive. It verifies the tag still points to the
 **exact tested commit** before publication. It never creates or moves tags,
 bumps a version, or commits generated output.
 
-Publication creates a draft with generated notes and uploads
-`github-notifications-<tag>.tar.gz` and `SHA256SUMS` before making the release
-public and marking it **Latest**. The canvas follows `/releases/latest`, so it
-does not advertise a draft with missing assets. Publication is serialized.
+Publication first checks every page of releases and refuses an existing
+published release or draft with the requested tag. It then uses GitHub CLI's
+single upload-and-publish command. The CLI creates a draft with generated notes,
+uploads `github-notifications-<tag>.tar.gz` and `SHA256SUMS`, then publishes
+that exact release by ID and marks it **Latest**. The script never
+looks up a release by tag to edit or publish it. The canvas follows
+`/releases/latest`, so it does not advertise a draft with missing assets.
+Publication is serialized.
 Review the generated notes for behavior changes and update guidance.
 
 An existing release or asset is never overwritten. A failure before draft

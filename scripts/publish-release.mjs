@@ -22,10 +22,24 @@ export async function publishRelease({ tag, sha, event, ref, directory = resolve
   if (commit?.sha !== sha) {
     throw new Error("The release tag does not point to the tested commit. Refusing to move or publish it.");
   }
-  const url = (await run(["release", "create", tag, ...assets,
-    "--draft", "--verify-tag", "--generate-notes", "--title", tag])).trim();
-  await run(["release", "edit", tag, "--draft=false", "--latest"]);
-  return url;
+  const listing = await run(["api", "--paginate", "repos/{owner}/{repo}/releases?per_page=100",
+    "--jq", "map({tag_name, draft}) | tojson"]);
+  let pages;
+  try {
+    pages = listing.trim().split("\n").map(line => JSON.parse(line));
+  } catch {
+    throw new Error("GitHub returned unreadable release metadata. Refusing to publish.");
+  }
+  if (pages.some(page => !Array.isArray(page) ||
+      page.some(release => typeof release?.tag_name !== "string" || typeof release.draft !== "boolean"))) {
+    throw new Error("GitHub returned invalid release metadata. Refusing to publish.");
+  }
+  if (pages.some(page => page.some(release => release.tag_name === tag))) {
+    throw new Error(`A release or draft already exists for ${tag}. Inspect it before retrying; existing releases are never modified.`);
+  }
+  // With assets, gh creates a draft, uploads, then publishes that exact release by ID.
+  return (await run(["release", "create", tag, ...assets,
+    "--verify-tag", "--generate-notes", "--title", tag, "--latest"])).trim();
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

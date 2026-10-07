@@ -44,7 +44,7 @@ test("release validation writes only a validated canonical tag to GitHub Actions
   assert.equal(await readFile(output, "utf8"), "existing=preserved\n");
 });
 
-async function fixture(t, { remoteSha = sha, fail } = {}) {
+async function fixture(t, { remoteSha = sha, pages = [[]], listResponse, fail } = {}) {
   const directory = await home(t);
   const archive = archiveName(tag);
   const content = "Synthetic archive; package integration tests validate the real archive.";
@@ -56,14 +56,14 @@ async function fixture(t, { remoteSha = sha, fail } = {}) {
     let operation;
     let result;
     if (args[0] === "release" && args[1] === "create") {
-      operation = "upload";
+      operation = "create";
       result = `${url}\n`;
-    } else if (args[0] === "release" && args[1] === "edit") {
-      operation = "publish";
-      result = "";
     } else if (args[1].includes("/commits/")) {
       operation = "resolve";
       result = JSON.stringify({ sha: remoteSha });
+    } else if (args[0] === "api" && args.includes("repos/{owner}/{repo}/releases?per_page=100")) {
+      operation = "list";
+      result = listResponse ?? `${pages.map(page => JSON.stringify(page)).join("\n")}\n`;
     } else {
       throw new Error(`Unexpected gh invocation: ${JSON.stringify(args)}`);
     }
@@ -76,14 +76,15 @@ async function fixture(t, { remoteSha = sha, fail } = {}) {
   };
 }
 
-test("tagged releases upload verified assets to a draft before publishing it as latest", async t => {
+test("tagged releases use one upload-and-publish command without a tag-based edit", async t => {
   const item = await fixture(t);
   assert.equal(await publishRelease(item.input), url);
   assert.deepEqual(item.calls, [
     ["api", `repos/{owner}/{repo}/commits/${tag}`],
+    ["api", "--paginate", "repos/{owner}/{repo}/releases?per_page=100",
+      "--jq", "map({tag_name, draft}) | tojson"],
     ["release", "create", tag, join(item.directory, archiveName(tag)), join(item.directory, "SHA256SUMS"),
-      "--draft", "--verify-tag", "--generate-notes", "--title", tag],
-    ["release", "edit", tag, "--draft=false", "--latest"],
+      "--verify-tag", "--generate-notes", "--title", tag, "--latest"],
   ]);
 });
 
@@ -115,12 +116,64 @@ test("missing or corrupted assets stop publication before contacting GitHub", as
   assert.deepEqual(item.calls, []);
 });
 
-test("GitHub errors and existing drafts stop publication without tag writes or asset overwrites", async t => {
-  for (const [fail, count] of [["resolve", 1], ["upload", 2], ["publish", 3]]) {
+test("existing published releases and drafts on any page stop publication before writes", async t => {
+  for (const draft of [false, true]) {
+    for (const page of [0, 1]) {
+      const existing = Object.freeze({ tag_name: tag, draft });
+      const pages = [[{ tag_name: "v0.0.1", draft: false }], []];
+      pages[page].push(existing);
+      const item = await fixture(t, { pages });
+      await assert.rejects(publishRelease(item.input), /A release or draft already exists/);
+      assert.equal(item.calls.length, 2);
+      assert.ok(item.calls.every(args => args[0] === "api" && !args.includes("--method")));
+      assert.deepEqual(existing, { tag_name: tag, draft });
+    }
+  }
+});
+
+test("other versions and similar tag names do not block a new release", async t => {
+  const item = await fixture(t, { pages: [
+    [{ tag_name: `${tag}-rc.1`, draft: false }],
+    [{ tag_name: `${tag}0`, draft: true }],
+  ] });
+  assert.equal(await publishRelease(item.input), url);
+  assert.equal(item.calls.at(-1)[1], "create");
+});
+
+test("a retry detects a draft left behind by an interrupted upload or publication", async t => {
+  const pages = [[]];
+  const item = await fixture(t, { pages, fail: "create" });
+  await assert.rejects(publishRelease(item.input), /Synthetic create failure/);
+  pages[0].push({ tag_name: tag, draft: true });
+  item.calls.length = 0;
+  await assert.rejects(publishRelease(item.input), /A release or draft already exists/);
+  assert.equal(item.calls.length, 2);
+  assert.ok(item.calls.every(args => args[0] === "api"));
+});
+
+test("invalid release-list responses fail closed before creation", async t => {
+  for (const page of [null, {}, [null], ["unexpected"],
+    [{ tag_name: tag }], [{ tag_name: tag, draft: "false" }], [{ draft: false }]]) {
+    const item = await fixture(t, { pages: [page] });
+    await assert.rejects(publishRelease(item.input), /invalid release metadata/);
+    assert.equal(item.calls.length, 2);
+    assert.ok(item.calls.every(args => args[0] === "api"));
+  }
+  for (const listResponse of ["", "{", "[]\n{"]) {
+    const item = await fixture(t, { listResponse });
+    await assert.rejects(publishRelease(item.input), /unreadable release metadata/);
+    assert.equal(item.calls.length, 2);
+    assert.ok(item.calls.every(args => args[0] === "api"));
+  }
+});
+
+test("GitHub errors stop publication without fallback tag writes or extra release commands", async t => {
+  for (const [fail, count] of [["resolve", 1], ["list", 2], ["create", 3]]) {
     const item = await fixture(t, { fail });
     await assert.rejects(publishRelease(item.input), new RegExp(`Synthetic ${fail} failure`));
     assert.equal(item.calls.length, count);
     assert.equal(item.calls.some(args => args.includes("--clobber") || args.includes("DELETE") || args.includes("POST")), false);
+    assert.equal(item.calls.some(args => args[0] === "release" && args[1] !== "create"), false);
   }
 });
 
