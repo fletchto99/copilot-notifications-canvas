@@ -150,16 +150,20 @@ export class DesktopNotifications {
       if (this.enabled) this.activation = { generation: null, sequence: this.client.sequence };
       this.setStatus(this.enabled ? "starting" : "off",
         this.enabled ? "Starting the shared desktop notification watcher..." : "Desktop notifications are off.");
-      if (!this.enabled) this.controller?.abort();
+      if (!this.enabled) {
+        this.foregroundRequested = false;
+        this.controller?.abort();
+      }
     }
     if (!this.panels.size) return;
-    this.timer = this.schedule(() => { void this.check(); }, 0);
+    this.timer = this.schedule(() => { void (this.foregroundRequested ? this.sync() : this.check()); }, 0);
     this.timer?.unref?.();
   }
 
   async remove(instanceId) {
     this.panels.delete(instanceId);
     if (this.panels.size) return;
+    this.foregroundRequested = false;
     this.cancel(this.timer);
     this.controller?.abort();
     await this.pending;
@@ -208,7 +212,10 @@ export class DesktopNotifications {
       do {
         await this.pending;
         this.foregroundRequested = false;
-        await this.check({ foreground: true });
+        if (await this.check({ foreground: true }) === "contended") {
+          this.foregroundRequested = this.panels.size > 0 && !this.controller.signal.aborted;
+          break;
+        }
       } while (this.foregroundRequested && this.panels.size);
     })().finally(() => { this.foregroundPending = undefined; });
     return this.foregroundPending;
@@ -225,7 +232,7 @@ export class DesktopNotifications {
       this.pending = undefined;
       this.cancel(this.timer);
       if (this.panels.size) {
-        this.timer = this.schedule(() => { void this.check(); }, CHECK_MS);
+        this.timer = this.schedule(() => { void (this.foregroundRequested ? this.sync() : this.check()); }, CHECK_MS);
         this.timer?.unref?.();
       }
     });
@@ -333,7 +340,7 @@ export class DesktopNotifications {
     if (!release) {
       const state = await readState(this.statePath);
       this.setStatus(state.error ? "error" : "shared", state.error || "Another Notifications canvas is checking for desktop alerts.");
-      return;
+      return "contended";
     }
     try {
       const state = await readState(this.statePath);

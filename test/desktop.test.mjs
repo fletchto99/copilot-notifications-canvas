@@ -57,6 +57,24 @@ async function fixture(t, { enabled = true } = {}) {
   };
 }
 
+function watcherTimers() {
+  const timers = new Map();
+  let id = 0;
+  return {
+    timers,
+    schedule(run, delay) { timers.set(++id, { run, delay }); return id; },
+    cancel(timer) { timers.delete(timer); },
+    async fire(watcher, delay = 5000) {
+      assert.equal(timers.size, 1);
+      const [timerId, timer] = [...timers][0];
+      assert.equal(timer.delay, delay);
+      timers.delete(timerId);
+      timer.run();
+      await (watcher.foregroundPending ?? watcher.pending);
+    },
+  };
+}
+
 test("desktop watching is opt-in and never invokes GitHub or the sender when disabled or unsupported", async t => {
   const f = await fixture(t, { enabled: false });
   const off = f.make();
@@ -396,6 +414,154 @@ test("foreground synchronization preserves opt-in and at-most-once delivery acro
   await Promise.all([one.sync(), two.sync()]);
   await two.sync();
   assert.equal(f.deliveries.length, 1);
+});
+
+test("foreground synchronization retries contention on the timer and consumes the newer session's cache", async t => {
+  const f = await fixture(t);
+  const clock = watcherTimers();
+  let entered;
+  let release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const older = f.make({ notify: async message => {
+    f.deliveries.push(message);
+    entered();
+    await held;
+  } });
+  const newer = f.make({ schedule: clock.schedule, cancel: clock.cancel });
+  const inbox = new Inbox(newer.client);
+  t.after(() => inbox.close());
+  await older.check();
+  await newer.check();
+  const olderTime = f.advance(60_000);
+  f.rows([updated("2", olderTime), thread()]);
+  const delivering = older.check();
+  try {
+    await started;
+    const newerTime = f.advance(1000);
+    f.rows([updated("3", newerTime), updated("2", olderTime), thread()]);
+    await newer.prepareForeground();
+    await inbox.refresh();
+    await newer.sync();
+    assert.equal(newer.snapshot().state, "shared");
+    assert.equal(newer.foregroundRequested, true);
+    assert.equal(newer.foregroundPending, undefined, "contention must finish the attempt rather than spin");
+    const calls = f.calls.length;
+    assert.equal(calls, 3);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      f.advance(5000);
+      await clock.fire(newer);
+      assert.equal(newer.foregroundRequested, true);
+      assert.equal(newer.foregroundPending, undefined);
+      assert.equal(f.calls.length, calls);
+      assert.equal(f.deliveries.length, 1);
+    }
+    newer.add("another-panel");
+    await clock.fire(newer, 0);
+    assert.equal(newer.foregroundRequested, true, "waking a watcher must retain its foreground retry");
+    await newer.remove("another-panel");
+    assert.equal(newer.foregroundRequested, true, "closing one of several panels must not cancel the retry");
+    release();
+    await delivering;
+    f.advance(5000);
+    assert.ok(f.advance(0) < (await f.state()).nextPollAt);
+    await clock.fire(newer);
+    assert.equal(f.calls.length, calls, "the deferred foreground scan reuses its fresh cache");
+    assert.deepEqual(f.deliveries.map(alert => alert.body), ["#42 Synthetic notification 2", "#42 Synthetic notification 3"]);
+    assert.equal(newer.foregroundRequested, false);
+    assert.equal((await f.state()).watermark, newerTime);
+    f.rows([updated("2", olderTime), thread()]);
+    f.advance(5000);
+    await clock.fire(newer);
+    assert.equal(f.calls.length, calls);
+    assert.equal(f.deliveries.length, 2);
+    await newer.sync();
+    assert.equal(f.deliveries.length, 2, "already claimed cache contents are not delivered again");
+  } finally {
+    release();
+    await delivering;
+  }
+});
+
+test("disabling or closing the watcher clears a foreground retry retained after lock contention", async t => {
+  for (const action of ["disable", "close"]) {
+    const f = await fixture(t);
+    const clock = watcherTimers();
+    const watcher = f.make({ schedule: clock.schedule, cancel: clock.cancel });
+    await watcher.check();
+    f.rows([updated("2", f.advance(60_000)), thread()]);
+    await watcher.client.page(firstPage());
+    const release = await acquireLock(join(f.directory, ".desktop.lock"));
+    assert.ok(release);
+    try {
+      await watcher.sync();
+      assert.equal(watcher.foregroundRequested, true);
+      if (action === "disable") {
+        watcher.wake(await f.preferences.update({ desktopNotifications: false }));
+        assert.equal(watcher.foregroundRequested, false);
+        await clock.fire(watcher, 0);
+        assert.equal(watcher.snapshot().state, "off");
+      } else {
+        await watcher.close();
+        assert.equal(watcher.foregroundRequested, false);
+        assert.equal(clock.timers.size, 0);
+      }
+    } finally {
+      await release();
+    }
+    if (action === "disable") {
+      f.advance(5000);
+      await clock.fire(watcher);
+    }
+    assert.equal(f.calls.length, 2);
+    assert.equal(f.deliveries.length, 0);
+  }
+});
+
+test("a deferred foreground retry honors an error reservation written by the lock owner", async t => {
+  const f = await fixture(t);
+  const clock = watcherTimers();
+  let entered;
+  let release;
+  let failedAttempts = 0;
+  const started = new Promise(resolve => { entered = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const owner = f.make({ notify: async () => {
+    failedAttempts++;
+    entered();
+    await held;
+    throw new InboxError("desktop_delivery", "Synthetic delivery failure", 503);
+  } });
+  const contender = f.make({ schedule: clock.schedule, cancel: clock.cancel });
+  await owner.check();
+  await contender.check();
+  const time = f.advance(60_000);
+  f.rows([updated("2", time), thread()]);
+  const delivering = owner.check();
+  try {
+    await started;
+    f.rows([updated("3", f.advance(1000)), updated("2", time), thread()]);
+    await contender.client.page(firstPage());
+    await contender.sync();
+    assert.equal(contender.foregroundRequested, true);
+    const calls = f.calls.length;
+    release();
+    await delivering;
+    const retryAt = (await f.state()).nextPollAt;
+    f.advance(5000);
+    await clock.fire(contender);
+    assert.equal(contender.foregroundRequested, false);
+    assert.equal(contender.snapshot().state, "error");
+    assert.equal(f.calls.length, calls);
+    assert.equal(f.deliveries.length, 0);
+    f.advance(retryAt - f.advance(0));
+    await clock.fire(contender);
+    assert.equal(failedAttempts, 1);
+    assert.deepEqual(f.deliveries.map(alert => alert.body), ["#42 Synthetic notification 3"]);
+  } finally {
+    release();
+    await delivering;
+  }
 });
 
 test("foreground synchronization honors interrupted, legacy and failed-delivery reservations", async t => {

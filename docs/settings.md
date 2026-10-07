@@ -66,8 +66,11 @@ The first successful poll after enabling or restarting all watchers is silent,
 so existing unread items do not trigger alerts.
 
 Sessions sharing a local `COPILOT_HOME` coordinate to avoid duplicate alerts;
-separate machines or homes do not. Delivery is **at most once**: failed or
-interrupted batches are not replayed, so alerts can be lost. Reload older
+separate machines or homes do not. A foreground check that finds another session
+holding the desktop lock retries on the next five-second watcher tick, rather
+than waiting for the next background polling deadline.
+Delivery is **at most once**: failed or interrupted batches are not replayed,
+so alerts can be lost. Reload older
 sessions after upgrades; a changed checkpoint format starts a fresh silent baseline.
 
 Desktop alerts send repository names and titles to the OS, which may retain
