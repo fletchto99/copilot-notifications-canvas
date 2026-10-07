@@ -270,15 +270,20 @@ test("rollback preserves an unexpected user edit and keeps original runtime back
   const root = await home(t);
   const target = await install(root);
   const oldEntry = await fs.readFile(join(target, "extension.mjs"), "utf8");
+  const publicationError = new Error("Synthetic interrupted publication");
   intercept(t, "rename", async (rename, from, to) => {
     const result = await rename(from, to);
     if (from.includes("-stage-") && to === join(target, "extension.mjs")) {
       await fs.writeFile(to, "// Unrelated user edit.\n");
-      throw new Error("Synthetic interrupted publication");
+      throw publicationError;
     }
     return result;
   });
-  await assert.rejects(install(root), /rollback needs attention/);
+  await assert.rejects(install(root), error => {
+    assert.match(error.message, /rollback needs attention/);
+    assert.equal(error.cause, publicationError);
+    return true;
+  });
   assert.equal(await fs.readFile(join(target, "extension.mjs"), "utf8"), "// Unrelated user edit.\n");
   await fs.access(join(target, "extension.mjs"));
   const parentEntries = await fs.readdir(join(root, "extensions"));
