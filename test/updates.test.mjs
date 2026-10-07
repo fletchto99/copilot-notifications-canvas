@@ -12,24 +12,36 @@ const release = (version = "0.2.0", fields = {}) =>
 test("shared installation and update instructions retain links used by older releases", async () => {
   const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
   assert.match(readme, /^## Installation and Updating$/m);
-  assert.match(readme, /```text\nInstall or update the Unread Notifications canvas/);
   assert.match(readme, /<a id="installation"><\/a>/);
   assert.match(readme, /<a id="updating"><\/a>/);
-  const verify = readme.indexOf('gh release verify "$tag"');
-  const verifyAsset = readme.indexOf('gh release verify-asset "$tag"');
-  const resolve = readme.indexOf('commit=$(gh api --hostname github.com');
-  const provenance = readme.indexOf('gh attestation verify "github-notifications-$tag.tar.gz"');
-  const extract = readme.indexOf('tar -xzf "github-notifications-$tag.tar.gz"');
-  const install = readme.indexOf('node install.mjs "$tag"');
+  assert.match(readme, /\[Manual installation, updates, and migration\]\(docs\/Installation\.md\)/);
+  const prompt = readme.match(/```text\n(Install or update[\s\S]+?)```/)[1];
+  assert.match(prompt, /as a user-wide Copilot/);
+  assert.match(prompt, /latest stable release/);
+  assert.ok(prompt.includes(`https://github.com/${REPOSITORY}`));
+  assert.match(prompt, /Follow docs\/Installation\.md in that repository/);
+  assert.match(prompt, /including all verification\s+and settings-preservation requirements/);
+  assert.match(prompt, /Stop if any check fails/);
+  assert.match(prompt, /After installation succeeds, reload extensions and open the canvas/);
+});
+
+test("installation guide requires release and provenance verification before extraction", async () => {
+  const instructions = await readFile(new URL("../docs/Installation.md", import.meta.url), "utf8");
+  const verify = instructions.indexOf('gh release verify "$tag"');
+  const verifyAsset = instructions.indexOf('gh release verify-asset "$tag"');
+  const resolve = instructions.indexOf('commit=$(gh api --hostname github.com');
+  const provenance = instructions.indexOf('gh attestation verify "github-notifications-$tag.tar.gz"');
+  const extract = instructions.indexOf('tar -xzf "github-notifications-$tag.tar.gz"');
+  const install = instructions.indexOf('node install.mjs "$tag"');
   assert.ok(verify >= 0 && verifyAsset > verify && resolve > verifyAsset &&
     provenance > resolve && extract > provenance && install > extract);
-  assert.ok(readme.includes('"repos/fletchto99/copilot-notifications-canvas/commits/$tag" --jq .sha) &&'));
-  assert.ok(readme.includes("grep -Eq '^[0-9a-f]{40}$' &&"));
-  assert.match(readme, /--source-ref "refs\/tags\/\$tag" --source-digest "\$commit"/);
-  assert.match(readme, /--signer-digest "\$commit" --deny-self-hosted-runners/);
-  assert.match(readme, /--predicate-type https:\/\/slsa\.dev\/provenance\/v1 &&/);
-  const prompt = readme.match(/```text\n(Install or update[\s\S]+?)```/)[1];
-  const manual = readme.slice(provenance, extract);
+  assert.ok(instructions.includes('"repos/fletchto99/copilot-notifications-canvas/commits/$tag" --jq .sha) &&'));
+  assert.ok(instructions.includes("grep -Eq '^[0-9a-f]{40}$' &&"));
+  assert.match(instructions, /--source-ref "refs\/tags\/\$tag" --source-digest "\$commit"/);
+  assert.match(instructions, /--signer-digest "\$commit" --deny-self-hosted-runners/);
+  assert.match(instructions, /--predicate-type https:\/\/slsa\.dev\/provenance\/v1 &&/);
+  const prompt = instructions.match(/```text\n(Install or update[\s\S]+?)```/)[1];
+  const manual = instructions.slice(provenance, extract);
   assert.ok(manual.includes(`--repo ${REPOSITORY} --hostname github.com`));
   assert.ok(manual.includes(`--cert-identity "https://github.com/${REPOSITORY}/.github/workflows/release.yml@refs/tags/$tag"`));
   assert.doesNotMatch(manual, /--signer-workflow|--cert-identity-regex/);
@@ -39,7 +51,7 @@ test("shared installation and update instructions retain links used by older rel
   assert.match(prompt, /commit for both source and signer digests\. Reject self-hosted runners/);
   assert.match(prompt, /https:\/\/slsa\.dev\/provenance\/v1/);
   assert.match(prompt, /Resolve annotated tags to commits, not tag objects/);
-  assert.match(readme, /do not fall back to source or checksum-only verification/);
+  assert.match(instructions, /do not fall back to source or checksum-only verification/);
 });
 
 test("stable versions compare numerically and reject unsupported versions", () => {
