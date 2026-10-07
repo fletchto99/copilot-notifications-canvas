@@ -45,13 +45,18 @@ test("installation guide requires release and provenance verification before ext
   assert.ok(manual.includes(`--repo ${REPOSITORY} --hostname github.com`));
   assert.ok(manual.includes(`--cert-identity "https://github.com/${REPOSITORY}/.github/workflows/release.yml@refs/tags/$tag"`));
   assert.doesNotMatch(manual, /--signer-workflow|--cert-identity-regex/);
-  assert.match(prompt, /follow the manual gh release verify, gh release verify-asset, and\ngh attestation verify commands without omitting flags/);
-  assert.match(prompt, /Pin the exact certificate identity/);
-  assert.match(prompt, /\.github\/workflows\/release\.yml, refs\/tags\/<release-tag>/);
-  assert.match(prompt, /commit for both source and signer digests\. Reject self-hosted runners/);
-  assert.match(prompt, /https:\/\/slsa\.dev\/provenance\/v1/);
-  assert.match(prompt, /Resolve annotated tags to commits, not tag objects/);
-  assert.match(instructions, /do not fall back to source or checksum-only verification/);
+  assert.match(prompt, /as a user-wide Copilot/);
+  assert.match(prompt, /latest stable release/);
+  assert.ok(prompt.includes(`https://github.com/${REPOSITORY}`));
+  assert.match(prompt, /Follow "Manual installation and updates" in docs\/Installation\.md/);
+  assert.match(prompt, /Complete all\s+release, provenance, and checksum checks before extracting or running anything/);
+  assert.match(prompt, /Stop if a required check is unavailable or fails/);
+  assert.match(prompt, /do not fall back to source\s+or checksum-only verification/);
+  assert.match(prompt, /Use my existing COPILOT_HOME and GitHub CLI sign-in/);
+  assert.match(prompt, /Preserve all settings and\s+artifacts without changing preferences/);
+  assert.match(prompt, /legacy\/source installation,\s+stop and report the migration instructions instead of migrating it/);
+  assert.match(prompt, /After installation succeeds, reload extensions and open Unread Notifications/);
+  assert.match(prompt, /Report the installed version and remind me\s+to reload extensions in other already-open sessions/);
 });
 
 test("stable versions compare numerically and reject unsupported versions", () => {

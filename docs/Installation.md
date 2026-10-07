@@ -19,42 +19,22 @@ Check sign-in with `gh auth status --hostname github.com`.
 Use this prompt for a fresh installation or a packaged-release upgrade:
 
 ```text
-Install or update the Unread Notifications canvas from
-https://github.com/fletchto99/copilot-notifications-canvas as a user-wide
-GitHub Copilot extension available across sessions. Follow the repository's
-docs/Installation.md for the complete manual steps.
+Install or update the Unread Notifications canvas as a user-wide Copilot
+extension using the latest stable release from:
+https://github.com/fletchto99/copilot-notifications-canvas
 
-Use the latest published stable GitHub Release, not main or a prerelease.
-If no stable release exists, stop and report that. If already current, report
-that instead of reinstalling. Do not downgrade a newer installed version.
+Follow "Manual installation and updates" in docs/Installation.md. Complete all
+release, provenance, and checksum checks before extracting or running anything.
+Stop if a required check is unavailable or fails; do not fall back to source
+or checksum-only verification.
 
-Read the release notes and download github-notifications-<release-tag>.tar.gz
-and SHA256SUMS from that exact release. Before extracting or executing anything,
-follow the manual gh release verify, gh release verify-asset, and
-gh attestation verify commands without omitting flags.
-Pin the exact certificate identity to this repository's
-.github/workflows/release.yml, refs/tags/<release-tag>, and the tag's resolved
-commit for both source and signer digests. Reject self-hosted runners and require
-https://slsa.dev/provenance/v1. Resolve annotated tags to commits, not tag objects.
-After all checks, including SHA256SUMS, pass, extract into a new directory and
-run node install.mjs <release-tag>. Use my existing COPILOT_HOME and GitHub CLI sign-in.
-Stop if packages, attestations, or verification capabilities are missing or any
-check fails; do not fall back to source or checksum-only verification.
+Use my existing COPILOT_HOME and GitHub CLI sign-in. Preserve all settings and
+artifacts without changing preferences. For a legacy/source installation,
+stop and report the migration instructions instead of migrating it.
 
-Preserve the entire installed artifacts directory in place, including
-settings.json, autoOpen, darkMode, groupBy, unknown settings, and other files. Do not
-delete or recreate that directory, overwrite locally modified runtime files,
-or bypass installer safeguards. Report missing prerequisites or permissions
-without changing credentials.
-
-If a legacy/source installation is detected, stop and report the repository's
-one-time migration instructions. Do not migrate it while old extension
-processes may be running.
-
-Only after installation succeeds, reload extensions in this session and
-open Unread Notifications (canvasId: github-notifications). Report the
-installed version and remind me to reload extensions in other already-open
-sessions. Do not enable auto-update or change any preferences.
+After installation succeeds, reload extensions and open Unread Notifications
+(canvasId: github-notifications). Report the installed version and remind me
+to reload extensions in other already-open sessions.
 ```
 
 ## Manual installation and updates
