@@ -70,7 +70,8 @@ export class Inbox {
         ? { code: error.code, message: error.message }
         : { code: "internal_error", message: "An unexpected inbox error occurred. Inspect the extension log." };
       this.errorSource = source;
-      this.nextRefreshAt = Math.max(this.client.now() + POLL_MS, this.client.blockedUntil);
+      const now = this.client.now();
+      this.nextRefreshAt = this.client.blockedUntil > now ? this.client.blockedUntil : now + POLL_MS;
       throw error;
     } finally {
       if (this.controller.signal.aborted) this.pages = [];

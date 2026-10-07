@@ -19,7 +19,10 @@ test("load-more preserves visible coverage, deduplicates boundary shifts, and re
   await inbox.more();
   assert.equal(inbox.summary().loaded, 3);
   assert.equal(inbox.summary().hasMore, false);
-  now = POLL_MS;
+  now = 29_999;
+  await inbox.refresh();
+  assert.equal(calls, 2);
+  now = 30_000;
   await inbox.refresh();
   assert.equal(calls, 4);
   assert.equal(inbox.summary().loaded, 3);
@@ -72,7 +75,7 @@ test("forced refresh rechecks every loaded page before the next poll without los
   assert.equal(inbox.summary().loaded, 2);
   assert.equal(inbox.summary().matching, 1);
   assert.equal(inbox.summary().lastFetchedAt, now);
-  assert.equal(inbox.summary().nextRefreshAt, now + POLL_MS);
+  assert.equal(inbox.summary().nextRefreshAt, now + 30_000);
   await inbox.refresh({ force: false });
   assert.equal(calls.length, 4);
 });

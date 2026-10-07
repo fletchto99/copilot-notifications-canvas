@@ -645,8 +645,8 @@ function render(fallbackFocusKey) {
     groupBy === "date" ? "New notifications will appear here, grouped by date." :
     "New notifications will appear here, newest first.";
   const fetched = state.lastFetchedAt ? `Checked ${relativeTime(new Date(state.lastFetchedAt).toISOString())} \u00b7 ` : "";
-  const minutes = Math.ceil(Math.max(0, state.nextRefreshAt - Date.now()) / 60_000);
-  const next = minutes ? `Next check in ${minutes} min` : "Next check soon";
+  const seconds = Math.ceil(Math.max(0, state.nextRefreshAt - Date.now()) / 1000);
+  const next = seconds ? `Next check in ${seconds < 60 ? `${seconds} sec` : `${Math.ceil(seconds / 60)} min`}` : "Next check soon";
   $("updated").textContent = `${fetched}${loading ? "Checking..." : next}`;
   const checkedAt = state.lastFetchedAt ? `Last checked ${new Date(state.lastFetchedAt).toLocaleString()}. ` : "";
   const nextAt = state.nextRefreshAt ? `Next check ${new Date(state.nextRefreshAt).toLocaleString()}. ` : "";
@@ -719,9 +719,13 @@ $("collapse").addEventListener("click", () => {
   renderGroups(groups);
   $("collapse").textContent = close ? "Expand all" : "Collapse all";
 });
+let wasVisible = visible();
 function visibilityChanged() {
+  const isVisible = visible();
+  if (isVisible && !wasVisible) pendingRefresh = true;
+  wasVisible = isVisible;
   clearTimeout(timer);
-  if (visible()) {
+  if (isVisible) {
     void tick();
     void settingsRequest();
   } else {

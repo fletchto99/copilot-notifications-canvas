@@ -3,6 +3,7 @@ import { setTimeout as wait } from "node:timers/promises";
 import { InboxError, normalizeThreads } from "./model.mjs";
 
 export const POLL_MS = 120_000;
+const FOREGROUND_POLL_MS = 30_000;
 const API_ORIGIN = "https://api.github.com";
 
 export function firstPage() {
@@ -201,16 +202,17 @@ export class GitHubClient {
       const { status, headers } = response;
       const fetchedAt = this.now();
       const serverTime = Date.parse(headers.date ?? "");
-      const poll = Math.max(POLL_MS, seconds(headers["x-poll-interval"]));
+      const poll = Math.max(FOREGROUND_POLL_MS, seconds(headers["x-poll-interval"]));
+      const retryPoll = Math.max(POLL_MS, poll);
       const reset = seconds(headers["x-ratelimit-reset"]);
       const retry = seconds(headers["retry-after"]) ||
         Math.max(0, Date.parse(headers["retry-after"]) - fetchedAt) || 0;
       const exhausted = headers["x-ratelimit-remaining"] === "0";
       if (retry) this.blockedUntil = Math.max(this.blockedUntil, fetchedAt + retry);
-      if (exhausted) this.blockedUntil = Math.max(this.blockedUntil, reset + 1000, fetchedAt + poll);
+      if (exhausted) this.blockedUntil = Math.max(this.blockedUntil, reset + 1000, fetchedAt + retryPoll);
       if (status === 429 || (status === 403 && (exhausted || retry ||
           /rate limit|abuse detection|secondary limit/i.test(response.text)))) {
-        this.blockedUntil = Math.max(this.blockedUntil, fetchedAt + retry, fetchedAt + poll);
+        this.blockedUntil = Math.max(this.blockedUntil, fetchedAt + retry, fetchedAt + retryPoll);
         throw new InboxError("rate_limited", "GitHub rate limit reached. Requests are paused; wait for the retry time.", 429);
       }
       if (status === 401) throw new InboxError("authentication",

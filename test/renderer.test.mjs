@@ -448,12 +448,12 @@ test("Force refresh is an always-enabled link-style footer button beside the che
   assert.equal(ui.ids.get("force-refresh").disabled, false);
   assert.ok(ui.calls.some(call => call.path === "/api/refresh"));
   assert.equal(ui.githubCalls.length, 1);
-  assert.equal(ui.ids.get("updated").textContent, "Checked just now \u00b7 Next check in 2 min");
+  assert.equal(ui.ids.get("updated").textContent, "Checked just now \u00b7 Next check in 30 sec");
   assert.match(ui.ids.get("updated").title, /Last checked .+\. Next check .+\. Automatic refresh runs only while this view is visible\./);
 });
 
 test("refresh status ages the last check, rounds the countdown up and never displays negative waits", async () => {
-  const ui = await renderer();
+  const ui = await renderer({ onFetch: () => http([thread()], { "x-poll-interval": "120" }) });
   ui.advance(59_999);
   await runInContext("render()", ui.context);
   assert.match(ui.ids.get("updated").textContent, /Next check in 2 min$/);
@@ -463,7 +463,7 @@ test("refresh status ages the last check, rounds the countdown up and never disp
   assert.equal(ui.ids.get("updated").textContent, `Checked ${minuteAgo} \u00b7 Next check in 1 min`);
   ui.advance(59_999);
   await runInContext("render()", ui.context);
-  assert.match(ui.ids.get("updated").textContent, /Next check in 1 min$/);
+  assert.match(ui.ids.get("updated").textContent, /Next check in 1 sec$/);
   ui.advance(1);
   await runInContext("render()", ui.context);
   assert.match(ui.ids.get("updated").textContent, /Next check soon$/);
@@ -508,7 +508,7 @@ test("Force refresh checks GitHub immediately, preserves focus and still leaves 
   assert.equal(button.attributes["aria-busy"], "false");
   await button.events.click();
   assert.equal(ui.githubCalls.length, 3);
-  ui.advance(119_999);
+  ui.advance(29_999);
   await ui.fireTimer();
   assert.equal(ui.githubCalls.length, 3);
   ui.advance(1);
@@ -559,8 +559,9 @@ test("Force refresh waits for a local poll instead of losing the click or accept
   assert.equal(ui.document.querySelectorAll("a")[0].textContent, "Synthetic notification 2");
 });
 
-test("Force refresh queues behind row and repository writes without interrupting them", async () => {
-  for (const kind of ["row", "repository"]) {
+test("manual and foreground refreshes queue behind row and repository writes without interrupting them", async () => {
+  for (const [kind, trigger] of [["row", "manual"], ["repository", "manual"],
+    ["row", "foreground"], ["repository", "foreground"]]) {
     let release;
     const ui = await renderer({
       onWrite: () => new Promise(resolve => { release = () => resolve("HTTP/2 205 Reset Content\r\n\r\n"); }),
@@ -570,7 +571,12 @@ test("Force refresh queues behind row and repository writes without interrupting
     const reading = read.events.click();
     await settle();
     const button = ui.ids.get("force-refresh");
-    await button.events.click();
+    if (trigger === "manual") await button.events.click();
+    else {
+      ui.intersect(false);
+      ui.intersect(true);
+      await settle();
+    }
     assert.equal(button.disabled, false);
     assert.equal(button.textContent, "Refresh queued...");
     assert.equal(ui.calls.filter(call => call.path === "/api/refresh").length, 1);
@@ -634,16 +640,103 @@ test("Force refresh remains clickable during GitHub backoff and reports the wait
   assert.equal(button.attributes["aria-busy"], "false");
 });
 
-test("automatic polling honors the two-minute minimum", async () => {
+test("automatic polling refreshes at 30 seconds, never before, and repeats on that cadence", async () => {
   const ui = await renderer();
-  ui.advance(119_999);
-  await ui.fireTimer();
-  assert.equal(ui.calls.at(-1).path, "/api/state");
+  for (let refreshes = 1; refreshes <= 2; refreshes++) {
+    ui.advance(29_999);
+    await ui.fireTimer();
+    assert.equal(ui.calls.at(-1).path, "/api/state");
+    assert.equal(ui.githubCalls.length, refreshes);
+    assert.match(ui.ids.get("updated").textContent, /Next check in 1 sec$/);
+    ui.advance(1);
+    await ui.fireTimer();
+    assert.equal(ui.calls.at(-1).path, "/api/refresh");
+    assert.equal(ui.calls.at(-1).options.body, "{}");
+    assert.equal(ui.githubCalls.length, refreshes + 1);
+    assert.match(ui.ids.get("updated").textContent, /Next check in 30 sec$/);
+  }
+  ui.window.events.pagehide();
+});
+
+test("30-second refreshes pause while hidden or non-intersecting and resume when visible", async () => {
+  for (const mode of ["hidden", "non-intersecting"]) {
+    const ui = await renderer();
+    const setVisible = value => {
+      if (mode === "hidden") {
+        ui.document.hidden = !value;
+        ui.document.events.visibilitychange();
+      } else {
+        ui.intersect(value);
+      }
+    };
+    setVisible(false);
+    ui.advance(30_000);
+    assert.equal(ui.timers.size, 0);
+    await runInContext("tick()", ui.context);
+    assert.equal(ui.githubCalls.length, 1);
+    setVisible(true);
+    await settle();
+    assert.equal(ui.githubCalls.length, 2);
+    ui.window.events.pagehide();
+    ui.advance(30_000);
+    await runInContext("tick()", ui.context);
+    assert.equal(ui.githubCalls.length, 2);
+    assert.equal(ui.timers.size, 0);
+  }
+});
+
+test("returning to foreground refreshes immediately before the interval, without duplicate visibility requests", async () => {
+  const ui = await renderer({ onFetch: () => http([thread()], { "x-poll-interval": "300" }) });
+  ui.intersect(true);
+  ui.document.events.visibilitychange();
+  await settle();
   assert.equal(ui.githubCalls.length, 1);
-  ui.advance(1);
-  await ui.fireTimer();
-  assert.equal(ui.calls.at(-1).path, "/api/refresh");
+
+  ui.document.hidden = true;
+  ui.document.events.visibilitychange();
+  ui.intersect(false);
+  ui.advance(1000);
+  ui.document.hidden = false;
+  ui.document.events.visibilitychange();
+  await settle();
+  assert.equal(ui.githubCalls.length, 1);
+  ui.intersect(true);
+  ui.document.events.visibilitychange();
+  ui.intersect(true);
+  await settle();
   assert.equal(ui.githubCalls.length, 2);
+  const refreshes = ui.calls.filter(call => call.path === "/api/refresh");
+  assert.equal(refreshes.length, 2);
+  assert.equal(refreshes[1].options.body, '{"force":true}');
+  assert.equal(ui.inbox.summary().nextRefreshAt, ui.advance(0) + 300_000);
+  ui.document.events.visibilitychange();
+  await settle();
+  assert.equal(ui.githubCalls.length, 2);
+  ui.window.events.pagehide();
+});
+
+test("returning to foreground cannot bypass rate limits or error backoff", async () => {
+  for (const response of [
+    http({}, {}, 401),
+    http({}, { "retry-after": "600" }, 429),
+    http([thread()], { "x-ratelimit-remaining": "0" }),
+  ]) {
+    let fetches = 0;
+    const ui = await renderer({ onFetch: () => ++fetches === 1 ? response : http([thread()]) });
+    const deadline = ui.inbox.summary().nextRefreshAt;
+    ui.intersect(false);
+    ui.advance(1000);
+    ui.intersect(true);
+    await settle();
+    assert.equal(fetches, 1);
+    assert.equal(ui.ids.get("notice").hidden, false);
+    assert.equal(ui.ids.get("force-refresh").attributes["aria-busy"], "false");
+    ui.advance(deadline - ui.advance(0));
+    await ui.fireTimer();
+    assert.equal(fetches, 2);
+    assert.equal(ui.ids.get("notice").hidden, true);
+    ui.window.events.pagehide();
+  }
 });
 
 test("automatic polling honors a longer GitHub interval and resumes only when visible", async () => {
@@ -818,7 +911,9 @@ test("hidden/non-intersecting/closed documents do not schedule unnecessary work"
   ui.intersect(true);
   await settle();
   assert.equal(ui.calls.length, 4);
-  assert.equal(ui.calls[2].path, "/api/state");
+  const resumed = ui.calls.slice(2).find(call => call.path === "/api/refresh");
+  assert.ok(resumed);
+  assert.equal(resumed.options.body, '{"force":true}');
   ui.window.events.pagehide();
   assert.equal(ui.timers.size, 0);
   await runInContext("tick()", ui.context);

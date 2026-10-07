@@ -33,8 +33,18 @@ remote sessions do not automatically notify your local computer.
 
 ### Polling and delivery
 
-Checks run about every two minutes, subject to GitHub limits and independent of
-search or loaded pages. For each repository:
+While the canvas is visible, its checks feed the same results to desktop alerts,
+normally every 30 seconds and immediately on returning to the foreground. The
+watcher uses the same request cache and follows any additional pages needed for
+new activity, independent of search or how many pages the canvas has loaded.
+The first successful baseline remains silent, and OS settings control the
+exact alert timing.
+
+When the canvas is hidden, its visible-inbox polling pauses but desktop checks
+continue about every two minutes after the last check. GitHub polling intervals,
+rate limits, and retry waits still apply.
+Closing all Notifications canvases in a session stops that session's watcher;
+other sessions with open canvases can continue watching. For each repository:
 
 - **1-4 new or updated unread threads** produce individual alerts with the
   repository name and notification title. Titles include the issue or PR number

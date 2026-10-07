@@ -228,6 +228,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
       }
       if (path === "/api/state" || path === "/api/refresh") void updates?.check();
       json(200, snapshot());
+      if (path === "/api/refresh") void desktop?.sync();
     } catch (error) {
       if (error instanceof InboxError) {
         json(error.status, { error: { code: error.code, message: error.message } });

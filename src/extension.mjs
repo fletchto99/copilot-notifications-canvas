@@ -14,7 +14,7 @@ const preferences = new Preferences();
 let session;
 let startup;
 const log = (message, options) => session?.log(message, options);
-const desktop = new DesktopNotifications({ preferences, log });
+const desktop = new DesktopNotifications({ preferences, client, log });
 const updates = new Updates({ log });
 
 async function action(ctx, run) {

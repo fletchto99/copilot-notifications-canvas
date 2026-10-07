@@ -119,6 +119,31 @@ test("HTTP force refresh bypasses the polling cache only when explicitly request
   assert.equal(calls, 2);
 });
 
+test("only successful foreground refreshes feed the desktop watcher, after updating the inbox", async t => {
+  let fail = false;
+  let syncs = 0;
+  const inbox = new Inbox(new GitHubClient({ run: async () => fail ? http({}, {}, 500) : http([thread()]) }));
+  const desktop = { sync: async () => {
+    syncs++;
+    assert.equal(inbox.snapshot().groups[0].items[0].id, "1");
+  } };
+  const server = await startServer(inbox, { desktop });
+  t.after(() => server.close());
+  const url = new URL(server.url);
+  const headers = { Authorization: `Bearer ${url.hash.slice(1)}`, Origin: url.origin, "Content-Type": "application/json" };
+  const refresh = input => fetch(`${url.origin}/api/refresh`, {
+    method: "POST", headers, body: JSON.stringify(input),
+  });
+  assert.equal((await refresh({})).status, 200);
+  assert.equal(syncs, 1);
+  assert.equal((await fetch(`${url.origin}/api/state`, { headers })).status, 200);
+  assert.equal((await refresh({ force: "invalid" })).status, 400);
+  assert.equal(syncs, 1);
+  fail = true;
+  assert.equal((await refresh({ force: true })).status, 502);
+  assert.equal(syncs, 1);
+});
+
 test("HTTP errors remain explicit and contain no upstream response or stderr", async t => {
   const { origin, headers } = await setup(t, async () => http({ message: "DO NOT LEAK synthetic secret" }, {}, 401));
   const response = await fetch(`${origin}/api/refresh`, {

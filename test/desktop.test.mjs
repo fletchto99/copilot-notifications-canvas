@@ -8,7 +8,8 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { DesktopNotifications } from "../src/desktop.mjs";
 import { Preferences } from "../src/settings.mjs";
-import { GitHubClient, POLL_MS } from "../src/github.mjs";
+import { firstPage, GitHubClient, POLL_MS } from "../src/github.mjs";
+import { Inbox } from "../src/inbox.mjs";
 import { InboxError } from "../src/model.mjs";
 import { acquireLock } from "../src/lock.mjs";
 import { http, thread, next } from "./fixtures.mjs";
@@ -99,6 +100,189 @@ test("initial backlog is silent and small batches retain each thread's title and
   assert.match(state.fingerprints[0], /^[a-f0-9]{64}$/);
   assert.doesNotMatch(JSON.stringify(state), /Synthetic|example\/widgets|updatedAt|repository|title/);
   assert.equal((await stat(join(f.directory, "desktop-state.json"))).mode & 0o777, 0o600);
+});
+
+test("desktop checks retain their two-minute cadence despite the shorter foreground cache interval", async t => {
+  const f = await fixture(t);
+  const watcher = f.make();
+  await watcher.check();
+  assert.equal((await f.state()).nextPollAt, epoch + 120_000);
+  for (let checks = 0; checks < 3; checks++) {
+    f.rows([updated("2", f.advance(30_000)), thread()]);
+    await watcher.check();
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.deliveries.length, 0);
+  }
+  f.advance(29_999);
+  await watcher.check();
+  assert.equal(f.calls.length, 1);
+  f.advance(1);
+  await watcher.check();
+  assert.equal(f.calls.length, 2);
+  assert.equal(f.deliveries.length, 1);
+});
+
+test("foreground refreshes share results with alerts at 30 seconds and background checks resume at two minutes", async t => {
+  const f = await fixture(t);
+  const watcher = f.make();
+  const inbox = new Inbox(watcher.client);
+  t.after(() => inbox.close());
+  await inbox.refresh();
+  await watcher.sync();
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.deliveries.length, 0);
+  const time = f.advance(30_000);
+  f.rows([updated("2", time), thread()]);
+  await inbox.refresh();
+  await watcher.sync();
+  assert.equal(f.calls.length, 2, "desktop delivery reuses the foreground response");
+  assert.equal(inbox.snapshot().groups[0].items[0].id, "2");
+  assert.deepEqual(f.deliveries.map(alert => alert.body), ["#42 Synthetic notification 2"]);
+  assert.equal((await f.state()).nextPollAt, time + 120_000);
+  assert.equal((await f.state()).polling, false);
+  f.rows([updated("3", f.advance(30_000)), thread()]);
+  await watcher.check();
+  assert.equal(f.calls.length, 2);
+  f.advance(89_999);
+  await watcher.check();
+  assert.equal(f.calls.length, 2);
+  f.advance(1);
+  await watcher.check();
+  assert.equal(f.calls.length, 3);
+  assert.equal(f.deliveries.length, 2);
+});
+
+test("an immediate foreground return feeds new activity to alerts without waiting for the polling interval", async t => {
+  const f = await fixture(t);
+  const watcher = f.make();
+  const inbox = new Inbox(watcher.client);
+  t.after(() => inbox.close());
+  await inbox.refresh();
+  await watcher.sync();
+  f.rows([updated("2", f.advance(1000)), thread()]);
+  await inbox.refresh({ force: true });
+  await watcher.sync();
+  assert.equal(f.calls.length, 2);
+  assert.equal(f.deliveries.length, 1);
+  await watcher.sync();
+  assert.equal(f.calls.length, 2);
+  assert.equal(f.deliveries.length, 1);
+});
+
+test("foreground alerts scan all new activity pages without changing the canvas's loaded selection", async t => {
+  const f = await fixture(t);
+  const watcher = f.make();
+  const inbox = new Inbox(watcher.client, { query: "notification 2" });
+  t.after(() => inbox.close());
+  await inbox.refresh();
+  await watcher.sync();
+  const time = f.advance(30_000);
+  const arrivals = Array.from({ length: 60 }, (_, index) => updated(String(index + 2), time));
+  f.response(args => args.at(-1).includes("page=1") ? http(arrivals.slice(0, 50), { link: next }) :
+    http([...arrivals.slice(50), thread()]));
+  await inbox.refresh();
+  await watcher.sync();
+  assert.equal(f.calls.length, 3, "one shared first-page read and one desktop-only continuation");
+  assert.equal(inbox.pages.length, 1);
+  assert.equal(inbox.filters.query, "notification 2");
+  assert.equal(inbox.summary().loaded, 50);
+  assert.equal(f.deliveries.length, 1);
+  assert.equal(f.deliveries[0].body, "60 new notifications");
+});
+
+test("foreground synchronization preserves opt-in and at-most-once delivery across sessions", async t => {
+  const f = await fixture(t, { enabled: false });
+  const one = f.make();
+  await one.sync();
+  assert.deepEqual(f.calls, []);
+  assert.deepEqual(await readdir(f.directory), []);
+  await f.preferences.update({ desktopNotifications: true });
+  const two = f.make();
+  await Promise.all([one.sync(), two.sync()]);
+  assert.equal(f.deliveries.length, 0);
+  f.rows([updated("2", f.advance(30_000)), thread()]);
+  await Promise.all([one.client.page(firstPage()), two.client.page(firstPage())]);
+  await Promise.all([one.sync(), two.sync()]);
+  await two.sync();
+  assert.equal(f.deliveries.length, 1);
+});
+
+test("foreground synchronization honors interrupted, legacy and failed-delivery reservations", async t => {
+  for (const kind of ["interrupted", "legacy", "delivery"]) {
+    const f = await fixture(t);
+    let attempts = 0;
+    const watcher = f.make({ notify: async () => { attempts++; throw new Error("Synthetic delivery failure"); } });
+    await watcher.sync();
+    if (kind === "delivery") {
+      f.rows([updated("2", f.advance(30_000)), thread()]);
+      await watcher.sync();
+      assert.equal(attempts, 1);
+    } else {
+      const state = await f.state();
+      if (kind === "interrupted") state.polling = true;
+      else delete state.polling;
+      await writeFile(join(f.directory, "desktop-state.json"), JSON.stringify(state));
+    }
+    const calls = f.calls.length;
+    f.advance(1000);
+    await watcher.sync();
+    assert.equal(f.calls.length, calls);
+    assert.equal(attempts, kind === "delivery" ? 1 : 0);
+    f.advance(120_000);
+    await watcher.sync();
+    assert.equal(f.calls.length, calls + 1);
+    assert.equal(attempts, kind === "delivery" ? 1 : 0, "failed deliveries are not replayed");
+  }
+});
+
+test("foreground requests arriving during delivery coalesce into a follow-up check and close drains it", async t => {
+  const f = await fixture(t);
+  let started;
+  let release;
+  const delivering = new Promise(resolve => { started = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const watcher = f.make({ notify: async options => {
+    f.deliveries.push(options);
+    if (f.deliveries.length === 1) {
+      started();
+      await held;
+    }
+  } });
+  await watcher.sync();
+  f.rows([updated("2", f.advance(30_000)), thread()]);
+  const first = watcher.sync();
+  try {
+    await delivering;
+    f.rows([updated("3", f.advance(30_000)), thread()]);
+    const second = watcher.sync();
+    assert.equal(second, first);
+    release();
+    await first;
+    assert.deepEqual(f.deliveries.map(alert => alert.body),
+      ["#42 Synthetic notification 2", "#42 Synthetic notification 3"]);
+    const closing = watcher.sync();
+    await watcher.close();
+    await closing;
+    assert.equal(watcher.pending, undefined);
+    assert.equal(watcher.foregroundPending, undefined);
+    const calls = f.calls.length;
+    await watcher.sync();
+    assert.equal(f.calls.length, calls);
+  } finally {
+    release();
+  }
+});
+
+test("invalid foreground reservation metadata fails closed", async t => {
+  const f = await fixture(t);
+  const watcher = f.make();
+  await watcher.check();
+  const content = JSON.stringify({ ...await f.state(), polling: "false" });
+  await writeFile(join(f.directory, "desktop-state.json"), content);
+  await watcher.sync();
+  assert.equal(watcher.snapshot().state, "error");
+  assert.equal(f.calls.length, 1);
+  assert.equal(await readFile(join(f.directory, "desktop-state.json"), "utf8"), content);
 });
 
 test("individual desktop alerts include issue and PR numbers but not unrelated IDs on every platform", async t => {

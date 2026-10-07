@@ -125,6 +125,74 @@ test("refresh preserves keyboard focus and collapsed repository state", async ({
   await expect(page.getByRole("link", { name: "Changed during refresh", exact: true })).toBeVisible();
 });
 
+test("foreground checks use a 30-second interval, pause while hidden, and refresh immediately on return", async ({ page, canvas }) => {
+  canvas.rows.splice(1);
+  const initialResponse = page.waitForResponse(response => response.url().endsWith("/api/refresh"));
+  await page.goto(canvas.url);
+  const initial = await (await initialResponse).json();
+  await expect(page.locator(".row")).toHaveCount(1);
+  expect(initial.nextRefreshAt - initial.lastFetchedAt).toBe(30_000);
+  await expect(page.locator("#updated")).toContainText(/Next check in \d+ sec/);
+  const notificationRequests = () => canvas.requests.filter(path => path.startsWith("/notifications")).length;
+  expect(notificationRequests()).toBe(1);
+
+  await page.evaluate(() => { document.documentElement.style.display = "none"; });
+  await expect(page.locator("html")).toBeHidden();
+  await page.clock.setFixedTime(new Date(canvas.advance(1000)));
+  await page.waitForTimeout(5500);
+  expect(notificationRequests()).toBe(1);
+
+  canvas.rows[0].subject.title = "Updated when visible again";
+  const resumedRequest = page.waitForRequest(request => request.url().endsWith("/api/refresh"));
+  await page.evaluate(() => { document.documentElement.style.display = ""; });
+  expect((await resumedRequest).postDataJSON()).toEqual({ force: true });
+  await expect(page.getByRole("link", { name: "Updated when visible again", exact: true })).toBeVisible();
+  expect(notificationRequests()).toBe(2);
+
+  canvas.rows[0].subject.title = "Updated on the next foreground check";
+  await page.clock.setFixedTime(new Date(canvas.advance(31_000)));
+  await expect(page.getByRole("link", { name: "Updated on the next foreground check", exact: true })).toBeVisible({ timeout: 10_000 });
+  expect(notificationRequests()).toBe(3);
+  expect(canvas.writes).toEqual([]);
+});
+
+test.describe("synchronized desktop alerts", () => {
+  test.use({ desktopEnabled: true });
+
+  test("foreground polling updates the inbox and alerts together, then hidden alerts retain the background cadence", async ({ page, canvas }) => {
+    canvas.rows.splice(1);
+    await page.goto(canvas.url);
+    await expect(page.locator(".row")).toHaveCount(1);
+    await canvas.desktop.sync();
+    expect(canvas.deliveries).toEqual([]);
+    const notificationRequests = () => canvas.requests.filter(path => path.startsWith("/notifications")).length;
+    expect(notificationRequests()).toBe(1);
+
+    const time = canvas.advance(31_000);
+    canvas.rows[0].updated_at = new Date(time).toISOString();
+    canvas.rows[0].subject.title = "Synchronized foreground notification";
+    await page.clock.setFixedTime(new Date(time));
+    await expect(page.getByRole("link", { name: "Synchronized foreground notification", exact: true })).toBeVisible({ timeout: 10_000 });
+    await expect.poll(() => canvas.deliveries.map(alert => alert.body)).toEqual(["Synchronized foreground notification"]);
+    expect(notificationRequests()).toBe(2);
+
+    await page.evaluate(() => { document.documentElement.style.display = "none"; });
+    await expect(page.locator("html")).toBeHidden();
+    canvas.rows[0].updated_at = new Date(canvas.advance(30_000)).toISOString();
+    canvas.rows[0].subject.title = "Background notification";
+    await canvas.desktop.check();
+    expect(canvas.deliveries).toHaveLength(1);
+    expect(notificationRequests()).toBe(2);
+    canvas.advance(91_000);
+    await canvas.desktop.check();
+    expect(canvas.deliveries.map(alert => alert.body)).toEqual([
+      "Synchronized foreground notification", "Background notification",
+    ]);
+    expect(notificationRequests()).toBe(3);
+    expect(canvas.writes).toEqual([]);
+  });
+});
+
 test("Settings supports keyboard dismissal and persists theme and auto-open across reloads", async ({ page, canvas }) => {
   await page.goto(canvas.url);
   const settings = page.getByLabel("Settings", { exact: true });

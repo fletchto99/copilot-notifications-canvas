@@ -42,6 +42,34 @@ test("poll floor and server interval are enforced even across concurrent panels;
   assert.equal(page.nextRefreshAt, 700_000);
 });
 
+test("successful requests cache for at least 30 seconds, including conditional responses", async () => {
+  for (const headers of [{}, { "x-poll-interval": "10" }, { "x-poll-interval": "30" }]) {
+    let now = 1000;
+    const calls = [];
+    const client = new GitHubClient({ now: () => now, run: async args => {
+      calls.push(args);
+      return calls.length === 1 ? http([thread()], { ...headers, etag: '"sample"' }) : http(null, headers, 304);
+    } });
+    const first = await client.page(firstPage());
+    assert.equal(first.nextRefreshAt, now + 30_000);
+    now += 29_999;
+    await client.page(firstPage());
+    assert.equal(calls.length, 1);
+    now += 1;
+    const pages = await Promise.all([client.page(firstPage()), client.page(firstPage())]);
+    assert.equal(calls.length, 2);
+    assert.ok(calls[1].includes('If-None-Match: "sample"'));
+    assert.equal(pages[0].nextRefreshAt, now + 30_000);
+    assert.equal(pages[0].items.length, 1);
+    now += 29_999;
+    await client.page(firstPage());
+    assert.equal(calls.length, 2);
+    now += 1;
+    await client.page(firstPage());
+    assert.equal(calls.length, 3);
+  }
+});
+
 test("Last-Modified is used when ETag is absent and cacheless 304 fails", async () => {
   let now = 0;
   const calls = [];
@@ -176,6 +204,20 @@ test("successful responses exhausting quota also pause later page requests", asy
   const page = await client.page(firstPage());
   assert.equal(page.nextRefreshAt, 901_000);
   await assert.rejects(client.page(page.next), { code: "rate_limited" });
+});
+
+test("exhausted quota without a future reset retains the two-minute minimum pause", async () => {
+  let now = 1000;
+  let calls = 0;
+  const client = new GitHubClient({ now: () => now, run: async () => {
+    calls++;
+    return http([thread()], { "x-ratelimit-remaining": "0", "x-poll-interval": "30" });
+  } });
+  const page = await client.page(firstPage());
+  assert.equal(page.nextRefreshAt, now + 120_000);
+  now += 30_000;
+  await assert.rejects(client.page(firstPage()), { code: "rate_limited" });
+  assert.equal(calls, 1);
 });
 
 test("requests are serialized and a closed panel cannot launch queued work", async () => {
