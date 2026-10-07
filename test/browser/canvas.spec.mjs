@@ -3,6 +3,24 @@ import { test, expect } from "./fixtures.mjs";
 
 const searchName = "Search loaded notification titles and repositories";
 
+test.describe("startup recovery", () => {
+  test.use({ assetFailure: true });
+
+  test("opens an accessible recovery page and loads the inbox automatically on the same URL", async ({ page, canvas }) => {
+    await page.goto(canvas.url);
+    await expect(page.getByRole("status")).toContainText("Retrying in the background");
+    expect(canvas.requests).toEqual([]);
+    expect(canvas.writes).toEqual([]);
+    const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+    expect(results.violations).toEqual([]);
+    canvas.recoverAssets();
+    await expect(page.locator(".row")).toHaveCount(50, { timeout: 10_000 });
+    await expect(page).toHaveURL(canvas.url);
+    await expect(page.getByRole("searchbox", { name: searchName })).toBeEnabled();
+    expect(canvas.writes).toEqual([]);
+  });
+});
+
 test("real assets load under CSP, render titles as text, and support search and pagination", async ({ page, canvas }) => {
   const response = await page.goto(canvas.url);
   expect(response.headers()["content-security-policy"]).toContain("default-src 'none'");

@@ -131,6 +131,14 @@ including **Group By**, **Theme**, **Auto-open**, **Desktop notifications** and
   The count shows loaded unread notifications, adds a matching count while
   searching, and disappears when you are all caught up. Search and Settings
   stay in place.
+- If the canvas cannot read its local UI files, it opens a recovery page and
+  retries in the background with exponential backoff, up to 30 seconds between
+  attempts. The inbox appears automatically after recovery, without reopening
+  the panel. Closing the panel stops retries.
+  Socket-binding failures are retried three times before opening fails: the app
+  cannot display a web canvas without a listening local server. Errors include
+  a safe operating-system error code when available. For persistent failures,
+  reload extensions or reinstall the canvas while preserving its settings.
 - Notifications refresh about every two minutes while the canvas is visible.
   GitHub polling and rate limits can delay updates. The footer shows relative
   check times; hover over the status for exact times and the visibility reminder.
@@ -254,6 +262,19 @@ Runtime files are in `.github/extensions/github-notifications/`. Open this
 repository as a Copilot project to work on its local extension. After edits,
 reload extensions and use extension **list/inspect** to check the provider and
 its log.
+
+Each Copilot session runs its own provider process. Its project extension reads
+from that session's checkout; sessions using separate worktrees do not load each
+other's edits. Panels have separate loopback ports and access tokens. After a
+successful load, each server retains its in-memory asset snapshot until closed.
+Reload extensions to pick up provider changes. Avoid deleting or replacing a
+checkout while a session still uses it.
+
+Canvas routing is scoped to the session and provider (`project:github-notifications`
+or `user:github-notifications`), with `github-notifications` as the canvas type
+and an `instanceId` for each panel. If both providers are registered, pass an
+explicit `extensionId` when opening the canvas. User-wide settings and desktop
+alert coordination remain shared across sessions using the same `COPILOT_HOME`.
 
 Run the unit and HTTP integration tests without installing dependencies:
 

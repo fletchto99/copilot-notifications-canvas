@@ -150,7 +150,7 @@ test("the extension entry point wires an isolated session through its complete l
     assert.doesNotMatch(JSON.stringify(logs), /Synthetic private detail/);
   });
 
-  await t.test("failed opens report errors and allow a later retry", async subtest => {
+  await t.test("asset failures open a recovery page and keep repeated opens on the same server", async subtest => {
     await assert.rejects(canvas.open({ instanceId: "invalid", input: { mode: "all" } }), { code: "invalid_filters" });
     const readFile = fs.readFile;
     const mocked = subtest.mock.method(fs, "readFile", (path, ...args) => {
@@ -159,11 +159,15 @@ test("the extension entry point wires an isolated session through its complete l
     });
     syncBuiltinESMExports();
     try {
-      await assert.rejects(canvas.open({ instanceId: "retry" }), { code: "server_start", message: "Could not start the local notifications server." });
-      assert.equal(logs.at(-1).message, "Could not start the notifications loopback server.");
+      const opened = await canvas.open({ instanceId: "retry" });
+      assert.match(await (await fetch(opened.url)).text(), /Retrying in the background/);
+      assert.deepEqual(await canvas.open({ instanceId: "retry" }), opened);
+      assert.equal(logs.at(-1).message, "Could not load the notifications canvas assets. Retrying in the background.");
+      assert.doesNotMatch(JSON.stringify(logs), /Synthetic private path/);
     } finally {
       mocked.mock.restore();
       syncBuiltinESMExports();
+      await canvas.onClose({ instanceId: "retry" });
     }
     const retried = await canvas.open({ instanceId: "retry" });
     assert.equal((await fetch(retried.url)).status, 200);
@@ -276,5 +280,17 @@ test("a failed server releases inbox resources and never starts desktop watching
   f.servers[0].reject(new Error("Synthetic bind failure"));
   await rejected;
   assert.equal(f.inboxes[0].closed, true);
+  assert.equal(f.desktop.panels.size, 0);
+});
+
+test("closing while startup is cancelled handles the rejection without leaving a panel", async () => {
+  const f = await fixture();
+  const opening = f.canvas.open({ instanceId: "panel", input: {} });
+  const rejected = assert.rejects(opening, { code: "closed" });
+  const closing = f.canvas.onClose({ instanceId: "panel" });
+  assert.equal(f.inboxes[0].closed, true);
+  f.servers[0].reject(new InboxError("closed", "The canvas was closed.", 410));
+  await rejected;
+  await closing;
   assert.equal(f.desktop.panels.size, 0);
 });

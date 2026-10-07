@@ -1,5 +1,5 @@
 import { test as base, expect } from "@playwright/test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GitHubClient } from "../../.github/extensions/github-notifications/github.mjs";
@@ -13,12 +13,15 @@ import { http, next, thread } from "../fixtures.mjs";
 export { expect };
 
 export const test = base.extend({
-  canvas: async ({ page, context }, use) => {
+  assetFailure: [false, { option: true }],
+  canvas: async ({ page, context, assetFailure }, use) => {
     const directory = await mkdtemp(join(tmpdir(), "notification-browser-"));
     const writes = [];
     const deliveries = [];
     const requests = [];
     const errors = [];
+    const warnings = [];
+    let assetsUnavailable = assetFailure;
     const rows = Array.from({ length: 53 }, (_, index) => {
       const id = String(index + 1);
       const titles = {
@@ -63,7 +66,16 @@ export const test = base.extend({
     } });
     let server;
     try {
-      server = await startServer(new Inbox(client), { preferences, desktop, updates, log: message => errors.push(message) });
+      server = await startServer(new Inbox(client), {
+        preferences, desktop, updates,
+        log: (message, options) => (options.level === "warning" ? warnings : errors).push(message),
+        read: (path, options) => {
+          if (assetsUnavailable && path.pathname.endsWith("/app.mjs")) {
+            throw Object.assign(new Error("Synthetic asset failure"), { code: "ENOENT" });
+          }
+          return readFile(path, options);
+        },
+      });
       desktop.add("browser-test");
       const origin = new URL(server.url).origin;
       await context.route("**/*", async route => {
@@ -76,8 +88,11 @@ export const test = base.extend({
       page.on("console", message => {
         if (message.type() === "error") errors.push(message.text());
       });
-      await use({ url: server.url, rows, writes, requests, preferences, deliveries });
+      await use({ url: server.url, rows, writes, requests, preferences, deliveries,
+        recoverAssets: () => { assetsUnavailable = false; } });
       expect(errors, "Browser execution, CSP, and external-network errors").toEqual([]);
+      expect(warnings).toEqual(assetFailure
+        ? ["Could not load the notifications canvas assets (ENOENT). Retrying in the background."] : []);
     } finally {
       await context.unrouteAll({ behavior: "wait" });
       await page.close();
