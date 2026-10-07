@@ -445,7 +445,7 @@ test("PR checks validate packages without publishing, and tag checks precede pub
 test("documented shell installation enforces provenance before extraction or execution", {
   skip: process.platform === "win32" && "The documented POSIX-shell command is tested on Linux and macOS.",
 }, async t => {
-  const instructions = await readFile(new URL("../docs/Installation.md", import.meta.url), "utf8");
+  const instructions = await readFile(new URL("../docs/installation.md", import.meta.url), "utf8");
   const command = instructions.match(/```sh\n( {3}tag=v[\s\S]+?) {3}```/)[1];
   const manualTag = command.match(/tag=(v[0-9.]+)/)[1];
   const stub = `#!${process.execPath}

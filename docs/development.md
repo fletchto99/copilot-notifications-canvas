@@ -1,6 +1,6 @@
 # Development
 
-[README](../README.md) | [Installation](Installation.md) | [Settings](Settings.md)
+[README](../README.md) | [Installation](installation.md) | [Settings](settings.md)
 
 ## Local development
 
@@ -74,7 +74,7 @@ in place. Existing sessions keep their loaded code and assets until reloaded.
 
 3. Monitor the [release workflow](../.github/workflows/release.yml). It runs all
    PR checks, builds and attests the archive, enforces the
-   [installation verification policy](Installation.md#manual-installation-and-updates),
+   [installation verification policy](installation.md#manual-installation-and-updates),
    then publishes and verifies an immutable release as **Latest**.
 4. Review the generated release notes for behavior changes and update guidance.
 

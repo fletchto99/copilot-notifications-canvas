@@ -14,7 +14,7 @@ function updatePrompt(version) {
   return `Update my user-wide Unread Notifications canvas to v${version} from:
 ${REPOSITORY_URL}
 
-Follow "Manual installation and updates" in docs/Installation.md with
+Follow "Manual installation and updates" in docs/installation.md with
 tag=v${version}. Use only that published stable release package.
 Complete all release, provenance, and checksum checks before extracting or
 running anything. Stop if a required check is unavailable or fails; do not

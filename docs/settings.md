@@ -1,6 +1,6 @@
 # Settings
 
-[README](../README.md) | [Installation](Installation.md) | [Development](Development.md)
+[README](../README.md) | [Installation](installation.md) | [Development](development.md)
 
 Open **Settings** in the canvas to change these preferences. They are saved
 across sessions and preserved during packaged upgrades.
@@ -64,4 +64,4 @@ See [Privacy](../README.md#privacy).
 - **Sender icon and clicks:** the OS controls the sender icon; clicking an alert
   cannot focus the canvas.
 - **The canvas will not load:** see
-  [installation troubleshooting](Installation.md#upgrades-and-troubleshooting).
+  [installation troubleshooting](installation.md#upgrades-and-troubleshooting).

@@ -14,7 +14,7 @@ as read, and opt into desktop notifications or auto-open.
   into **github.com** with `notifications` or `repo` scope.
 
 GitHub.com only; fine-grained personal access tokens are not supported.
-See the [installation guide](docs/Installation.md#prerequisites) for CLI
+See the [installation guide](docs/installation.md#prerequisites) for CLI
 verification requirements and the sign-in check.
 
 <a id="installation"></a>
@@ -29,12 +29,12 @@ Install or update the Unread Notifications canvas as a user-wide Copilot
 extension using the latest stable release from:
 https://github.com/fletchto99/copilot-notifications-canvas
 
-Follow docs/Installation.md in that repository, including all verification
+Follow docs/installation.md in that repository, including all verification
 and settings-preservation requirements. Stop if any check fails.
 After installation succeeds, reload extensions and open the canvas.
 ```
 
-[Manual installation and updates](docs/Installation.md) cover the
+[Manual installation and updates](docs/installation.md) cover the
 full procedure, verification requirements, and troubleshooting.
 
 ## Usage
@@ -52,7 +52,7 @@ full procedure, verification requirements, and troubleshooting.
 
 Open **Settings** for grouping, theme, auto-open, desktop notifications, and sound.
 Preferences persist across sessions; auto-open and desktop alerts are off by
-default. See the [settings guide](docs/Settings.md) for details and platform support.
+default. See the [settings guide](docs/settings.md) for details and platform support.
 
 ## Privacy
 
@@ -74,6 +74,6 @@ also mark a notification read on GitHub.
 
 ## Documentation
 
-- [Installation](docs/Installation.md): setup, updates, and verification.
-- [Settings](docs/Settings.md): preferences, desktop alerts, and troubleshooting.
-- [Development](docs/Development.md): local development, tests, packaging, and releases.
+- [Installation](docs/installation.md): setup, updates, and verification.
+- [Settings](docs/settings.md): preferences, desktop alerts, and troubleshooting.
+- [Development](docs/development.md): local development, tests, packaging, and releases.

@@ -1,6 +1,6 @@
 # Installation and updating
 
-[README](../README.md) | [Settings](Settings.md) | [Development](Development.md)
+[README](../README.md) | [Settings](settings.md) | [Development](development.md)
 
 ## Prerequisites
 
@@ -94,7 +94,7 @@ not bypass its safeguards.
 Already-running providers retain their loaded code and assets until reloaded.
 If local UI files fail to load, the recovery page retries automatically. For
 persistent failures, reload extensions or reinstall while preserving settings.
-See [Settings](Settings.md#troubleshooting) for settings-save and desktop errors.
+See [Settings](settings.md#troubleshooting) for settings-save and desktop errors.
 
 A project-local checkout shadows the user-wide installation in that repository.
-Update that checkout deliberately; see [Development](Development.md#local-development).
+Update that checkout deliberately; see [Development](development.md#local-development).

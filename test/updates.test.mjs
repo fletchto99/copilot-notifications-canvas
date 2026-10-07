@@ -14,19 +14,19 @@ test("shared installation and update instructions retain links used by older rel
   assert.match(readme, /^## Installation and Updating$/m);
   assert.match(readme, /<a id="installation"><\/a>/);
   assert.match(readme, /<a id="updating"><\/a>/);
-  assert.match(readme, /\[Manual installation and updates\]\(docs\/Installation\.md\)/);
+  assert.match(readme, /\[Manual installation and updates\]\(docs\/installation\.md\)/);
   const prompt = readme.match(/```text\n(Install or update[\s\S]+?)```/)[1];
   assert.match(prompt, /as a user-wide Copilot/);
   assert.match(prompt, /latest stable release/);
   assert.ok(prompt.includes(`https://github.com/${REPOSITORY}`));
-  assert.match(prompt, /Follow docs\/Installation\.md in that repository/);
+  assert.match(prompt, /Follow docs\/installation\.md in that repository/);
   assert.match(prompt, /including all verification\s+and settings-preservation requirements/);
   assert.match(prompt, /Stop if any check fails/);
   assert.match(prompt, /After installation succeeds, reload extensions and open the canvas/);
 });
 
 test("installation guide requires release and provenance verification before extraction", async () => {
-  const instructions = await readFile(new URL("../docs/Installation.md", import.meta.url), "utf8");
+  const instructions = await readFile(new URL("../docs/installation.md", import.meta.url), "utf8");
   assert.match(instructions, /\[installation prompt in the README\]\(\.\.\/README\.md#installation-and-updating\)/);
   assert.doesNotMatch(instructions, /```text\nInstall or update/);
   assert.match(instructions, /^## Manual installation and updates$/m);
@@ -94,7 +94,7 @@ test("release checks use a fixed read-only GitHub endpoint and locally construct
   assert.match(state.instructionsUrl, /#installation-and-updating$/);
   assert.match(state.prompt, /Update my user-wide Unread Notifications canvas to v1\.2\.3/);
   assert.ok(state.prompt.includes(`https://github.com/${REPOSITORY}`));
-  assert.match(state.prompt, /Follow "Manual installation and updates" in docs\/Installation\.md with\s+tag=v1\.2\.3/);
+  assert.match(state.prompt, /Follow "Manual installation and updates" in docs\/installation\.md with\s+tag=v1\.2\.3/);
   assert.match(state.prompt, /Use only that published stable release package/);
   assert.doesNotMatch(state.prompt, /v0\.2\.0/);
   assert.match(state.prompt, /Complete all release, provenance, and checksum checks before extracting or\s+running anything/);
