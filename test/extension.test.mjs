@@ -44,6 +44,11 @@ test("the extension entry point wires an isolated session through its complete l
     }
   });
   t.mock.method(childProcess, "execFile", (command, args, options, callback) => {
+    if (command === "git") {
+      assert.deepEqual(args, ["symbolic-ref", "--quiet", "HEAD"]);
+      queueMicrotask(() => callback(null, "refs/heads/feature/footer-details\n", ""));
+      return;
+    }
     assert.equal(command, "gh");
     assert.equal(args[args.indexOf("--method") + 1], "GET", "Agent actions must never mark notifications read");
     calls.push(args);
@@ -187,6 +192,12 @@ test("the extension entry point wires an isolated session through its complete l
       }
     }
     assert.equal((await invoke("get_state", "one")).loaded, 0);
+    assert.equal(Object.hasOwn(await invoke("get_state", "one"), "development"), false);
+    const url = new URL(first.url);
+    const response = await fetch(new URL("/api/state", url), {
+      headers: { Authorization: `Bearer ${url.hash.slice(1)}`, Origin: url.origin },
+    });
+    assert.deepEqual((await response.json()).development, { version: CURRENT_VERSION, branch: "feature/footer-details" });
   });
 
   await t.test("all agent actions route correctly without returning notification content", async () => {

@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { setTimeout as wait } from "node:timers/promises";
-import { assetPaths, loadAssets } from "./assets.mjs";
+import { assetPaths, loadAssets, loadDevelopmentInfo } from "./assets.mjs";
 import { InboxError } from "./model.mjs";
 import { validSound } from "./notifier.mjs";
 
@@ -101,12 +101,17 @@ async function readBody(req) {
   return input;
 }
 
-export async function startServer(inbox, { log = () => {}, preferences, desktop, updates, read } = {}) {
+export async function startServer(inbox, { log = () => {}, preferences, desktop, updates, read, development } = {}) {
   const secret = randomBytes(32).toString("hex");
-  const snapshot = () => ({ ...inbox.snapshot(), ...(updates ? { updates: updates.snapshot() } : {}) });
+  const snapshot = () => ({ ...inbox.snapshot(), development, ...(updates ? { updates: updates.snapshot() } : {}) });
   const controller = new AbortController();
   const signal = AbortSignal.any([inbox.controller.signal, controller.signal]);
   assertOpen(signal);
+  try {
+    development ??= await loadDevelopmentInfo({ log, signal });
+  } finally {
+    assertOpen(signal);
+  }
   let resolveReady;
   const ready = new Promise(resolve => { resolveReady = resolve; });
   let staticFiles;

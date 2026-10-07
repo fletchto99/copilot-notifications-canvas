@@ -14,6 +14,12 @@ Provider modules and renderer assets live in `src/`. The entry point at
 local source without a build. After edits, reload extensions and use extension
 **list/inspect** to check the provider and its log.
 
+Source checkouts show `dev (v<version>) <branch-name>` in the footer, using
+`version.json` and the extension checkout's branch when the panel opens. Reload
+extensions after switching branches. Detached checkouts show `detached HEAD`;
+if Git is unavailable, the footer shows `branch unavailable` and the provider
+logs a warning. Packaged releases do not show this development label.
+
 Each session uses its own checkout and loaded asset snapshot; do not delete a
 checkout while a session uses it. A project-local checkout shadows a user-wide
 installation. If both providers are registered, pass

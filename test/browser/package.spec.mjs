@@ -5,6 +5,8 @@ test.use({ packaged: true });
 test("installed bundle supports search, saved settings and exact row writes in a real browser", async ({ page, canvas }) => {
   await page.goto(canvas.url);
   await expect(page.locator(".row")).toHaveCount(50);
+  await expect(page.locator("#development-build")).toBeHidden();
+  await expect(page.locator("#development-build")).toBeEmpty();
   await page.getByRole("searchbox").fill("Needle");
   await expect(page.locator(".row")).toHaveCount(3);
   await page.getByLabel("Settings", { exact: true }).click();
