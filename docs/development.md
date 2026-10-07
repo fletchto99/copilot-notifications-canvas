@@ -46,9 +46,15 @@ npx playwright install --with-deps chromium webkit
 npm run test:browser
 ```
 
-Coverage also works without `npm ci`. Playwright downloads browser binaries and
-may need permission to install Linux system libraries. Use `-- --project=webkit`
-with `npm run test:browser` to run one engine.
+Coverage also works without `npm ci`. It enforces aggregate minimums of 95% for
+lines, branches, and functions, not per-file minimums. Every eligible runtime
+and release/installer module must appear in the report. The coverage reporter
+and build script remain excluded from the percentages; packaged integration
+tests validate the build separately.
+
+Playwright downloads browser binaries and may need permission to install Linux
+system libraries. Use `-- --project=webkit` with `npm run test:browser` to run one
+engine.
 
 See the [test workflow](../.github/workflows/tests.yml) for platform coverage and
 required checks. PR/main CI validates packaging but never publishes releases.

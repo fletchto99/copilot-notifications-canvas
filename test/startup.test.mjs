@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import fs, { mkdtemp, rm } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Startup, STARTUP_INSTANCE, claimStartup } from "../src/startup.mjs";
@@ -112,6 +113,45 @@ test("another canvas opening during the final panel check does not cancel startu
   assert.equal(item.opened.length, 1);
 });
 
+test("starting work during history or panel inspection cancels auto-open even when the snapshot is still fresh", async t => {
+  for (const stage of ["history", "panels"]) {
+    await t.test(stage, async () => {
+      const item = fixture();
+      if (stage === "history") {
+        item.session.getEvents = async () => {
+          item.emit({ type: "assistant.turn_start" });
+          return [{ type: "session.start" }];
+        };
+      } else {
+        item.session.rpc.canvas.listOpen = async () => {
+          item.emit({ type: "assistant.turn_start" });
+          return { openCanvases: [] };
+        };
+      }
+      await item.startup.start();
+      assert.equal(item.startup.status, "session-already-active");
+      item.emit({ type: "capabilities.changed" });
+      await item.startup.attempt();
+      assert.deepEqual(item.opened, []);
+      assert.deepEqual(item.logs, []);
+    });
+  }
+});
+
+test("a resumed session discovered on the final history read never reaches the panel open RPC", async () => {
+  const item = fixture();
+  let reads = 0;
+  item.session.getEvents = async () => ++reads === 1
+    ? [{ type: "session.start" }]
+    : [{ type: "session.start" }, { type: "session.resume" }];
+  item.session.rpc.canvas.listOpen = async () => assert.fail("Active sessions must not continue to panel inspection");
+  await item.startup.start();
+  assert.equal(reads, 2);
+  assert.equal(item.startup.status, "existing-session");
+  assert.deepEqual(item.opened, []);
+  assert.deepEqual(item.logs, []);
+});
+
 test("notification activity while waiting still cancels startup", async () => {
   for (const type of canvasEvents) {
     const item = fixture({ renderer: false });
@@ -160,6 +200,47 @@ test("the session marker prevents reopening after close or provider reload, incl
     await reload.startup.start();
     assert.equal(reload.startup.status, "already-checked");
     assert.equal(reload.opened.length, 0);
+  }
+});
+
+test("a missing session workspace reports one startup failure without opening or retrying", async () => {
+  const item = fixture();
+  item.session.workspacePath = undefined;
+  item.startup.claim = claimStartup;
+  await item.startup.start();
+  await item.startup.start();
+  await item.startup.attempt();
+  assert.equal(item.startup.status, "error");
+  assert.deepEqual(item.opened, []);
+  assert.equal(item.logs.length, 1);
+  assert.equal(item.logs[0][1].level, "warning");
+});
+
+test("startup marker I/O errors propagate and close handles without reopening an already-claimed session", async t => {
+  for (const operation of ["open", "writeFile"]) {
+    await t.test(operation, async t => {
+      const directory = await mkdtemp(join(tmpdir(), "notification-startup-test-"));
+      t.after(() => rm(directory, { recursive: true, force: true }));
+      const failure = Object.assign(new Error("Synthetic marker failure"), { code: "EACCES" });
+      const open = fs.open;
+      let handle;
+      t.mock.method(fs, "open", async (...args) => {
+        if (operation === "open") throw failure;
+        handle = await open(...args);
+        t.mock.method(handle, "writeFile", async () => { throw failure; });
+        return handle;
+      });
+      syncBuiltinESMExports();
+      try {
+        await assert.rejects(claimStartup(directory), error => error === failure);
+        if (operation === "writeFile") assert.equal(handle.fd, -1);
+      } finally {
+        t.mock.restoreAll();
+        syncBuiltinESMExports();
+      }
+      assert.equal(await claimStartup(directory), operation === "open");
+      assert.equal(await claimStartup(directory), false);
+    });
   }
 });
 

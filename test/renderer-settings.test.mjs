@@ -152,6 +152,37 @@ test("Windows and Linux sound pickers use their own sound catalogs", async () =>
   }
 });
 
+test("a saved sound unavailable on this platform remains selected until the user chooses a supported sound", async () => {
+  const storedSettings = { desktopNotifications: true, desktopSound: "Ping" };
+  const ui = await renderer({ desktopPlatform: "win32", storedSettings });
+  const sound = ui.ids.get("desktop-sound");
+  assert.equal(sound.value, "Ping");
+  assert.equal(sound.disabled, false);
+  assert.equal(sound.children.find(option => option.value === "Ping").textContent, "Unavailable on this platform: Ping");
+  assert.equal(ui.calls.some(call => call.path === "/api/settings" && call.options.body), false);
+  sound.value = "Mail";
+  sound.events.change();
+  await settle();
+  assert.equal(storedSettings.desktopSound, "Mail");
+  assert.equal(sound.value, "Mail");
+  assert.equal(sound.children.some(option => option.value === "Ping"), false);
+  assert.equal(ui.ids.get("settings-error").hidden, true);
+  assert.deepEqual(ui.patches, []);
+  ui.window.events.pagehide();
+});
+
+test("missing desktop sound capabilities preserve the saved value without enabling the picker", async () => {
+  const ui = await renderer({ desktopStatus: { supported: false, sounds: undefined, message: "Desktop backend unavailable." },
+    storedSettings: { desktopNotifications: true, desktopSound: "Ping" } });
+  const sound = ui.ids.get("desktop-sound");
+  assert.equal(sound.value, "Ping");
+  assert.equal(sound.disabled, true);
+  assert.deepEqual(sound.children.map(option => option.textContent), ["Unavailable on this platform: Ping"]);
+  assert.equal(ui.ids.get("desktop-status").textContent, "Desktop backend unavailable.");
+  assert.equal(ui.calls.some(call => call.path === "/api/settings" && call.options.body), false);
+  ui.window.events.pagehide();
+});
+
 test("a settings edit during a background status read is queued rather than dropped", async () => {
   let reads = 0;
   let finish;

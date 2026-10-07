@@ -56,7 +56,7 @@ jobs:
           node-version: "24"
           package-manager-cache: false
       - name: Test Windows installation, settings, locks and notification arguments
-        run: node --test test/platform.test.mjs test/settings.test.mjs test/notifier.test.mjs
+        run: node --test test/platform.test.mjs test/lock.test.mjs test/settings.test.mjs test/notifier.test.mjs
   lint:
     name: JavaScript and workflows
     runs-on: ubuntu-slim

@@ -310,6 +310,26 @@ test("invalid stored sound booleans stop watching without polling, delivery, or 
   }
 });
 
+test("a sound saved on another platform blocks watching until an explicit supported choice is saved", async t => {
+  const f = await fixture(t);
+  await f.preferences.update({ desktopSound: "Mail" });
+  const watcher = f.make();
+  await watcher.check();
+  assert.equal(watcher.snapshot().state, "error");
+  assert.match(watcher.snapshot().message, /sound supported by this operating system/);
+  assert.deepEqual(f.calls, []);
+  assert.deepEqual(f.deliveries, []);
+  assert.deepEqual(await readdir(f.directory), ["settings.json"]);
+  assert.equal((await f.preferences.read()).desktopSound, "Mail");
+  watcher.wake(await f.preferences.update({ desktopSound: "default" }));
+  await watcher.check();
+  assert.equal(watcher.snapshot().state, "watching");
+  assert.deepEqual(f.deliveries, []);
+  f.rows([updated("2", f.advance())]);
+  await watcher.check();
+  assert.deepEqual(f.deliveries.map(alert => alert.body), ["#42 Synthetic notification 2"]);
+});
+
 test("bursts group at exactly five new notifications from a repository", async t => {
   for (const count of [1, 4, 5, 6]) {
     const f = await fixture(t);
@@ -715,6 +735,81 @@ test("longer polling intervals and rate limits are shared by every watcher", asy
   assert.equal(f.deliveries.length, 1);
 });
 
+test("failed checkpoint writes preserve the last published state and prevent native delivery", async t => {
+  for (const checkpoint of ["poll reservation", "activity claim"]) {
+    for (const operation of ["writeFile", "sync", "rename"]) {
+      await t.test(`${checkpoint}: ${operation}`, async t => {
+        const f = await fixture(t);
+        const watcher = f.make();
+        await watcher.check();
+        const baseline = await f.state();
+        const entries = (await readdir(f.directory)).sort();
+        const time = f.advance();
+        f.rows([updated("2", time), thread()]);
+        const targetWatermark = checkpoint === "activity claim" ? time : baseline.watermark;
+        const targets = new Set();
+        const handles = [];
+        let failures = 0;
+        let lastPublished;
+        const fail = async () => {
+          failures++;
+          lastPublished ??= await readFile(watcher.statePath, "utf8");
+          throw Object.assign(new Error("Synthetic private disk failure"), { code: "ENOSPC" });
+        };
+        const open = fs.open;
+        const rename = fs.rename;
+        t.mock.method(fs, "open", async (path, flags, ...args) => {
+          const file = await open(path, flags, ...args);
+          if (flags === "wx" && path.startsWith(join(f.directory, ".desktop-"))) {
+            handles.push(file);
+            const write = file.writeFile.bind(file);
+            const sync = file.sync.bind(file);
+            t.mock.method(file, "writeFile", async content => {
+              if (JSON.parse(content).watermark === targetWatermark) targets.add(path);
+              if (targets.has(path) && operation === "writeFile") {
+                await write(content.slice(0, 10));
+                return fail();
+              }
+              return write(content);
+            });
+            t.mock.method(file, "sync", () => targets.has(path) && operation === "sync" ? fail() : sync());
+          }
+          return file;
+        });
+        t.mock.method(fs, "rename", (from, to) =>
+          targets.has(from) && to === watcher.statePath && operation === "rename" ? fail() : rename(from, to));
+        syncBuiltinESMExports();
+        try {
+          await watcher.check();
+          assert.ok(failures > 0, "The selected checkpoint operation must fail");
+          assert.equal(watcher.snapshot().state, "error");
+          assert.equal(f.calls.length, checkpoint === "activity claim" ? 2 : 1);
+          assert.deepEqual(f.deliveries, []);
+          assert.equal(await readFile(watcher.statePath, "utf8"), lastPublished);
+          assert.equal((await f.state()).watermark, baseline.watermark);
+          assert.deepEqual((await f.state()).fingerprints, baseline.fingerprints);
+          assert.deepEqual((await readdir(f.directory)).sort(), entries);
+          assert.ok(handles.length > 0);
+          assert.ok(handles.every(file => file.fd === -1), "Temporary checkpoint handles must be closed");
+          assert.equal(f.logs.length, 1);
+          assert.doesNotMatch(JSON.stringify(f.logs), /Synthetic private disk failure|Synthetic notification|example\/widgets/);
+        } finally {
+          t.mock.restoreAll();
+          syncBuiltinESMExports();
+        }
+        f.advance();
+        await watcher.check();
+        assert.equal(watcher.snapshot().state, "watching");
+        assert.deepEqual(f.deliveries.map(alert => alert.body), ["#42 Synthetic notification 2"]);
+        assert.equal((await f.state()).watermark, time);
+        f.advance();
+        await f.make().check();
+        assert.equal(f.deliveries.length, 1, "Another watcher must not replay the recovered activity");
+      });
+    }
+  }
+});
+
 test("a failed sender is not retried, even after another copy takes over", async t => {
   const f = await fixture(t);
   let attempts = 0;
@@ -760,6 +855,46 @@ test("closing or disabling during an in-flight fetch prevents delivery", async t
     assert.equal(f.deliveries.length, 0, action);
     assert.equal(f.logs.length, 0, action);
   }
+});
+
+test("saving disabled preferences aborts an active poll and re-enabling establishes a silent baseline", async t => {
+  const f = await fixture(t);
+  const watcher = f.make();
+  await watcher.check();
+  const time = f.advance();
+  let started;
+  let finish;
+  const ready = new Promise(resolve => { started = resolve; });
+  f.response(() => {
+    started();
+    return new Promise(resolve => { finish = () => resolve(http([updated("2", time)])); });
+  });
+  const pending = watcher.check();
+  try {
+    await ready;
+    assert.equal(watcher.controller.signal.aborted, false);
+    watcher.wake(await f.preferences.update({ desktopNotifications: false }));
+    assert.equal(watcher.controller.signal.aborted, true);
+    assert.equal(watcher.snapshot().state, "off");
+  } finally {
+    finish();
+    await pending;
+  }
+  await watcher.check();
+  assert.equal(watcher.registered, false);
+  assert.equal(f.calls.length, 2);
+  assert.deepEqual(f.deliveries, []);
+  assert.deepEqual(f.logs, []);
+  f.response(undefined);
+  f.rows([updated("2", f.advance())]);
+  watcher.wake(await f.preferences.update({ desktopNotifications: true }));
+  assert.equal(watcher.snapshot().state, "starting");
+  await watcher.check();
+  assert.equal(watcher.snapshot().state, "watching");
+  assert.deepEqual(f.deliveries, []);
+  f.rows([updated("3", f.advance())]);
+  await watcher.check();
+  assert.deepEqual(f.deliveries.map(alert => alert.body), ["#42 Synthetic notification 3"]);
 });
 
 test("malformed state, symlinks and unknown locks fail closed without alerting or overwriting", async t => {
