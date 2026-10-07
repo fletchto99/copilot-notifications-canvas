@@ -40,7 +40,8 @@ new activity, independent of search or how many pages the canvas has loaded.
 The first successful baseline uses a fresh response and remains silent. If a
 baseline or continuation page is still cached from an earlier check, the watcher
 waits for GitHub's polling interval before revalidating it. OS settings control
-the exact alert timing.
+the exact alert timing. Rate-limit backoff pauses upstream requests, but the
+watcher can still process sufficiently fresh results already in its cache.
 
 When the canvas is hidden, its visible-inbox polling pauses but desktop checks
 continue about every two minutes after the last check. GitHub polling intervals,

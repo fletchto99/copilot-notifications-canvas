@@ -116,10 +116,10 @@ export class GitHubClient {
     this.revision = 0;
   }
 
-  page(endpoint, signal, { force = false, minSequence = 0 } = {}) {
+  page(endpoint, signal, { force = false, minSequence = 0, allowCachedDuringBackoff = false } = {}) {
     const url = endpointURL(endpoint);
     const path = `${url.pathname}${url.search}`;
-    const pending = this.queue.then(() => this.request(path, signal, "GET", { force }));
+    const pending = this.queue.then(() => this.request(path, signal, "GET", { force, minSequence, allowCachedDuringBackoff }));
     this.queue = pending.catch(() => {});
     return pending.then(async page => {
       if (page.sequence >= minSequence) return page;
@@ -130,7 +130,7 @@ export class GitHubClient {
         if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
         throw error;
       }
-      return this.page(endpoint, signal, { force, minSequence });
+      return this.page(endpoint, signal, { force, minSequence, allowCachedDuringBackoff });
     });
   }
 
@@ -188,12 +188,14 @@ export class GitHubClient {
     return pending;
   }
 
-  async request(endpoint, signal, method = "GET", { force = false } = {}) {
+  async request(endpoint, signal, method = "GET", { force = false, minSequence = 0, allowCachedDuringBackoff = false } = {}) {
     if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
     const now = this.now();
+    const cached = method === "GET" ? this.cache.get(endpoint) : undefined;
+    if (allowCachedDuringBackoff && !force && cached &&
+        cached.sequence >= minSequence && now < cached.nextRefreshAt) return cached;
     if (now < this.blockedUntil) throw this.lastError ??
       new InboxError("rate_limited", "GitHub requests are paused until the rate limit resets.", 429);
-    const cached = method === "GET" ? this.cache.get(endpoint) : undefined;
     if (!force && cached && now < cached.nextRefreshAt) return cached;
     const requestKey = `${method} ${endpoint}`;
     const clearFailure = () => {

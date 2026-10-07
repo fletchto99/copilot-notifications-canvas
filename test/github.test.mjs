@@ -322,6 +322,79 @@ test("successful responses exhausting quota also pause later page requests", asy
   await assert.rejects(client.page(page.next), { code: "rate_limited" });
 });
 
+test("desktop cache reads can consume quota-exhausting responses without permitting upstream requests", async () => {
+  let now = 0;
+  let calls = 0;
+  const client = new GitHubClient({ now: () => now, run: async () => {
+    calls++;
+    return http([thread()], { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "900" });
+  } });
+  const page = await client.page(firstPage());
+  const options = { minSequence: page.sequence, allowCachedDuringBackoff: true };
+  assert.equal(await client.page(firstPage(), undefined, options), page);
+  for (const input of [{}, { ...options, force: true }, { ...options, minSequence: page.sequence + 1 }]) {
+    await assert.rejects(client.page(firstPage(), undefined, input), { code: "rate_limited" });
+  }
+  await assert.rejects(client.page(nextPage(next, firstPage()), undefined, options), { code: "rate_limited" });
+  await assert.rejects(client.markRead("1"), { code: "rate_limited" });
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(client.page(firstPage(), controller.signal, options), { code: "closed" });
+  now = page.nextRefreshAt;
+  client.blockedUntil = now + 1000;
+  await assert.rejects(client.page(firstPage(), undefined, options), { code: "rate_limited" });
+  assert.equal(calls, 1);
+});
+
+test("a queued desktop cache read consumes the successful response that imposes backoff ahead of it", async () => {
+  let entered;
+  let release;
+  const started = new Promise(resolve => { entered = resolve; });
+  let calls = 0;
+  const client = new GitHubClient({ now: () => 0, run: async () => {
+    calls++;
+    entered();
+    await new Promise(resolve => { release = resolve; });
+    return http([thread()], { "x-ratelimit-remaining": "0" });
+  } });
+  const foreground = client.page(firstPage());
+  await started;
+  const desktop = client.page(firstPage(), undefined, { minSequence: 1, allowCachedDuringBackoff: true });
+  release();
+  const [first, reused] = await Promise.all([foreground, desktop]);
+  assert.equal(reused, first);
+  assert.equal(calls, 1);
+  assert.equal(client.blockedUntil, 120_000);
+});
+
+test("a waiting desktop scan can consume a newer quota-exhausting response without another request", async () => {
+  let now = 0;
+  let sleeping;
+  let resume;
+  const waiting = new Promise(resolve => { sleeping = resolve; });
+  let calls = 0;
+  const client = new GitHubClient({ now: () => now,
+    run: async () => http([thread()], ++calls === 1 ? {} : { "x-ratelimit-remaining": "0" }),
+    sleep: async delay => {
+      sleeping();
+      await new Promise(resolve => { resume = resolve; });
+      now += delay;
+    },
+  });
+  await client.page(firstPage());
+  const desktop = client.page(firstPage(), undefined, { minSequence: 2, allowCachedDuringBackoff: true });
+  await waiting;
+  let foreground;
+  try {
+    foreground = await client.page(firstPage(), undefined, { force: true });
+  } finally {
+    resume();
+  }
+  assert.equal(await desktop, foreground);
+  assert.equal(calls, 2);
+  assert.ok(client.blockedUntil > now);
+});
+
 test("exhausted quota without a future reset retains the two-minute minimum pause", async () => {
   let now = 1000;
   let calls = 0;

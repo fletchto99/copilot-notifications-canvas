@@ -339,7 +339,7 @@ export class DesktopNotifications {
         let boundary = initial ? null : state.watermark;
         const items = [];
         while (next) {
-          const page = await this.client.page(next, signal, { minSequence });
+          const page = await this.client.page(next, signal, { minSequence, allowCachedDuringBackoff: true });
           signal.throwIfAborted();
           minSequence = page.sequence;
           items.push(...page.items);

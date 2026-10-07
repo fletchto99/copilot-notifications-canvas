@@ -171,6 +171,106 @@ test("an immediate foreground return feeds new activity to alerts without waitin
   assert.equal(f.deliveries.length, 1);
 });
 
+test("quota-exhausting foreground responses establish silent baselines without hiding later arrivals", async t => {
+  for (const initialRows of [[], [thread()]]) {
+    const f = await fixture(t);
+    const watcher = f.make();
+    const inbox = new Inbox(watcher.client);
+    t.after(() => inbox.close());
+    f.response(() => http(initialRows, {
+      date: new Date(epoch).toUTCString(),
+      "x-ratelimit-remaining": "0", "x-ratelimit-reset": String((epoch + 600_000) / 1000),
+    }));
+    const since = watcher.client.sequence;
+    await inbox.refresh();
+    await watcher.sync({ since });
+    assert.equal(f.calls.length, 1);
+    assert.equal(watcher.snapshot().state, "watching");
+    assert.equal((await f.state()).watermark, epoch);
+    assert.equal((await f.state()).error, null);
+    assert.equal(f.deliveries.length, 0);
+    await assert.rejects(watcher.client.page(firstPage()), { code: "rate_limited" });
+    assert.equal(f.calls.length, 1);
+
+    f.response(undefined);
+    f.rows([updated("2", epoch + 1000), ...initialRows]);
+    f.advance(watcher.client.blockedUntil - f.advance(0));
+    await watcher.check();
+    assert.equal(f.calls.length, 2);
+    assert.deepEqual(f.deliveries.map(alert => alert.body), ["#42 Synthetic notification 2"]);
+  }
+});
+
+test("an established watcher immediately delivers fresh cached activity even when the response exhausts quota", async t => {
+  const f = await fixture(t);
+  const watcher = f.make();
+  await watcher.check();
+  const inbox = new Inbox(watcher.client);
+  t.after(() => inbox.close());
+  const time = f.advance(30_000);
+  f.response(() => http([updated("2", time), thread()], { "x-ratelimit-remaining": "0" }));
+  await inbox.refresh();
+  await watcher.sync();
+  assert.equal(f.calls.length, 2);
+  assert.deepEqual(f.deliveries.map(alert => alert.body), ["#42 Synthetic notification 2"]);
+  assert.equal((await f.state()).error, null);
+  assert.ok((await f.state()).nextPollAt >= watcher.client.blockedUntil);
+  await watcher.sync();
+  await watcher.check();
+  assert.equal(f.calls.length, 2);
+  assert.equal(f.deliveries.length, 1);
+});
+
+test("complete foreground scans can deliver across cached pages when the final response exhausts quota", async t => {
+  const f = await fixture(t);
+  const watcher = f.make();
+  const inbox = new Inbox(watcher.client);
+  t.after(() => inbox.close());
+  const backlog = Array.from({ length: 50 }, (_, index) => thread(String(index + 1)));
+  f.response(args => args.at(-1).includes("page=1") ? http(backlog, { link: next }) : http([thread("51")]));
+  const since = watcher.client.sequence;
+  await inbox.refresh();
+  await inbox.more();
+  await watcher.sync({ since });
+  const time = f.advance(30_000);
+  const arrivals = Array.from({ length: 51 }, (_, index) => updated(String(100 + index), time - index));
+  f.response(args => args.at(-1).includes("page=1") ? http(arrivals.slice(0, 50), { link: next })
+    : http(arrivals.slice(50), { "x-ratelimit-remaining": "0" }));
+  await inbox.refresh();
+  await watcher.sync();
+  assert.equal(f.calls.length, 4, "both refreshed pages are consumed from cache");
+  assert.deepEqual(f.deliveries.map(alert => alert.body), ["51 new notifications"]);
+  assert.equal((await f.state()).error, null);
+  await assert.rejects(watcher.client.page(firstPage()), { code: "rate_limited" });
+  assert.equal(f.calls.length, 4);
+});
+
+test("quota-paused scans reject missing and stale continuations without committing a partial baseline or watermark", async t => {
+  for (const cachedContinuation of [false, true]) {
+    const f = await fixture(t);
+    const watcher = f.make();
+    const inbox = new Inbox(watcher.client);
+    t.after(() => inbox.close());
+    if (cachedContinuation) {
+      const backlog = Array.from({ length: 50 }, (_, index) => thread(String(index + 1)));
+      f.response(args => args.at(-1).includes("page=1") ? http(backlog, { link: next }) : http([thread("51")]));
+      await watcher.check();
+      assert.equal(f.calls.length, 2);
+    }
+    const time = f.advance(1000);
+    const arrivals = Array.from({ length: 50 }, (_, index) => updated(String(100 + index), time));
+    f.response(() => http(arrivals, { link: next, "x-ratelimit-remaining": "0" }));
+    const since = watcher.client.sequence;
+    await inbox.refresh({ force: true });
+    const before = f.calls.length;
+    await watcher.sync({ since });
+    assert.equal(f.calls.length, before, "a missing or stale continuation must not trigger an upstream request");
+    assert.equal((await f.state()).watermark, cachedContinuation ? epoch : null);
+    assert.equal((await f.state()).error.includes("rate limit"), true);
+    assert.equal(f.deliveries.length, 0);
+  }
+});
+
 test("foreground alerts scan all new activity pages without changing the canvas's loaded selection", async t => {
   const f = await fixture(t);
   const watcher = f.make();
