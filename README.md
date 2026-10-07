@@ -117,261 +117,141 @@ including **Group By**, **Theme**, **Auto-open**, **Desktop notifications** and
 
 ## Usage
 
-- **Settings > Group By** has three saved options:
-  - **none**: no group headers; all loaded, matching notifications are sorted
-    globally by their last-updated date, newest first.
-  - **repo** (default): repository groups are sorted alphabetically by full name
-    (`owner/repo`), with newest notifications first within each group.
-  - **date**: notifications are grouped by their last-updated calendar day in
-    your local time zone, with newest days and notifications first.
-  Repository names appear on each row in **none** and **date** modes.
-- The canvas loads up to 50 notifications initially. **Load more** fetches up to
-  50 more at a time, with no fixed total cap while GitHub has more pages.
-  Search covers loaded notifications only.
-  The count shows loaded unread notifications, adds a matching count while
-  searching, and disappears when you are all caught up. Search and Settings
-  stay in place.
-- If the canvas cannot read its local UI files, it opens a recovery page and
-  retries in the background with exponential backoff, up to 30 seconds between
-  attempts. The inbox appears automatically after recovery, without reopening
-  the panel. Closing the panel stops retries.
-  Desktop polling for this panel starts only after its assets are ready;
-  watchers for other ready panels continue normally.
-  Socket-binding failures are retried three times before opening fails: the app
-  cannot display a web canvas without a listening local server. Errors include
-  a safe operating-system error code when available. For persistent failures,
-  reload extensions or reinstall the canvas while preserving its settings.
-- Notifications refresh about every two minutes while the canvas is visible.
-  GitHub polling and rate limits can delay updates. The footer shows relative
-  check times; hover over the status for exact times and the visibility reminder.
-- **Force refresh**, beside the checked time in the footer, checks loaded pages
-  immediately without waiting for the polling
-  interval. It stays clickable; clicks during an active operation queue one
-  follow-up refresh. GitHub rate-limit and error retry waits still apply and
-  are shown as errors.
-- The inbox icon to the left of **Settings** opens your
-  [GitHub inbox](https://github.com/notifications) in a new tab.
-- **Settings > Theme**, above **Group By**, offers **System** (default),
-  **Dark**, and **Light**. System follows Copilot's theme, falling back to the
-  OS theme when the app does not provide one. Choose System again to return
-  to automatic theming. Your choice is saved across sessions and loaded when a
-  panel opens or becomes visible. Existing saved Dark mode choices are preserved.
-- **Auto-open** and **Desktop notifications** are off by default.
-  **Sound** offers system-specific sounds
-  and defaults to **System default**. These settings are saved across sessions.
-  Desktop alerts run while the canvas is in the foreground, hidden, or
-  Copilot is minimized, as long as its session's
-  extension process is running. Closing the last Notifications canvas stops
-  the watcher; quitting Copilot stops it too.
-- Auto-open runs once per new session, including general chats, before assistant
-  work starts. Other canvases do not block it. It does not reopen Notifications
-  on session resume, extension reload, or after you close the panel.
-- A repository's **Mark N as read** immediately starts marking only its shown,
-  loaded notifications, narrowed by search. Older unloaded items are not included.
-  This action is available in **repo** mode; individual **Mark as read** buttons
-  remain available in every grouping mode.
+- **Browse and search:** loads up to 50 notifications at a time; **Load more**
+  continues while GitHub has more pages. Search and counts cover loaded items only.
+- **Mark as read:** mark individual rows in any view. In **repo** mode,
+  **Mark N as read** marks only that repository's loaded items matching your search,
+  not older unloaded notifications.
+- **Refresh:** automatic checks run about every two minutes while visible.
+  **Force refresh** in the footer checks loaded pages without waiting for that
+  interval; GitHub rate limits and error retry waits still apply.
+- **Open GitHub:** the inbox icon beside **Settings** opens your
+  [GitHub inbox](https://github.com/notifications).
+
+Settings are saved across sessions:
+
+| Setting | Options |
+| --- | --- |
+| **Group By** | **repo** (default): alphabetical repositories, newest items first. **none**: one newest-first list. **date**: newest local calendar day first. All use last-updated times. |
+| **Theme** | **System** (default), **Dark**, or **Light**. System follows Copilot, falling back to the OS theme. |
+| **Auto-open** | Off by default. Opens once per new session, including general chats; not on resume, reload, or after closing the panel. |
+| **Desktop notifications** | Off by default. Enable native alerts as described below. |
+| **Sound** | System-specific sounds; defaults to **System default**. |
+
+If local UI files fail to load, the recovery page retries automatically. For
+persistent failures, reload extensions or reinstall while preserving settings.
 
 ### Desktop notifications
 
 Enable **Desktop notifications** in Settings and choose a **Sound**.
-The old per-panel Web Audio chime has been replaced by this setting. No extra
-app, package or background service is installed automatically.
+Alerts continue while the panel is hidden or Copilot is minimized, provided its
+session's extension process is running. Closing the last Notifications canvas
+or quitting Copilot stops them. No extra software is installed automatically.
 
-| Platform | Backend | Sounds and requirements |
+| Platform | Requirements | Sounds |
 | --- | --- | --- |
-| macOS | Built-in `/usr/bin/osascript` | Named system sounds such as Glass, Ping and Submarine, or the native system default. Allow notifications for the script sender. |
-| Windows 10/11 | Built-in Windows PowerShell and WinRT toasts | Default, IM, Mail, Reminder and SMS. Requires PowerShell's existing Start menu registration and an interactive Windows desktop. No module or new app registration is installed. |
-| Linux | `notify-send` and the desktop notification service | Default or themed sound hints. Requires existing libnotify tools and a graphical D-Bus session; missing dependencies produce an error, not an automatic installation. Desktops may ignore sound or silence hints. |
+| macOS | Built-in `osascript`; allow notifications for the script sender. | System default or named sounds such as Glass, Ping and Submarine. |
+| Windows 10/11 | Built-in Windows PowerShell/WinRT, PowerShell's existing Start menu registration, and an interactive desktop. | Default, IM, Mail, Reminder and SMS. |
+| Linux | `notify-send` (libnotify) and a graphical D-Bus notification service. | Default or themed sound hints; desktops may ignore sound or silence hints. |
 
-Windows and Linux backends are experimental; actual delivery depends on the
-desktop configuration. Commands run on the extension host, so a remote
-session does not automatically send alerts to your local computer.
+Windows and Linux support is experimental. Alerts run on the **extension host**;
+remote sessions do not automatically notify your local computer.
 
-The watcher polls about every two minutes, respecting GitHub polling and rate
-limits, and follows additional pages when new activity spans multiple pages.
-For each repository with **1-4 new or updated unread threads in a poll**, it
-sends one alert per thread:
+Checks run about every two minutes, subject to GitHub limits and independent of
+search or loaded pages. For each repository, **1-4 new or updated unread threads**
+produce individual alerts with the repository name and notification title.
+**5 or more in one poll** produce a single `<count> new notifications` summary
+with one sound request. Counts reflect new activity, not the whole unread inbox.
 
-- **Title:** `owner/repo`
-- **Body:** the GitHub notification's title.
+The first successful poll after enabling or restarting all watchers is silent,
+so existing unread items do not trigger alerts. GitHub reports only the latest
+activity per thread, not every event between polls.
 
-At **5 or more new or updated unread threads from the same repository in a
-single poll**, it sends one summary alert instead:
+Sessions sharing a local `COPILOT_HOME` coordinate to avoid duplicate alerts;
+separate machines or homes do not. Delivery is **at most once**: failed or
+interrupted batches are not replayed, so alerts can be lost. Reload older
+sessions after upgrades; a changed checkpoint format starts a fresh silent baseline.
 
-- **Title:** `owner/repo`
-- **Body:** `<count> new notifications`
-
-Each summary makes one notification sound request, not one per thread. Counts
-include only newly detected activity, not the repository's entire unread inbox.
-Repositories are grouped independently; five notifications from five different
-repositories still produce five individual alerts.
-
-Very long titles are truncated to fit system payload limits. The first
-successful poll after enabling, or after all watchers have stopped, establishes
-a silent baseline using GitHub timestamps rather than the local completion
-clock. The initial load includes all pages sharing the newest timestamp, so
-same-second arrivals can be distinguished from existing notifications. Search
-and the panel's loaded pages do not affect alerts.
-GitHub's API exposes the latest activity per thread, not every individual
-comment or event between polls.
-
-Copies using the same local `COPILOT_HOME` coordinate through a shared lock and
-checkpoint, so multiple panels and sessions do not each send the same desktop
-alert. Another open copy takes over polling if one closes or crashes. The
-watchers record their shared lifetime when joining, independently of delivery,
-so opening a second canvas during an alert does not restart the baseline.
-After an upgrade, reload all older sessions to use the same coordination format.
-The first use of an upgraded checkpoint establishes a fresh silent baseline.
-
-The checkpoint is saved before invoking the operating system: delivery is
-**at most once**, not guaranteed exactly once. A crash or delivery failure can
-lose alerts from the current batch; they are not retried. Separate machines or separate `COPILOT_HOME` directories do not
-share this coordination.
-
-The sender's icon is controlled by the operating system and is not necessarily
-branded as GitHub Copilot. System notification, sound and Focus/Do Not Disturb
-settings can suppress a banner or sound even when the command succeeds.
-The extension cannot confirm that the operating system displayed it. Detected
-failures appear in Settings and the extension log. Desktop alerts do not
-support clicking to focus the canvas.
+OS permissions, sound settings and Focus/Do Not Disturb can suppress delivery,
+which the extension cannot confirm. Detected errors appear in Settings and the
+extension log. The OS controls the sender icon; clicking an alert cannot focus
+the canvas.
 
 ## Privacy
 
-Notification titles and repository names are not logged, saved to disk by the
-extension, or sent to the agent.
+The extension does not log notification titles or repository names, save them to
+disk, or send them to the agent. There is no telemetry or remote asset loading.
 
-> **Native notification content:** If desktop notifications are enabled,
-> repository names and notification titles are sent to your operating system.
-> The OS may store this content on disk in its notification history and display
-> it on the lock screen, according to your system settings. The extension does
-> not control the OS's storage or retention of this content.
+**Desktop alerts send repository names and titles to your OS**, which may retain
+them in notification history or show them on the lock screen. System settings
+control this, not the extension.
 
-Desktop coordination saves timestamps, hashed thread/activity identifiers,
-watcher group IDs, process ownership markers and sanitized error status under
-the user extension's `artifacts/` directory. GitHub CLI handles credentials;
-they never enter the canvas renderer.
-There is no telemetry or remote asset loading.
+The local `artifacts/` directory stores settings and desktop coordination data:
+timestamps, hashed activity/thread IDs, watcher/process markers and sanitized
+errors. GitHub CLI handles credentials; they never enter the canvas renderer.
 
-The extension fetches notifications and public release metadata from GitHub
-through GitHub CLI. Release checks do not send notification content or download
-or execute release code. Only explicit row or repository
-**Mark as read** clicks send read updates. Visiting a linked GitHub page may also
-mark that notification read on GitHub.
+GitHub CLI fetches notifications and public release metadata. Update checks do
+not send notification content or download or execute release code. Only explicit
+**Mark as read** actions send read updates; visiting a linked GitHub page may
+also mark a notification read on GitHub.
 
 ## Development
 
 Runtime files are in `.github/extensions/github-notifications/`. Open this
-repository as a Copilot project to work on its local extension. After edits,
-reload extensions and use extension **list/inspect** to check the provider and
-its log.
+repository as a Copilot project, reload extensions after edits, and use extension
+**list/inspect** to check the provider and log. Each session uses its own checkout
+and loaded asset snapshot; do not delete a checkout while a session uses it.
+If both project and user providers are registered, pass
+`extensionId: project:github-notifications` when opening the local canvas.
 
-Each Copilot session runs its own provider process. Its project extension reads
-from that session's checkout; sessions using separate worktrees do not load each
-other's edits. Panels have separate loopback ports and access tokens. After a
-successful load, each server retains its in-memory asset snapshot until closed.
-Reload extensions to pick up provider changes. Avoid deleting or replacing a
-checkout while a session still uses it.
-
-Canvas routing is scoped to the session and provider (`project:github-notifications`
-or `user:github-notifications`), with `github-notifications` as the canvas type
-and an `instanceId` for each panel. If both providers are registered, pass an
-explicit `extensionId` when opening the canvas. User-wide settings and desktop
-alert coordination remain shared across sessions using the same `COPILOT_HOME`.
-
-Run the unit and HTTP integration tests without installing dependencies:
+Unit and HTTP integration tests need no dependency installation:
 
 ```sh
 node --test test/*.test.mjs
 ```
 
-The [test workflow](.github/workflows/tests.yml) runs on pull requests, pushes to
-`main`, and before publication by the release workflow:
-
-- Unit and integration tests on Linux with Node.js 22 and 24, and macOS with
-  Node.js 24.
-- Source-only Node.js coverage on Linux/Node.js 22, requiring at least 90% lines,
-  85% branches, and 90% functions. Tests and development tooling do not count.
-  A separate guard fails if any runtime or release/installer module is missing
-  from the report, including the renderer and extension entry point.
-- Correctness-focused ESLint and checksum-verified actionlint. Browser and Node
-  globals are checked separately; extension providers must not use `console`.
-- Chromium and WebKit smoke tests against the real loopback server, including
-  WCAG 2.1 A/AA axe checks and light/dark layouts at 320, 480, and 960 pixels.
-  Browser reports, layout screenshots, and failure traces are retained for 14 days.
-
-All tests use synthetic GitHub responses. They need no GitHub sign-in, make no
-live GitHub requests, and cannot mark real notifications read. Browser tests
-stub native desktop delivery, block unexpected external requests, and fail on
-browser errors. Tests never show operating-system notifications. Temporary
-settings and lifecycle-test `COPILOT_HOME` directories are isolated and removed
-after each test. The SDK-boundary stub tests our registration and lifecycle
-wiring, not compatibility with a particular Copilot build; still reload and
-inspect the real extension when changing SDK integration.
-
-The repository's `.npmrc` selects the public npm registry for development
-dependencies. Install them and run the checks locally:
+For lint, coverage and browser checks:
 
 ```sh
 npm ci --ignore-scripts
 npm run lint
-npm run lint:workflows  # Requires actionlint on PATH (CI uses v1.7.12).
+npm run lint:workflows  # Requires actionlint on PATH.
 npm run test:coverage
 npx playwright install --with-deps chromium webkit
 npm run test:browser
 ```
 
-The coverage command also works without `npm ci`. Playwright's install command
-downloads browser binaries and, on Linux, may require permission to install
-system libraries. To run one engine, use
-`npm run test:browser -- --project=webkit`. The extension itself remains
-dependency-free apart from the SDK supplied by Copilot; development packages
-are never copied by the installer. Dependabot groups weekly updates for pinned
-GitHub Actions and npm development dependencies.
+Coverage also works without `npm ci`. Playwright downloads browser binaries and
+may need permission to install Linux system libraries. Use `-- --project=webkit`
+with `npm run test:browser` to run one engine.
+
+The [test workflow](.github/workflows/tests.yml) defines the platform matrix,
+coverage thresholds, lint and Chromium/WebKit accessibility checks. Tests use
+synthetic GitHub responses and isolated settings: no sign-in, live read updates,
+or OS notifications. SDK stubs do not verify compatibility with a specific
+Copilot build; reload and inspect the real extension after SDK changes.
+Development dependencies are not included in installed extensions.
 
 ### Publishing releases
 
-Use stable semantic versions (`vMAJOR.MINOR.PATCH`) so users receive deliberate,
-tested updates with release notes instead of every merge. Bump
-`.github/extensions/github-notifications/version.json` in the release PR.
+1. Bump `.github/extensions/github-notifications/version.json` to a new stable
+   semantic version and merge into `main`.
+2. Run the [Release workflow](.github/workflows/release.yml) from
+   **Actions → Release → Run workflow**, selecting **main** and entering the
+   version or tag (for example, `0.1.1` or `v0.1.1`). Or use GitHub CLI:
 
-After merging the version change into `main`, invoke the
-[Release workflow](.github/workflows/release.yml) from **Actions → Release →
-Run workflow**. Select **main** and enter either the version (`0.1.1`) or its
-tag (`v0.1.1`). Both are validated and normalized to `v0.1.1` before publication.
-The workflow must be merged into the default branch before GitHub
-offers the manual trigger.
+   ```sh
+   gh workflow run release.yml \
+     --repo fletchto99/copilot-notifications-canvas \
+     --ref main \
+     -f version=0.1.1
+   ```
 
-You can also invoke it with GitHub CLI:
+3. Review the generated release notes and confirm the intended stable version
+   is marked **Latest**; the canvas follows `/releases/latest`.
 
-```sh
-gh workflow run release.yml \
-  --repo fletchto99/copilot-notifications-canvas \
-  --ref main \
-  -f version=0.1.1
-```
-
-The workflow checks that the requested version matches `version.json`, runs
-the same test matrix, coverage, lint, and browser/accessibility checks as PR CI,
-creates the matching tag at the **exact tested commit**,
-and publishes a GitHub Release with generated notes. It does not bump the
-version or commit changes to `main`. Manual runs from other branches are
-rejected. Publication is serialized across manual runs and tag pushes.
-
-If publication fails after creating the tag, rerun the failed job: a tag
-already pointing to the tested commit can be reused. A tag pointing elsewhere
-is rejected, never moved. An existing release is never overwritten. If tag
-rules block creation, fix the repository permissions or create the tag yourself;
-do not bypass the rules.
-
-Pushing a matching release tag yourself still invokes the same validation,
-tests, and publication. After a successful run, review the generated notes for
-behavior changes, prerequisites, and update guidance. Confirm GitHub marks the
-intended stable version as **Latest**; the canvas follows `/releases/latest`.
-
-Publish increasing versions; never move a published tag or reuse a version.
-For a bad release, publish a fixed version rather than modifying existing
-release code. Restrict `v*` tag creation with repository rules if more
-contributors gain write access.
-
-Existing installations from before the update banner need one manual update
-to a release containing this feature. They cannot discover updates retroactively.
+The workflow validates the version, runs PR CI, tags the **exact tested commit**
+and publishes the release. Pushing a matching release tag triggers the same checks.
+If publication fails after tagging, rerun the failed job; only a tag at the tested
+commit can be reused. Never move published tags, overwrite releases or bypass tag
+rules. Fix bad releases by publishing a higher version.
