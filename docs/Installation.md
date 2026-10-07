@@ -29,8 +29,8 @@ Stop if a required check is unavailable or fails; do not fall back to source
 or checksum-only verification.
 
 Use my existing COPILOT_HOME and GitHub CLI sign-in. Preserve all settings and
-artifacts without changing preferences. For a legacy/source installation,
-stop and report the migration instructions instead of migrating it.
+artifacts without changing preferences. Stop if the installer reports an
+unsupported installation; do not bypass its safeguards.
 
 After installation succeeds, reload extensions and open Unread Notifications
 (canvasId: github-notifications). Report the installed version and remind me
@@ -105,8 +105,9 @@ and does nothing if already current.
 **Settings are preserved.** Upgrades replace the bundled `extension.mjs` while
 leaving the entire `artifacts/` directory in place, including `settings.json`,
 unknown settings, and other files, even during concurrent settings saves.
-Never delete the installed extension to upgrade it. If the installer reports
-modified files or a concurrency conflict, stop; do not bypass its safeguards.
+Never delete the installed extension to upgrade it. If the installer reports an
+unsupported installation, modified files, or a concurrency conflict, stop; do
+not bypass its safeguards.
 
 Already-running providers retain their loaded code and assets until reloaded.
 If local UI files fail to load, the recovery page retries automatically. For
@@ -115,39 +116,3 @@ See [Settings](Settings.md#troubleshooting) for settings-save and desktop errors
 
 A project-local checkout shadows the user-wide installation in that repository.
 Update that checkout deliberately; see [Development](Development.md#local-development).
-
-## One-time migration from source installations
-
-The first packaged release is a new baseline, not an in-place upgrade for the
-old flat-file or `runtimes/<hash>/` layouts. The installer refuses those layouts
-rather than deleting code an old session might still need. Installations from
-before the update banner cannot discover releases retroactively; follow this
-migration instead of their old source-based installation instructions.
-
-1. Stop **all** Copilot app/CLI sessions and extension processes using the old
-   installation. Closing a canvas or reloading only one session is not enough.
-   Perform the migration from an external terminal after they have stopped.
-2. Locate `${COPILOT_HOME:-$HOME/.copilot}/extensions/github-notifications`.
-   Make a backup outside every extension discovery directory. Move its old
-   code and metadata into that backup, including retained `runtimes/`, but
-   **leave `artifacts/` exactly where it is**. Preserve locally modified files
-   in the backup; do not delete or overwrite them. The installation directory
-   should now contain only `artifacts/` (or be empty).
-3. While all old extension processes are still stopped, check the testing-era
-   data in `artifacts/`:
-   - If `desktop-state.json` uses schema version **1**, move just that file to
-     the backup. The next enabled desktop poll creates a current version **2**
-     checkpoint and establishes a silent baseline. Leave a valid version 2
-     checkpoint untouched; its schema version is independent of the release version.
-   - If `settings.json` has a boolean `desktopSound`, back up that file and
-     explicitly change `true` to `"default"` or `false` to `"none"`. Preserve
-     every other setting and unknown key. Missing sound preferences already
-     default to `"default"`; valid string values need no changes.
-   - Leave all other artifacts in place. Unexpected or malformed data requires
-     inspection, not a blanket reset.
-4. Install the verified release package using the steps above, restart Copilot,
-   and open the canvas. Keep the backup until you have confirmed the new
-   installation and settings. Future packaged updates need no such migration.
-
-The runtime accepts only current checkpoint and sound formats. It reports
-invalid stored data rather than migrating or overwriting it automatically.

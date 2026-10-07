@@ -34,7 +34,7 @@ and settings-preservation requirements. Stop if any check fails.
 After installation succeeds, reload extensions and open the canvas.
 ```
 
-[Manual installation, updates, and migration](docs/Installation.md) cover the
+[Manual installation and updates](docs/Installation.md) cover the
 full procedure, verification requirements, and troubleshooting.
 
 ## Usage
@@ -74,6 +74,6 @@ also mark a notification read on GitHub.
 
 ## Documentation
 
-- [Installation](docs/Installation.md): setup, updates, verification, and migration.
+- [Installation](docs/Installation.md): setup, updates, and verification.
 - [Settings](docs/Settings.md): preferences, desktop alerts, and troubleshooting.
 - [Development](docs/Development.md): local development, tests, packaging, and releases.

@@ -14,7 +14,7 @@ test("shared installation and update instructions retain links used by older rel
   assert.match(readme, /^## Installation and Updating$/m);
   assert.match(readme, /<a id="installation"><\/a>/);
   assert.match(readme, /<a id="updating"><\/a>/);
-  assert.match(readme, /\[Manual installation, updates, and migration\]\(docs\/Installation\.md\)/);
+  assert.match(readme, /\[Manual installation and updates\]\(docs\/Installation\.md\)/);
   const prompt = readme.match(/```text\n(Install or update[\s\S]+?)```/)[1];
   assert.match(prompt, /as a user-wide Copilot/);
   assert.match(prompt, /latest stable release/);
@@ -54,7 +54,7 @@ test("installation guide requires release and provenance verification before ext
   assert.match(prompt, /do not fall back to source\s+or checksum-only verification/);
   assert.match(prompt, /Use my existing COPILOT_HOME and GitHub CLI sign-in/);
   assert.match(prompt, /Preserve all settings and\s+artifacts without changing preferences/);
-  assert.match(prompt, /legacy\/source installation,\s+stop and report the migration instructions instead of migrating it/);
+  assert.match(prompt, /Stop if the installer reports an\s+unsupported installation; do not bypass its safeguards/);
   assert.match(prompt, /After installation succeeds, reload extensions and open Unread Notifications/);
   assert.match(prompt, /Report the installed version and remind me\s+to reload extensions in other already-open sessions/);
 });
@@ -124,7 +124,7 @@ test("release checks use a fixed read-only GitHub endpoint and locally construct
   assert.match(state.prompt, /node install\.mjs v0\.2\.0/);
   assert.match(state.prompt, /not a source checkout, main, or a local build/);
   assert.match(state.prompt, /Do not downgrade/);
-  assert.match(state.prompt, /one-time migration/);
+  assert.match(state.prompt, /legacy\/source installation is\ndetected, stop and report that it is unsupported; do not modify its files/);
   assert.match(state.prompt, /Preserve the entire installed artifacts directory in place/);
   assert.match(state.prompt, /settings\.json\nand unknown settings/);
   assert.match(state.prompt, /Do not delete or recreate it/);

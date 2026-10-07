@@ -24,10 +24,10 @@ async function verifyOwned(target) {
     throw new Error("Refusing a symlink or non-directory artifacts location.");
   }
   if (entries.some(file => [".copilot-notifications-install.json", "runtimes"].includes(file))) {
-    throw new Error("Legacy installation detected. Follow the README's one-time migration after stopping all old extension processes.");
+    throw new Error("Legacy installation detected. Preserve the existing files; this layout cannot be upgraded automatically.");
   }
   if (entries.some(file => !["extension.mjs", "artifacts"].includes(file))) {
-    throw new Error("Refusing an unrelated or legacy installation. Preserve its files and follow the one-time migration instructions.");
+    throw new Error("Refusing an unrelated or legacy installation. Preserve its files; only packaged installations can be upgraded.");
   }
   return entries.includes("extension.mjs") ? inspectBundle(await readRegular(join(target, "extension.mjs"))) : null;
 }

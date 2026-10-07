@@ -40,8 +40,8 @@ installed version; report an already-current installation without reinstalling.
 Preserve the entire installed artifacts directory in place, including settings.json
 and unknown settings. Do not delete or recreate it, overwrite locally modified
 runtime files, or bypass installer safeguards. If a legacy/source installation is
-detected, stop and report the one-time migration instructions; do not migrate it
-while old extension processes may be running. Keep my existing GitHub CLI sign-in.
+detected, stop and report that it is unsupported; do not modify its files.
+Keep my existing GitHub CLI sign-in.
 If installation succeeds, reload extensions in this session and reopen Unread
 Notifications (canvasId: github-notifications). Report the installed version and
 remind me to reload extensions in other already-open sessions. Do not enable
