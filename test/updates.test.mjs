@@ -17,9 +17,25 @@ test("shared installation and update instructions retain links used by older rel
   assert.match(readme, /<a id="updating"><\/a>/);
   const verify = readme.indexOf('gh release verify "$tag"');
   const verifyAsset = readme.indexOf('gh release verify-asset "$tag"');
+  const resolve = readme.indexOf('commit=$(gh api --hostname github.com');
+  const provenance = readme.indexOf('gh attestation verify "github-notifications-$tag.tar.gz"');
   const extract = readme.indexOf('tar -xzf "github-notifications-$tag.tar.gz"');
   const install = readme.indexOf('node install.mjs "$tag"');
-  assert.ok(verify >= 0 && verifyAsset > verify && extract > verifyAsset && install > extract);
+  assert.ok(verify >= 0 && verifyAsset > verify && resolve > verifyAsset &&
+    provenance > resolve && extract > provenance && install > extract);
+  assert.ok(readme.includes('"repos/fletchto99/copilot-notifications-canvas/commits/$tag" --jq .sha) &&'));
+  assert.ok(readme.includes("grep -Eq '^[0-9a-f]{40}$' &&"));
+  assert.match(readme, /--source-ref "refs\/tags\/\$tag" --source-digest "\$commit"/);
+  assert.match(readme, /--signer-digest "\$commit" --deny-self-hosted-runners/);
+  assert.match(readme, /--predicate-type https:\/\/slsa\.dev\/provenance\/v1 &&/);
+  const prompt = readme.match(/```text\n(Install or update[\s\S]+?)```/)[1];
+  for (const text of [prompt, readme.slice(provenance, extract)]) {
+    assert.ok(text.includes(`--repo ${REPOSITORY} --hostname github.com`));
+    assert.ok(text.includes(`--signer-workflow ${REPOSITORY}/.github/workflows/release.yml`));
+  }
+  assert.match(prompt, /--source-ref refs\/tags\/<release-tag> --source-digest <resolved-commit>/);
+  assert.match(prompt, /--signer-digest <resolved-commit> --deny-self-hosted-runners/);
+  assert.match(prompt, /--predicate-type https:\/\/slsa\.dev\/provenance\/v1/);
   assert.match(readme, /do not fall back to source or checksum-only verification/);
 });
 
@@ -71,6 +87,17 @@ test("release checks use a fixed read-only GitHub endpoint and locally construct
   assert.match(state.prompt, /Before extracting or running anything, use gh release verify/);
   assert.match(state.prompt, /verify-asset v0\.2\.0 github-notifications-v0\.2\.0\.tar\.gz/);
   assert.match(state.prompt, /verify the immutable release/);
+  assert.match(state.prompt, /repos\/fletchto99\/copilot-notifications-canvas\/commits\/v0\.2\.0 --jq \.sha/);
+  assert.match(state.prompt, /40-character lowercase hexadecimal commit SHA, not an annotated-tag object SHA/);
+  assert.match(state.prompt, /gh attestation verify\ngithub-notifications-v0\.2\.0\.tar\.gz/);
+  assert.ok(state.prompt.includes(`--repo ${REPOSITORY} --hostname github.com`));
+  assert.ok(state.prompt.includes(`--signer-workflow ${REPOSITORY}/.github/workflows/release.yml`));
+  assert.match(state.prompt, /--source-ref refs\/tags\/v0\.2\.0 --source-digest <resolved-commit>/);
+  assert.match(state.prompt, /--signer-digest <resolved-commit> --deny-self-hosted-runners/);
+  assert.match(state.prompt, /--predicate-type https:\/\/slsa\.dev\/provenance\/v1/);
+  assert.match(state.prompt, /Require every identity check; attestation existence alone\nis insufficient/);
+  assert.match(state.prompt, /package or build\nprovenance is missing/);
+  assert.ok(state.prompt.indexOf("gh attestation verify") < state.prompt.indexOf("extract into a new directory"));
   assert.match(state.prompt, /never fall back to checksum-only verification/);
   assert.match(state.prompt, /SHA-256 using SHA256SUMS/);
   assert.match(state.prompt, /node install\.mjs v0\.2\.0/);

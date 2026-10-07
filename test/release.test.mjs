@@ -1,14 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { normalizeReleaseTag } from "../scripts/check-release.mjs";
 import { publishRelease } from "../scripts/publish-release.mjs";
-import { CURRENT_VERSION } from "../src/updates.mjs";
+import { CURRENT_VERSION, REPOSITORY } from "../src/updates.mjs";
 import { archiveName, hash } from "../scripts/package.mjs";
 import { home } from "./install-fixtures.mjs";
 
@@ -64,6 +64,9 @@ async function fixture(t, {
     } else if (args[0] === "release" && ["verify", "verify-asset"].includes(args[1])) {
       operation = args.includes("--help") ? `help-${args[1]}` : args[1];
       result = "Verified\n";
+    } else if (args[0] === "attestation" && args[1] === "verify") {
+      operation = "provenance";
+      result = "Verified\n";
     } else if (args[1].includes("/commits/")) {
       operation = "resolve";
       result = JSON.stringify({ sha: remoteSha });
@@ -95,6 +98,11 @@ test("tagged releases use one upload-and-publish command without a tag-based edi
       "--jq", "map({tag_name, draft}) | tojson"],
     ["release", "verify", "--help"],
     ["release", "verify-asset", "--help"],
+    ["attestation", "verify", join(item.directory, archiveName(tag)),
+      "--repo", REPOSITORY, "--hostname", "github.com",
+      "--signer-workflow", `${REPOSITORY}/.github/workflows/release.yml`,
+      "--source-ref", ref, "--source-digest", sha, "--signer-digest", sha,
+      "--deny-self-hosted-runners", "--predicate-type", "https://slsa.dev/provenance/v1"],
     ["release", "create", tag, join(item.directory, archiveName(tag)), join(item.directory, "SHA256SUMS"),
       "--verify-tag", "--generate-notes", "--title", tag, "--latest"],
     ["release", "verify", tag],
@@ -200,7 +208,7 @@ test("invalid release-list responses fail closed before creation", async t => {
 test("GitHub errors stop publication without fallback tag writes or extra release commands", async t => {
   for (const [fail, count] of [
     ["resolve", 1], ["ancestry", 2], ["list", 3], ["help-verify", 4],
-    ["help-verify-asset", 5], ["create", 6], ["verify", 7], ["verify-asset", 8],
+    ["help-verify-asset", 5], ["provenance", 6], ["create", 7], ["verify", 8], ["verify-asset", 9],
   ]) {
     const item = await fixture(t, { fail });
     await assert.rejects(publishRelease(item.input), new RegExp(`Synthetic ${fail} failure`));
@@ -211,10 +219,33 @@ test("GitHub errors stop publication without fallback tag writes or extra releas
   }
 });
 
+test("provenance verification failures never create a release or execute the archive", async t => {
+  for (const reason of [
+    "No attestations found", "Artifact digest mismatch", "Invalid signature",
+    "SourceRepository mismatch", "Signer workflow mismatch", "Source ref mismatch",
+    "Source digest mismatch", "Signer digest mismatch", "Self-hosted runner denied",
+    "Predicate type mismatch", "unknown command attestation", "unknown flag: --source-digest",
+  ]) {
+    const item = await fixture(t);
+    const error = new Error(reason);
+    const run = async args => {
+      const result = await item.input.run(args);
+      if (args[0] === "attestation") throw error;
+      return result;
+    };
+    await assert.rejects(publishRelease({ ...item.input, run }), received => received === error);
+    assert.equal(item.calls.length, 6, reason);
+    assert.equal(item.calls.at(-1)[0], "attestation");
+    assert.ok(item.calls.every(args => args[0] === "api" ||
+      args[0] === "attestation" || args.includes("--help")), reason);
+  }
+});
+
 test("only the tag workflow builds releases, and packaged checks precede publication", async () => {
   const workflow = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
   const tests = await readFile(new URL("../.github/workflows/tests.yml", import.meta.url), "utf8");
   assert.match(workflow, /on:\n {2}push:\n {4}tags: \["v\*"\]/);
+  assert.match(workflow, /\npermissions:\n {2}contents: read\n\nconcurrency:/);
   assert.doesNotMatch(workflow, /workflow_dispatch|branches:/);
   assert.doesNotMatch(tests, /build-release|publish-release|npm run build/);
   assert.match(workflow, /checks:\n {4}needs: validate\n {4}uses: \.\/\.github\/workflows\/tests\.yml/);
@@ -222,16 +253,76 @@ test("only the tag workflow builds releases, and packaged checks precede publica
   assert.match(workflow, /publish:\n {4}needs: \[validate, build\]/);
   const buildJob = workflow.slice(workflow.indexOf("\n  build:"), workflow.indexOf("\n  publish:"));
   const publishJob = workflow.slice(workflow.indexOf("\n  publish:"));
-  assert.match(buildJob, /permissions:\n {6}contents: read/);
-  assert.doesNotMatch(buildJob, /contents: write|GH_TOKEN|id-token: write/);
-  assert.match(publishJob, /permissions:\n {6}contents: write/);
+  assert.match(buildJob, /permissions:\n {6}contents: read\n {6}attestations: write\n {6}id-token: write\n {4}outputs:/);
+  assert.doesNotMatch(buildJob, /contents: write|GH_TOKEN/);
+  assert.match(buildJob, /uses: actions\/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4\.2\.2/);
+  assert.match(buildJob, /subject-path: dist\/github-notifications-\$\{\{ github\.ref_name \}\}\.tar\.gz/);
+  assert.doesNotMatch(buildJob, /continue-on-error|predicate:|predicate-path:|subject-checksums:/);
+  assert.match(publishJob, /permissions:\n {6}contents: write\n {6}attestations: read\n {4}env:/);
+  assert.doesNotMatch(publishJob, /id-token:|attestations: write|actions\/attest@/);
   assert.doesNotMatch(publishJob, /npm (ci|install)|build-release\.mjs|package\.integration|node install\.mjs/);
   assert.match(publishJob, /artifact-ids: \$\{\{ needs\.build\.outputs\.artifact-id \}\}/);
   assert.match(publishJob, /digest-mismatch: error/);
   assert.match(workflow, /git merge-base --is-ancestor "\$GITHUB_SHA" origin\/main/);
   assert.ok(workflow.indexOf("git merge-base --is-ancestor") < workflow.indexOf("node scripts/check-release.mjs"));
   const commands = ["scripts/check-release.mjs", "npm ci",
-    "scripts/build-release.mjs", "node --test test/package.integration.mjs", "scripts/publish-release.mjs"];
+    "scripts/build-release.mjs", "node --test test/package.integration.mjs",
+    "actions/attest@", "actions/upload-artifact@", "scripts/publish-release.mjs"];
   const positions = commands.map(command => workflow.indexOf(command));
   assert.ok(positions.every((position, index) => position >= 0 && (!index || position > positions[index - 1])));
+});
+
+test("documented shell installation enforces provenance before extraction or execution", {
+  skip: process.platform === "win32" && "The documented POSIX-shell command is tested on Linux and macOS.",
+}, async t => {
+  const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
+  const command = readme.match(/```sh\n( {3}tag=v[\s\S]+?) {3}```/)[1];
+  const manualTag = command.match(/tag=(v[0-9.]+)/)[1];
+  const stub = `#!${process.execPath}
+import { appendFileSync } from "node:fs";
+import { basename } from "node:path";
+const name = basename(process.argv[1]);
+const args = process.argv.slice(2);
+appendFileSync(process.env.TEST_LOG, JSON.stringify([name, ...args]) + "\\n");
+if (name === "gh" && args[0] === "api") {
+  process.stdout.write(process.env.TEST_COMMIT + "\\n");
+}
+if (name === "gh" && args[0] === process.env.TEST_FAIL) process.exit(1);
+`;
+  for (const { commit = sha, fail = "", succeeds = false } of [
+    { succeeds: true }, { fail: "attestation" }, { fail: "api" }, { commit: "" },
+    { commit: "null" }, { commit: "main" }, { commit: "a".repeat(39) },
+  ]) {
+    const directory = await home(t);
+    const bin = join(directory, "bin");
+    const log = join(directory, "calls.jsonl");
+    await mkdir(bin);
+    for (const name of ["gh", "sha256sum", "tar", "node"]) {
+      await writeFile(join(bin, name), stub, { mode: 0o755 });
+    }
+    const operation = promisify(execFile)("sh", ["-c", command], {
+      cwd: directory,
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`,
+        TEST_LOG: log, TEST_COMMIT: commit, TEST_FAIL: fail },
+    });
+    if (succeeds) await operation;
+    else await assert.rejects(operation, { code: 1 });
+    const calls = (await readFile(log, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+    const verification = calls.find(call => call[0] === "gh" && call[1] === "attestation");
+    if (verification) {
+      assert.deepEqual(verification, ["gh", "attestation", "verify", `github-notifications-${manualTag}.tar.gz`,
+        "--repo", REPOSITORY, "--hostname", "github.com",
+        "--signer-workflow", `${REPOSITORY}/.github/workflows/release.yml`,
+        "--source-ref", `refs/tags/${manualTag}`, "--source-digest", sha,
+        "--signer-digest", sha, "--deny-self-hosted-runners",
+        "--predicate-type", "https://slsa.dev/provenance/v1"]);
+    }
+    assert.equal(Boolean(verification), succeeds || fail === "attestation");
+    assert.equal(calls.some(call => call[0] === "tar"), succeeds);
+    assert.equal(calls.some(call => call[0] === "node"), succeeds);
+    if (succeeds) {
+      assert.ok(calls.indexOf(verification) < calls.findIndex(call => call[0] === "tar"));
+      assert.deepEqual(calls.at(-1), ["node", "install.mjs", manualTag]);
+    }
+  }
 });
