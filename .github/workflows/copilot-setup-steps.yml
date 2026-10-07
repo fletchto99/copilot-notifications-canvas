@@ -19,6 +19,8 @@ permissions:
 
 jobs:
   copilot-setup-steps:
+    permissions:
+      contents: read
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
