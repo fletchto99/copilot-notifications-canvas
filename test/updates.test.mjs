@@ -52,7 +52,13 @@ test("release checks use a fixed read-only GitHub endpoint and locally construct
   assert.equal(state.releaseUrl, `https://github.com/${REPOSITORY}/releases/tag/v0.2.0`);
   assert.match(state.instructionsUrl, /#installation-and-updating$/);
   assert.match(state.prompt, /"Installation and Updating" instructions/);
-  assert.match(state.prompt, /exact release tag\nv0\.2\.0/);
+  assert.match(state.prompt, /github-notifications-v0\.2\.0\.tar\.gz and SHA256SUMS/);
+  assert.match(state.prompt, /exact stable\nrelease v0\.2\.0/);
+  assert.match(state.prompt, /SHA-256 before extracting/);
+  assert.match(state.prompt, /node install\.mjs v0\.2\.0/);
+  assert.match(state.prompt, /not a source checkout, main, or a local build/);
+  assert.match(state.prompt, /Do not downgrade/);
+  assert.match(state.prompt, /one-time migration/);
   assert.match(state.prompt, /Preserve the entire installed artifacts directory in place/);
   assert.match(state.prompt, /settings\.json\nand unknown settings/);
   assert.match(state.prompt, /Do not delete or recreate it/);
@@ -176,7 +182,7 @@ test("rate-limit retry headers apply even to manual requests", async () => {
   ]) {
     let now = 1000;
     let calls = 0;
-    const updates = new Updates({ now: () => now, run: async () => {
+    const updates = new Updates({ version: "0.1.0", now: () => now, run: async () => {
       calls++;
       return calls === 1 ? http({}, headers, 429) : http(release());
     } });

@@ -1,7 +1,10 @@
 import { appendFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { CURRENT_VERSION, versionParts } from "../.github/extensions/github-notifications/updates.mjs";
+import metadata from "../.github/extensions/github-notifications/version.json" with { type: "json" };
+import { versionParts } from "../.github/extensions/github-notifications/version.mjs";
+
+const CURRENT_VERSION = metadata.version;
 
 export function validateReleaseTag(tag, version = CURRENT_VERSION) {
   if (!versionParts(version) || tag !== `v${version}`) {

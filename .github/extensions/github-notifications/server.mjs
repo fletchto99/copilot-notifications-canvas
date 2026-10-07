@@ -1,14 +1,9 @@
 import { createServer } from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { loadAssets } from "./assets.mjs";
 import { InboxError } from "./model.mjs";
 import { validSound } from "./notifier.mjs";
 
-const assets = new Map([
-  ["/", ["index.html", "text/html; charset=utf-8"]],
-  ["/app.mjs", ["app.mjs", "text/javascript; charset=utf-8"]],
-  ["/styles.css", ["styles.css", "text/css; charset=utf-8"]],
-]);
 const batchRoutes = new Map([
   ["/api/batch/start", "start"],
   ["/api/batch/cancel", "cancel"],
@@ -48,8 +43,7 @@ async function readBody(req) {
 export async function startServer(inbox, { log = () => {}, preferences, desktop, updates } = {}) {
   const secret = randomBytes(32).toString("hex");
   const snapshot = () => ({ ...inbox.snapshot(), ...(updates ? { updates: updates.snapshot() } : {}) });
-  const staticFiles = new Map(await Promise.all([...assets].map(async ([path, [file, type]]) =>
-    [path, { body: await readFile(new URL(`./${file}`, import.meta.url)), type }])));
+  const staticFiles = await loadAssets();
   let origin;
   const server = createServer(async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
@@ -67,7 +61,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         throw new InboxError("invalid_host", "Invalid loopback host.", 403);
       }
       const path = req.url;
-      if (assets.has(path)) {
+      if (staticFiles.has(path)) {
         if (req.method !== "GET") throw new InboxError("method", "Only GET is supported.", 405);
         const file = staticFiles.get(path);
         res.writeHead(200, { "Content-Type": file.type });

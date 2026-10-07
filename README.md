@@ -23,8 +23,7 @@ Check sign-in with `gh auth status --hostname github.com`.
 
 ### Install or update with Copilot
 
-Use the same prompt for a fresh installation or an upgrade, including versions
-that do not yet have an update banner:
+Use the same prompt for a fresh installation or a packaged-release upgrade:
 
 ```text
 Install or update the Unread Notifications canvas from
@@ -36,16 +35,22 @@ Use the latest published stable GitHub Release, not main or a prerelease.
 If no stable release exists, stop and report that. If already current, report
 that instead of reinstalling. Do not downgrade a newer installed version.
 
-Read the release notes, fetch the exact release tag into a separate clean
-checkout or worktree, and run node scripts/check-release.mjs <release-tag>
-before node scripts/install.mjs. Use my existing COPILOT_HOME and GitHub CLI
-sign-in.
+Read the release notes. Download github-notifications-<release-tag>.tar.gz
+and SHA256SUMS from that exact release. Verify the archive's SHA-256 before
+extracting it into a new directory, then run node install.mjs <release-tag>
+from the extracted package. Use my existing COPILOT_HOME and GitHub CLI sign-in.
+Do not install from a source checkout, main, or a local build. Stop if the
+package is missing or verification fails; do not fall back to source.
 
 Preserve the entire installed artifacts directory in place, including
 settings.json, autoOpen, darkMode, unknown settings, and other files. Do not
 delete or recreate that directory, overwrite locally modified runtime files,
 or bypass installer safeguards. Report missing prerequisites or permissions
 without changing credentials.
+
+If a legacy/source installation is detected, stop and report the repository's
+one-time migration instructions. Do not migrate it while old extension
+processes may be running.
 
 Only after installation succeeds, reload extensions in this session and
 open Unread Notifications (canvasId: github-notifications). Report the
@@ -55,45 +60,55 @@ sessions. Do not enable auto-update or change any preferences.
 
 ### Manual installation and updates
 
-Both paths install user-wide into
+Packaged releases (starting with **v0.2.0**) install user-wide into
 `${COPILOT_HOME:-$HOME/.copilot}/extensions/github-notifications`.
 Use the same `COPILOT_HOME` for an upgrade as for the original installation.
 
 1. Read the [release notes](https://github.com/fletchto99/copilot-notifications-canvas/releases)
    and choose the latest stable `<release-tag>`. If no stable release is
-   published yet, wait for the first release or use a development checkout
-   explicitly.
-2. Enter your existing repository clone. If you do not have one, create it
-   in the directory where you keep repositories:
+   published with the package assets yet, stop. GitHub's automatically
+   generated **Source code** downloads are not installation packages.
+2. Download into a **new, unused directory** and verify before extracting.
+   Set `COPILOT_HOME` first if you use a custom location. Replace the example
+   tag below with your chosen stable release:
 
    ```sh
-   git clone https://github.com/fletchto99/copilot-notifications-canvas
-   cd copilot-notifications-canvas
+   tag=v0.2.0
+   mkdir github-notifications-release &&
+   cd github-notifications-release &&
+   gh release download "$tag" \
+     --repo fletchto99/copilot-notifications-canvas \
+     --pattern "github-notifications-$tag.tar.gz" --pattern SHA256SUMS &&
+   sha256sum -c SHA256SUMS &&
+   mkdir package &&
+   tar -xzf "github-notifications-$tag.tar.gz" -C package &&
+   cd package &&
+   node install.mjs "$tag"
    ```
 
-3. From that clone, run the following with a **new, unused worktree path**.
-   Set `COPILOT_HOME` first if you use a custom location:
+   On macOS, replace `sha256sum -c SHA256SUMS` with
+   `shasum -a 256 -c SHA256SUMS`. These are shell commands; on Windows, use
+   a shell with `tar` and a SHA-256 utility, or verify with PowerShell's
+   `Get-FileHash -Algorithm SHA256` before extracting. Never continue after
+   a failed download or checksum check.
 
-   ```sh
-   git fetch origin tag <release-tag>
-   git worktree add --detach ../copilot-notifications-release <release-tag>
-   cd ../copilot-notifications-release
-   node scripts/check-release.mjs <release-tag>
-   node scripts/install.mjs
-   ```
+   The archive contains only `extension.mjs`, `install.mjs`, and `release.json`.
+   No clone, npm install, build tools, or separately installed Copilot SDK
+   are needed. The installer also verifies the package's file hashes and
+   version, refuses downgrades, and does nothing if already current.
 
-4. Only after the installer succeeds, ask Copilot:
+3. Only after the installer succeeds, ask Copilot:
 
    > Reload extensions, then open the Unread Notifications canvas.
 
    Other already-open Copilot sessions need their own extension reload.
 
-**Settings are preserved.** The installer writes a complete runtime, including
-its HTML, JavaScript and styles, under `runtimes/<content-hash>/`, then atomically
-switches the extension entry point to that version. It never replaces files
-inside a published runtime. `.copilot-notifications-install.json` records the
-active runtime; its `version.json` is authoritative, not any retained legacy
-`version.json` at the extension root.
+**Settings are preserved.** The installed layout is one self-contained
+`extension.mjs` beside `artifacts/`. HTML, minified browser JavaScript and CSS,
+provider code, version, and ownership metadata are all in that bundle. The
+Copilot SDK remains host-provided. Upgrades stage and verify the replacement,
+then activate it with one atomic file rename. There is no separate installed
+manifest to get out of sync and no accumulating runtime directories.
 
 It leaves `artifacts/` in place, including `artifacts/settings.json`, unknown
 settings, and other artifacts, even if a running session saves settings during
@@ -101,18 +116,36 @@ the update. Never delete the installed extension to upgrade it. If the installer
 reports modified files, stop and preserve those changes; do not bypass its
 ownership or concurrency safeguards.
 
-Older runtimes are retained so already-open sessions keep a consistent version,
-even if an upgrade rolls back. Upgrades from the original flat layout also keep
-its legacy files, including `sound.mjs`, for sessions that have not reloaded.
-These retained files are extension code, not notification content. They are not
-automatically pruned; do not remove them while a session may still use them.
-New runtimes contain no Web Audio playback or its old inbox activity tracking.
+Already-running packaged providers retain their own loaded code and embedded
+assets, including when opening another panel after an upgrade. They need an
+extension reload to pick up the new version. An error before activation leaves
+the previous bundle intact; an interruption after activation leaves a complete
+new bundle. A retry recognizes whichever version is installed.
 
 Updates use the user-wide installer. A project-local checkout shadows a
 user-wide installation in that repository; update that checkout deliberately
 instead of expecting a user-wide install to replace it. Persisted settings,
 including **Auto-open**, **Dark mode**, **Desktop notifications** and
 **Sound**, are retained.
+
+### One-time migration from source installations
+
+The first packaged release is a new baseline, not an in-place upgrade for the
+old flat-file or `runtimes/<hash>/` layouts. The installer deliberately refuses
+those layouts rather than deleting code that an old session might still need.
+
+1. Stop **all** Copilot app/CLI sessions and extension processes using the old
+   installation. Closing a canvas or reloading only one session is not enough.
+   Perform the migration from an external terminal after they have stopped.
+2. Locate `${COPILOT_HOME:-$HOME/.copilot}/extensions/github-notifications`.
+   Make a backup outside every extension discovery directory. Move its old
+   code and metadata into that backup, including retained `runtimes/`, but
+   **leave `artifacts/` exactly where it is**. Preserve locally modified files
+   in the backup; do not delete or overwrite them. The installation directory
+   should now contain only `artifacts/` (or be empty).
+3. Install the verified release package using the steps above, restart Copilot,
+   and open the canvas. Keep the backup until you have confirmed the new
+   installation and settings. Future packaged updates need no such migration.
 
 ## Usage
 
@@ -254,7 +287,21 @@ node --test test/*.test.mjs
 
 The [test workflow](.github/workflows/tests.yml) runs the same suite on pull
 requests and pushes to `main`. Tests use synthetic fixtures and need no dependency
-installation, GitHub sign-in, or external network access.
+installation, GitHub sign-in, or external network access. Ordinary CI does not
+build or publish release assets.
+
+To validate packaging locally (not to distribute a development installation):
+
+```sh
+npm ci --ignore-scripts --no-audit --no-fund
+npm run build -- v0.2.0
+npm run test:package
+```
+
+Use the tag matching `version.json`. The pinned esbuild dependency is build-time
+only. Generated archives and checksums go in ignored `dist/`; build output is
+not committed. The packaged tests extract the archive, run its installer in
+temporary Copilot homes, and load its provider with a stub host SDK.
 
 ### Publishing releases
 
@@ -262,43 +309,37 @@ Use stable semantic versions (`vMAJOR.MINOR.PATCH`) so users receive deliberate,
 tested updates with release notes instead of every merge. Bump
 `.github/extensions/github-notifications/version.json` in the release PR.
 
-After merging the version change into `main`, invoke the
-[Release workflow](.github/workflows/release.yml) from **Actions → Release →
-Run workflow**. Select **main** and enter either the version (`0.1.1`) or its
-tag (`v0.1.1`). Both are validated and normalized to `v0.1.1` before publication.
-The workflow must be merged into the default branch before GitHub
-offers the manual trigger.
-
-You can also invoke it with GitHub CLI:
+After merging the version change into `main`, tag that exact commit and push
+the tag. For example, from an up-to-date checkout of the intended release commit:
 
 ```sh
-gh workflow run release.yml \
-  --repo fletchto99/copilot-notifications-canvas \
-  --ref main \
-  -f version=0.1.1
+git tag -a v0.2.0 -m "Release v0.2.0"
+git push origin v0.2.0
 ```
 
-The workflow checks that the requested version matches `version.json`, runs
-the full test suite, creates the matching tag at the **exact tested commit**,
-and publishes a GitHub Release with generated notes. It does not bump the
-version or commit changes to `main`. Manual runs from other branches are
-rejected. Publication is serialized across manual runs and tag pushes.
+Only a `v*` tag push triggers the [Release workflow](.github/workflows/release.yml).
+There is no manual or branch-push release build. The workflow validates the
+stable tag against `version.json`, runs the source/installer tests, installs
+the locked build tools, bundles and minifies the runtime, and tests the actual
+archive. It then verifies the tag still points to the **exact tested commit**.
+It never creates or moves tags, bumps a version, or commits generated output.
 
-If publication fails after creating the tag, rerun the failed job: a tag
-already pointing to the tested commit can be reused. A tag pointing elsewhere
-is rejected, never moved. An existing release is never overwritten. If tag
-rules block creation, fix the repository permissions or create the tag yourself;
-do not bypass the rules.
+Publication creates a draft with generated notes and uploads
+`github-notifications-<tag>.tar.gz` and `SHA256SUMS` before making the release
+public and marking it **Latest**. The canvas follows `/releases/latest`, so it
+does not advertise a draft with missing assets. Publication is serialized.
+Review the generated notes for behavior changes and update guidance.
 
-Pushing a matching release tag yourself still invokes the same validation,
-tests, and publication. After a successful run, review the generated notes for
-behavior changes, prerequisites, and update guidance. Confirm GitHub marks the
-intended stable version as **Latest**; the canvas follows `/releases/latest`.
+An existing release or asset is never overwritten. A failure before draft
+creation can be retried. If an upload/publication failure leaves a draft,
+inspect it first; remove only that incomplete draft (not its tag) before
+rerunning the job. Never replace assets on an already-published release.
 
 Publish increasing versions; never move a published tag or reuse a version.
 For a bad release, publish a fixed version rather than modifying existing
 release code. Restrict `v*` tag creation with repository rules if more
 contributors gain write access.
 
-Existing installations from before the update banner need one manual update
-to a release containing this feature. They cannot discover updates retroactively.
+Installations from before the update banner cannot discover releases
+retroactively. Follow the one-time source migration above rather than their
+old source-based installation instructions.

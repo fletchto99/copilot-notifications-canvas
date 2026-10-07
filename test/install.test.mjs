@@ -1,205 +1,147 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, readFile, readdir, symlink, unlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
 import { execFile } from "node:child_process";
+import { mkdir, readFile, readdir, stat, symlink, unlink, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { fileURLToPath, pathToFileURL } from "node:url";
 import { install } from "../scripts/install.mjs";
-import { home, legacyAssets, legacyInstallation, olderRuntime, runtimePath, sourceFiles } from "./install-fixtures.mjs";
+import { inspectBundle } from "../scripts/package.mjs";
+import { fixture, home } from "./install-fixtures.mjs";
 
-test("installation is repeatable, scoped to the supplied Copilot home, and copies only runtime files", async t => {
-  const root = await home(t);
-  const target = await install(root);
-  assert.equal(target, join(root, "extensions", "github-notifications"));
-  assert.equal(await install(root), target);
-  assert.equal((await readdir(target)).length, 3);
-  const runtime = await runtimePath(target);
-  const entries = await readdir(runtime);
-  assert.equal(entries.length, 17);
-  assert.equal((await readdir(join(target, "runtimes"))).length, 1);
-  assert.equal(entries.includes("extension.mjs"), true);
-  assert.equal(entries.includes("README.md"), false);
-  assert.equal(entries.includes("test"), false);
-  assert.equal(entries.includes("node_modules"), false);
-  assert.equal(entries.includes("sound.mjs"), false);
-  assert.equal(entries.includes("updates.mjs"), true);
-  assert.equal(entries.includes("version.json"), true);
-  const { Updates } = await import(pathToFileURL(join(runtime, "updates.mjs")).href);
-  const version = JSON.parse(await readFile(join(runtime, "version.json"), "utf8")).version;
-  assert.equal(new Updates().snapshot().currentVersion, version);
-  assert.match(await readFile(join(target, "extension.mjs"), "utf8"), /^await import\("\.\/runtimes\/[a-f0-9]{64}\/extension\.mjs"\);\n$/);
+test("installation publishes only one owned bundle and an already-current install changes nothing", async t => {
+  const f = await fixture(t);
+  assert.deepEqual(await f.install(), { target: f.target, version: f.version, status: "installed" });
+  assert.deepEqual(await readdir(f.target), ["extension.mjs"]);
+  const path = join(f.target, "extension.mjs");
+  const before = await stat(path);
+  assert.equal(inspectBundle(await readFile(path)).version, f.version);
+  assert.equal((await f.install()).status, "current");
+  assert.equal((await stat(path)).ino, before.ino);
+  assert.equal((await stat(path)).mtimeMs, before.mtimeMs);
+  assert.deepEqual(await readdir(join(f.root, "extensions")), ["github-notifications"]);
 });
 
-test("an untouched pre-sound installation upgrades without overwriting unrelated files", async t => {
-  const root = await home(t);
-  const { target } = await legacyInstallation(root, { omit: ["sound.mjs", "settings.mjs", "startup.mjs", "batch.mjs", "updates.mjs", "version.json"] });
-  assert.equal(await install(root), target);
-  assert.match(await readFile(join(await runtimePath(target), "notifier.mjs"), "utf8"), /notifyDesktop/);
+test("upgrades replace the entire runtime without leaving old code, assets, or metadata files", async t => {
+  const old = await fixture(t);
+  await old.install();
+  const next = await fixture(t, { root: old.root, version: "1.1.0" });
+  assert.equal((await next.install()).status, "installed");
+  assert.equal(await readFile(join(old.target, "extension.mjs"), "utf8"), next.content);
+  assert.deepEqual(await readdir(old.target), ["extension.mjs"]);
+  assert.deepEqual(await readdir(join(old.root, "extensions")), ["github-notifications"]);
 });
 
-test("a pre-desktop installation upgrades and a missing current desktop file is rejected", async t => {
-  const root = await home(t);
-  const { target } = await legacyInstallation(root);
-  await install(root);
-  const runtime = await runtimePath(target);
-  assert.match(await readFile(join(runtime, "desktop.mjs"), "utf8"), /class DesktopNotifications/);
-  await unlink(join(runtime, "desktop.mjs"));
-  await assert.rejects(install(root), /incomplete/);
+test("fresh installs and upgrades preserve the artifacts directory and all contents in place", async t => {
+  const f = await fixture(t);
+  const directory = join(f.target, "artifacts");
+  await mkdir(directory, { recursive: true });
+  const settings = '{"autoOpen":true,"darkMode":true,"desktopNotifications":true,"desktopSound":"default","future":{"x":42}}\n';
+  await writeFile(join(directory, "settings.json"), settings);
+  await mkdir(join(directory, "nested"));
+  await writeFile(join(directory, "nested", "keep.txt"), "untouched");
+  const before = await stat(directory);
+  await f.install();
+  await (await fixture(t, { root: f.root, version: "2.0.0" })).install();
+  assert.equal(await readFile(join(directory, "settings.json"), "utf8"), settings);
+  assert.equal(await readFile(join(directory, "nested", "keep.txt"), "utf8"), "untouched");
+  assert.equal((await stat(directory)).ino, before.ino);
 });
 
-test("a pre-batch installation upgrades while preserving settings", async t => {
-  const root = await home(t);
-  const { target } = await legacyInstallation(root, { omit: ["batch.mjs"] });
-  await install(root);
-  assert.match(await readFile(join(await runtimePath(target), "batch.mjs"), "utf8"), /class ReadBatch/);
+test("downgrades and different contents under the same version are refused", async t => {
+  const f = await fixture(t);
+  await f.install();
+  await assert.rejects((await fixture(t, { root: f.root, version: "0.9.0" })).install(), /downgrade/);
+  await assert.rejects((await fixture(t, { root: f.root, code: "export const different = true;\n" })).install(), /same version/);
+  assert.equal(await readFile(join(f.target, "extension.mjs"), "utf8"), f.content);
 });
 
-test("installation preserves existing user settings and unknown artifact files on every upgrade", async t => {
-  const root = await home(t);
-  const artifacts = join(root, "extensions", "github-notifications", "artifacts");
-  await mkdir(artifacts, { recursive: true });
-  await writeFile(join(artifacts, "settings.json"), '{"autoOpen":true,"future":42}');
-  await writeFile(join(artifacts, "preserve.txt"), "user artifact");
-  await install(root);
-  await install(root);
-  assert.equal(await readFile(join(artifacts, "settings.json"), "utf8"), '{"autoOpen":true,"future":42}');
-  assert.equal(await readFile(join(artifacts, "preserve.txt"), "utf8"), "user artifact");
-});
-
-test("a pre-update-check installation upgrades with settings and artifacts byte-for-byte intact", async t => {
-  const root = await home(t);
-  const { target } = await legacyInstallation(root, { omit: ["updates.mjs", "version.json"] });
-  const artifacts = join(target, "artifacts");
-  await mkdir(artifacts);
-  const settings = '{\n  "autoOpen": true,\n  "darkMode": true,\n  "future": {"nested": [1, 2]}\n}\n';
-  await writeFile(join(artifacts, "settings.json"), settings);
-  await writeFile(join(artifacts, "user-note.txt"), "preserve");
-  await install(root);
-  assert.equal(await readFile(join(artifacts, "settings.json"), "utf8"), settings);
-  assert.equal(await readFile(join(artifacts, "user-note.txt"), "utf8"), "preserve");
-  const runtime = await runtimePath(target);
-  assert.match(await readFile(join(runtime, "updates.mjs"), "utf8"), /class Updates/);
-  assert.match(await readFile(join(runtime, "version.json"), "utf8"), /"version"/);
-});
-
-test("missing update files are not mistaken for a legacy installation", async t => {
-  for (const files of [["updates.mjs"], ["version.json"], ["updates.mjs", "version.json"]]) {
-    const root = await home(t);
-    const target = await install(root);
-    const runtime = await runtimePath(target);
-    for (const file of files) await unlink(join(runtime, file));
-    await assert.rejects(install(root), /incomplete/);
+test("legacy flat and versioned installations require explicit offline migration and are never changed", async t => {
+  for (const version of [1, 2]) {
+    const f = await fixture(t);
+    await mkdir(f.target, { recursive: true });
+    await writeFile(join(f.target, "extension.mjs"), "old provider with local edits");
+    await writeFile(join(f.target, ".copilot-notifications-install.json"), JSON.stringify({ version }));
+    if (version === 2) await mkdir(join(f.target, "runtimes"));
+    else await writeFile(join(f.target, "sound.mjs"), "old sound");
+    const before = await readdir(f.target);
+    await assert.rejects(f.install(), /Legacy installation.*one-time migration/);
+    assert.deepEqual(await readdir(f.target), before);
+    assert.equal(await readFile(join(f.target, "extension.mjs"), "utf8"), "old provider with local edits");
   }
 });
 
-test("a missing current runtime module is rejected as an incomplete installation", async t => {
-  const root = await home(t);
-  const target = await install(root);
-  await unlink(join(await runtimePath(target), "app.mjs"));
-  await assert.rejects(install(root), /incomplete/);
-});
-
-test("upgrades preserve unchanged legacy assets for old sessions without including Web Audio in new runtimes", async t => {
-  const root = await home(t);
-  const { target, contents } = await legacyInstallation(root);
-  await writeFile(join(target, "sound.mjs"), "local edit");
-  await assert.rejects(install(root), /modified/);
-  assert.equal(await readFile(join(target, "sound.mjs"), "utf8"), "local edit");
-  await writeFile(join(target, "sound.mjs"), legacyAssets["sound.mjs"]);
-  await install(root);
-  for (const [file, content] of Object.entries(contents)) {
-    if (file !== "extension.mjs") assert.equal(await readFile(join(target, file), "utf8"), content);
+test("unowned files, malformed headers and edited bundles are preserved", async t => {
+  for (const change of [
+    f => writeFile(join(f.target, "extension.mjs"), "unrelated source code"),
+    f => writeFile(join(f.target, "extension.mjs"), f.content + "// local edit\n"),
+    f => writeFile(join(f.target, "extension.mjs"), f.content.replace('"version":"1.0.0"', '"version":"9.0.0"')),
+    f => writeFile(join(f.target, "extension.mjs"), f.content.replace('"format":1', '"note":"local edit","format":1')),
+    f => writeFile(join(f.target, "extension.mjs"), "// copilot-notifications-bundle: {\ninvalid\n"),
+    f => writeFile(join(f.target, "notes.txt"), "user notes"),
+  ]) {
+    const f = await fixture(t);
+    await f.install();
+    await change(f);
+    const before = await readFile(join(f.target, "extension.mjs"), "utf8");
+    await assert.rejects(f.install(), /modified|modifications|unrelated|Unrecognized/);
+    assert.equal(await readFile(join(f.target, "extension.mjs"), "utf8"), before);
   }
-  assert.equal((await readdir(await runtimePath(target))).includes("sound.mjs"), false);
-  await install(root);
 });
 
-test("versioned upgrades retain the previous complete runtime without modifying its files", async t => {
-  const root = await home(t);
-  const { target, directory, contents } = await olderRuntime(root);
-  await install(root);
-  assert.notEqual(await runtimePath(target), directory);
-  assert.equal((await readdir(join(target, "runtimes"))).length, 2);
-  for (const file of sourceFiles) assert.equal(await readFile(join(directory, file), "utf8"), contents[file]);
-  await install(root);
-  assert.equal((await readdir(join(target, "runtimes"))).length, 2);
-  await writeFile(join(directory, "app.mjs"), "local edit to retained runtime");
-  await assert.rejects(install(root), /modified/);
-  assert.equal(await readFile(join(directory, "app.mjs"), "utf8"), "local edit to retained runtime");
+test("symlinked installation, artifacts and runtime paths are never followed", async t => {
+  for (const location of ["target", "artifacts", "extension.mjs"]) {
+    const f = await fixture(t);
+    const elsewhere = await home(t);
+    await writeFile(join(elsewhere, "keep.mjs"), f.content);
+    await mkdir(join(f.root, "extensions"));
+    if (location === "target") await symlink(elsewhere, f.target);
+    else {
+      await mkdir(f.target);
+      await symlink(location === "artifacts" ? elsewhere : join(elsewhere, "keep.mjs"), join(f.target, location));
+    }
+    await assert.rejects(f.install(), /symlink/);
+    assert.equal(await readFile(join(elsewhere, "keep.mjs"), "utf8"), f.content);
+  }
 });
 
-test("the documented install command respects COPILOT_HOME without touching the real user directory", async t => {
-  const root = await home(t);
-  const { stdout } = await promisify(execFile)(process.execPath,
-    [fileURLToPath(new URL("../scripts/install.mjs", import.meta.url))],
-    { env: { ...process.env, COPILOT_HOME: root } });
-  assert.ok(stdout.includes(join(root, "extensions", "github-notifications")));
-  const runtime = await runtimePath(join(root, "extensions", "github-notifications"));
-  assert.match(await readFile(join(runtime, "extension.mjs"), "utf8"), /joinSession/);
+test("missing, extra, symlinked and checksum-invalid package files fail before installation", async t => {
+  for (const change of [
+    f => unlink(join(f.directory, "install.mjs")),
+    f => writeFile(join(f.directory, "extra.txt"), "unexpected"),
+    f => writeFile(join(f.directory, "extension.mjs"), "corrupt"),
+    f => writeFile(join(f.directory, "install.mjs"), "corrupt"),
+    async f => {
+      await unlink(join(f.directory, "extension.mjs"));
+      await symlink(join(f.directory, "install.mjs"), join(f.directory, "extension.mjs"));
+    },
+    f => writeFile(join(f.directory, "release.json"), JSON.stringify({ ...f.manifest, version: "2.0.0" })),
+    f => writeFile(join(f.directory, "release.json"), JSON.stringify({ ...f.manifest, hashes: {} })),
+    f => writeFile(join(f.directory, "release.json"), "{"),
+  ]) {
+    const f = await fixture(t);
+    await change(f);
+    await assert.rejects(f.install());
+    assert.deepEqual(await readdir(f.root), []);
+  }
 });
 
-test("the installed entry point loads its complete runtime with the host-provided SDK", async t => {
-  const root = await home(t);
-  const target = await install(root);
-  const sdk = `export const createCanvas = options => options;
-export class CanvasError extends Error {}
-export async function joinSession(options) {
-  globalThis.registeredCanvases = options.canvases.map(canvas => canvas.id);
-  return { workspacePath: process.argv[2], log: async () => {} };
-}`;
-  const hook = `export async function resolve(specifier, context, next) {
-  if (specifier === "@github/copilot-sdk/extension") return { url: ${JSON.stringify(`data:text/javascript,${encodeURIComponent(sdk)}`)}, shortCircuit: true };
-  return next(specifier, context);
-}`;
-  const script = `
-import { register } from "node:module";
-import assert from "node:assert/strict";
-register(${JSON.stringify(`data:text/javascript,${encodeURIComponent(hook)}`)});
-await import(process.argv[1]);
-assert.deepEqual(globalThis.registeredCanvases, ["github-notifications"]);
-`;
-  await promisify(execFile)(process.execPath, ["--input-type=module", "-e", script,
-    pathToFileURL(join(target, "extension.mjs")).href, join(root, "session")],
-  { env: { ...process.env, COPILOT_HOME: root } });
+test("package version and tag must agree, including the bundle's embedded version", async t => {
+  const f = await fixture(t);
+  for (const tag of [undefined, "", "1.0.0", "v1.0.0-rc.1", "v2.0.0", "v1.0.0\n"]) {
+    await assert.rejects(install({ home: f.root, directory: f.directory, tag }));
+  }
+  await writeFile(join(f.directory, "release.json"), JSON.stringify({ ...f.manifest, version: "2.0.0" }));
+  await assert.rejects(install({ home: f.root, directory: f.directory, tag: "v2.0.0" }), /Bundle version/);
+  assert.deepEqual(await readdir(f.root), []);
 });
 
-test("installer refuses unrelated content and preserves it exactly", async t => {
+test("the source installer refuses source-based installation and missing CLI arguments", async t => {
   const root = await home(t);
-  const target = join(root, "extensions", "github-notifications");
-  await mkdir(target, { recursive: true });
-  await writeFile(join(target, "extension.mjs"), "unrelated user extension");
-  await assert.rejects(install(root), /unrelated or incomplete/);
-  assert.equal(await readFile(join(target, "extension.mjs"), "utf8"), "unrelated user extension");
-});
-
-test("installer refuses locally edited owned files, extra content and symlink destinations", async t => {
-  const root = await home(t);
-  const target = await install(root);
-  await writeFile(join(target, "extension.mjs"), "local changes");
-  await assert.rejects(install(root), /modified/);
-  const secondRoot = await home(t);
-  const second = await install(secondRoot);
-  await writeFile(join(second, "notes.txt"), "preserve");
-  await assert.rejects(install(secondRoot), /unrelated/);
-  const thirdRoot = await home(t);
-  await mkdir(join(thirdRoot, "extensions"));
-  await symlink(target, join(thirdRoot, "extensions", "github-notifications"));
-  await assert.rejects(install(thirdRoot), /symlink/);
-});
-
-test("unrecognized or symlinked runtime directories are never replaced", async t => {
-  const root = await home(t);
-  const target = await install(root);
-  const unowned = join(target, "runtimes", "notes");
-  await mkdir(unowned);
-  await writeFile(join(unowned, "keep.txt"), "keep");
-  await assert.rejects(install(root), /unrecognized runtime/);
-  assert.equal(await readFile(join(unowned, "keep.txt"), "utf8"), "keep");
-  const other = await home(t);
-  const second = await install(other);
-  const runtime = await runtimePath(second);
-  await unlink(join(runtime, "styles.css"));
-  await symlink(join(runtime, "app.mjs"), join(runtime, "styles.css"));
-  await assert.rejects(install(other), /non-regular/);
+  const script = fileURLToPath(new URL("../scripts/install.mjs", import.meta.url));
+  for (const args of [[], ["v0.2.0"], ["v0.2.0", "--force"]]) {
+    await assert.rejects(promisify(execFile)(process.execPath, [script, ...args],
+      { env: { ...process.env, COPILOT_HOME: root } }), { code: 1 });
+  }
+  assert.deepEqual(await readdir(root), []);
 });

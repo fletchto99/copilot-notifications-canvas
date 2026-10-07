@@ -1,0 +1,16 @@
+{
+  "name": "copilot-notifications-canvas",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "build": "node scripts/build-release.mjs",
+    "test:package": "node --test test/package.integration.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

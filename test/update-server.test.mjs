@@ -46,7 +46,7 @@ test("slow release checks never block the inbox, and all panels see one cached r
 
 test("manual checks require the capability, same origin, POST and an empty object", async t => {
   let calls = 0;
-  const updates = new Updates({ run: async () => { calls++; return http(stable); } });
+  const updates = new Updates({ version: "0.1.0", run: async () => { calls++; return http(stable); } });
   const { origin, headers } = await panel(t, updates);
   for (const [options, expected] of [
     [{ method: "POST", body: "{}" }, 403],

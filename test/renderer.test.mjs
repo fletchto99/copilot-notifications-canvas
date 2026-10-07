@@ -7,7 +7,8 @@ import { GitHubClient } from "../.github/extensions/github-notifications/github.
 import { desktopCapabilities } from "../.github/extensions/github-notifications/notifier.mjs";
 import { http, next, thread } from "./fixtures.mjs";
 
-const script = await readFile(new URL("../.github/extensions/github-notifications/app.mjs", import.meta.url), "utf8");
+const script = await readFile(process.env.NOTIFICATIONS_TEST_SCRIPT ??
+  new URL("../.github/extensions/github-notifications/app.mjs", import.meta.url), "utf8");
 const html = await readFile(new URL("../.github/extensions/github-notifications/index.html", import.meta.url), "utf8");
 const styles = await readFile(new URL("../.github/extensions/github-notifications/styles.css", import.meta.url), "utf8");
 const settle = () => new Promise(resolve => setImmediate(resolve));
@@ -221,6 +222,44 @@ async function renderer({ hidden = false, token = "a".repeat(64), readFailure = 
     intersect: value => intersect([{ isIntersecting: value }]),
   };
 }
+
+test("renderer public controls survive bundling and minification", async () => {
+  const ui = await renderer({
+    initialRows: [thread("1"), thread("2")],
+    release: { status: "available", latestVersion: "2.0.0", prompt: "Install the verified v2.0.0 package." },
+  });
+  try {
+    assert.equal(ui.document.querySelectorAll("article").length, 2);
+    await ui.ids.get("copy-update").events.click();
+    assert.deepEqual(ui.copied, ["Install the verified v2.0.0 package."]);
+    ui.ids.get("dark-mode").events.click();
+    await settle();
+    assert.equal(ui.document.documentElement.dataset.notificationTheme, "dark");
+    ui.ids.get("auto-open").events.click();
+    await settle();
+    assert.equal(ui.ids.get("auto-open").attributes["aria-checked"], "true");
+    await ui.ids.get("force-refresh").events.click();
+    ui.advance();
+    await ui.fireTimer();
+    assert.equal(ui.inbox.summary().status, "ready");
+    const search = ui.ids.get("search");
+    search.value = "notification 2";
+    search.events.input();
+    await ui.fireTimer(250);
+    assert.equal(ui.document.querySelectorAll("article").length, 1);
+    assert.equal(ui.ids.get("count").textContent, "2 unread \u00b7 1 matching");
+    await ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "2").events.click();
+    assert.deepEqual(ui.patches, ["/notifications/threads/2"]);
+    search.value = "";
+    search.events.input();
+    await ui.fireTimer(250);
+    assert.equal(ui.ids.get("count").textContent, "1 unread");
+    assert.equal(ui.document.querySelectorAll("article").length, 1);
+  } finally {
+    ui.window.events.pagehide();
+  }
+  assert.equal(ui.timers.size, 0);
+});
 
 test("update banner sits below the subtitle and above the inbox controls with its prompt collapsed", () => {
   const positions = ['class="subtitle"', 'id="update-banner"', 'class="toolbar"', 'id="count"', 'id="groups"']
