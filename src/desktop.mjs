@@ -147,13 +147,13 @@ export class DesktopNotifications {
     this.cancel(this.timer);
     if (settings && settings.desktopNotifications !== this.enabled) {
       this.enabled = settings.desktopNotifications;
+      if (this.enabled) this.activation = { generation: null, sequence: this.client.sequence };
       this.setStatus(this.enabled ? "starting" : "off",
         this.enabled ? "Starting the shared desktop notification watcher..." : "Desktop notifications are off.");
       if (!this.enabled) this.controller?.abort();
     }
     if (!this.panels.size) return;
-    const since = this.client.sequence;
-    this.timer = this.schedule(() => { void this.check({ since }); }, 0);
+    this.timer = this.schedule(() => { void this.check(); }, 0);
     this.timer?.unref?.();
   }
 
@@ -182,26 +182,44 @@ export class DesktopNotifications {
     await this.remove();
   }
 
-  sync({ since = this.client.sequence } = {}) {
+  observeActivation(settings) {
+    if (!settings.desktopNotifications) return;
+    const current = generation(settings);
+    if (this.activation?.generation !== current) {
+      this.activation = {
+        generation: current,
+        sequence: this.activation?.generation === null ? this.activation.sequence : this.client.sequence,
+      };
+    }
+  }
+
+  async prepareForeground() {
+    try {
+      this.observeActivation(await this.preferences.document());
+    } catch (error) {
+      this.setStatus("error", errorMessage(error));
+    }
+  }
+
+  sync() {
     this.foregroundRequested = true;
-    this.foregroundSince = since;
     if (this.foregroundPending) return this.foregroundPending;
     this.foregroundPending = (async () => {
       do {
         await this.pending;
         this.foregroundRequested = false;
-        await this.check({ foreground: true, since: this.foregroundSince });
+        await this.check({ foreground: true });
       } while (this.foregroundRequested && this.panels.size);
     })().finally(() => { this.foregroundPending = undefined; });
     return this.foregroundPending;
   }
 
-  check({ foreground = false, since = this.client.sequence } = {}) {
+  check({ foreground = false } = {}) {
     if (this.pending) return this.pending;
     if (!this.panels.size) return Promise.resolve();
     const controller = new AbortController();
     this.controller = controller;
-    this.pending = this.run(controller.signal, foreground, since).catch(error => {
+    this.pending = this.run(controller.signal, foreground).catch(error => {
       if (!controller.signal.aborted) this.setStatus("error", errorMessage(error));
     }).finally(() => {
       this.pending = undefined;
@@ -294,7 +312,7 @@ export class DesktopNotifications {
     return active;
   }
 
-  async run(signal, foreground, since) {
+  async run(signal, foreground) {
     const settings = await this.preferences.document();
     signal.throwIfAborted();
     this.enabled = settings.desktopNotifications === true;
@@ -307,6 +325,8 @@ export class DesktopNotifications {
     if (!validSound(settings.desktopSound ?? "default", this.platform)) {
       throw new InboxError("desktop_sound", "Choose a notification sound supported by this operating system.", 400);
     }
+    this.observeActivation(settings);
+    const activation = this.activation;
     await this.register();
     signal.throwIfAborted();
     const release = await acquireLock(join(this.directory, ".desktop.lock"), { alive: this.alive });
@@ -335,7 +355,7 @@ export class DesktopNotifications {
       await saveDocument(this.statePath, state);
       try {
         let next = firstPage();
-        let minSequence = initial ? since + 1 : 0;
+        let minSequence = initial ? activation.sequence + 1 : 0;
         let boundary = initial ? null : state.watermark;
         const items = [];
         while (next) {

@@ -1,9 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { request } from "node:http";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { GitHubClient } from "../src/github.mjs";
 import { Inbox } from "../src/inbox.mjs";
 import { startServer } from "../src/server.mjs";
+import { DesktopNotifications } from "../src/desktop.mjs";
+import { Preferences } from "../src/settings.mjs";
 import { http, thread } from "./fixtures.mjs";
 
 async function setup(t, run = async () => http([thread()])) {
@@ -123,12 +128,19 @@ test("only successful foreground refreshes feed the desktop watcher, after updat
   let fail = false;
   let syncs = 0;
   const inbox = new Inbox(new GitHubClient({ run: async () => fail ? http({}, {}, 500) : http([thread()]) }));
-  const desktop = { sync: async ({ since }) => {
-    syncs++;
-    assert.equal(since, 0);
-    assert.equal(inbox.pages[0].sequence, 1);
-    assert.equal(inbox.snapshot().groups[0].items[0].id, "1");
-  } };
+  let prepared = false;
+  const desktop = {
+    prepareForeground: async () => {
+      assert.equal(inbox.client.sequence, syncs ? 1 : 0);
+      prepared = true;
+    },
+    sync: async () => {
+      syncs++;
+      assert.equal(prepared, true);
+      assert.equal(inbox.pages[0].sequence, 1);
+      assert.equal(inbox.snapshot().groups[0].items[0].id, "1");
+    },
+  };
   const server = await startServer(inbox, { desktop });
   t.after(() => server.close());
   const url = new URL(server.url);
@@ -144,6 +156,123 @@ test("only successful foreground refreshes feed the desktop watcher, after updat
   fail = true;
   assert.equal((await refresh({ force: true })).status, 502);
   assert.equal(syncs, 1);
+});
+
+test("activation during an in-flight foreground request establishes a fresh generation-scoped baseline", async t => {
+  for (const alreadyEnabled of [false, true]) {
+    for (const external of [false, true]) {
+      await t.test(`${alreadyEnabled ? "re-enable" : "enable"} ${external ? "in another session" : "through the panel"}`, async t => {
+        const directory = await mkdtemp(join(tmpdir(), "notifications-activation-http-"));
+        const preferences = new Preferences({ directory });
+        if (alreadyEnabled) await preferences.update({ desktopNotifications: true });
+        let now = Date.parse("2026-01-10T12:00:00Z");
+        let rows = [thread("1")];
+        let holdNext = false;
+        let entered;
+        let release;
+        const started = new Promise(resolve => { entered = resolve; });
+        const held = new Promise(resolve => { release = resolve; });
+        const deliveries = [];
+        const client = new GitHubClient({
+          now: () => now,
+          sleep: async delay => { now += delay; },
+          run: async () => {
+            const snapshot = http(rows);
+            if (holdNext) {
+              holdNext = false;
+              entered();
+              await held;
+            }
+            return snapshot;
+          },
+        });
+        const desktop = new DesktopNotifications({
+          preferences, client, now: () => now, platform: "darwin",
+          notify: async message => { deliveries.push(message); },
+        });
+        const wake = desktop.wake.bind(desktop);
+        desktop.wake = settings => {
+          wake(settings);
+          // Let the old response finish before the activation timer gets its turn.
+          if (settings?.desktopNotifications === true) release();
+        };
+        desktop.add("activation-http");
+        await desktop.check();
+        const server = await startServer(new Inbox(client), { preferences, desktop, development: null });
+        t.after(async () => {
+          release();
+          await server.close();
+          await desktop.close();
+          await rm(directory, { recursive: true, force: true });
+        });
+        const url = new URL(server.url);
+        const post = async (path, body) => {
+          const response = await fetch(new URL(path, url), {
+            method: "POST",
+            headers: { Authorization: `Bearer ${url.hash.slice(1)}`, Origin: url.origin, "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          assert.equal(response.status, 200);
+          return response.json();
+        };
+        const setEnabled = desktopNotifications => external
+          ? preferences.update({ desktopNotifications })
+          : post("/api/settings", { desktopNotifications });
+        holdNext = true;
+        const refreshing = post("/api/refresh", { force: true });
+        await started;
+        if (alreadyEnabled) await setEnabled(false);
+        now += 1000;
+        const preActivationTime = now;
+        rows = [thread("2", { updated_at: new Date(now).toISOString() }), thread("1")];
+        await setEnabled(true);
+        release();
+        await refreshing;
+        await desktop.foregroundPending;
+        const baseline = JSON.parse(await readFile(join(directory, "desktop-state.json"), "utf8"));
+        assert.equal(baseline.watermark, preActivationTime);
+        assert.equal(baseline.generation, (await preferences.document()).desktopGeneration);
+        assert.equal(deliveries.length, 0);
+
+        now += 1000;
+        rows = [thread("3", { updated_at: new Date(now).toISOString() }), ...rows];
+        await post("/api/refresh", { force: true });
+        await desktop.foregroundPending;
+        assert.deepEqual(deliveries.map(message => message.body), ["#42 Synthetic notification 3"]);
+      });
+    }
+  }
+});
+
+test("desktop preparation failures remain explicit without blocking foreground notification reads", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "notifications-prepare-http-"));
+  const logs = [];
+  const desktop = new DesktopNotifications({
+    preferences: { directory, document: async () => { throw new Error("Synthetic settings failure"); } },
+    client: new GitHubClient({ run: async () => assert.fail("Desktop requests must not run") }),
+    log: (message, options) => { logs.push({ message, ...options }); },
+    schedule: () => 0, cancel: () => {},
+  });
+  desktop.add("prepare-http");
+  const server = await startServer(new Inbox(new GitHubClient({ run: async () => http([thread()]) })), { desktop });
+  t.after(async () => {
+    await server.close();
+    await desktop.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+  const url = new URL(server.url);
+  const response = await fetch(new URL("/api/refresh", url), {
+    method: "POST",
+    headers: { Authorization: `Bearer ${url.hash.slice(1)}`, Origin: url.origin, "Content-Type": "application/json" },
+    body: "{}",
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).loaded, 1);
+  await desktop.foregroundPending;
+  assert.equal(desktop.snapshot().state, "error");
+  assert.equal(logs.length, 1);
+  assert.equal(logs[0].level, "error");
+  assert.doesNotMatch(logs[0].message, /Synthetic settings failure/);
 });
 
 test("HTTP errors remain explicit and contain no upstream response or stderr", async t => {

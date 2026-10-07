@@ -127,9 +127,9 @@ test("foreground refreshes share results with alerts at 30 seconds and backgroun
   const watcher = f.make();
   const inbox = new Inbox(watcher.client);
   t.after(() => inbox.close());
-  const since = watcher.client.sequence;
+  await watcher.prepareForeground();
   await inbox.refresh();
-  await watcher.sync({ since });
+  await watcher.sync();
   assert.equal(f.calls.length, 1);
   assert.equal(f.deliveries.length, 0);
   const time = f.advance(30_000);
@@ -158,9 +158,9 @@ test("an immediate foreground return feeds new activity to alerts without waitin
   const watcher = f.make();
   const inbox = new Inbox(watcher.client);
   t.after(() => inbox.close());
-  const since = watcher.client.sequence;
+  await watcher.prepareForeground();
   await inbox.refresh();
-  await watcher.sync({ since });
+  await watcher.sync();
   f.rows([updated("2", f.advance(1000)), thread()]);
   await inbox.refresh({ force: true });
   await watcher.sync();
@@ -181,9 +181,9 @@ test("quota-exhausting foreground responses establish silent baselines without h
       date: new Date(epoch).toUTCString(),
       "x-ratelimit-remaining": "0", "x-ratelimit-reset": String((epoch + 600_000) / 1000),
     }));
-    const since = watcher.client.sequence;
+    await watcher.prepareForeground();
     await inbox.refresh();
-    await watcher.sync({ since });
+    await watcher.sync();
     assert.equal(f.calls.length, 1);
     assert.equal(watcher.snapshot().state, "watching");
     assert.equal((await f.state()).watermark, epoch);
@@ -228,10 +228,10 @@ test("complete foreground scans can deliver across cached pages when the final r
   t.after(() => inbox.close());
   const backlog = Array.from({ length: 50 }, (_, index) => thread(String(index + 1)));
   f.response(args => args.at(-1).includes("page=1") ? http(backlog, { link: next }) : http([thread("51")]));
-  const since = watcher.client.sequence;
+  await watcher.prepareForeground();
   await inbox.refresh();
   await inbox.more();
-  await watcher.sync({ since });
+  await watcher.sync();
   const time = f.advance(30_000);
   const arrivals = Array.from({ length: 51 }, (_, index) => updated(String(100 + index), time - index));
   f.response(args => args.at(-1).includes("page=1") ? http(arrivals.slice(0, 50), { link: next })
@@ -260,10 +260,10 @@ test("quota-paused scans reject missing and stale continuations without committi
     const time = f.advance(1000);
     const arrivals = Array.from({ length: 50 }, (_, index) => updated(String(100 + index), time));
     f.response(() => http(arrivals, { link: next, "x-ratelimit-remaining": "0" }));
-    const since = watcher.client.sequence;
+    await watcher.prepareForeground();
     await inbox.refresh({ force: true });
     const before = f.calls.length;
-    await watcher.sync({ since });
+    await watcher.sync();
     assert.equal(f.calls.length, before, "a missing or stale continuation must not trigger an upstream request");
     assert.equal((await f.state()).watermark, cachedContinuation ? epoch : null);
     assert.equal((await f.state()).error.includes("rate limit"), true);
@@ -276,9 +276,9 @@ test("foreground alerts scan all new activity pages without changing the canvas'
   const watcher = f.make();
   const inbox = new Inbox(watcher.client, { query: "notification 2" });
   t.after(() => inbox.close());
-  const since = watcher.client.sequence;
+  await watcher.prepareForeground();
   await inbox.refresh();
-  await watcher.sync({ since });
+  await watcher.sync();
   const time = f.advance(30_000);
   const arrivals = Array.from({ length: 60 }, (_, index) => updated(String(index + 2), time));
   f.response(args => args.at(-1).includes("page=1") ? http(arrivals.slice(0, 50), { link: next }) :
@@ -306,9 +306,9 @@ test("a fresh first page cannot advance the watermark past arrivals hidden by an
     return http(rows.slice(offset, offset + 50), offset + 50 < rows.length
       ? { link: `<https://api.github.com/notifications?all=false&per_page=50&page=${page + 1}>; rel="next"` } : {});
   });
-  const since = watcher.client.sequence;
+  await watcher.prepareForeground();
   await inbox.refresh();
-  await watcher.sync({ since });
+  await watcher.sync();
   assert.equal(f.calls.length, 2);
   assert.equal(f.deliveries.length, 0);
 
@@ -368,10 +368,11 @@ test("closing the final panel cancels an outstanding baseline cache wait without
   assert.equal((await f.state()).watermark, null);
 });
 
-test("a watcher woken before a fresh foreground response can reuse that response for its silent baseline", async t => {
+test("a watcher can reuse a foreground response prepared for its activation generation as a silent baseline", async t => {
   const f = await fixture(t);
   let scheduled;
   const watcher = f.make({ schedule: fn => { scheduled = fn; return 0; } });
+  await watcher.prepareForeground();
   await watcher.client.page(firstPage());
   scheduled();
   await watcher.pending;
