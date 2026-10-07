@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { createContext, runInContext } from "node:vm";
+import { fileURLToPath } from "node:url";
 import { Inbox } from "../.github/extensions/github-notifications/inbox.mjs";
 import { GitHubClient } from "../.github/extensions/github-notifications/github.mjs";
 import { desktopCapabilities } from "../.github/extensions/github-notifications/notifier.mjs";
@@ -15,7 +16,7 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
 // Minimal DOM/event/timer doubles exercise the actual renderer without a browser dependency.
 async function renderer({ hidden = false, token = "a".repeat(64), readFailure = false,
   initialRows, onWrite, onFetch, onState, onFilters, initialOffline = false, release,
-  onUpdates, clipboardFailure = false, onSettings, desktopPlatform = "darwin", desktopStatus = {},
+  onUpdates, clipboardFailure = false, onSettings, retainDisabledFocus = false, desktopPlatform = "darwin", desktopStatus = {},
   storedSettings = { autoOpen: false, darkMode: null, desktopNotifications: false, desktopSound: "default" },
   appColorMode = "light", systemDark = false } = {}) {
   const calls = [];
@@ -55,7 +56,7 @@ async function renderer({ hidden = false, token = "a".repeat(64), readFailure = 
     get disabled() { return this._disabled; }
     set disabled(value) {
       this._disabled = Boolean(value);
-      if (value && document.activeElement === this) document.activeElement = document.body;
+      if (value && !retainDisabledFocus && document.activeElement === this) document.activeElement = document.body;
     }
     get hidden() { return this._hidden; }
     set hidden(value) {
@@ -194,7 +195,9 @@ async function renderer({ hidden = false, token = "a".repeat(64), readFailure = 
       return { ok: true, json: async () => ({ ...inbox.snapshot(), updates: releaseMetadata }) };
     },
   });
-  runInContext(script, context);
+  runInContext(script, context, {
+    filename: fileURLToPath(new URL("../.github/extensions/github-notifications/app.mjs", import.meta.url)),
+  });
   await settle();
   return {
     calls, document, window, ids, timers, context, inbox, patches, githubCalls, copied, media,
@@ -1202,6 +1205,37 @@ test("mark-read requires a click and removes only on confirmation", async () => 
   await marking;
   assert.equal(ui.calls.filter(call => call.path === "/api/read").length, 1);
   assert.equal(ui.document.querySelectorAll("article").length, 0);
+  assert.equal(ui.document.activeElement, ui.ids.get("search"));
+  ui.window.events.pagehide();
+});
+
+test("row reads focus the next row whether disabling a button blurs it immediately or retains focus", async () => {
+  for (const retainDisabledFocus of [false, true]) {
+    const ui = await renderer({ retainDisabledFocus, initialRows: [
+      thread("1", { updated_at: "2026-01-11T12:00:00Z" }),
+      thread("2"),
+    ] });
+    const readButton = id => ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === id);
+    const first = readButton("1");
+    first.focus();
+    await first.events.click();
+    assert.equal(ui.document.activeElement, readButton("2"));
+    assert.equal(ui.ids.get("search").value, "");
+    ui.window.events.pagehide();
+  }
+});
+
+test("a row read never steals focus moved to Search while the write is pending", async () => {
+  let release;
+  const ui = await renderer({ retainDisabledFocus: true, initialRows: [thread("1"), thread("2")],
+    onWrite: () => new Promise(resolve => { release = () => resolve("HTTP/2 205 Reset Content\r\n\r\n"); }) });
+  const button = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "1");
+  button.focus();
+  const marking = button.events.click();
+  await settle();
+  ui.ids.get("search").focus();
+  release();
+  await marking;
   assert.equal(ui.document.activeElement, ui.ids.get("search"));
   ui.window.events.pagehide();
 });

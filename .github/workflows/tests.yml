@@ -5,6 +5,7 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -15,7 +16,35 @@ concurrency:
 
 jobs:
   test:
-    name: Node.js 22
+    name: Node.js ${{ matrix.node }} (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-slim
+            node: "22"
+          - os: ubuntu-slim
+            node: "24"
+          - os: macos-latest
+            node: "24"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          package-manager-cache: false
+      - name: Run tests with source coverage
+        if: matrix.node == '22'
+        run: npm run test:coverage
+      - name: Run tests
+        if: matrix.node != '22'
+        run: npm test
+  lint:
+    name: JavaScript and workflows
     runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:
@@ -26,5 +55,47 @@ jobs:
         with:
           node-version: "22"
           package-manager-cache: false
-      - name: Run tests
-        run: node --test test/*.test.mjs
+      - name: Install development dependencies
+        run: npm ci --ignore-scripts --no-fund --no-audit
+      - name: Lint JavaScript
+        run: npm run lint
+      - name: Install verified actionlint and lint workflows
+        run: |
+          curl --fail --silent --show-error --location \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
+            --output "$RUNNER_TEMP/actionlint.tar.gz"
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $RUNNER_TEMP/actionlint.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
+          PATH="$RUNNER_TEMP:$PATH" npm run lint:workflows
+  browser:
+    name: Browser (${{ matrix.browser }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, webkit]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          package-manager-cache: false
+      - name: Install development dependencies
+        run: npm ci --ignore-scripts --no-fund --no-audit
+      - name: Install browser and system dependencies
+        run: npx playwright install --with-deps "${{ matrix.browser }}"
+      - name: Run browser and accessibility tests
+        run: npm run test:browser -- --project="${{ matrix.browser }}"
+      - name: Upload browser report and failure traces
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: browser-results-${{ matrix.browser }}
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
+          if-no-files-found: error

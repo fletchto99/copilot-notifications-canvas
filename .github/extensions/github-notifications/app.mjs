@@ -257,7 +257,7 @@ async function markRead(id) {
     readError = `Could not mark the notification as read. ${error.message || "Try again."}`;
   } finally {
     markingRead.delete(id);
-    render();
+    render(nextFocusKey);
     const current = findButton(key);
     if (current) {
       current.disabled = false;
@@ -477,7 +477,7 @@ function renderControls() {
   $("groups").setAttribute("aria-busy", String(loading));
 }
 
-function renderGroups(groups) {
+function renderGroups(groups, fallbackFocusKey) {
   // Keep focused controls and disclosure state stable across unchanged polls.
   const key = JSON.stringify(groups);
   if (key === listKey) return;
@@ -555,11 +555,11 @@ function renderGroups(groups) {
   }
   $("groups").replaceChildren(fragment);
   if (focused) {
-    (focusKey(focused) ?? $("search")).focus({ preventScroll: true });
+    (focusKey(focused) ?? focusKey(fallbackFocusKey) ?? $("search")).focus({ preventScroll: true });
   }
 }
 
-function render() {
+function render(fallbackFocusKey) {
   renderUpdates(state?.updates);
   renderControls();
   const error = readError || state?.error?.message || connectionError;
@@ -582,7 +582,7 @@ function render() {
   $("more").hidden = !state.hasMore;
   $("more").textContent = "Load more (up to 50)";
   $("more").title = state.needsRefresh ? "Refresh notifications before loading more." : "";
-  renderGroups(state.groups);
+  renderGroups(state.groups, fallbackFocusKey);
   renderControls();
   for (const time of document.querySelectorAll("time")) time.textContent = relativeTime(time.dateTime);
   $("empty").hidden = Boolean(state.groups.length);
