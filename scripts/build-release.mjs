@@ -17,6 +17,7 @@ export function embeddedAssetsPlugin(assets) {
       builder.onLoad({ filter: /[/\\]assets\.mjs$/ }, args => args.path === join(source, "assets.mjs") ? {
         contents: `import assets from "notifications:assets";
 export const assetPaths = new Set(assets.map(([path]) => path));
+export async function loadDevelopmentInfo() { return null; }
 export async function loadAssets() { return new Map(assets); }`,
         loader: "js",
       } : undefined);

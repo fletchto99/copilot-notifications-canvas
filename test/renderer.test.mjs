@@ -83,6 +83,24 @@ test("Settings combines the running version and update status in one text row be
   }
 });
 
+test("the footer shows source version and branch as text, but stays hidden for release builds", async () => {
+  assert.match(html, /<p id="development-build" hidden><\/p>/);
+  for (const development of [null, { version: "1.2.3", branch: "feature/<img-src=x>" },
+    { version: "1.2.3", branch: "detached HEAD" }, { version: "1.2.3", branch: "branch unavailable" }]) {
+    const ui = await renderer({ development });
+    const label = ui.ids.get("development-build");
+    const expected = development ? `dev (v1.2.3) ${development.branch}` : "";
+    assert.equal(label.hidden, !development);
+    assert.equal(label.textContent, expected);
+    assert.deepEqual(label.children, []);
+    await ui.ids.get("force-refresh").events.click();
+    assert.equal(label.textContent, expected);
+    await ui.fireTimer();
+    assert.equal(label.textContent, expected);
+    ui.window.events.pagehide();
+  }
+});
+
 test("update banner shows release links and copies a prompt without installing or changing settings", async () => {
   const ui = await renderer({ release: {
     status: "available", latestVersion: "0.2.0", prompt: "Synthetic safe update prompt",

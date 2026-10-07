@@ -16,7 +16,7 @@ export const settle = () => new Promise(resolve => setImmediate(resolve));
 
 // Minimal DOM/event/timer doubles exercise the actual renderer without a browser dependency.
 export async function renderer({ hidden = false, token = "a".repeat(64), readFailure = false,
-  initialRows, onWrite, onFetch, onState, onFilters, initialOffline = false, release,
+  initialRows, onWrite, onFetch, onState, onFilters, initialOffline = false, release, development = null,
   onUpdates, clipboardFailure = false, onSettings, retainDisabledFocus = false, desktopPlatform = "darwin", desktopStatus = {},
   storedSettings = { autoOpen: false, darkMode: null, desktopNotifications: false, desktopSound: "default" },
   appColorMode = "light", systemDark = false } = {}) {
@@ -182,7 +182,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       if (path === "/api/refresh") await inbox.refresh(JSON.parse(options.body));
       if (path === "/api/more") await inbox.more();
       if (path === "/api/state") {
-        const snapshot = { ...inbox.snapshot(), updates: releaseMetadata };
+        const snapshot = { ...inbox.snapshot(), updates: releaseMetadata, development };
         if (onState) await onState();
         return { ok: true, json: async () => snapshot };
       }
@@ -193,7 +193,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       }
       if (path === "/api/read") await inbox.markRead(JSON.parse(options.body));
       if (path.startsWith("/api/batch/")) inbox.batch[path.slice("/api/batch/".length)](JSON.parse(options.body));
-      return { ok: true, json: async () => ({ ...inbox.snapshot(), updates: releaseMetadata }) };
+      return { ok: true, json: async () => ({ ...inbox.snapshot(), updates: releaseMetadata, development }) };
     },
   });
   if (!process.env.NOTIFICATIONS_TEST_SCRIPT) assert.match(script, /^import \{ notificationTitle, orderedThreads \} from "\.\/model\.mjs";/);

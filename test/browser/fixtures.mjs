@@ -17,7 +17,8 @@ export const test = base.extend({
   assetFailure: [false, { option: true }],
   desktopEnabled: [false, { option: true }],
   packaged: [false, { option: true }],
-  canvas: async ({ page, context, assetFailure, desktopEnabled, packaged }, use) => {
+  development: [undefined, { option: true }],
+  canvas: async ({ page, context, assetFailure, desktopEnabled, packaged, development }, use) => {
     const root = await mkdtemp(join(tmpdir(), "notification-browser-"));
     const directory = join(root, "home", "extensions", "github-notifications", "artifacts");
     const writes = [];
@@ -81,7 +82,7 @@ export const test = base.extend({
     const log = (message, options) => (options.level === "warning" ? warnings : errors).push(message);
     try {
       server = packaged ? await startPackagedCanvas(root, run, log) : await startServer(new Inbox(client), {
-        preferences, desktop, updates,
+        preferences, desktop, updates, development,
         log,
         read: (path, options) => {
           if (assetsUnavailable && path.pathname.endsWith("/app.mjs")) {

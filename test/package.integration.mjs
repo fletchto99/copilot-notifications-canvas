@@ -100,6 +100,7 @@ test("embedded assets round-trip through the JSON loader without becoming JavaSc
   assert.deepEqual(Object.values(result.metafile.outputs).flatMap(output => output.imports), []);
   const module = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString("base64")}`);
   assert.deepEqual([...await module.loadAssets()], assets);
+  assert.equal(await module.loadDevelopmentInfo(), null);
   assert.deepEqual([...module.assetPaths], assets.map(([path]) => path));
   assert.equal(globalThis.notificationAssetExecuted, undefined);
 });
@@ -188,6 +189,10 @@ async function open(canvas, id) {
   }
   assert.equal((await fetch(new URL("/sound.mjs", result.url))).status, 404);
   assert.equal((await fetch(new URL("/model.mjs", result.url))).status, 404);
+  const response = await fetch(new URL("/api/state", url), {
+    headers: { Authorization: "Bearer " + url.hash.slice(1), Origin: url.origin },
+  });
+  assert.equal((await response.json()).development, null);
   const state = await canvas.actions.find(action => action.name === "get_state").handler({ instanceId: id });
   assert.ok(state);
   return { url: result.url, assets };

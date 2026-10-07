@@ -1,7 +1,29 @@
 import AxeBuilder from "@axe-core/playwright";
 import { test, expect } from "./fixtures.mjs";
+import { CURRENT_VERSION } from "../../src/updates.mjs";
 
 const searchName = "Search loaded notification titles, issue or PR numbers, and repositories";
+
+test.describe("development footer", () => {
+  const branch = `feature/<footer>&${"long-branch-name-".repeat(20)}`;
+  test.use({ development: { version: CURRENT_VERSION, branch } });
+
+  test("shows the version and literal branch without overflowing a narrow panel", async ({ page, canvas }) => {
+    canvas.rows.splice(1);
+    await page.setViewportSize({ width: 320, height: 800 });
+    await page.goto(canvas.url);
+    const label = page.locator("footer #development-build");
+    await expect(label).toBeVisible();
+    await expect(label).toHaveText(`dev (v${CURRENT_VERSION}) ${branch}`);
+    await expect(label.locator("*")).toHaveCount(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+    const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+    expect(results.violations).toEqual([]);
+    await page.getByRole("button", { name: "Force refresh", exact: true }).click();
+    await expect(label).toHaveText(`dev (v${CURRENT_VERSION}) ${branch}`);
+    expect(canvas.writes).toEqual([]);
+  });
+});
 
 test.describe("startup recovery", () => {
   test.use({ assetFailure: true, desktopEnabled: true });

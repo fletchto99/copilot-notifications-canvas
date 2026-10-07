@@ -603,6 +603,9 @@ function renderGroups(groups, fallbackFocusKey) {
 
 function render(fallbackFocusKey) {
   renderUpdates(state?.updates);
+  const development = state?.development;
+  $("development-build").hidden = !development;
+  $("development-build").textContent = development ? `dev (v${development.version}) ${development.branch}` : "";
   renderControls();
   const error = readError || state?.error?.message || connectionError;
   const loading = state?.status === "idle" || state?.status === "loading";
