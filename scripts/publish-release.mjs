@@ -6,6 +6,7 @@ import { validateReleaseTag } from "./check-release.mjs";
 import { verifyArchive } from "./package.mjs";
 
 const execute = promisify(execFile);
+const repository = "fletchto99/copilot-notifications-canvas";
 const runGh = async args => (await execute("gh", args, {
   timeout: 30_000, maxBuffer: 1024 * 1024, encoding: "utf8",
 })).stdout;
@@ -43,6 +44,12 @@ export async function publishRelease({ tag, sha, event, ref, directory = resolve
   }
   await run(["release", "verify", "--help"]);
   await run(["release", "verify-asset", "--help"]);
+  // Exact certificate identity avoids older gh versions' workflow-prefix matching.
+  await run(["attestation", "verify", assets[0],
+    "--repo", repository, "--hostname", "github.com",
+    "--cert-identity", `https://github.com/${repository}/.github/workflows/release.yml@${ref}`,
+    "--source-ref", ref, "--source-digest", sha, "--signer-digest", sha,
+    "--deny-self-hosted-runners", "--predicate-type", "https://slsa.dev/provenance/v1"]);
   // With assets, gh creates a draft, uploads, then publishes that exact release by ID.
   const url = (await run(["release", "create", tag, ...assets,
     "--verify-tag", "--generate-notes", "--title", tag, "--latest"])).trim();
