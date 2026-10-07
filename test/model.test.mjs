@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { filterSchema, groupThreads, normalizeThreads, notificationLink, notificationTitle, orderedThreads, validateFilters } from "../src/model.mjs";
+import { attentionCounts, attentionFilters, filterSchema, groupThreads, normalizeThreads, notificationLink, notificationTitle, orderedThreads, validateFilters } from "../src/model.mjs";
 import { thread } from "./fixtures.mjs";
 
 test("groups alphabetically while deduplicating and ordering notifications newest first, then by ID", () => {
@@ -36,6 +36,52 @@ test("group order follows the full repository name regardless of activity, input
     assert.deepEqual(groupThreads(threads, { query: "example/" }).map(group => group.repository),
       ["example/another", "example/Zebra"]);
   }
+});
+
+test("attention filters use exact notification reasons and combine with unread search", () => {
+  const reasons = ["review_requested", "mention", "team_mention", "assign", "author", "comment",
+    "subscribed", "manual", "state_change", "security_alert", "unknown", "constructor"];
+  const items = normalizeThreads(reasons.map((reason, index) => thread(String(index + 1), { reason })));
+  const expected = {
+    all: reasons, review_requested: ["review_requested"], mentioned: ["mention", "team_mention"],
+    assigned: ["assign"], participating: ["author", "comment"],
+  };
+  for (const [attention, selected] of Object.entries(expected)) {
+    const groups = groupThreads([...items, { ...items[0], id: "99", unread: false }], { query: "", attention });
+    assert.deepEqual(groups[0].items.map(item => item.reason).sort(), [...selected].sort());
+    assert.equal(groups[0].unread, selected.length);
+  }
+  assert.deepEqual(groupThreads(items, { query: "notification 3", attention: "mentioned" })[0].items.map(item => item.id), ["3"]);
+  assert.deepEqual(groupThreads(items, { query: "notification 3", attention: "assigned" }), []);
+  assert.throws(() => groupThreads(items, { query: "", attention: "invalid" }), { code: "invalid_filters" });
+});
+
+test("attention counts span all tabs and only count deduplicated unread search matches", () => {
+  const items = normalizeThreads([
+    thread("1", { reason: "review_requested" }),
+    thread("2", { reason: "mention" }),
+    thread("3", { reason: "team_mention" }),
+    thread("4", { reason: "assign" }),
+    thread("5", { reason: "author" }),
+    thread("6", { reason: "comment" }),
+    thread("7", { reason: "unknown" }),
+    thread("8", { reason: "mention", unread: false }),
+    thread("1", { reason: "mention", updated_at: "2026-01-01T00:00:00Z" }),
+  ]);
+  for (const attention of attentionFilters.map(filter => filter.value)) {
+    assert.deepEqual(attentionCounts(items, { query: "", attention }),
+      { all: 7, review_requested: 1, mentioned: 2, assigned: 1, participating: 2 });
+    const counts = attentionCounts(items, { query: " NOTIFICATION 3 ", attention });
+    assert.deepEqual(counts, { all: 1, review_requested: 0, mentioned: 1, assigned: 0, participating: 0 });
+    for (const filter of attentionFilters) {
+      const groups = groupThreads(items, { query: " NOTIFICATION 3 ", attention: filter.value });
+      assert.equal(counts[filter.value], groups.reduce((total, group) => total + group.items.length, 0));
+    }
+  }
+  assert.deepEqual(attentionCounts(items, { query: "missing" }),
+    { all: 0, review_requested: 0, mentioned: 0, assigned: 0, participating: 0 });
+  assert.equal(attentionCounts(items, { query: "WIDGETS" }).all, 7);
+  assert.equal(attentionCounts(items, { query: "#42" }).all, 7);
 });
 
 test("known API subject links become safe GitHub web links", () => {
@@ -149,7 +195,12 @@ test("filters match the public schema and reject invalid or surplus input", () =
   assert.deepEqual(validateFilters({ query: "", mode: "unread" }), { query: "", mode: "unread" });
   assert.equal(filterSchema.additionalProperties, false);
   assert.deepEqual(filterSchema.properties.mode.enum, ["unread"]);
-  for (const input of [null, [], "all", { mode: "all" }, { mode: "read" }, { query: 1 }, { query: "x".repeat(201) }, { token: "x" }]) {
+  assert.deepEqual(filterSchema.properties.attention.enum, attentionFilters.map(filter => filter.value));
+  for (const attention of filterSchema.properties.attention.enum) {
+    assert.deepEqual(validateFilters({ attention }), { attention });
+  }
+  for (const input of [null, [], "all", { mode: "all" }, { mode: "read" }, { query: 1 }, { query: "x".repeat(201) }, { token: "x" },
+    ...[null, 1, [], {}, "", "mention", "subscribed", "constructor"].map(attention => ({ attention }))]) {
     assert.throws(() => validateFilters(input), { code: "invalid_filters" });
   }
 });

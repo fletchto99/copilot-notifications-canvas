@@ -6,12 +6,21 @@ export class InboxError extends Error {
   }
 }
 
+export const attentionFilters = [
+  { value: "all", label: "All", reasons: [] },
+  { value: "review_requested", label: "Review requested", reasons: ["review_requested"] },
+  { value: "mentioned", label: "Mentioned", reasons: ["mention", "team_mention"] },
+  { value: "assigned", label: "Assigned", reasons: ["assign"] },
+  { value: "participating", label: "Participating", reasons: ["author", "comment"] },
+];
+
 export const filterSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
     mode: { type: "string", enum: ["unread"] },
     query: { type: "string", maxLength: 200 },
+    attention: { type: "string", enum: attentionFilters.map(filter => filter.value) },
   },
 };
 
@@ -19,10 +28,11 @@ export const emptySchema = { type: "object", properties: {}, additionalPropertie
 
 export function validateFilters(input) {
   if (!input || typeof input !== "object" || Array.isArray(input) ||
-      Object.keys(input).some(key => !["mode", "query"].includes(key)) ||
+      Object.keys(input).some(key => !["mode", "query", "attention"].includes(key)) ||
       (input.mode !== undefined && input.mode !== "unread") ||
-      (input.query !== undefined && (typeof input.query !== "string" || input.query.length > 200))) {
-    throw new InboxError("invalid_filters", "Only unread notifications are supported. Search must be at most 200 characters.", 400);
+      (input.query !== undefined && (typeof input.query !== "string" || input.query.length > 200)) ||
+      (input.attention !== undefined && !attentionFilters.some(filter => filter.value === input.attention))) {
+    throw new InboxError("invalid_filters", "Only unread notifications are supported. Search must be at most 200 characters. Choose a supported attention filter.", 400);
   }
   return input;
 }
@@ -114,12 +124,25 @@ export function orderedThreads(threads) {
     b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id));
 }
 
-export function groupThreads(threads, { query }) {
-  const groups = new Map();
+function searchThreads(threads, query) {
   const search = query.trim().toLocaleLowerCase();
-  for (const thread of orderedThreads(threads)) {
-    if (!thread.unread) continue;
-    if (search && !`${notificationTitle(thread)}\n${thread.repository}`.toLocaleLowerCase().includes(search)) continue;
+  return orderedThreads(threads).filter(thread => thread.unread &&
+    (!search || `${notificationTitle(thread)}\n${thread.repository}`.toLocaleLowerCase().includes(search)));
+}
+
+export function attentionCounts(threads, { query }) {
+  const matches = searchThreads(threads, query);
+  return Object.fromEntries(attentionFilters.map(({ value, reasons }) => [
+    value, value === "all" ? matches.length : matches.filter(thread => reasons.includes(thread.reason)).length,
+  ]));
+}
+
+export function groupThreads(threads, { query, attention = "all" }) {
+  const groups = new Map();
+  const filter = attentionFilters.find(filter => filter.value === attention);
+  if (!filter) throw new InboxError("invalid_filters", "Choose a supported attention filter.", 400);
+  for (const thread of searchThreads(threads, query)) {
+    if (attention !== "all" && !filter.reasons.includes(thread.reason)) continue;
     let group = groups.get(thread.repository);
     if (!group) {
       group = { repository: thread.repository, unread: 0, items: [] };

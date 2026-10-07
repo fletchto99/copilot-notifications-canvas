@@ -74,6 +74,36 @@ test("strict bounded selection requests reject unknown, forged, stale, cross-rep
   assert.deepEqual(writes, []);
 });
 
+test("repository reads respect attention and search, and filter changes invalidate even identical selections", async () => {
+  const { inbox, writes } = await fixture({
+    rows: [thread("1", { reason: "mention" }), thread("2", { reason: "review_requested" }),
+      thread("3", { reason: "team_mention" }), thread("4", { reason: "mention", repository: { full_name: "example/other" } })],
+  });
+  await inbox.setFilters({ query: "notification 1" });
+  const before = selection(inbox);
+  await inbox.setFilters({ attention: "mentioned" });
+  assert.equal(inbox.summary().matching, 1);
+  assert.throws(() => inbox.batch.start(before), { code: "selection_changed" });
+  start(inbox);
+  await assert.rejects(inbox.setFilters({ attention: "all" }), { code: "busy" });
+  await inbox.batch.done;
+  assert.deepEqual(writes, ["/notifications/threads/1"]);
+  assert.deepEqual(inbox.loadedItems().map(item => item.id), ["2", "3", "4"]);
+});
+
+test("retry excludes original batch items hidden by a new attention filter", async () => {
+  const { inbox, writes } = await fixture({
+    rows: [thread("1", { reason: "mention" }), thread("2", { reason: "review_requested" })],
+  });
+  const token = start(inbox);
+  inbox.batch.cancel(token);
+  await inbox.batch.done;
+  await inbox.setFilters({ attention: "review_requested" });
+  inbox.batch.retry(token);
+  await inbox.batch.done;
+  assert.deepEqual(writes, ["/notifications/threads/2"]);
+});
+
 test("batch controls reject malformed, missing and stale operation tokens without changing the current selection", async () => {
   const { inbox, client, writes } = await fixture();
   const unknown = { token: "00000000-0000-4000-8000-000000000000" };

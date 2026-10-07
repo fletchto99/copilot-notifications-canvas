@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { InboxError } from "./model.mjs";
 
-export function selectionKey(group, query) {
+export function selectionKey(group, filters) {
   return createHash("sha256").update(JSON.stringify([
-    group.repository, query, group.items.map(item => [item.id, item.updatedAt]),
+    group.repository, filters.query, filters.attention, group.items.map(item => [item.id, item.updatedAt]),
   ])).digest("hex");
 }
 

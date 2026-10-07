@@ -74,6 +74,66 @@ test("each snapshot loads items once and observes subsequent changes", async t =
   assert.deepEqual(updated.groups, []);
 });
 
+test("attention is panel-local, survives pagination and refresh, and returns only aggregate metadata", async t => {
+  let calls = 0;
+  const client = new GitHubClient({ run: async args => {
+    calls++;
+    return args.at(-1).includes("page=1") ?
+      http([thread("1", { reason: "review_requested" }), thread("2", { reason: "mention" })], { link: next }) :
+      http([thread("3", { reason: "review_requested" })]);
+  } });
+  const inbox = new Inbox(client);
+  const other = new Inbox(client);
+  t.after(() => { inbox.close(); other.close(); });
+  assert.equal(inbox.filters.attention, "all");
+  await inbox.refresh();
+  const filtered = await inbox.setFilters({ attention: "review_requested" });
+  assert.equal(calls, 1);
+  assert.equal(filtered.loaded, 2);
+  assert.equal(filtered.matching, 1);
+  assert.equal(filtered.attention, "review_requested");
+  assert.deepEqual(filtered.attentionCounts, { all: 2, review_requested: 1, mentioned: 1, assigned: 0, participating: 0 });
+  assert.doesNotMatch(JSON.stringify(filtered), /Synthetic|example\/|selectionKey|"groups"|"filters"/);
+  assert.equal(other.filters.attention, "all");
+  await inbox.more();
+  assert.equal(inbox.summary().matching, 2);
+  assert.equal(inbox.summary().attentionCounts.review_requested, 2);
+  assert.equal(inbox.summary().attentionCounts.all, 3);
+  await inbox.setFilters({ query: "notification 3" });
+  await inbox.refresh({ force: true });
+  assert.equal(inbox.summary().matching, 1);
+  assert.equal(inbox.summary().loaded, 3);
+  assert.deepEqual(inbox.summary().attentionCounts, { all: 1, review_requested: 1, mentioned: 0, assigned: 0, participating: 0 });
+  assert.deepEqual(inbox.filters, { mode: "unread", query: "notification 3", attention: "review_requested" });
+  await assert.rejects(inbox.setFilters({ attention: "bad" }), { code: "invalid_filters" });
+  assert.equal(inbox.filters.attention, "review_requested");
+  await inbox.setFilters({ attention: "all" });
+  assert.equal(inbox.filters.query, "notification 3");
+  const prefiltered = new Inbox(client, { attention: "mentioned" });
+  t.after(() => prefiltered.close());
+  await prefiltered.refresh();
+  assert.equal(prefiltered.summary().matching, 1);
+});
+
+test("tab counts follow cross-panel reads and retain loaded data after a failed refresh", async t => {
+  let fail = false;
+  const client = new GitHubClient({ run: async args => {
+    if (args.includes("PATCH")) return "HTTP/2 205 Reset Content\r\n\r\n";
+    return fail ? http({}, {}, 500) : http([thread("1", { reason: "mention" }), thread("2", { reason: "assign" })]);
+  } });
+  const inbox = new Inbox(client, { attention: "mentioned" });
+  const other = new Inbox(client);
+  t.after(() => { inbox.close(); other.close(); });
+  await inbox.refresh();
+  await other.refresh();
+  await other.markRead({ id: "1" });
+  assert.deepEqual(inbox.snapshot().attentionCounts, { all: 1, review_requested: 0, mentioned: 0, assigned: 1, participating: 0 });
+  fail = true;
+  await assert.rejects(inbox.refresh({ force: true }), { code: "github_http" });
+  assert.equal(inbox.summary().status, "stale");
+  assert.deepEqual(inbox.snapshot().attentionCounts, { all: 1, review_requested: 0, mentioned: 0, assigned: 1, participating: 0 });
+});
+
 test("forced refresh rechecks every loaded page before the next poll without losing search", async () => {
   let now = 1000;
   const calls = [];

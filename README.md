@@ -45,9 +45,27 @@ full procedure, verification requirements, and troubleshooting.
   Search matches titles, numbers and repositories;
   search and counts cover loaded items only. Numbers are omitted when GitHub
   does not provide a valid issue or PR link.
-- **Mark as read:** mark individual rows in any view. In **repo** mode,
-  **Mark N as read** marks only that repository's loaded items matching your search,
-  not older unloaded notifications.
+- **Attention tabs:** new panels start on **All** (all loaded unread items).
+  **Review requested** shows review requests, **Mentioned** includes personal
+  and team mentions, **Assigned** shows assignments, and **Participating**
+  shows threads you authored or commented on. These use GitHub's notification
+  reason, not a full history of your involvement; a thread's reason can change.
+  Tabs combine with search in every grouping mode and stay selected during
+  refresh and pagination. Each tab's count, such as **Review requested (3)**,
+  includes loaded unread items matching the current search, regardless of
+  which tab is selected. Use Left/Right Arrow or Home/End to switch tabs.
+  When tabs do not all fit, edge arrows scroll the strip without changing your
+  selected filter. The scrollbar stays hidden; touch and trackpad scrolling
+  still work.
+  If no loaded notifications match, **Clear filters** clears the search and
+  returns to **All** without fetching more notifications or changing read state.
+- **Mark as read:** mark individual rows in any view. In **repo** mode, groups
+  with multiple matching notifications also offer **Mark N as read**. This
+  marks only that repository's loaded items matching your attention tab and
+  search, not hidden or older unloaded notifications.
+- **Responsive layout:** panel padding and header spacing stay consistent while
+  resizing. In narrow panels, timestamps share a line with row read actions.
+  Header text, notification titles, and metadata remain visible.
 - **Refresh:** automatic checks run about every 60 seconds while the canvas is
   visible and pause while hidden. Returning to the foreground refreshes immediately.
   Longer GitHub polling intervals apply to automatic checks. Foreground returns

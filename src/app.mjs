@@ -1,9 +1,10 @@
-import { notificationTitle, orderedThreads } from "./model.mjs";
+import { attentionFilters, notificationTitle, orderedThreads } from "./model.mjs";
 
 const $ = id => document.getElementById(id);
 const token = location.hash.slice(1);
 const hasCapability = /^[a-f0-9]{64}$/.test(token);
 const collapsed = new Set();
+const attentionTabs = new Map();
 const relative = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
 let state;
 let listKey;
@@ -14,7 +15,7 @@ let timer;
 let tooltipTimer;
 let refreshStatusKey;
 let searchTimer;
-let pendingQuery;
+let pendingFilters;
 let pendingRefresh = false;
 let refreshing = false;
 let pollPromise;
@@ -400,7 +401,7 @@ async function performUpdate(path, input) {
 
 function update(path = "state", input) {
   if (path === "filters") {
-    pendingQuery = input.query;
+    pendingFilters = { ...pendingFilters, ...input };
     return flushPendingUpdates();
   }
   if (path !== "state") return blockingUpdate(path, input);
@@ -424,16 +425,16 @@ async function blockingUpdate(path, input) {
   renderControls();
   try {
     await pollPromise;
-    if (path === "filters" && pendingQuery !== undefined) {
-      input = { query: pendingQuery };
-      pendingQuery = undefined;
+    if (path === "filters" && pendingFilters) {
+      input = { ...input, ...pendingFilters };
+      pendingFilters = undefined;
       clearTimeout(searchTimer);
     }
     if (visible()) succeeded = await performUpdate(path, input);
   } finally {
     busy = false;
     refreshing = false;
-    if (!succeeded && path === "filters" && pendingQuery === undefined) pendingQuery = input.query;
+    if (!succeeded && path === "filters") pendingFilters = { ...input, ...pendingFilters };
     render();
     restoreFocus(previousFocus);
     if (succeeded || path !== "filters" || pendingRefresh) void flushPendingUpdates();
@@ -447,11 +448,13 @@ async function flushPendingUpdates() {
     pendingRefresh = false;
     return blockingUpdate("refresh", { force: true });
   }
-  if (pendingQuery === undefined) return;
-  const query = pendingQuery;
-  pendingQuery = undefined;
+  if (!pendingFilters) return;
+  const input = pendingFilters;
+  pendingFilters = undefined;
   clearTimeout(searchTimer);
-  if (query !== state?.filters.query) await blockingUpdate("filters", { query });
+  if (Object.entries(input).some(([key, value]) => value !== state?.filters[key])) {
+    await blockingUpdate("filters", input);
+  }
 }
 
 async function tick() {
@@ -512,6 +515,8 @@ function renderControls() {
     }
   }
   $("search").disabled = batchBusy || batchLocked();
+  $("clear-filters").disabled = !hasCapability || batchBusy || batchLocked();
+  for (const tab of attentionTabs.values()) tab.disabled = !hasCapability || batchBusy || batchLocked();
   $("batch-stop").disabled = batchBusy || busy || state?.batch?.status === "stopping";
   $("batch-retry").disabled = batchBusy || busy || (state?.batch?.retryAt ?? 0) > Date.now();
   $("batch-dismiss").disabled = batchBusy || busy;
@@ -570,7 +575,7 @@ function renderGroups(groups, fallbackFocusKey) {
       disclosure.setAttribute("aria-controls", rows.id);
       disclosure.setAttribute("aria-expanded", String(!rows.hidden));
       disclosure.append(element("span", "repo-name", group.label),
-        element("span", "repo-count", `${group.items.length} / ${group.unread} unread`));
+        element("span", "repo-count", `${group.unread} unread`));
       disclosure.addEventListener("click", () => {
         rows.hidden = !rows.hidden;
         if (rows.hidden) collapsed.add(group.key);
@@ -579,7 +584,7 @@ function renderGroups(groups, fallbackFocusKey) {
         $("collapse").textContent = groups.some(item => !collapsed.has(item.key)) ? "Collapse all" : "Expand all";
       });
       header.append(disclosure);
-      if (group.repository) {
+      if (group.repository && group.items.length > 1) {
         const markGroup = element("button", "repo-read", `Mark ${group.items.length} as read`);
         markGroup.type = "button";
         markGroup.dataset.focusKey = `bulk:${group.repository}`;
@@ -603,7 +608,7 @@ function renderGroups(groups, fallbackFocusKey) {
       const row = element("article", "row unread");
       const dot = element("span", "dot");
       dot.setAttribute("aria-hidden", "true");
-      const content = element("div");
+      const content = element("div", "row-content");
       const link = element("a", "title", item.title || "(Untitled notification)");
       link.href = item.url;
       link.target = "_blank";
@@ -615,8 +620,7 @@ function renderGroups(groups, fallbackFocusKey) {
       if (!group.repository) metadata.append(element("span", "repository", item.repository));
       const type = item.type.replace(/([a-z])([A-Z])/g, "$1 $2");
       metadata.append(element("span", "", item.number ? `${type} #${item.number}` : type),
-        element("span", "", item.reason.replaceAll("_", " ")),
-        element("span", "", "Unread"));
+        element("span", "", item.reason.replaceAll("_", " ")));
       if (!item.direct) metadata.append(element("span", "destination", item.label));
       content.append(metadata);
       const time = element("time", "", relativeTime(item.updatedAt));
@@ -650,7 +654,24 @@ function render(fallbackFocusKey) {
   renderControls();
   const error = readError || state?.error?.message || connectionError;
   const loading = state?.status === "idle" || state?.status === "loading";
-  const caughtUp = Boolean(state && !error && !loading && !state.filters.query && !state.groups.length);
+  const filtered = Boolean(state?.filters.query || (state && state.filters.attention !== "all"));
+  const caughtUp = Boolean(state && !error && !loading && !filtered && !state.groups.length);
+  $("clear-filters").hidden = !state || !filtered || Boolean(state.groups.length) || loading || Boolean(error);
+  const attention = state?.filters.attention ?? "all";
+  const focusedTab = [...attentionTabs.values()].find(tab => tab === document.activeElement);
+  let tabsChanged = false;
+  for (const { value, label } of attentionFilters) {
+    const tab = attentionTabs.get(value);
+    const text = state ? `${label} (${state.attentionCounts[value]})` : label;
+    const selected = String(value === attention);
+    if (tab.textContent !== text || tab.getAttribute("aria-selected") !== selected) tabsChanged = true;
+    tab.textContent = text;
+    tab.setAttribute("aria-selected", selected);
+    tab.tabIndex = (focusedTab ? tab === focusedTab : value === attention) ? 0 : -1;
+  }
+  renderAttentionOverflow();
+  if (focusedTab && tabsChanged) focusedTab.scrollIntoView({ block: "nearest", inline: "nearest" });
+  $("attention-panel").setAttribute("aria-labelledby", `attention-${attention}`);
   $("empty-symbol").hidden = caughtUp;
   $("count").hidden = caughtUp;
   $("notice").hidden = !error;
@@ -662,8 +683,8 @@ function render(fallbackFocusKey) {
     }
     return;
   }
-  if (document.activeElement !== $("search") && pendingQuery === undefined) $("search").value = state.filters.query;
-  $("count").textContent = `${state.unread} unread${state.filters.query ? ` \u00b7 ${state.matching} matching` : ""}`;
+  if (document.activeElement !== $("search") && pendingFilters?.query === undefined) $("search").value = state.filters.query;
+  $("count").textContent = `${state.unread} unread${filtered ? ` \u00b7 ${state.matching} matching` : ""}`;
   $("more").hidden = !state.hasMore;
   $("more").textContent = "Load more (up to 50)";
   $("more").title = state.needsRefresh ? "Refresh notifications before loading more." : "";
@@ -678,14 +699,76 @@ function render(fallbackFocusKey) {
   $("empty").hidden = Boolean(state.groups.length);
   $("empty-title").textContent = error ? "Your inbox is unavailable" :
     loading ? "Loading your inbox" :
-    state.filters.query ? "No matches in loaded notifications" : "All caught up \u{1F389}";
+    filtered ? "No matches in loaded notifications" : "All caught up \u{1F389}";
   $("empty-description").textContent = error ? "Resolve the message above. This view retries automatically while visible when the retry time arrives." :
+    attention !== "all" ? "Try another attention filter or search, or load more notifications." :
     state.filters.query ? "Try another title, number or repository, or load more notifications." :
     loading ? "Using your existing GitHub CLI sign-in." :
     groupBy === "repo" ? "New notifications will appear here, grouped by repository." :
     groupBy === "date" ? "New notifications will appear here, grouped by date." :
     "New notifications will appear here, newest first.";
   renderBatch();
+}
+
+function renderAttentionOverflow() {
+  const tabs = $("attention-tabs");
+  const previous = $("attention-previous");
+  const next = $("attention-next");
+  const focused = document.activeElement;
+  // Measure against the full strip so the arrows cannot keep themselves visible.
+  const overflow = tabs.scrollWidth > $("attention-navigation").clientWidth + 1;
+  previous.hidden = next.hidden = !overflow;
+  // aria-disabled keeps keyboard focus on an arrow when scrolling reaches an end.
+  previous.setAttribute("aria-disabled", String(!overflow || tabs.scrollLeft <= 1));
+  next.setAttribute("aria-disabled", String(!overflow || tabs.scrollWidth - tabs.clientWidth - tabs.scrollLeft <= 1));
+  if (!overflow && (focused === previous || focused === next)) {
+    attentionTabs.get(state?.filters.attention ?? "all").focus({ preventScroll: true });
+  }
+}
+
+for (const [id, direction] of [["attention-previous", -1], ["attention-next", 1]]) {
+  $(id).addEventListener("click", () => {
+    if ($(id).hidden || $(id).getAttribute("aria-disabled") === "true") return;
+    const tabs = $("attention-tabs");
+    tabs.scrollBy({ left: direction * tabs.clientWidth * 0.8 });
+    renderAttentionOverflow();
+  });
+}
+$("attention-tabs").addEventListener("scroll", renderAttentionOverflow, { passive: true });
+
+function activateAttention(value) {
+  for (const [key, tab] of attentionTabs) tab.tabIndex = key === value ? 0 : -1;
+  attentionTabs.get(value).scrollIntoView({ block: "nearest", inline: "nearest" });
+  return update("filters", { attention: value });
+}
+
+for (const [index, filter] of attentionFilters.entries()) {
+  const tab = element("button", "attention-tab", filter.label);
+  tab.id = `attention-${filter.value}`;
+  tab.type = "button";
+  tab.setAttribute("role", "tab");
+  tab.setAttribute("aria-controls", "attention-panel");
+  tab.setAttribute("aria-selected", String(filter.value === "all"));
+  tab.tabIndex = filter.value === "all" ? 0 : -1;
+  tab.disabled = !hasCapability;
+  tab.addEventListener("click", () => {
+    if (!tab.disabled) return activateAttention(filter.value);
+  });
+  tab.addEventListener("keydown", event => {
+    if (tab.disabled) return;
+    let next;
+    if (event.key === "ArrowRight") next = (index + 1) % attentionFilters.length;
+    else if (event.key === "ArrowLeft") next = (index + attentionFilters.length - 1) % attentionFilters.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = attentionFilters.length - 1;
+    else return;
+    event.preventDefault();
+    const filter = attentionFilters[next];
+    attentionTabs.get(filter.value).focus();
+    return activateAttention(filter.value);
+  });
+  attentionTabs.set(filter.value, tab);
+  $("attention-tabs").append(tab);
 }
 
 for (const [id, action] of [["batch-stop", "cancel"],
@@ -744,11 +827,17 @@ for (const [control, anchor] of tooltipControls) {
   $(control).addEventListener("focus", () => showTooltip(anchor));
 }
 $("search").addEventListener("input", () => {
-  pendingQuery = $("search").value;
+  pendingFilters = { ...pendingFilters, query: $("search").value };
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => {
     void flushPendingUpdates();
   }, 250);
+});
+$("clear-filters").addEventListener("click", () => {
+  if ($("clear-filters").disabled) return;
+  $("search").value = "";
+  attentionTabs.get("all").scrollIntoView({ block: "nearest", inline: "nearest" });
+  return update("filters", { query: "", attention: "all" });
 });
 $("collapse").addEventListener("click", () => {
   const groups = displayGroups();
@@ -786,6 +875,9 @@ observer.observe(document.documentElement);
 const themeObserver = new MutationObserver(renderTheme);
 themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-color-mode"] });
 themeObserver.observe(document.body, { attributes: true, attributeFilter: ["data-color-mode"] });
+const attentionObserver = new ResizeObserver(renderAttentionOverflow);
+attentionObserver.observe($("attention-navigation"));
+for (const tab of attentionTabs.values()) attentionObserver.observe(tab);
 systemTheme.addEventListener("change", renderTheme);
 renderTheme();
 window.addEventListener("pagehide", () => {
@@ -797,6 +889,8 @@ window.addEventListener("pagehide", () => {
   for (const controller of requestControllers) controller.abort();
   observer.disconnect();
   themeObserver.disconnect();
+  attentionObserver.disconnect();
+  $("attention-tabs").removeEventListener("scroll", renderAttentionOverflow);
   systemTheme.removeEventListener("change", renderTheme);
 });
 if (hasCapability) {

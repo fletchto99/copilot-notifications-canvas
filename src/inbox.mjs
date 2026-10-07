@@ -1,11 +1,11 @@
 import { firstPage, RETRY_MS } from "./github.mjs";
-import { groupThreads, InboxError, orderedThreads, validateFilters } from "./model.mjs";
+import { attentionCounts, groupThreads, InboxError, orderedThreads, validateFilters } from "./model.mjs";
 import { ReadBatch, selectionKey } from "./batch.mjs";
 
 export class Inbox {
   constructor(client, input = {}) {
     this.client = client;
-    this.filters = { mode: "unread", query: "", ...validateFilters(input) };
+    this.filters = { mode: "unread", query: "", attention: "all", ...validateFilters(input) };
     this.pages = [];
     this.busy = false;
     this.reading = new Set();
@@ -27,7 +27,7 @@ export class Inbox {
 
   groups(items = this.loadedItems()) {
     return groupThreads(items, this.filters).map(group =>
-      ({ ...group, selectionKey: selectionKey(group, this.filters.query) }));
+      ({ ...group, selectionKey: selectionKey(group, this.filters) }));
   }
 
   snapshot() {
@@ -41,6 +41,7 @@ export class Inbox {
       loaded: items.length,
       unread: items.length,
       matching: groups.reduce((count, group) => count + group.items.length, 0),
+      attentionCounts: attentionCounts(items, this.filters),
       hasMore: Boolean(this.pages.at(-1)?.next),
       needsRefresh: this.needsRefresh,
       lastFetchedAt: this.pages.length ? Math.min(...this.pages.map(page => page.fetchedAt)) : null,
@@ -53,7 +54,8 @@ export class Inbox {
   summary() {
     const { filters, groups, batch, ...state } = this.snapshot();
     const { repository, token, ...batchCounts } = batch ?? {};
-    return { ...state, batch: batch ? batchCounts : null, mode: filters.mode, searchActive: Boolean(filters.query), repositories: groups.length };
+    return { ...state, batch: batch ? batchCounts : null, mode: filters.mode, attention: filters.attention,
+      searchActive: Boolean(filters.query), repositories: groups.length };
   }
 
   async execute(operation, source = "refresh") {
@@ -129,7 +131,7 @@ export class Inbox {
     validateFilters(input);
     if (this.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
     if (this.busy) throw new InboxError("busy", "An inbox request is already running.", 409);
-    if (this.batch.locked) throw new InboxError("busy", "Finish or cancel the repository batch before changing search.", 409);
+    if (this.batch.locked) throw new InboxError("busy", "Finish or cancel the repository batch before changing filters.", 409);
     this.filters = { ...this.filters, ...input };
     return this.summary();
   }
