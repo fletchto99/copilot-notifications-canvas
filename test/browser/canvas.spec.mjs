@@ -125,6 +125,72 @@ test("refresh preserves keyboard focus and collapsed repository state", async ({
   await expect(page.getByRole("link", { name: "Changed during refresh", exact: true })).toBeVisible();
 });
 
+test("the toolbar refresh icon shows the current update age on hover and keyboard focus", async ({ page, canvas }) => {
+  canvas.rows.splice(1);
+  await page.setViewportSize({ width: 320, height: 800 });
+  const initialResponse = page.waitForResponse(response => response.url().endsWith("/api/refresh"));
+  await page.goto(canvas.url);
+  const initial = await (await initialResponse).json();
+  const refresh = page.getByRole("button", { name: "Force refresh", exact: true });
+  await expect(refresh).toHaveAttribute("aria-busy", "false");
+  await expect(page.locator(".toolbar > #force-refresh + #settings")).toHaveCount(1);
+  await expect(refresh.locator("svg")).toHaveCount(1);
+  await expect(refresh).toHaveText("");
+  await expect(page.locator("#updated, footer button")).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+
+  canvas.advance(23_000);
+  await page.clock.setFixedTime(new Date(initial.lastFetchedAt + 23_000));
+  await refresh.hover();
+  await expect(refresh).toHaveAttribute("title", "Last updated 23 seconds ago");
+  canvas.advance(1000);
+  await page.clock.setFixedTime(new Date(initial.lastFetchedAt + 24_000));
+  await refresh.focus();
+  await expect(refresh).toHaveAttribute("title", "Last updated 24 seconds ago");
+  await expect(refresh).toHaveAccessibleDescription("Last updated 24 seconds ago");
+  const requestCount = canvas.requests.length;
+  canvas.rows[0].subject.title = "Updated from the toolbar";
+  await refresh.press("Enter");
+  await expect(page.getByRole("link", { name: "Updated from the toolbar", exact: true })).toBeVisible();
+  await expect(refresh).toHaveAttribute("aria-busy", "false");
+  await expect(refresh).toHaveAttribute("title", "Last updated 0 seconds ago");
+  await expect(refresh).toBeFocused();
+  await expect(refresh.locator("svg")).toHaveCount(1);
+  expect(canvas.requests.length).toBe(requestCount + 1);
+  expect(canvas.writes).toEqual([]);
+});
+
+test("the refresh icon exposes pending state, preserves queued clicks, and respects reduced motion", async ({ page, canvas }) => {
+  canvas.rows.splice(1);
+  await page.goto(canvas.url);
+  const refresh = page.getByRole("button", { name: "Force refresh", exact: true });
+  await expect(refresh).toHaveAttribute("aria-busy", "false");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const before = canvas.requests.length;
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  canvas.setRequestHook(args => args.at(-1).startsWith("/notifications") ? held : undefined);
+  try {
+    await refresh.click();
+    await expect(refresh).toHaveAttribute("aria-busy", "true");
+    await expect(refresh).toHaveAttribute("title", /^Refreshing\. Last updated /);
+    await expect(refresh).toBeEnabled();
+    await expect(refresh.locator("svg")).toHaveCSS("animation-name", "none");
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    await expect(refresh.locator("svg")).toHaveCSS("animation-name", "refresh-spin");
+    await refresh.click();
+    await expect(refresh).toHaveAttribute("title", /^Refresh queued\. Last updated /);
+    canvas.setRequestHook(undefined);
+    release();
+    await expect(refresh).toHaveAttribute("aria-busy", "false");
+    await expect(refresh.locator("svg")).toHaveCount(1);
+    expect(canvas.requests.length).toBe(before + 2);
+    expect(canvas.writes).toEqual([]);
+  } finally {
+    release();
+  }
+});
+
 test("foreground checks use a 30-second interval, pause while hidden, and refresh immediately on return", async ({ page, canvas }) => {
   canvas.rows.splice(1);
   const initialResponse = page.waitForResponse(response => response.url().endsWith("/api/refresh"));
@@ -132,7 +198,7 @@ test("foreground checks use a 30-second interval, pause while hidden, and refres
   const initial = await (await initialResponse).json();
   await expect(page.locator(".row")).toHaveCount(1);
   expect(initial.nextRefreshAt - initial.lastFetchedAt).toBe(30_000);
-  await expect(page.locator("#updated")).toContainText(/Next check in \d+ sec/);
+  await expect(page.locator("#force-refresh")).toHaveAttribute("title", /Last updated \d+ seconds? ago/);
   const notificationRequests = () => canvas.requests.filter(path => path.startsWith("/notifications")).length;
   expect(notificationRequests()).toBe(1);
 

@@ -51,8 +51,10 @@ full procedure, verification requirements, and troubleshooting.
 - **Refresh:** automatic checks run about every 30 seconds while the canvas is
   visible and pause while hidden. Returning to the foreground refreshes immediately.
   Longer GitHub polling intervals apply to automatic checks. Foreground returns
-  and **Force refresh** in the footer check loaded pages without waiting for the
-  polling interval, but cannot bypass rate limits or error retry waits.
+  and the **Force refresh** icon immediately left of **Settings** check loaded
+  pages without waiting for the polling interval, but cannot bypass rate limits
+  or error retry waits. Its tooltip reports how many seconds have passed since
+  the last successful update.
   When desktop alerts are enabled, foreground checks feed the same results to
   the desktop watcher. It falls back to checking about every two minutes while
   the canvas is hidden; the OS controls when alerts appear.

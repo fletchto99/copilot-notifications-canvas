@@ -36,7 +36,7 @@ test("enabled toggle rows keep neutral text and borders while the switch indicat
   assert.match(styles, /:focus-visible \{ outline: 2px solid var\(--focus\); outline-offset: 3px; \}/);
 });
 
-test("GitHub inbox is an accessible icon link immediately before Settings in the toolbar", () => {
+test("GitHub inbox is an accessible icon link before Refresh and Settings in the toolbar", () => {
   const link = html.match(/<a\b([^>]*\bid="open-inbox"[^>]*)>([\s\S]*?)<\/a>/);
   assert.ok(link);
   const [, attributes, content] = link;
@@ -49,7 +49,7 @@ test("GitHub inbox is an accessible icon link immediately before Settings in the
   assert.doesNotMatch(attributes, /\bhidden\b|\btabindex=/);
   assert.match(content, /<svg\b[^>]*aria-hidden="true"[^>]*focusable="false"/);
   assert.equal(content.replace(/<[^>]*>/g, "").trim(), "");
-  assert.match(html, /<div class="toolbar">\s*<label class="search">[\s\S]*?<\/label>\s*<a id="open-inbox"[^>]*>[\s\S]*?<\/a>\s*<details id="settings"/);
+  assert.match(html, /<div class="toolbar">\s*<label class="search">[\s\S]*?<\/label>\s*<a id="open-inbox"[^>]*>[\s\S]*?<\/a>\s*<button id="force-refresh"[^>]*>[\s\S]*?<\/button>\s*<details id="settings"/);
   assert.equal([...html.matchAll(/href="https:\/\/github\.com\/notifications"/g)].length, 1);
 });
 

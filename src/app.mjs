@@ -456,11 +456,19 @@ async function tick() {
   }
 }
 
+function renderRefreshStatus() {
+  const fetchedAt = state?.lastFetchedAt ?? null;
+  const seconds = fetchedAt === null ? null : Math.floor(Math.max(0, Date.now() - fetchedAt) / 1000);
+  const updated = seconds === null ? "Not updated yet" : `Last updated ${seconds} second${seconds === 1 ? "" : "s"} ago`;
+  const progress = pendingRefresh ? "Refresh queued. " : refreshing ? "Refreshing. " : "";
+  $("force-refresh").title = progress + updated;
+  $("force-refresh").setAttribute("aria-busy", String(pendingRefresh || refreshing));
+}
+
 function renderControls() {
   const loading = busy || state?.status === "loading" || markingRead.size > 0 || batchBusy || batchLocked();
   const waiting = state && Date.now() < state.nextRefreshAt;
-  $("force-refresh").textContent = pendingRefresh ? "Refresh queued..." : refreshing ? "Refreshing..." : "Force refresh";
-  $("force-refresh").setAttribute("aria-busy", String(pendingRefresh || refreshing));
+  renderRefreshStatus();
   $("more").disabled = loading || state?.needsRefresh || Boolean(state?.error && waiting);
   for (const button of $("groups").querySelectorAll("button")) {
     if (!button.dataset.disclosure) button.disabled = loading || markingRead.has(button.dataset.threadId);
@@ -644,13 +652,6 @@ function render(fallbackFocusKey) {
     groupBy === "repo" ? "New notifications will appear here, grouped by repository." :
     groupBy === "date" ? "New notifications will appear here, grouped by date." :
     "New notifications will appear here, newest first.";
-  const fetched = state.lastFetchedAt ? `Checked ${relativeTime(new Date(state.lastFetchedAt).toISOString())} \u00b7 ` : "";
-  const seconds = Math.ceil(Math.max(0, state.nextRefreshAt - Date.now()) / 1000);
-  const next = seconds ? `Next check in ${seconds < 60 ? `${seconds} sec` : `${Math.ceil(seconds / 60)} min`}` : "Next check soon";
-  $("updated").textContent = `${fetched}${loading ? "Checking..." : next}`;
-  const checkedAt = state.lastFetchedAt ? `Last checked ${new Date(state.lastFetchedAt).toLocaleString()}. ` : "";
-  const nextAt = state.nextRefreshAt ? `Next check ${new Date(state.nextRefreshAt).toLocaleString()}. ` : "";
-  $("updated").title = `${checkedAt}${nextAt}Automatic refresh runs only while this view is visible.`;
   renderBatch();
 }
 
@@ -701,6 +702,8 @@ $("force-refresh").addEventListener("click", () => {
   renderControls();
   return flushPendingUpdates();
 });
+$("force-refresh").addEventListener("pointerenter", renderRefreshStatus);
+$("force-refresh").addEventListener("focus", renderRefreshStatus);
 $("search").addEventListener("input", () => {
   pendingQuery = $("search").value;
   clearTimeout(searchTimer);
