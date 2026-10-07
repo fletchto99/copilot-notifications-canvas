@@ -11,6 +11,24 @@ const source = fileURLToPath(new URL("../.github/extensions/github-notifications
 const execute = promisify(execFile);
 const nodeOptions = { bundle: true, platform: "node", format: "esm", target: "node22", minify: true, write: false };
 
+export function embeddedAssetsPlugin(assets) {
+  return {
+    name: "embedded-assets",
+    setup(builder) {
+      builder.onLoad({ filter: /[/\\]assets\.mjs$/ }, args => args.path === join(source, "assets.mjs") ? {
+        contents: 'import assets from "notifications:assets"; export async function loadAssets() { return new Map(assets); }',
+        loader: "js",
+      } : undefined);
+      builder.onResolve({ filter: /^notifications:assets$/ }, () => ({
+        path: "assets", namespace: "notification-assets",
+      }));
+      builder.onLoad({ filter: /^assets$/, namespace: "notification-assets" }, () => ({
+        contents: JSON.stringify(assets), loader: "json",
+      }));
+    },
+  };
+}
+
 export async function buildRelease({ tag, directory = resolve("dist") }) {
   validateReleaseTag(tag);
   await mkdir(directory, { recursive: true });
@@ -29,15 +47,7 @@ export async function buildRelease({ tag, directory = resolve("dist") }) {
     const runtime = await build({
       ...nodeOptions, entryPoints: [join(source, "extension.mjs")],
       external: ["@github/copilot-sdk/extension"], metafile: true,
-      plugins: [{
-        name: "embedded-assets",
-        setup(builder) {
-          builder.onLoad({ filter: /[/\\]assets\.mjs$/ }, args => args.path === join(source, "assets.mjs") ? {
-            contents: `export async function loadAssets() { return new Map(${JSON.stringify(assets)}); }`,
-            loader: "js",
-          } : undefined);
-        },
-      }],
+      plugins: [embeddedAssetsPlugin(assets)],
     });
     const imports = Object.values(runtime.metafile.outputs).flatMap(output => output.imports);
     if (imports.some(item => !item.path.startsWith("node:") && item.path !== "@github/copilot-sdk/extension")) {

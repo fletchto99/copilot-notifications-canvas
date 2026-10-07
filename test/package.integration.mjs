@@ -5,12 +5,36 @@ import { mkdir, readFile, readdir, symlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { build } from "esbuild";
 import { CURRENT_VERSION } from "../.github/extensions/github-notifications/updates.mjs";
+import { embeddedAssetsPlugin } from "../scripts/build-release.mjs";
 import { encodeBundle, inspectBundle, loadPackage, verifyArchive } from "../scripts/package.mjs";
 import { home } from "./install-fixtures.mjs";
 
 const execute = promisify(execFile);
 const tag = `v${CURRENT_VERSION}`;
+
+test("embedded assets round-trip through the JSON loader without becoming JavaScript", async () => {
+  const samples = [
+    'quotes: " \\ \' ` ${globalThis.notificationAssetExecuted = true}',
+    '</script><script>globalThis.notificationAssetExecuted = true</script>',
+    '"); globalThis.notificationAssetExecuted = true; //',
+    "line\u2028separator\u2029paragraph",
+    "control characters: \0\b\f\n\r\t",
+    "lone surrogate: \ud800",
+  ];
+  const assets = samples.map((body, index) => [`/${index}`, { body, type: "text/plain" }]);
+  const result = await build({
+    entryPoints: [fileURLToPath(new URL("../.github/extensions/github-notifications/assets.mjs", import.meta.url))],
+    bundle: true, platform: "node", format: "esm", target: "node22", minify: true,
+    write: false, metafile: true, plugins: [embeddedAssetsPlugin(assets)],
+  });
+  assert.ok(Object.hasOwn(result.metafile.inputs, "notification-assets:assets"));
+  assert.deepEqual(Object.values(result.metafile.outputs).flatMap(output => output.imports), []);
+  const module = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString("base64")}`);
+  assert.deepEqual([...await module.loadAssets()], assets);
+  assert.equal(globalThis.notificationAssetExecuted, undefined);
+});
 
 test("the published archive installs and upgrades a self-contained provider with working minified assets", { timeout: 60_000 }, async t => {
   const root = await home(t);
