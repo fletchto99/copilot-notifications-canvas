@@ -25,14 +25,14 @@ export class Inbox {
     return orderedThreads(this.pages.flatMap(page => page.items)).filter(item => item.unread);
   }
 
-  groups() {
-    return groupThreads(this.loadedItems(), this.filters).map(group =>
+  groups(items = this.loadedItems()) {
+    return groupThreads(items, this.filters).map(group =>
       ({ ...group, selectionKey: selectionKey(group, this.filters.query) }));
   }
 
   snapshot() {
     const items = this.loadedItems();
-    const groups = this.groups();
+    const groups = this.groups(items);
     return {
       filters: { ...this.filters },
       status: this.busy ? "loading" : this.error ? (this.pages.length ? "stale" : "error") :

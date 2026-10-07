@@ -8,10 +8,17 @@ import { validSound } from "./notifier.mjs";
 import { acquireLock } from "./lock.mjs";
 
 const MAX_SETTINGS_BYTES = 16_384;
-const groupingModes = ["none", "repo", "date"];
-const booleanSettings = ["autoOpen", "desktopNotifications"];
+const booleanValue = value => typeof value === "boolean";
+const settingValidators = {
+  autoOpen: booleanValue,
+  desktopNotifications: booleanValue,
+  darkMode: value => value === null || booleanValue(value),
+  desktopSound: validSound,
+  groupBy: value => ["none", "repo", "date"].includes(value),
+};
 const settingsValue = data => ({
-  ...Object.fromEntries(booleanSettings.map(key => [key, data[key] ?? false])),
+  autoOpen: data.autoOpen ?? false,
+  desktopNotifications: data.desktopNotifications ?? false,
   darkMode: data.darkMode ?? null,
   desktopSound: data.desktopSound ?? "default",
   groupBy: data.groupBy ?? "repo",
@@ -33,11 +40,8 @@ export class Preferences {
       if (!stat.isFile() || stat.size > MAX_SETTINGS_BYTES) throw new Error("Invalid settings file");
       const data = JSON.parse(await file.readFile("utf8"));
       if (!data || typeof data !== "object" || Array.isArray(data) ||
-          booleanSettings.some(key => data[key] !== undefined && typeof data[key] !== "boolean") ||
-          (data.desktopSound !== undefined && !validSound(data.desktopSound)) ||
-          (data.desktopGeneration !== undefined && typeof data.desktopGeneration !== "string") ||
-          (data.darkMode !== undefined && data.darkMode !== null && typeof data.darkMode !== "boolean") ||
-          (data.groupBy !== undefined && !groupingModes.includes(data.groupBy))) {
+          Object.entries(settingValidators).some(([key, valid]) => data[key] !== undefined && !valid(data[key])) ||
+          (data.desktopGeneration !== undefined && typeof data.desktopGeneration !== "string")) {
         throw new Error("Invalid settings object");
       }
       return data;
@@ -57,11 +61,8 @@ export class Preferences {
   async update(input) {
     if (!input || typeof input !== "object" || Array.isArray(input) ||
         Object.keys(input).length === 0 ||
-        Object.keys(input).some(key => ![...booleanSettings, "darkMode", "desktopSound", "groupBy"].includes(key)) ||
-        booleanSettings.some(key => Object.hasOwn(input, key) && typeof input[key] !== "boolean") ||
-        (Object.hasOwn(input, "darkMode") && input.darkMode !== null && typeof input.darkMode !== "boolean") ||
-        (Object.hasOwn(input, "desktopSound") && !validSound(input.desktopSound)) ||
-        (Object.hasOwn(input, "groupBy") && !groupingModes.includes(input.groupBy))) {
+        Object.keys(input).some(key => !Object.hasOwn(settingValidators, key)) ||
+        Object.entries(settingValidators).some(([key, valid]) => Object.hasOwn(input, key) && !valid(input[key]))) {
       throw new InboxError("invalid_settings", "Settings accept autoOpen and desktopNotifications booleans, darkMode as a boolean or null, desktopSound as a supported sound name, and groupBy set to none, repo, or date.", 400);
     }
     const lockPath = join(this.directory, ".settings.lock");

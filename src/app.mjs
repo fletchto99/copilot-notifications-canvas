@@ -235,8 +235,6 @@ function closeSettings(focus = false) {
 
 async function markRead(id) {
   if (!visible() || busy || batchBusy || batchLocked() || markingRead.size) return;
-  const findButton = key => [...$("groups").querySelectorAll("[data-focus-key]")]
-    .find(node => node.dataset.focusKey === key);
   const key = `read:${id}`;
   const index = displayGroups().flatMap(group => group.items).findIndex(item => item.id === id);
   const previousFocus = document.activeElement;
@@ -244,7 +242,7 @@ async function markRead(id) {
   markingRead.add(id);
   renderControls();
   readError = "";
-  const button = findButton(key);
+  const button = focusKey(key);
   if (button) {
     button.disabled = true;
     button.textContent = "Marking...";
@@ -261,12 +259,12 @@ async function markRead(id) {
   } finally {
     markingRead.delete(id);
     render(nextFocusKey);
-    const current = findButton(key);
+    const current = focusKey(key);
     if (current) {
       current.disabled = false;
       current.textContent = "Mark as read";
     }
-    restoreFocus(previousFocus, nextFocusKey ? findButton(nextFocusKey) : $("search"));
+    restoreFocus(previousFocus, nextFocusKey ? focusKey(nextFocusKey) : $("search"));
     void flushPendingUpdates();
     schedule();
   }

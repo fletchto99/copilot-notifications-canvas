@@ -51,6 +51,26 @@ test("search is local, read items are excluded, and summaries never contain pers
   assert.equal(Object.hasOwn(inbox, "activityWatermark"), false);
 });
 
+test("each snapshot loads items once and observes subsequent changes", async t => {
+  const inbox = new Inbox(new GitHubClient({ run: async () => http([thread()]) }));
+  t.after(() => inbox.close());
+  await inbox.refresh();
+  const loadedItems = t.mock.method(inbox, "loadedItems");
+  const snapshot = inbox.snapshot();
+  assert.equal(loadedItems.mock.callCount(), 1);
+  assert.equal(snapshot.loaded, 1);
+  assert.equal(snapshot.matching, 1);
+  assert.deepEqual(snapshot.groups, inbox.groups());
+
+  loadedItems.mock.resetCalls();
+  inbox.onRead("1");
+  const updated = inbox.snapshot();
+  assert.equal(loadedItems.mock.callCount(), 1);
+  assert.equal(updated.loaded, 0);
+  assert.equal(updated.matching, 0);
+  assert.deepEqual(updated.groups, []);
+});
+
 test("forced refresh rechecks every loaded page before the next poll without losing search", async () => {
   let now = 1000;
   const calls = [];
