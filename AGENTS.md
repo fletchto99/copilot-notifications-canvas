@@ -143,11 +143,19 @@ changing SDK wiring, consult the installed SDK guide/types through
 provider/log. Use `extensionId: project:github-notifications` when needed to
 select the local provider. Report when real-host validation is unavailable.
 
-The [cloud-agent setup workflow](.github/workflows/copilot-setup-steps.yml)
-preinstalls development tools for Copilot cloud sessions, not local app/CLI
-sessions. Keep its Node version, action pins, browser installation, and verified
-`actionlint` version aligned with the test workflow. Setup prepares tools; the
-agent still selects and runs the checks relevant to its changes.
+The shared [Copilot setup workflow](.github/workflows/copilot-setup-steps.yml)
+preinstalls development tools for cloud-agent sessions and code reviews, not
+local app/CLI sessions. It does not install browser binaries or system
+libraries. Install those on demand using the command above when the task needs
+browser tests; report any network or permission limitations explicitly. Keep
+the workflow's Node version, action pins, and verified `actionlint` version
+aligned with the test workflow. Setup prepares tools; the agent still selects
+and runs the checks relevant to its task.
+
+Browser CI uses a digest-pinned Playwright image with browsers and system
+libraries already installed. When updating Playwright, update the image's
+version and verified digest in `.github/workflows/tests.yml` together with the
+locked npm dependency. Preserve both browser engines and packaged checks.
 
 Documentation-only changes do not need runtime tests unless they affect a
 tested contract. Check paths, commands, and consistency; report which checks

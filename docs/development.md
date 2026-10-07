@@ -57,22 +57,35 @@ system libraries. Use `-- --project=webkit` with `npm run test:browser` to run o
 engine.
 
 See the [test workflow](../.github/workflows/tests.yml) for platform coverage and
-required checks. PR/main CI validates packaging but never publishes releases.
+required checks. Browser CI runs both engines in the official Playwright image,
+which includes browser binaries and system libraries; it does not run APT or
+download browsers during each job. The image is pinned by version and digest.
+Update both pins whenever the locked `@playwright/test` version changes; the
+workflow tests check that the versions match. PR/main CI validates packaging
+but never publishes releases.
 Tests use synthetic GitHub responses and isolated settings: no sign-in, live
 read updates, or OS notifications. SDK stubs do not verify compatibility with a
 specific Copilot build; reload and inspect the real extension after SDK changes.
 
-## Copilot cloud agent
+## Copilot cloud agent and code review
 
 [Copilot setup steps](../.github/workflows/copilot-setup-steps.yml) prepare an
 Ubuntu 24.04 environment with Node.js 22, locked development dependencies,
-Chromium and WebKit with their system libraries, and checksum-verified
-`actionlint`. The workflow checks tool availability without running the test
-suite, installing the extension, or publishing a release. It needs no
-notification credentials or separately installed Copilot SDK.
+and checksum-verified `actionlint`. Cloud-agent sessions and code reviews share
+this lightweight setup, without a separate review workflow. It checks tool
+availability without running the test suite, installing the extension, or
+publishing a release. It needs no notification credentials or separately
+installed Copilot SDK.
 
-Copilot uses these steps once the workflow is on the default branch. They do
-not configure local Copilot app/CLI sessions. Manual runs and path-filtered
+Setup does not install browser binaries or system libraries. For tasks needing
+browser validation, run the Playwright installation command in
+[Tests and checks](#tests-and-checks) on demand. Downloads need network access,
+and Linux system libraries may require installation permission; report any
+environment restrictions rather than treating unrun tests as passing. Browser
+and accessibility validation still runs in CI's pre-provisioned container.
+
+Copilot uses the shared setup once the workflow is on the default branch. It
+does not configure local Copilot app/CLI sessions. Manual runs and path-filtered
 pull-request/main runs validate setup when the workflow or dependency manifests
 change; the agent still runs the checks relevant to its task.
 
