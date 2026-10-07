@@ -63,8 +63,11 @@ Use the same `COPILOT_HOME` for an upgrade as for the original installation.
    On macOS, replace `sha256sum -c SHA256SUMS` with
    `shasum -a 256 -c SHA256SUMS`. On Windows, use a shell with `tar` and a
    SHA-256 utility, or verify with PowerShell's `Get-FileHash -Algorithm SHA256`
-   before extracting. Never continue after a failed check. Missing attestations
-   or unsupported verification flags are errors, not reasons to skip verification.
+   before extracting.
+
+   All verification checks must pass before installation. A newly published
+   release's attestation may take time to appear; retry later rather than skipping
+   verification. If required flags are unsupported, update GitHub CLI.
 
    Release verification binds the archive to an immutable release. Build
    provenance binds it to this repository's workflow, tag, and resolved commit
