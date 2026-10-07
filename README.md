@@ -277,6 +277,10 @@ also mark a notification read on GitHub.
 
 ## Development
 
+Coding agents should follow [AGENTS.md](AGENTS.md). Copilot also loads
+[`.github/copilot-instructions.md`](.github/copilot-instructions.md), which
+points to the shared repository guidance.
+
 Provider modules and renderer assets live in `src/`. The one-line entry point
 at `.github/extensions/github-notifications/extension.mjs` imports
 `src/extension.mjs`, so opening this repository as a Copilot project loads the
