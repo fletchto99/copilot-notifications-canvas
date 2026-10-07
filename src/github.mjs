@@ -2,7 +2,8 @@ import { execFile } from "node:child_process";
 import { setTimeout as wait } from "node:timers/promises";
 import { InboxError, normalizeThreads } from "./model.mjs";
 
-export const POLL_MS = 120_000;
+export const POLL_MS = 60_000;
+export const RETRY_MS = 120_000;
 const API_ORIGIN = "https://api.github.com";
 
 export function firstPage() {
@@ -102,6 +103,7 @@ export class GitHubClient {
     this.run = run;
     this.now = now;
     this.cache = new Map();
+    this.sequence = 0;
     this.queue = Promise.resolve();
     this.blockedUntil = 0;
     this.failures = new Map();
@@ -114,12 +116,22 @@ export class GitHubClient {
     this.revision = 0;
   }
 
-  page(endpoint, signal, { force = false } = {}) {
+  page(endpoint, signal, { force = false, minSequence = 0, allowCachedDuringBackoff = false } = {}) {
     const url = endpointURL(endpoint);
     const path = `${url.pathname}${url.search}`;
-    const pending = this.queue.then(() => this.request(path, signal, "GET", { force }));
+    const pending = this.queue.then(() => this.request(path, signal, "GET", { force, minSequence, allowCachedDuringBackoff }));
     this.queue = pending.catch(() => {});
-    return pending;
+    return pending.then(async page => {
+      if (page.sequence >= minSequence) return page;
+      // A scan needs a newer response, but waiting must not hold the request queue.
+      try {
+        await this.sleep(Math.max(0, page.nextRefreshAt - this.now()), undefined, { signal });
+      } catch (error) {
+        if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
+        throw error;
+      }
+      return this.page(endpoint, signal, { force, minSequence, allowCachedDuringBackoff });
+    });
   }
 
   reserveReads(ids) {
@@ -176,12 +188,14 @@ export class GitHubClient {
     return pending;
   }
 
-  async request(endpoint, signal, method = "GET", { force = false } = {}) {
+  async request(endpoint, signal, method = "GET", { force = false, minSequence = 0, allowCachedDuringBackoff = false } = {}) {
     if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
     const now = this.now();
+    const cached = method === "GET" ? this.cache.get(endpoint) : undefined;
+    if (allowCachedDuringBackoff && !force && cached &&
+        cached.sequence >= minSequence && now < cached.nextRefreshAt) return cached;
     if (now < this.blockedUntil) throw this.lastError ??
       new InboxError("rate_limited", "GitHub requests are paused until the rate limit resets.", 429);
-    const cached = method === "GET" ? this.cache.get(endpoint) : undefined;
     if (!force && cached && now < cached.nextRefreshAt) return cached;
     const requestKey = `${method} ${endpoint}`;
     const clearFailure = () => {
@@ -194,6 +208,7 @@ export class GitHubClient {
     if (cached?.etag) args.push("-H", `If-None-Match: ${cached.etag}`);
     else if (cached?.modified) args.push("-H", `If-Modified-Since: ${cached.modified}`);
     args.push(endpoint);
+    const sequence = method === "GET" ? ++this.sequence : undefined;
     let response;
     try {
       response = parseResponse(await this.run(args, { signal }));
@@ -202,15 +217,16 @@ export class GitHubClient {
       const fetchedAt = this.now();
       const serverTime = Date.parse(headers.date ?? "");
       const poll = Math.max(POLL_MS, seconds(headers["x-poll-interval"]));
+      const retryPoll = Math.max(RETRY_MS, poll);
       const reset = seconds(headers["x-ratelimit-reset"]);
       const retry = seconds(headers["retry-after"]) ||
         Math.max(0, Date.parse(headers["retry-after"]) - fetchedAt) || 0;
       const exhausted = headers["x-ratelimit-remaining"] === "0";
       if (retry) this.blockedUntil = Math.max(this.blockedUntil, fetchedAt + retry);
-      if (exhausted) this.blockedUntil = Math.max(this.blockedUntil, reset + 1000, fetchedAt + poll);
+      if (exhausted) this.blockedUntil = Math.max(this.blockedUntil, reset + 1000, fetchedAt + retryPoll);
       if (status === 429 || (status === 403 && (exhausted || retry ||
           /rate limit|abuse detection|secondary limit/i.test(response.text)))) {
-        this.blockedUntil = Math.max(this.blockedUntil, fetchedAt + retry, fetchedAt + poll);
+        this.blockedUntil = Math.max(this.blockedUntil, fetchedAt + retry, fetchedAt + retryPoll);
         throw new InboxError("rate_limited", "GitHub rate limit reached. Requests are paused; wait for the retry time.", 429);
       }
       if (status === 401) throw new InboxError("authentication",
@@ -237,6 +253,7 @@ export class GitHubClient {
         next = nextPage(headers.link, endpoint);
       }
       const page = {
+        sequence,
         items, next, fetchedAt, nextRefreshAt: Math.max(fetchedAt + poll, this.blockedUntil),
         serverTime: Number.isFinite(serverTime) && serverTime >= 0 ? serverTime : null,
         etag: headers.etag ?? (status === 304 ? cached?.etag : undefined),
@@ -251,7 +268,7 @@ export class GitHubClient {
         const failureCount = (this.failures.get(requestKey) ?? 0) + 1;
         this.failures.set(requestKey, failureCount);
         this.blockedUntil = Math.max(this.blockedUntil,
-          this.now() + Math.min(30 * 60_000, POLL_MS * 2 ** Math.min(failureCount - 1, 4)),
+          this.now() + Math.min(30 * 60_000, RETRY_MS * 2 ** Math.min(failureCount - 1, 4)),
           this.now() + seconds(response?.headers["x-poll-interval"]));
         this.lastError = error;
       }

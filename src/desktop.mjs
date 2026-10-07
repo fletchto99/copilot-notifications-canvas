@@ -3,7 +3,7 @@ import { lstat, mkdir, open, readdir, rename } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { setTimeout as wait } from "node:timers/promises";
-import { GitHubClient, firstPage, POLL_MS } from "./github.mjs";
+import { GitHubClient, firstPage, POLL_MS, RETRY_MS } from "./github.mjs";
 import { groupThreads, InboxError, notificationTitle, orderedThreads } from "./model.mjs";
 import { acquireLock, ownerPattern, processAlive, removeFile } from "./lock.mjs";
 import { notifyDesktop, desktopCapabilities, validSound } from "./notifier.mjs";
@@ -40,7 +40,8 @@ async function readState(path) {
         !(state.watermark === null || timestamp(state.watermark)) ||
         !Array.isArray(state.fingerprints) ||
         state.fingerprints.some(key => typeof key !== "string" || !/^[a-f0-9]{64}$/.test(key)) ||
-        !timestamp(state.nextPollAt) || !(state.error === null || typeof state.error === "string")) {
+        !timestamp(state.nextPollAt) || !(state.error === null || typeof state.error === "string") ||
+        (state.polling !== undefined && typeof state.polling !== "boolean")) {
       throw new Error("Invalid desktop state");
     }
     return state;
@@ -146,21 +147,27 @@ export class DesktopNotifications {
     this.cancel(this.timer);
     if (settings && settings.desktopNotifications !== this.enabled) {
       this.enabled = settings.desktopNotifications;
+      if (this.enabled) this.activation = { generation: null, sequence: this.client.sequence };
       this.setStatus(this.enabled ? "starting" : "off",
         this.enabled ? "Starting the shared desktop notification watcher..." : "Desktop notifications are off.");
-      if (!this.enabled) this.controller?.abort();
+      if (!this.enabled) {
+        this.foregroundRequested = false;
+        this.controller?.abort();
+      }
     }
     if (!this.panels.size) return;
-    this.timer = this.schedule(() => { void this.check(); }, 0);
+    this.timer = this.schedule(() => { void (this.foregroundRequested ? this.sync() : this.check()); }, 0);
     this.timer?.unref?.();
   }
 
   async remove(instanceId) {
     this.panels.delete(instanceId);
     if (this.panels.size) return;
+    this.foregroundRequested = false;
     this.cancel(this.timer);
     this.controller?.abort();
     await this.pending;
+    await this.foregroundPending;
     if (!this.panels.size) {
       try {
         await this.unregister({ onlyWhenClosed: true });
@@ -179,18 +186,53 @@ export class DesktopNotifications {
     await this.remove();
   }
 
-  check() {
+  observeActivation(settings) {
+    if (!settings.desktopNotifications) return;
+    const current = generation(settings);
+    if (this.activation?.generation !== current) {
+      this.activation = {
+        generation: current,
+        sequence: this.activation?.generation === null ? this.activation.sequence : this.client.sequence,
+      };
+    }
+  }
+
+  async prepareForeground() {
+    try {
+      this.observeActivation(await this.preferences.document());
+    } catch (error) {
+      this.setStatus("error", errorMessage(error));
+    }
+  }
+
+  sync() {
+    this.foregroundRequested = true;
+    if (this.foregroundPending) return this.foregroundPending;
+    this.foregroundPending = (async () => {
+      do {
+        await this.pending;
+        this.foregroundRequested = false;
+        if (await this.check({ foreground: true }) === "contended") {
+          this.foregroundRequested = this.panels.size > 0 && !this.controller.signal.aborted;
+          break;
+        }
+      } while (this.foregroundRequested && this.panels.size);
+    })().finally(() => { this.foregroundPending = undefined; });
+    return this.foregroundPending;
+  }
+
+  check({ foreground = false } = {}) {
     if (this.pending) return this.pending;
     if (!this.panels.size) return Promise.resolve();
     const controller = new AbortController();
     this.controller = controller;
-    this.pending = this.run(controller.signal).catch(error => {
+    this.pending = this.run(controller.signal, foreground).catch(error => {
       if (!controller.signal.aborted) this.setStatus("error", errorMessage(error));
     }).finally(() => {
       this.pending = undefined;
       this.cancel(this.timer);
       if (this.panels.size) {
-        this.timer = this.schedule(() => { void this.check(); }, CHECK_MS);
+        this.timer = this.schedule(() => { void (this.foregroundRequested ? this.sync() : this.check()); }, CHECK_MS);
         this.timer?.unref?.();
       }
     });
@@ -277,7 +319,7 @@ export class DesktopNotifications {
     return active;
   }
 
-  async run(signal) {
+  async run(signal, foreground) {
     const settings = await this.preferences.document();
     signal.throwIfAborted();
     this.enabled = settings.desktopNotifications === true;
@@ -290,13 +332,15 @@ export class DesktopNotifications {
     if (!validSound(settings.desktopSound ?? "default", this.platform)) {
       throw new InboxError("desktop_sound", "Choose a notification sound supported by this operating system.", 400);
     }
+    this.observeActivation(settings);
+    const activation = this.activation;
     await this.register();
     signal.throwIfAborted();
     const release = await acquireLock(join(this.directory, ".desktop.lock"), { alive: this.alive });
     if (!release) {
       const state = await readState(this.statePath);
       this.setStatus(state.error ? "error" : "shared", state.error || "Another Notifications canvas is checking for desktop alerts.");
-      return;
+      return "contended";
     }
     try {
       const state = await readState(this.statePath);
@@ -305,21 +349,26 @@ export class DesktopNotifications {
         state.cohort !== this.cohort || state.generation !== generation(settings);
       state.watchers = (await this.activeWatchers()).map(watcher => watcher.owner);
       signal.throwIfAborted();
-      if (this.now() < state.nextPollAt) {
+      // Foreground reads already refreshed the shared cache. Failed or interrupted
+      // polls still retain their durable retry reservation, including older checkpoints.
+      if (this.now() < state.nextPollAt && (!foreground || state.polling !== false || state.error)) {
         if (JSON.stringify(state) !== previous) await saveDocument(this.statePath, state);
         this.setStatus(state.error ? "error" : "watching", state.error || watchingMessage);
         return;
       }
       // Reserve the next poll before network I/O so a crashed poller cannot cause a retry storm.
-      state.nextPollAt = this.now() + POLL_MS;
+      state.nextPollAt = Math.max(state.nextPollAt, this.now() + POLL_MS);
+      state.polling = true;
       await saveDocument(this.statePath, state);
       try {
         let next = firstPage();
+        let minSequence = initial ? activation.sequence + 1 : 0;
         let boundary = initial ? null : state.watermark;
         const items = [];
         while (next) {
-          const page = await this.client.page(next, signal);
+          const page = await this.client.page(next, signal, { minSequence, allowCachedDuringBackoff: true });
           signal.throwIfAborted();
+          minSequence = page.sequence;
           items.push(...page.items);
           state.nextPollAt = Math.max(state.nextPollAt, page.nextRefreshAt);
           if (boundary === null) boundary = initialBoundary(page);
@@ -331,6 +380,8 @@ export class DesktopNotifications {
         state.generation = generation(settings);
         state.watchers = (await this.activeWatchers()).map(watcher => watcher.owner);
         state.error = null;
+        state.polling = false;
+        state.nextPollAt = Math.max(state.nextPollAt, this.now() + POLL_MS);
         // Claim activity durably before delivery: a crash may lose an alert, but never replay it.
         await saveDocument(this.statePath, state);
         for (const message of notificationMessages(arrivals)) {
@@ -343,7 +394,7 @@ export class DesktopNotifications {
         this.setStatus("watching", watchingMessage);
       } catch (error) {
         if (signal.aborted) throw error;
-        state.nextPollAt = Math.max(state.nextPollAt, this.now() + POLL_MS, this.client.blockedUntil);
+        state.nextPollAt = Math.max(state.nextPollAt, this.now() + RETRY_MS, this.client.blockedUntil);
         state.error = errorMessage(error);
         await saveDocument(this.statePath, state);
         throw error;

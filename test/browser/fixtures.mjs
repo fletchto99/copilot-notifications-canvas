@@ -69,7 +69,7 @@ export const test = base.extend({
     const preferences = new Preferences({ directory });
     if (desktopEnabled) await preferences.update({ desktopNotifications: true });
     const desktop = new DesktopNotifications({
-      preferences, client: new GitHubClient({ run }), platform: "darwin",
+      preferences, client, now: () => Date.now() + offset, platform: "darwin",
       notify: async message => { deliveries.push(message); },
       log: message => errors.push(message),
     });
@@ -106,6 +106,7 @@ export const test = base.extend({
         if (message.type() === "error") errors.push(message.text());
       });
       await use({ url: server.url, rows, writes, requests, preferences, deliveries,
+        desktop,
         setRequestHook: hook => { requestHook = hook; },
         advance: ms => { offset += ms; return Date.now() + offset; },
         recoverAssets: () => { assetsUnavailable = false; } });

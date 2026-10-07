@@ -11,6 +11,8 @@ let busy = false;
 let stopped = false;
 let intersecting = true;
 let timer;
+let tooltipTimer;
+let refreshStatusKey;
 let searchTimer;
 let pendingQuery;
 let pendingRefresh = false;
@@ -30,6 +32,11 @@ const markingRead = new Set();
 let readError = "";
 let batchBusy = false;
 let batchFocusKey;
+const tooltipControls = [
+  ["open-inbox", "inbox-control"],
+  ["force-refresh", "refresh-control"],
+  ["settings-toggle", "settings-toggle"],
+];
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -454,11 +461,38 @@ async function tick() {
   }
 }
 
+function renderRefreshStatus(updateAge = false) {
+  const fetchedAt = state?.lastFetchedAt ?? null;
+  const progress = pendingRefresh ? "Refresh queued. " : refreshing ? "Refreshing. " : "";
+  const key = `${fetchedAt}:${progress}`;
+  if (!updateAge && key === refreshStatusKey) return;
+  refreshStatusKey = key;
+  const seconds = fetchedAt === null ? null : Math.floor(Math.max(0, Date.now() - fetchedAt) / 1000);
+  const updated = seconds === null ? "Not updated yet" : `Last updated ${seconds} second${seconds === 1 ? "" : "s"} ago`;
+  $("refresh-tooltip-text").textContent = progress + updated;
+  $("force-refresh").setAttribute("aria-busy", String(pendingRefresh || refreshing));
+}
+
+function showTooltip(anchor) {
+  delete $(anchor).dataset.tooltipDismissed;
+  if (anchor === "refresh-control") renderRefreshStatus(true);
+}
+
+function dismissTooltips() {
+  for (const [, anchor] of tooltipControls) $(anchor).dataset.tooltipDismissed = "true";
+}
+
+function tickTooltip() {
+  clearTimeout(tooltipTimer);
+  if (!visible()) return;
+  renderRefreshStatus(true);
+  tooltipTimer = setTimeout(tickTooltip, 15_000);
+}
+
 function renderControls() {
   const loading = busy || state?.status === "loading" || markingRead.size > 0 || batchBusy || batchLocked();
   const waiting = state && Date.now() < state.nextRefreshAt;
-  $("force-refresh").textContent = pendingRefresh ? "Refresh queued..." : refreshing ? "Refreshing..." : "Force refresh";
-  $("force-refresh").setAttribute("aria-busy", String(pendingRefresh || refreshing));
+  renderRefreshStatus();
   $("more").disabled = loading || state?.needsRefresh || Boolean(state?.error && waiting);
   for (const button of $("groups").querySelectorAll("button")) {
     if (!button.dataset.disclosure) button.disabled = loading || markingRead.has(button.dataset.threadId);
@@ -642,13 +676,6 @@ function render(fallbackFocusKey) {
     groupBy === "repo" ? "New notifications will appear here, grouped by repository." :
     groupBy === "date" ? "New notifications will appear here, grouped by date." :
     "New notifications will appear here, newest first.";
-  const fetched = state.lastFetchedAt ? `Checked ${relativeTime(new Date(state.lastFetchedAt).toISOString())} \u00b7 ` : "";
-  const minutes = Math.ceil(Math.max(0, state.nextRefreshAt - Date.now()) / 60_000);
-  const next = minutes ? `Next check in ${minutes} min` : "Next check soon";
-  $("updated").textContent = `${fetched}${loading ? "Checking..." : next}`;
-  const checkedAt = state.lastFetchedAt ? `Last checked ${new Date(state.lastFetchedAt).toLocaleString()}. ` : "";
-  const nextAt = state.nextRefreshAt ? `Next check ${new Date(state.nextRefreshAt).toLocaleString()}. ` : "";
-  $("updated").title = `${checkedAt}${nextAt}Automatic refresh runs only while this view is visible.`;
   renderBatch();
 }
 
@@ -687,11 +714,15 @@ document.addEventListener("click", event => {
   if ($("settings").open && !$("settings").contains(event.target)) closeSettings();
 });
 document.addEventListener("keydown", event => {
-  if (event.key === "Escape" && $("settings").open) {
+  if (event.key !== "Escape") return;
+  if ($("settings").open) {
     event.preventDefault();
     closeSettings(true);
   }
+  dismissTooltips();
 });
+$("open-inbox").addEventListener("click", dismissTooltips);
+window.addEventListener("blur", dismissTooltips);
 $("more").addEventListener("click", () => update("more", {}));
 $("force-refresh").addEventListener("click", () => {
   if (!visible()) return;
@@ -699,6 +730,10 @@ $("force-refresh").addEventListener("click", () => {
   renderControls();
   return flushPendingUpdates();
 });
+for (const [control, anchor] of tooltipControls) {
+  $(control).addEventListener("pointerenter", () => showTooltip(anchor));
+  $(control).addEventListener("focus", () => showTooltip(anchor));
+}
 $("search").addEventListener("input", () => {
   pendingQuery = $("search").value;
   clearTimeout(searchTimer);
@@ -717,12 +752,18 @@ $("collapse").addEventListener("click", () => {
   renderGroups(groups);
   $("collapse").textContent = close ? "Expand all" : "Collapse all";
 });
+let wasVisible = visible();
 function visibilityChanged() {
+  const isVisible = visible();
+  if (isVisible && !wasVisible) pendingRefresh = true;
+  wasVisible = isVisible;
   clearTimeout(timer);
-  if (visible()) {
+  tickTooltip();
+  if (isVisible) {
     void tick();
     void settingsRequest();
   } else {
+    dismissTooltips();
     for (const controller of requestControllers) controller.abort();
     closeSettings();
   }
@@ -740,7 +781,9 @@ systemTheme.addEventListener("change", renderTheme);
 renderTheme();
 window.addEventListener("pagehide", () => {
   stopped = true;
+  dismissTooltips();
   clearTimeout(timer);
+  clearTimeout(tooltipTimer);
   clearTimeout(searchTimer);
   for (const controller of requestControllers) controller.abort();
   observer.disconnect();
@@ -748,6 +791,7 @@ window.addEventListener("pagehide", () => {
   systemTheme.removeEventListener("change", renderTheme);
 });
 if (hasCapability) {
+  tickTooltip();
   void tick();
   void settingsRequest();
 } else {

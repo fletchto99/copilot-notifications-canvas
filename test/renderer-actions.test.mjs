@@ -89,7 +89,7 @@ test("repository header shares its hover background across the toggle and read a
   assert.equal(disclosure.className, "repo-toggle");
   assert.equal(disclosure.parentNode.className, "repo-header");
   assert.equal(groupRead.parentNode, disclosure.parentNode);
-  assert.match(styles, /button:hover:not\(:disabled, \.repo-toggle, \.refresh-link\), summary:hover, \.icon-button:hover, \.repo-header:hover, \.row:hover \{\s*background: color-mix\(in srgb, var\(--canvas-text\) 4%, transparent\);/);
+  assert.match(styles, /button:hover:not\(:disabled, \.repo-toggle\), summary:hover, \.icon-button:hover, \.repo-header:hover, \.row:hover \{\s*background: color-mix\(in srgb, var\(--canvas-text\) 4%, transparent\);/);
   assert.match(styles, /@media \(prefers-reduced-motion: no-preference\) \{\s*button, a, \.repo-header \{ transition: background-color \.12s ease; \}/);
   ui.window.events.pagehide();
 });
@@ -100,7 +100,7 @@ test("repository toggle focus is inset inside the clipped card", () => {
   assert.match(styles, /\.repo-toggle:focus-visible \{ outline-offset: -5px; \}/);
 });
 
-test("compact toolbar keeps a shrinkable search beside matching inbox and settings icons", () => {
+test("compact toolbar keeps a shrinkable search beside matching inbox, refresh and settings icons", () => {
   assert.match(styles, /\.toolbar \{ display: flex;[^}]*\}/);
   assert.match(styles, /\.search \{ flex: 1; min-width: 0; \}/);
   assert.match(styles, /\.icon-button \{[^}]*flex-shrink: 0;[^}]*width: 38px; height: 38px;[^}]*color: var\(--canvas-text\);/);
@@ -116,7 +116,7 @@ test("notification metadata, counts and read actions use 12px text", () => {
   }
 });
 
-test("footer force refresh preserves the native notification toggle and selected sound", async () => {
+test("toolbar force refresh preserves the native notification toggle and selected sound", async () => {
   const storedSettings = { autoOpen: true, darkMode: true, desktopNotifications: true, desktopSound: "Submarine" };
   const ui = await renderer({ storedSettings });
   await ui.ids.get("force-refresh").events.click();

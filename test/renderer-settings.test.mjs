@@ -36,7 +36,7 @@ test("enabled toggle rows keep neutral text and borders while the switch indicat
   assert.match(styles, /:focus-visible \{ outline: 2px solid var\(--focus\); outline-offset: 3px; \}/);
 });
 
-test("GitHub inbox is an accessible icon link immediately before Settings in the toolbar", () => {
+test("GitHub inbox is an accessible icon link before Refresh and Settings in the toolbar", () => {
   const link = html.match(/<a\b([^>]*\bid="open-inbox"[^>]*)>([\s\S]*?)<\/a>/);
   assert.ok(link);
   const [, attributes, content] = link;
@@ -45,11 +45,12 @@ test("GitHub inbox is an accessible icon link immediately before Settings in the
   assert.match(attributes, /target="_blank"/);
   assert.match(attributes, /rel="noopener noreferrer"/);
   assert.match(attributes, /aria-label="Open GitHub inbox"/);
-  assert.match(attributes, /title="Open GitHub inbox"/);
+  assert.match(attributes, /aria-describedby="inbox-tooltip"/);
+  assert.doesNotMatch(attributes, /\btitle=/);
   assert.doesNotMatch(attributes, /\bhidden\b|\btabindex=/);
   assert.match(content, /<svg\b[^>]*aria-hidden="true"[^>]*focusable="false"/);
-  assert.equal(content.replace(/<[^>]*>/g, "").trim(), "");
-  assert.match(html, /<div class="toolbar">\s*<label class="search">[\s\S]*?<\/label>\s*<a id="open-inbox"[^>]*>[\s\S]*?<\/a>\s*<details id="settings"/);
+  assert.match(content, /^\s*<svg\b[^>]*>\s*<path\b[^>]*\/>\s*<path\b[^>]*\/>\s*<\/svg>\s*$/);
+  assert.match(html, /<div class="toolbar">\s*<label class="search">[\s\S]*?<\/label>\s*<div id="inbox-control"[^>]*>[\s\S]*?<\/div>\s*<div id="refresh-control"[^>]*>[\s\S]*?<\/div>\s*<details id="settings"/);
   assert.equal([...html.matchAll(/href="https:\/\/github\.com\/notifications"/g)].length, 1);
 });
 
@@ -57,13 +58,67 @@ test("Settings uses an icon-only toggle with an accessible name and tooltip", ()
   const summary = html.match(/<summary\b([^>]*\bid="settings-toggle"[^>]*)>([\s\S]*?)<\/summary>/);
   assert.ok(summary);
   const [, attributes, content] = summary;
-  assert.match(attributes, /class="icon-button"/);
+  assert.match(attributes, /class="icon-button tooltip-anchor"/);
   assert.match(attributes, /aria-label="Settings"/);
-  assert.match(attributes, /title="Settings"/);
+  assert.match(attributes, /aria-describedby="settings-tooltip"/);
+  assert.doesNotMatch(attributes, /\btitle=/);
   assert.match(attributes, /aria-controls="settings-panel"/);
   assert.match(attributes, /aria-expanded="false"/);
   assert.match(content, /<svg\b[^>]*aria-hidden="true"[^>]*focusable="false"/);
-  assert.equal(content.replace(/<[^>]*>/g, "").trim(), "");
+  assert.match(content, /^\s*<svg\b[^>]*>\s*<path\b[^>]*\/>\s*<circle\b[^>]*\/>\s*<\/svg>\s*<span id="settings-tooltip" class="tooltip" role="tooltip"><span class="tooltip-content">Settings<\/span><\/span>\s*$/);
+  assert.match(styles, /\.settings\[open\] \.tooltip \{ display: none; \}/);
+});
+
+test("Inbox and Settings tooltips share the refresh hover, focus and Escape behavior", async () => {
+  const ui = await renderer();
+  for (const [control, anchor] of [["open-inbox", "inbox-control"], ["settings-toggle", "settings-toggle"]]) {
+    ui.ids.get(control).events.pointerenter();
+    assert.equal(ui.ids.get(anchor).dataset.tooltipDismissed, undefined);
+    ui.document.events.keydown({ key: "Escape" });
+    assert.equal(ui.ids.get(anchor).dataset.tooltipDismissed, "true");
+    ui.ids.get(control).events.focus();
+    assert.equal(ui.ids.get(anchor).dataset.tooltipDismissed, undefined);
+  }
+  ui.window.events.pagehide();
+});
+
+test("opening the inbox dismisses tooltips without cancelling navigation or making local requests", async () => {
+  const ui = await renderer();
+  const link = ui.ids.get("open-inbox");
+  link.focus();
+  link.events.focus();
+  const calls = ui.calls.length;
+  link.events.click({ preventDefault: () => assert.fail("The inbox link must keep its default navigation") });
+  assert.equal(ui.ids.get("inbox-control").dataset.tooltipDismissed, "true");
+  assert.equal(ui.document.activeElement, link);
+  await ui.fireTimer(15_000);
+  assert.equal(ui.ids.get("inbox-control").dataset.tooltipDismissed, "true");
+  assert.equal(ui.calls.length, calls);
+  link.events.pointerenter();
+  assert.equal(ui.ids.get("inbox-control").dataset.tooltipDismissed, undefined);
+  ui.window.events.pagehide();
+});
+
+test("canvas blur, hiding and closing dismiss every toolbar tooltip without moving focus", async () => {
+  for (const action of ["blur", "hidden", "non-intersecting", "close"]) {
+    const ui = await renderer();
+    const controls = [["open-inbox", "inbox-control"], ["force-refresh", "refresh-control"], ["settings-toggle", "settings-toggle"]];
+    for (const [control] of controls) ui.ids.get(control).events.pointerenter();
+    const focus = ui.ids.get("force-refresh");
+    focus.focus();
+    if (action === "hidden") {
+      ui.document.hidden = true;
+      ui.document.events.visibilitychange();
+    } else if (action === "non-intersecting") ui.intersect(false);
+    else ui.window.events[action === "close" ? "pagehide" : "blur"]();
+    for (const [, anchor] of controls) assert.equal(ui.ids.get(anchor).dataset.tooltipDismissed, "true", action);
+    assert.equal(ui.document.activeElement, focus);
+    if (action === "blur") {
+      await ui.fireTimer(15_000);
+      assert.equal(ui.ids.get("refresh-control").dataset.tooltipDismissed, "true");
+    }
+    ui.window.events.pagehide();
+  }
 });
 
 test("Settings puts an Auto-open slider above sound, saves startup preference and closes accessibly", async () => {

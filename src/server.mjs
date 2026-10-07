@@ -205,7 +205,10 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
           void updates.check({ force: true });
           return json(202, updates.snapshot());
         }
-        if (path === "/api/refresh") await inbox.refresh(input);
+        if (path === "/api/refresh") {
+          await desktop?.prepareForeground();
+          await inbox.refresh(input);
+        }
         if (path === "/api/more") await inbox.more();
         if (path === "/api/filters") await inbox.setFilters(input);
         if (path === "/api/settings") {
@@ -227,6 +230,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
       }
       if (path === "/api/state" || path === "/api/refresh") void updates?.check();
       json(200, snapshot());
+      if (path === "/api/refresh") void desktop?.sync();
     } catch (error) {
       if (error instanceof InboxError) {
         json(error.status, { error: { code: error.code, message: error.message } });

@@ -7,6 +7,8 @@ test("installed bundle supports search, saved settings and exact row writes in a
   await expect(page.locator(".row")).toHaveCount(50);
   await expect(page.locator("#development-build")).toBeHidden();
   await expect(page.locator("#development-build")).toBeEmpty();
+  await expect(page.locator("footer")).toBeHidden();
+  await expect(page.locator(".toolbar > #refresh-control + #settings")).toHaveCount(1);
   await page.getByRole("searchbox").fill("Needle");
   await expect(page.locator(".row")).toHaveCount(3);
   await page.getByLabel("Settings", { exact: true }).click();

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
-import { firstPage, GitHubClient, nextPage, parseResponse, POLL_MS, runGh } from "../src/github.mjs";
+import { firstPage, GitHubClient, nextPage, parseResponse, POLL_MS, RETRY_MS, runGh } from "../src/github.mjs";
 import { http, next, thread } from "./fixtures.mjs";
 import { Inbox } from "../src/inbox.mjs";
 
@@ -40,6 +40,150 @@ test("poll floor and server interval are enforced even across concurrent panels;
   assert.equal(page.items.length, 1);
   assert.match(page.next, /page=2/);
   assert.equal(page.nextRefreshAt, 700_000);
+});
+
+test("successful requests cache for at least 60 seconds, including conditional responses", async () => {
+  for (const headers of [{}, { "x-poll-interval": "10" }, { "x-poll-interval": "30" }, { "x-poll-interval": "60" }]) {
+    let now = 1000;
+    const calls = [];
+    const client = new GitHubClient({ now: () => now, run: async args => {
+      calls.push(args);
+      return calls.length === 1 ? http([thread()], { ...headers, etag: '"sample"' }) : http(null, headers, 304);
+    } });
+    const first = await client.page(firstPage());
+    assert.equal(first.nextRefreshAt, now + 60_000);
+    now += 59_999;
+    await client.page(firstPage());
+    assert.equal(calls.length, 1);
+    now += 1;
+    const pages = await Promise.all([client.page(firstPage()), client.page(firstPage())]);
+    assert.equal(calls.length, 2);
+    assert.ok(calls[1].includes('If-None-Match: "sample"'));
+    assert.equal(pages[0].nextRefreshAt, now + 60_000);
+    assert.equal(pages[0].items.length, 1);
+    now += 59_999;
+    await client.page(firstPage());
+    assert.equal(calls.length, 2);
+    now += 1;
+    await client.page(firstPage());
+    assert.equal(calls.length, 3);
+  }
+});
+
+test("fresh scan reads wait for the poll deadline outside the shared request queue and revalidate ETags", async () => {
+  let now = 0;
+  let resume;
+  let sleeping;
+  const waiting = new Promise(resolve => { sleeping = resolve; });
+  const calls = [];
+  const client = new GitHubClient({ now: () => now,
+    sleep: async delay => {
+      assert.equal(delay, 60_000);
+      sleeping();
+      await new Promise(resolve => { resume = resolve; });
+      now += delay;
+    },
+    run: async args => {
+      calls.push(args);
+      if (args.at(-1).includes("page=2")) return http([]);
+      return calls.length === 1 ? http([thread()], { etag: '"sample"', "x-poll-interval": "60", link: next })
+        : http(null, {}, 304);
+    },
+  });
+  const first = await client.page(firstPage());
+  const fresh = client.page(firstPage(), undefined, { minSequence: first.sequence + 1 });
+  await waiting;
+  try {
+    const other = await client.page(first.next);
+    assert.equal(other.sequence, 2, "another request can complete during the cache wait");
+    assert.equal(calls.length, 2);
+  } finally {
+    resume();
+  }
+  const revalidated = await fresh;
+  assert.equal(revalidated.sequence, 3);
+  assert.equal(revalidated.fetchedAt, 60_000);
+  assert.equal(revalidated.items.length, 1);
+  assert.ok(calls[2].includes('If-None-Match: "sample"'));
+});
+
+test("fresh scan reads use response sequences even when the clock does not advance", async () => {
+  let calls = 0;
+  const client = new GitHubClient({ now: () => 1000, run: async () => { calls++; return http([]); } });
+  const first = await client.page(firstPage());
+  const refreshed = await client.page(firstPage(), undefined, { force: true });
+  const reused = await client.page(firstPage(), undefined, { minSequence: refreshed.sequence });
+  assert.equal(first.fetchedAt, refreshed.fetchedAt);
+  assert.equal(refreshed.sequence, first.sequence + 1);
+  assert.equal(reused, refreshed);
+  assert.equal(calls, 2);
+});
+
+test("a response already in flight before a freshness boundary cannot establish that boundary's baseline", async () => {
+  let now = 0;
+  let started;
+  let release;
+  const entered = new Promise(resolve => { started = resolve; });
+  let calls = 0;
+  const client = new GitHubClient({ now: () => now, sleep: async delay => { now += delay; },
+    run: async () => {
+      if (++calls === 1) {
+        started();
+        await new Promise(resolve => { release = resolve; });
+      }
+      return http([thread()]);
+    },
+  });
+  const oldRequest = client.page(firstPage());
+  await entered;
+  const minSequence = client.sequence + 1;
+  const baseline = client.page(firstPage(), undefined, { minSequence });
+  release();
+  const [oldPage, freshPage] = await Promise.all([oldRequest, baseline]);
+  assert.ok(oldPage.sequence < minSequence);
+  assert.equal(freshPage.sequence, minSequence);
+  assert.equal(calls, 2);
+  assert.equal(now, 60_000);
+});
+
+test("cancelling a fresh scan's cache wait does not retry or poison the shared client", async () => {
+  const controller = new AbortController();
+  let sleeping;
+  const waiting = new Promise(resolve => { sleeping = resolve; });
+  let calls = 0;
+  const client = new GitHubClient({ now: () => 0, run: async () => { calls++; return http([]); },
+    sleep: (_delay, _value, { signal }) => new Promise((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      sleeping();
+    }),
+  });
+  await client.page(firstPage());
+  const pending = client.page(firstPage(), controller.signal, { minSequence: 2 });
+  const rejected = assert.rejects(pending, { code: "closed" });
+  await waiting;
+  controller.abort();
+  await rejected;
+  assert.equal(calls, 1);
+  assert.equal(client.blockedUntil, 0);
+  assert.equal((await client.page(firstPage())).sequence, 1);
+});
+
+test("fresh scan retries still honor intervening backoff and surface unexpected wait failures", async () => {
+  for (const failWait of [false, true]) {
+    let now = 0;
+    let calls = 0;
+    const client = new GitHubClient({ now: () => now, run: async () => { calls++; return http([]); },
+      sleep: async delay => {
+        if (failWait) throw new Error("Synthetic wait failure");
+        now += delay;
+        client.blockedUntil = now + 120_000;
+      },
+    });
+    await client.page(firstPage());
+    await assert.rejects(client.page(firstPage(), undefined, { minSequence: 2 }),
+      failWait ? { message: "Synthetic wait failure" } : { code: "rate_limited" });
+    assert.equal(calls, 1);
+  }
 });
 
 test("Last-Modified is used when ETag is absent and cacheless 304 fails", async () => {
@@ -178,6 +322,93 @@ test("successful responses exhausting quota also pause later page requests", asy
   await assert.rejects(client.page(page.next), { code: "rate_limited" });
 });
 
+test("desktop cache reads can consume quota-exhausting responses without permitting upstream requests", async () => {
+  let now = 0;
+  let calls = 0;
+  const client = new GitHubClient({ now: () => now, run: async () => {
+    calls++;
+    return http([thread()], { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "900" });
+  } });
+  const page = await client.page(firstPage());
+  const options = { minSequence: page.sequence, allowCachedDuringBackoff: true };
+  assert.equal(await client.page(firstPage(), undefined, options), page);
+  for (const input of [{}, { ...options, force: true }, { ...options, minSequence: page.sequence + 1 }]) {
+    await assert.rejects(client.page(firstPage(), undefined, input), { code: "rate_limited" });
+  }
+  await assert.rejects(client.page(nextPage(next, firstPage()), undefined, options), { code: "rate_limited" });
+  await assert.rejects(client.markRead("1"), { code: "rate_limited" });
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(client.page(firstPage(), controller.signal, options), { code: "closed" });
+  now = page.nextRefreshAt;
+  client.blockedUntil = now + 1000;
+  await assert.rejects(client.page(firstPage(), undefined, options), { code: "rate_limited" });
+  assert.equal(calls, 1);
+});
+
+test("a queued desktop cache read consumes the successful response that imposes backoff ahead of it", async () => {
+  let entered;
+  let release;
+  const started = new Promise(resolve => { entered = resolve; });
+  let calls = 0;
+  const client = new GitHubClient({ now: () => 0, run: async () => {
+    calls++;
+    entered();
+    await new Promise(resolve => { release = resolve; });
+    return http([thread()], { "x-ratelimit-remaining": "0" });
+  } });
+  const foreground = client.page(firstPage());
+  await started;
+  const desktop = client.page(firstPage(), undefined, { minSequence: 1, allowCachedDuringBackoff: true });
+  release();
+  const [first, reused] = await Promise.all([foreground, desktop]);
+  assert.equal(reused, first);
+  assert.equal(calls, 1);
+  assert.equal(client.blockedUntil, 120_000);
+});
+
+test("a waiting desktop scan can consume a newer quota-exhausting response without another request", async () => {
+  let now = 0;
+  let sleeping;
+  let resume;
+  const waiting = new Promise(resolve => { sleeping = resolve; });
+  let calls = 0;
+  const client = new GitHubClient({ now: () => now,
+    run: async () => http([thread()], ++calls === 1 ? {} : { "x-ratelimit-remaining": "0" }),
+    sleep: async delay => {
+      sleeping();
+      await new Promise(resolve => { resume = resolve; });
+      now += delay;
+    },
+  });
+  await client.page(firstPage());
+  const desktop = client.page(firstPage(), undefined, { minSequence: 2, allowCachedDuringBackoff: true });
+  await waiting;
+  let foreground;
+  try {
+    foreground = await client.page(firstPage(), undefined, { force: true });
+  } finally {
+    resume();
+  }
+  assert.equal(await desktop, foreground);
+  assert.equal(calls, 2);
+  assert.ok(client.blockedUntil > now);
+});
+
+test("exhausted quota without a future reset retains the two-minute minimum pause", async () => {
+  let now = 1000;
+  let calls = 0;
+  const client = new GitHubClient({ now: () => now, run: async () => {
+    calls++;
+    return http([thread()], { "x-ratelimit-remaining": "0", "x-poll-interval": "30" });
+  } });
+  const page = await client.page(firstPage());
+  assert.equal(page.nextRefreshAt, now + 120_000);
+  now += 30_000;
+  await assert.rejects(client.page(firstPage()), { code: "rate_limited" });
+  assert.equal(calls, 1);
+});
+
 test("requests are serialized and a closed panel cannot launch queued work", async () => {
   const controller = new AbortController();
   let release;
@@ -267,7 +498,7 @@ test("later-page failures back off exponentially despite earlier-page successes,
   fail = true;
   now += POLL_MS;
   await assert.rejects(inbox.refresh(), { code: "rate_limited" });
-  assert.equal(client.blockedUntil - now, POLL_MS);
+  assert.equal(client.blockedUntil - now, RETRY_MS);
 });
 
 test("a successful write does not reset another endpoint's failure history or bypass the global gate", async () => {
@@ -285,5 +516,5 @@ test("a successful write does not reset another endpoint's failure history or by
   assert.equal(writes, 1);
   assert.equal([...client.failures.values()][0], 1);
   await assert.rejects(client.page(firstPage()));
-  assert.equal(client.blockedUntil - now, 2 * POLL_MS);
+  assert.equal(client.blockedUntil - now, 2 * RETRY_MS);
 });

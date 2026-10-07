@@ -8,7 +8,8 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { DesktopNotifications } from "../src/desktop.mjs";
 import { Preferences } from "../src/settings.mjs";
-import { GitHubClient, POLL_MS } from "../src/github.mjs";
+import { firstPage, GitHubClient, POLL_MS, RETRY_MS } from "../src/github.mjs";
+import { Inbox } from "../src/inbox.mjs";
 import { InboxError } from "../src/model.mjs";
 import { acquireLock } from "../src/lock.mjs";
 import { http, thread, next } from "./fixtures.mjs";
@@ -33,14 +34,14 @@ async function fixture(t, { enabled = true } = {}) {
   });
   return {
     directory, preferences, calls, deliveries, logs,
-    advance(ms = POLL_MS) { now += ms; return now; },
+    advance(ms = RETRY_MS) { now += ms; return now; },
     rows(value) { rows = value; },
     response(value) { response = value; },
     async state() { return JSON.parse(await readFile(join(directory, "desktop-state.json"), "utf8")); },
     make(overrides = {}) {
       const watcher = new DesktopNotifications({
         preferences, platform: "darwin", now: () => now,
-        client: new GitHubClient({ now: () => now, run: async args => {
+        client: new GitHubClient({ now: () => now, sleep: async delay => { now += delay; }, run: async args => {
           calls.push(args);
           return response ? response(args) : http(rows);
         } }),
@@ -52,6 +53,24 @@ async function fixture(t, { enabled = true } = {}) {
       instances.push(watcher);
       watcher.add(`panel-${instances.length}`);
       return watcher;
+    },
+  };
+}
+
+function watcherTimers() {
+  const timers = new Map();
+  let id = 0;
+  return {
+    timers,
+    schedule(run, delay) { timers.set(++id, { run, delay }); return id; },
+    cancel(timer) { timers.delete(timer); },
+    async fire(watcher, delay = 5000) {
+      assert.equal(timers.size, 1);
+      const [timerId, timer] = [...timers][0];
+      assert.equal(timer.delay, delay);
+      timers.delete(timerId);
+      timer.run();
+      await (watcher.foregroundPending ?? watcher.pending);
     },
   };
 }
@@ -99,6 +118,528 @@ test("initial backlog is silent and small batches retain each thread's title and
   assert.match(state.fingerprints[0], /^[a-f0-9]{64}$/);
   assert.doesNotMatch(JSON.stringify(state), /Synthetic|example\/widgets|updatedAt|repository|title/);
   assert.equal((await stat(join(f.directory, "desktop-state.json"))).mode & 0o777, 0o600);
+});
+
+test("background desktop checks run at one minute, never earlier", async t => {
+  const f = await fixture(t);
+  const watcher = f.make();
+  await watcher.check();
+  assert.equal((await f.state()).nextPollAt, epoch + 60_000);
+  for (let checks = 0; checks < 3; checks++) {
+    f.rows([updated("2", f.advance(15_000)), thread()]);
+    await watcher.check();
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.deliveries.length, 0);
+  }
+  f.advance(14_999);
+  await watcher.check();
+  assert.equal(f.calls.length, 1);
+  f.advance(1);
+  await watcher.check();
+  assert.equal(f.calls.length, 2);
+  assert.equal(f.deliveries.length, 1);
+});
+
+test("foreground refreshes share results with alerts at one minute and background checks retain that cadence", async t => {
+  const f = await fixture(t);
+  const watcher = f.make();
+  const inbox = new Inbox(watcher.client);
+  t.after(() => inbox.close());
+  await watcher.prepareForeground();
+  await inbox.refresh();
+  await watcher.sync();
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.deliveries.length, 0);
+  const time = f.advance(60_000);
+  f.rows([updated("2", time), thread()]);
+  await inbox.refresh();
+  await watcher.sync();
+  assert.equal(f.calls.length, 2, "desktop delivery reuses the foreground response");
+  assert.equal(inbox.snapshot().groups[0].items[0].id, "2");
+  assert.deepEqual(f.deliveries.map(alert => alert.body), ["#42 Synthetic notification 2"]);
+  assert.equal((await f.state()).nextPollAt, time + 60_000);
+  assert.equal((await f.state()).polling, false);
+  f.rows([updated("3", f.advance(30_000)), thread()]);
+  await watcher.check();
+  assert.equal(f.calls.length, 2);
+  f.advance(29_999);
+  await watcher.check();
+  assert.equal(f.calls.length, 2);
+  f.advance(1);
+  await watcher.check();
+  assert.equal(f.calls.length, 3);
+  assert.equal(f.deliveries.length, 2);
+});
+
+test("an immediate foreground return feeds new activity to alerts without waiting for the polling interval", async t => {
+  const f = await fixture(t);
+  const watcher = f.make();
+  const inbox = new Inbox(watcher.client);
+  t.after(() => inbox.close());
+  await watcher.prepareForeground();
+  await inbox.refresh();
+  await watcher.sync();
+  f.rows([updated("2", f.advance(1000)), thread()]);
+  await inbox.refresh({ force: true });
+  await watcher.sync();
+  assert.equal(f.calls.length, 2);
+  assert.equal(f.deliveries.length, 1);
+  await watcher.sync();
+  assert.equal(f.calls.length, 2);
+  assert.equal(f.deliveries.length, 1);
+});
+
+test("quota-exhausting foreground responses establish silent baselines without hiding later arrivals", async t => {
+  for (const initialRows of [[], [thread()]]) {
+    const f = await fixture(t);
+    const watcher = f.make();
+    const inbox = new Inbox(watcher.client);
+    t.after(() => inbox.close());
+    f.response(() => http(initialRows, {
+      date: new Date(epoch).toUTCString(),
+      "x-ratelimit-remaining": "0", "x-ratelimit-reset": String((epoch + 600_000) / 1000),
+    }));
+    await watcher.prepareForeground();
+    await inbox.refresh();
+    await watcher.sync();
+    assert.equal(f.calls.length, 1);
+    assert.equal(watcher.snapshot().state, "watching");
+    assert.equal((await f.state()).watermark, epoch);
+    assert.equal((await f.state()).error, null);
+    assert.equal(f.deliveries.length, 0);
+    await assert.rejects(watcher.client.page(firstPage()), { code: "rate_limited" });
+    assert.equal(f.calls.length, 1);
+
+    f.response(undefined);
+    f.rows([updated("2", epoch + 1000), ...initialRows]);
+    f.advance(watcher.client.blockedUntil - f.advance(0));
+    await watcher.check();
+    assert.equal(f.calls.length, 2);
+    assert.deepEqual(f.deliveries.map(alert => alert.body), ["#42 Synthetic notification 2"]);
+  }
+});
+
+test("an established watcher immediately delivers fresh cached activity even when the response exhausts quota", async t => {
+  const f = await fixture(t);
+  const watcher = f.make();
+  await watcher.check();
+  const inbox = new Inbox(watcher.client);
+  t.after(() => inbox.close());
+  const time = f.advance(60_000);
+  f.response(() => http([updated("2", time), thread()], { "x-ratelimit-remaining": "0" }));
+  await inbox.refresh();
+  await watcher.sync();
+  assert.equal(f.calls.length, 2);
+  assert.deepEqual(f.deliveries.map(alert => alert.body), ["#42 Synthetic notification 2"]);
+  assert.equal((await f.state()).error, null);
+  assert.ok((await f.state()).nextPollAt >= watcher.client.blockedUntil);
+  await watcher.sync();
+  await watcher.check();
+  assert.equal(f.calls.length, 2);
+  assert.equal(f.deliveries.length, 1);
+});
+
+test("complete foreground scans can deliver across cached pages when the final response exhausts quota", async t => {
+  const f = await fixture(t);
+  const watcher = f.make();
+  const inbox = new Inbox(watcher.client);
+  t.after(() => inbox.close());
+  const backlog = Array.from({ length: 50 }, (_, index) => thread(String(index + 1)));
+  f.response(args => args.at(-1).includes("page=1") ? http(backlog, { link: next }) : http([thread("51")]));
+  await watcher.prepareForeground();
+  await inbox.refresh();
+  await inbox.more();
+  await watcher.sync();
+  const time = f.advance(60_000);
+  const arrivals = Array.from({ length: 51 }, (_, index) => updated(String(100 + index), time - index));
+  f.response(args => args.at(-1).includes("page=1") ? http(arrivals.slice(0, 50), { link: next })
+    : http(arrivals.slice(50), { "x-ratelimit-remaining": "0" }));
+  await inbox.refresh();
+  await watcher.sync();
+  assert.equal(f.calls.length, 4, "both refreshed pages are consumed from cache");
+  assert.deepEqual(f.deliveries.map(alert => alert.body), ["51 new notifications"]);
+  assert.equal((await f.state()).error, null);
+  await assert.rejects(watcher.client.page(firstPage()), { code: "rate_limited" });
+  assert.equal(f.calls.length, 4);
+});
+
+test("quota-paused scans reject missing and stale continuations without committing a partial baseline or watermark", async t => {
+  for (const cachedContinuation of [false, true]) {
+    const f = await fixture(t);
+    const watcher = f.make();
+    const inbox = new Inbox(watcher.client);
+    t.after(() => inbox.close());
+    if (cachedContinuation) {
+      const backlog = Array.from({ length: 50 }, (_, index) => thread(String(index + 1)));
+      f.response(args => args.at(-1).includes("page=1") ? http(backlog, { link: next }) : http([thread("51")]));
+      await watcher.check();
+      assert.equal(f.calls.length, 2);
+    }
+    const time = f.advance(1000);
+    const arrivals = Array.from({ length: 50 }, (_, index) => updated(String(100 + index), time));
+    f.response(() => http(arrivals, { link: next, "x-ratelimit-remaining": "0" }));
+    await watcher.prepareForeground();
+    await inbox.refresh({ force: true });
+    const before = f.calls.length;
+    await watcher.sync();
+    assert.equal(f.calls.length, before, "a missing or stale continuation must not trigger an upstream request");
+    assert.equal((await f.state()).watermark, cachedContinuation ? epoch : null);
+    assert.equal((await f.state()).error.includes("rate limit"), true);
+    assert.equal(f.deliveries.length, 0);
+  }
+});
+
+test("foreground alerts scan all new activity pages without changing the canvas's loaded selection", async t => {
+  const f = await fixture(t);
+  const watcher = f.make();
+  const inbox = new Inbox(watcher.client, { query: "notification 2" });
+  t.after(() => inbox.close());
+  await watcher.prepareForeground();
+  await inbox.refresh();
+  await watcher.sync();
+  const time = f.advance(60_000);
+  const arrivals = Array.from({ length: 60 }, (_, index) => updated(String(index + 2), time));
+  f.response(args => args.at(-1).includes("page=1") ? http(arrivals.slice(0, 50), { link: next }) :
+    http([...arrivals.slice(50), thread()]));
+  await inbox.refresh();
+  await watcher.sync();
+  assert.equal(f.calls.length, 3, "one shared first-page read and one desktop-only continuation");
+  assert.equal(inbox.pages.length, 1);
+  assert.equal(inbox.filters.query, "notification 2");
+  assert.equal(inbox.summary().loaded, 50);
+  assert.equal(f.deliveries.length, 1);
+  assert.equal(f.deliveries[0].body, "60 new notifications");
+});
+
+test("a fresh first page cannot advance the watermark past arrivals hidden by an older cached continuation", async t => {
+  const f = await fixture(t);
+  const watcher = f.make();
+  const inbox = new Inbox(watcher.client);
+  t.after(() => inbox.close());
+  const backlog = Array.from({ length: 51 }, (_, index) => updated(String(index + 1), epoch));
+  let rows = backlog;
+  f.response(args => {
+    const page = Number(new URL(args.at(-1), "https://api.github.com").searchParams.get("page"));
+    const offset = (page - 1) * 50;
+    return http(rows.slice(offset, offset + 50), offset + 50 < rows.length
+      ? { link: `<https://api.github.com/notifications?all=false&per_page=50&page=${page + 1}>; rel="next"` } : {});
+  });
+  await watcher.prepareForeground();
+  await inbox.refresh();
+  await watcher.sync();
+  assert.equal(f.calls.length, 2);
+  assert.equal(f.deliveries.length, 0);
+
+  const time = f.advance(1000);
+  rows = [...Array.from({ length: 60 }, (_, index) => updated(String(100 + index), time - index)), ...backlog];
+  await inbox.refresh({ force: true });
+  await watcher.sync();
+  assert.equal(f.calls.length, 5, "the stale continuation must be revalidated before scanning the final page");
+  assert.equal(f.advance(0), epoch + 60_000, "revalidation respects the cached polling deadline");
+  assert.equal((await f.state()).nextPollAt, epoch + 120_000, "the background delay starts after the scan finishes");
+  assert.equal(inbox.pages.length, 1);
+  assert.deepEqual(f.deliveries.map(alert => alert.body), ["60 new notifications"]);
+  f.advance();
+  await inbox.refresh();
+  await watcher.sync();
+  assert.deepEqual(f.deliveries.map(alert => alert.body), ["60 new notifications"]);
+});
+
+test("enabling desktop alerts silently baselines activity missing from a pre-activation foreground cache", async t => {
+  const f = await fixture(t, { enabled: false });
+  const watcher = f.make();
+  const inbox = new Inbox(watcher.client);
+  t.after(() => inbox.close());
+  await inbox.refresh();
+  f.rows([updated("2", f.advance(1000)), thread()]);
+  await f.preferences.update({ desktopNotifications: true });
+  await watcher.check();
+  assert.equal(f.calls.length, 2, "the baseline must revalidate the pre-activation cache");
+  assert.equal(f.advance(0), epoch + 60_000);
+  assert.equal((await f.state()).nextPollAt, epoch + 120_000);
+  assert.equal(f.deliveries.length, 0);
+  f.advance(1000);
+  await inbox.refresh({ force: true });
+  await watcher.sync();
+  assert.equal(f.deliveries.length, 0);
+});
+
+test("closing the final panel cancels an outstanding baseline cache wait without delivering or retrying", async t => {
+  const f = await fixture(t);
+  const watcher = f.make();
+  await watcher.client.page(firstPage());
+  let waiting;
+  const started = new Promise(resolve => { waiting = resolve; });
+  watcher.client.sleep = (_delay, _value, { signal }) => new Promise((_resolve, reject) => {
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    waiting();
+  });
+  const syncing = watcher.sync();
+  await started;
+  await watcher.close();
+  await syncing;
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.deliveries.length, 0);
+  assert.deepEqual(f.logs, []);
+  assert.equal(watcher.pending, undefined);
+  assert.equal(watcher.foregroundPending, undefined);
+  assert.equal((await f.state()).watermark, null);
+});
+
+test("a watcher can reuse a foreground response prepared for its activation generation as a silent baseline", async t => {
+  const f = await fixture(t);
+  let scheduled;
+  const watcher = f.make({ schedule: fn => { scheduled = fn; return 0; } });
+  await watcher.prepareForeground();
+  await watcher.client.page(firstPage());
+  scheduled();
+  await watcher.pending;
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.deliveries.length, 0);
+  assert.equal((await f.state()).watermark, epoch);
+});
+
+test("foreground synchronization preserves opt-in and at-most-once delivery across sessions", async t => {
+  const f = await fixture(t, { enabled: false });
+  const one = f.make();
+  await one.sync();
+  assert.deepEqual(f.calls, []);
+  assert.deepEqual(await readdir(f.directory), []);
+  await f.preferences.update({ desktopNotifications: true });
+  const two = f.make();
+  await Promise.all([one.sync(), two.sync()]);
+  assert.equal(f.deliveries.length, 0);
+  f.rows([updated("2", f.advance(60_000)), thread()]);
+  await Promise.all([one.client.page(firstPage()), two.client.page(firstPage())]);
+  await Promise.all([one.sync(), two.sync()]);
+  await two.sync();
+  assert.equal(f.deliveries.length, 1);
+});
+
+test("foreground synchronization retries contention on the timer and consumes the newer session's cache", async t => {
+  const f = await fixture(t);
+  const clock = watcherTimers();
+  let entered;
+  let release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const older = f.make({ notify: async message => {
+    f.deliveries.push(message);
+    entered();
+    await held;
+  } });
+  const newer = f.make({ schedule: clock.schedule, cancel: clock.cancel });
+  const inbox = new Inbox(newer.client);
+  t.after(() => inbox.close());
+  await older.check();
+  await newer.check();
+  const olderTime = f.advance(60_000);
+  f.rows([updated("2", olderTime), thread()]);
+  const delivering = older.check();
+  try {
+    await started;
+    const newerTime = f.advance(1000);
+    f.rows([updated("3", newerTime), updated("2", olderTime), thread()]);
+    await newer.prepareForeground();
+    await inbox.refresh();
+    await newer.sync();
+    assert.equal(newer.snapshot().state, "shared");
+    assert.equal(newer.foregroundRequested, true);
+    assert.equal(newer.foregroundPending, undefined, "contention must finish the attempt rather than spin");
+    const calls = f.calls.length;
+    assert.equal(calls, 3);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      f.advance(5000);
+      await clock.fire(newer);
+      assert.equal(newer.foregroundRequested, true);
+      assert.equal(newer.foregroundPending, undefined);
+      assert.equal(f.calls.length, calls);
+      assert.equal(f.deliveries.length, 1);
+    }
+    newer.add("another-panel");
+    await clock.fire(newer, 0);
+    assert.equal(newer.foregroundRequested, true, "waking a watcher must retain its foreground retry");
+    await newer.remove("another-panel");
+    assert.equal(newer.foregroundRequested, true, "closing one of several panels must not cancel the retry");
+    release();
+    await delivering;
+    f.advance(5000);
+    assert.ok(f.advance(0) < (await f.state()).nextPollAt);
+    await clock.fire(newer);
+    assert.equal(f.calls.length, calls, "the deferred foreground scan reuses its fresh cache");
+    assert.deepEqual(f.deliveries.map(alert => alert.body), ["#42 Synthetic notification 2", "#42 Synthetic notification 3"]);
+    assert.equal(newer.foregroundRequested, false);
+    assert.equal((await f.state()).watermark, newerTime);
+    f.rows([updated("2", olderTime), thread()]);
+    f.advance(5000);
+    await clock.fire(newer);
+    assert.equal(f.calls.length, calls);
+    assert.equal(f.deliveries.length, 2);
+    await newer.sync();
+    assert.equal(f.deliveries.length, 2, "already claimed cache contents are not delivered again");
+  } finally {
+    release();
+    await delivering;
+  }
+});
+
+test("disabling or closing the watcher clears a foreground retry retained after lock contention", async t => {
+  for (const action of ["disable", "close"]) {
+    const f = await fixture(t);
+    const clock = watcherTimers();
+    const watcher = f.make({ schedule: clock.schedule, cancel: clock.cancel });
+    await watcher.check();
+    f.rows([updated("2", f.advance(60_000)), thread()]);
+    await watcher.client.page(firstPage());
+    const release = await acquireLock(join(f.directory, ".desktop.lock"));
+    assert.ok(release);
+    try {
+      await watcher.sync();
+      assert.equal(watcher.foregroundRequested, true);
+      if (action === "disable") {
+        watcher.wake(await f.preferences.update({ desktopNotifications: false }));
+        assert.equal(watcher.foregroundRequested, false);
+        await clock.fire(watcher, 0);
+        assert.equal(watcher.snapshot().state, "off");
+      } else {
+        await watcher.close();
+        assert.equal(watcher.foregroundRequested, false);
+        assert.equal(clock.timers.size, 0);
+      }
+    } finally {
+      await release();
+    }
+    if (action === "disable") {
+      f.advance(5000);
+      await clock.fire(watcher);
+    }
+    assert.equal(f.calls.length, 2);
+    assert.equal(f.deliveries.length, 0);
+  }
+});
+
+test("a deferred foreground retry honors an error reservation written by the lock owner", async t => {
+  const f = await fixture(t);
+  const clock = watcherTimers();
+  let entered;
+  let release;
+  let failedAttempts = 0;
+  const started = new Promise(resolve => { entered = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const owner = f.make({ notify: async () => {
+    failedAttempts++;
+    entered();
+    await held;
+    throw new InboxError("desktop_delivery", "Synthetic delivery failure", 503);
+  } });
+  const contender = f.make({ schedule: clock.schedule, cancel: clock.cancel });
+  await owner.check();
+  await contender.check();
+  const time = f.advance(60_000);
+  f.rows([updated("2", time), thread()]);
+  const delivering = owner.check();
+  try {
+    await started;
+    f.rows([updated("3", f.advance(1000)), updated("2", time), thread()]);
+    await contender.client.page(firstPage());
+    await contender.sync();
+    assert.equal(contender.foregroundRequested, true);
+    const calls = f.calls.length;
+    release();
+    await delivering;
+    const retryAt = (await f.state()).nextPollAt;
+    f.advance(5000);
+    await clock.fire(contender);
+    assert.equal(contender.foregroundRequested, false);
+    assert.equal(contender.snapshot().state, "error");
+    assert.equal(f.calls.length, calls);
+    assert.equal(f.deliveries.length, 0);
+    f.advance(retryAt - f.advance(0));
+    await clock.fire(contender);
+    assert.equal(failedAttempts, 1);
+    assert.deepEqual(f.deliveries.map(alert => alert.body), ["#42 Synthetic notification 3"]);
+  } finally {
+    release();
+    await delivering;
+  }
+});
+
+test("foreground synchronization honors interrupted, legacy and failed-delivery reservations", async t => {
+  for (const kind of ["interrupted", "legacy", "delivery"]) {
+    const f = await fixture(t);
+    let attempts = 0;
+    const watcher = f.make({ notify: async () => { attempts++; throw new Error("Synthetic delivery failure"); } });
+    await watcher.sync();
+    if (kind === "delivery") {
+      f.rows([updated("2", f.advance(60_000)), thread()]);
+      await watcher.sync();
+      assert.equal(attempts, 1);
+    } else {
+      const state = await f.state();
+      if (kind === "interrupted") state.polling = true;
+      else delete state.polling;
+      await writeFile(join(f.directory, "desktop-state.json"), JSON.stringify(state));
+    }
+    const calls = f.calls.length;
+    f.advance(1000);
+    await watcher.sync();
+    assert.equal(f.calls.length, calls);
+    assert.equal(attempts, kind === "delivery" ? 1 : 0);
+    f.advance(120_000);
+    await watcher.sync();
+    assert.equal(f.calls.length, calls + 1);
+    assert.equal(attempts, kind === "delivery" ? 1 : 0, "failed deliveries are not replayed");
+  }
+});
+
+test("foreground requests arriving during delivery coalesce into a follow-up check and close drains it", async t => {
+  const f = await fixture(t);
+  let started;
+  let release;
+  const delivering = new Promise(resolve => { started = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const watcher = f.make({ notify: async options => {
+    f.deliveries.push(options);
+    if (f.deliveries.length === 1) {
+      started();
+      await held;
+    }
+  } });
+  await watcher.sync();
+  f.rows([updated("2", f.advance(60_000)), thread()]);
+  const first = watcher.sync();
+  try {
+    await delivering;
+    f.rows([updated("3", f.advance(60_000)), thread()]);
+    const second = watcher.sync();
+    assert.equal(second, first);
+    release();
+    await first;
+    assert.deepEqual(f.deliveries.map(alert => alert.body),
+      ["#42 Synthetic notification 2", "#42 Synthetic notification 3"]);
+    const closing = watcher.sync();
+    await watcher.close();
+    await closing;
+    assert.equal(watcher.pending, undefined);
+    assert.equal(watcher.foregroundPending, undefined);
+    const calls = f.calls.length;
+    await watcher.sync();
+    assert.equal(f.calls.length, calls);
+  } finally {
+    release();
+  }
+});
+
+test("invalid foreground reservation metadata fails closed", async t => {
+  const f = await fixture(t);
+  const watcher = f.make();
+  await watcher.check();
+  const content = JSON.stringify({ ...await f.state(), polling: "false" });
+  await writeFile(join(f.directory, "desktop-state.json"), content);
+  await watcher.sync();
+  assert.equal(watcher.snapshot().state, "error");
+  assert.equal(f.calls.length, 1);
+  assert.equal(await readFile(join(f.directory, "desktop-state.json"), "utf8"), content);
 });
 
 test("individual desktop alerts include issue and PR numbers but not unrelated IDs on every platform", async t => {
