@@ -14,18 +14,24 @@ const laterThread = id => thread(id, { updated_at: "2026-01-11T12:00:00Z" });
 async function fixture({ rows = [thread("1"), thread("2"), thread("3")], run, sleep } = {}) {
   let now = 0;
   const writes = [];
+  const methods = [];
   const waits = [];
   const client = new GitHubClient({
     now: () => now,
     sleep: sleep ?? (async delay => { waits.push(delay); now += delay; }),
     run: async (args, options) => {
-      if (args.includes("PATCH")) writes.push(args.at(-1));
-      return run ? run(args, options) : args.includes("PATCH") ? ok : http(rows, { etag: '"synthetic"' });
+      const method = args[args.indexOf("--method") + 1];
+      if (method !== "GET") {
+        writes.push(args.at(-1));
+        methods.push(method);
+      }
+      return run ? run(args, options) : method === "DELETE" ? "HTTP/2 204 No Content\r\n\r\n" :
+        method === "PATCH" ? ok : http(rows, { etag: '"synthetic"' });
     },
   });
   const inbox = new Inbox(client);
   await inbox.refresh();
-  return { inbox, client, writes, waits, advance: () => { now += POLL_MS; } };
+  return { inbox, client, writes, methods, waits, advance: () => { now += POLL_MS; } };
 }
 
 function selection(inbox, repository = "example/widgets") {
@@ -33,10 +39,169 @@ function selection(inbox, repository = "example/widgets") {
   return { repository, selectionKey: group.selectionKey };
 }
 
-function start(inbox, repository = "example/widgets") {
-  inbox.batch.start(selection(inbox, repository));
+function start(inbox, repository = "example/widgets", action = "read") {
+  inbox.batch.start({ ...selection(inbox, repository), action });
   return { token: inbox.batch.snapshot().token };
 }
+
+test("Done batches issue spaced DELETEs for only loaded search matches and synchronize other panels", async t => {
+  const rows = [
+    thread("1"), thread("2"),
+    thread("3", { subject: { title: "Excluded", type: "Issue", url: null } }),
+    thread("4", { repository: { full_name: "example/other" } }),
+  ];
+  const { inbox, client, writes, methods, waits } = await fixture({
+    run: async args => args.includes("DELETE") ? "HTTP/2 204 No Content\r\n\r\n" : http(rows, { link: next }),
+  });
+  const other = new Inbox(client);
+  t.after(() => { inbox.close(); other.close(); });
+  await other.refresh();
+  await inbox.setFilters({ query: "notification" });
+  start(inbox, "example/widgets", "done");
+  assert.equal(inbox.batch.snapshot().action, "done");
+  assert.equal(inbox.batch.snapshot().total, 2);
+  assert.equal(inbox.batch.snapshot().searchActive, true);
+  assert.equal(inbox.summary().batch.action, "done");
+  assert.doesNotMatch(JSON.stringify(inbox.summary()), /example\/|selectionKey|token|Synthetic notification/);
+  await inbox.batch.done;
+  assert.deepEqual(writes, ["/notifications/threads/1", "/notifications/threads/2"]);
+  assert.deepEqual(methods, ["DELETE", "DELETE"]);
+  assert.deepEqual(waits, [1000]);
+  assert.equal(inbox.batch.snapshot(), null);
+  for (const panel of [inbox, other]) {
+    assert.deepEqual(panel.loadedItems().map(item => item.id), ["3", "4"]);
+    assert.equal(panel.summary().needsRefresh, true);
+    assert.equal(panel.summary().hasMore, true);
+  }
+  assert.equal(client.threadReservations.size, 0);
+});
+
+test("retry retains Done, never repeats successes or adds arrivals, and does not change the next batch default", async t => {
+  let fail = true;
+  let deletes = 0;
+  const { inbox, client, writes, methods, advance } = await fixture({ run: async args => {
+    if (args.includes("GET")) return http([thread("1"), thread("2"), thread("3")]);
+    if (args.includes("PATCH")) return ok;
+    return ++deletes === 2 && fail ? http({}, {}, 500) : "HTTP/2 204 No Content\r\n\r\n";
+  } });
+  t.after(() => inbox.close());
+  const token = start(inbox, "example/widgets", "done");
+  await inbox.batch.done;
+  assert.equal(inbox.batch.snapshot().action, "done");
+  assert.equal(inbox.batch.snapshot().succeeded, 1);
+  assert.equal(inbox.batch.snapshot().failed, 1);
+  assert.equal(inbox.batch.snapshot().notAttempted, 1);
+  inbox.pages[0].items.push(...normalizeThreads([thread("4")]));
+  assert.throws(() => inbox.batch.retry({ ...token, action: "read" }), { code: "invalid_batch" });
+  assert.throws(() => inbox.batch.retry(token), { code: "github_http" });
+  assert.equal(methods.length, 2);
+  advance();
+  advance();
+  fail = false;
+  inbox.batch.retry(token);
+  assert.equal(inbox.batch.snapshot().action, "done");
+  assert.equal(inbox.batch.snapshot().total, 2);
+  await inbox.batch.done;
+  assert.deepEqual(writes, ["/notifications/threads/1", "/notifications/threads/2", "/notifications/threads/2", "/notifications/threads/3"]);
+  assert.deepEqual(methods, ["DELETE", "DELETE", "DELETE", "DELETE"]);
+  assert.deepEqual(inbox.loadedItems().map(item => item.id), ["4"]);
+  inbox.batch.start(selection(inbox));
+  assert.equal(inbox.batch.snapshot().action, "read");
+  await inbox.batch.done;
+  assert.equal(methods.at(-1), "PATCH");
+  assert.equal(client.threadReservations.size, 0);
+});
+
+test("Done rejects invalid actions and rechecks selected activity after waiting for write spacing", async t => {
+  let release;
+  const { inbox, client, writes } = await fixture({ sleep: () => new Promise(resolve => { release = resolve; }) });
+  t.after(() => inbox.close());
+  for (const action of [undefined, null, "", "DELETE", "unread", true, {}, []]) {
+    assert.throws(() => inbox.batch.start({ ...selection(inbox), action }), { code: "invalid_selection" });
+  }
+  client.writeAvailableAt = 1000;
+  start(inbox, "example/widgets", "done");
+  await settle();
+  client.cache.values().next().value.items = normalizeThreads([laterThread("1"), laterThread("2"), laterThread("3")]);
+  release();
+  await inbox.batch.done;
+  assert.deepEqual(writes, []);
+  assert.equal(inbox.batch.snapshot().skipped, 3);
+  assert.equal(inbox.batch.snapshot().action, "done");
+  assert.equal(client.threadReservations.size, 0);
+});
+
+test("stopping an in-flight Done batch waits for confirmation and retains Done for the remaining retry", async t => {
+  let release;
+  let hold = true;
+  const { inbox, client, methods } = await fixture({ run: async args => {
+    if (args.includes("GET")) return http([thread("1"), thread("2")]);
+    assert.ok(args.includes("DELETE"));
+    if (hold) await new Promise(resolve => { release = resolve; });
+    return "HTTP/2 204 No Content\r\n\r\n";
+  } });
+  const other = new Inbox(client);
+  t.after(() => { inbox.close(); other.close(); });
+  await other.refresh();
+  const token = start(inbox, "example/widgets", "done");
+  await settle();
+  await assert.rejects(other.markRead({ id: "2" }), { code: "busy" });
+  await assert.rejects(other.markDone({ id: "2" }), { code: "busy" });
+  assert.throws(() => start(other), { code: "busy" });
+  inbox.batch.cancel(token);
+  assert.equal(inbox.batch.snapshot().status, "stopping");
+  release();
+  await inbox.batch.done;
+  assert.equal(inbox.batch.snapshot().status, "cancelled");
+  assert.equal(inbox.batch.snapshot().succeeded, 1);
+  assert.equal(inbox.batch.snapshot().notAttempted, 1);
+  assert.deepEqual(methods, ["DELETE"]);
+  hold = false;
+  inbox.batch.retry(token);
+  assert.equal(inbox.batch.snapshot().action, "done");
+  await inbox.batch.done;
+  assert.deepEqual(methods, ["DELETE", "DELETE"]);
+  assert.equal(client.threadReservations.size, 0);
+});
+
+test("closing a Done batch cancels queued and in-flight work and releases all reservations", async () => {
+  for (const queued of [true, false]) {
+    const interrupted = signal => new Promise((resolve, reject) =>
+      signal.addEventListener("abort", () => reject(new InboxError("closed", "Synthetic cancellation", 410)), { once: true }));
+    const { inbox, client, methods } = await fixture({
+      sleep: (_delay, _value, { signal }) => interrupted(signal),
+      run: (args, { signal }) => args.includes("GET") ? http([thread("1"), thread("2")]) : interrupted(signal),
+    });
+    if (queued) client.writeAvailableAt = 1000;
+    start(inbox, "example/widgets", "done");
+    await settle();
+    inbox.close();
+    await inbox.batch.done;
+    assert.equal(inbox.batch.snapshot(), null);
+    assert.equal(client.pendingThreads.size, 0);
+    assert.equal(client.threadReservations.size, 0);
+    assert.deepEqual(methods, queued ? [] : ["DELETE"]);
+  }
+});
+
+test("HTTP batch starts accept an explicit Done action but reject unknown actions before any writes", async t => {
+  const { inbox, methods } = await fixture();
+  const server = await startServer(inbox);
+  t.after(() => server.close());
+  const url = new URL(server.url);
+  const headers = { Authorization: `Bearer ${url.hash.slice(1)}`, Origin: url.origin, "Content-Type": "application/json" };
+  const request = body => fetch(`${url.origin}/api/batch/start`, { method: "POST", headers, body: JSON.stringify(body) });
+  const input = selection(inbox);
+  assert.equal((await request({ ...input, action: "DELETE" })).status, 400);
+  assert.deepEqual(methods, []);
+  const response = await request({ ...input, action: "done" });
+  assert.equal(response.status, 202);
+  const snapshot = await response.json();
+  assert.equal(snapshot.batch.action, "done");
+  assert.equal(snapshot.batch.total, 3);
+  await inbox.batch.done;
+  assert.deepEqual(methods, ["DELETE", "DELETE", "DELETE"]);
+});
 
 test("one request captures only shown loaded search matches and can stop before dispatch", async () => {
   const rows = [thread("1"), thread("2"), thread("3", { repository: { full_name: "example/other" } })];
@@ -99,7 +264,7 @@ test("batch controls reject malformed, missing and stale operation tokens withou
     }
   }
   assert.equal(inbox.summary().loaded, 3);
-  assert.equal(client.readReservations.size, 0);
+  assert.equal(client.threadReservations.size, 0);
   assert.deepEqual(writes, []);
 });
 
@@ -115,7 +280,7 @@ test("dismissal is blocked during a batch and clears cancelled progress without 
   assert.equal(inbox.batch.snapshot(), null);
   assert.throws(() => inbox.batch.dismiss(token), { code: "unknown_batch" });
   assert.equal(inbox.summary().loaded, 3);
-  assert.equal(client.readReservations.size, 0);
+  assert.equal(client.threadReservations.size, 0);
   assert.deepEqual(writes, []);
 });
 
@@ -147,7 +312,7 @@ test("one-click batches make spaced PATCH calls, update shared panels, and quiet
   }
   assert.throws(() => inbox.batch.start(input), { code: "selection_changed" });
   assert.equal(writes.length, 3);
-  assert.equal(client.readReservations.size, 0);
+  assert.equal(client.threadReservations.size, 0);
   client.run = async () => "HTTP/2 304 Not modified\r\n\r\n";
   advance();
   await inbox.refresh();
@@ -195,9 +360,11 @@ test("duplicate groups, overlapping per-row reads and other-panel batches are bl
   start(inbox);
   assert.throws(() => start(inbox), { code: "busy" });
   await assert.rejects(inbox.markRead({ id: "1" }), { code: "busy" });
+  await assert.rejects(inbox.markDone({ id: "1" }), { code: "busy" });
   await assert.rejects(inbox.setFilters({ query: "changed" }), { code: "busy" });
   await settle();
   await assert.rejects(other.markRead({ id: "1" }), { code: "busy" });
+  await assert.rejects(other.markDone({ id: "1" }), { code: "busy" });
   assert.throws(() => start(other), { code: "busy" });
   assert.equal(other.batch.snapshot(), null);
   release();
@@ -284,7 +451,7 @@ test("retry rejects an entirely hidden or changed selection without writing or r
       assert.throws(() => inbox.batch.retry(token), { code: "no_remaining" });
       assert.deepEqual(inbox.batch.snapshot(), before);
       assert.equal(inbox.summary().loaded, 1);
-      assert.equal(client.readReservations.size, 0);
+      assert.equal(client.threadReservations.size, 0);
       assert.deepEqual(writes, ["/notifications/threads/1"]);
     });
   }
@@ -306,7 +473,7 @@ test("cancellation while a request is in flight waits for its confirmation but s
   assert.equal(inbox.batch.snapshot().succeeded, 1);
   assert.equal(inbox.batch.snapshot().notAttempted, 1);
   assert.equal(writes.length, 1);
-  assert.equal(client.readReservations.size, 0);
+  assert.equal(client.threadReservations.size, 0);
 });
 
 test("cancelling during a write delay and closing the panel abort not-yet-dispatched work", async () => {
@@ -321,8 +488,8 @@ test("cancelling during a write delay and closing the panel abort not-yet-dispat
     else inbox.batch.cancel(token);
     await inbox.batch.done;
     assert.equal(writes.length, 0);
-    assert.equal(client.readReservations.size, 0);
-    assert.equal(client.pendingReads.size, 0);
+    assert.equal(client.threadReservations.size, 0);
+    assert.equal(client.pendingThreads.size, 0);
     if (close) assert.equal(inbox.batch.snapshot(), null);
     else assert.equal(inbox.batch.snapshot().notAttempted, 3);
   }
@@ -407,8 +574,8 @@ test("closing a server aborts an in-flight batch and releases its listener and r
   await settle();
   await server.close();
   assert.equal(inbox.batch.snapshot(), null);
-  assert.equal(client.readReservations.size, 0);
-  assert.equal(client.pendingReads.size, 0);
+  assert.equal(client.threadReservations.size, 0);
+  assert.equal(client.pendingThreads.size, 0);
   assert.equal(writes.length, 1);
   await assert.rejects(fetch(server.url));
 });

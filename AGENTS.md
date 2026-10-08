@@ -18,7 +18,7 @@ framework or separately installed runtime SDK.
 | `.github/extensions/github-notifications/extension.mjs` | Development discovery shim importing `src/extension.mjs`. Keep it thin. |
 | `src/extension.mjs` | SDK registration, agent-facing actions, panel lifecycle, and shared services. |
 | `src/github.mjs`, `src/model.mjs` | GitHub CLI requests, caching, rate limits, validation, normalization, and grouping. |
-| `src/inbox.mjs`, `src/batch.mjs` | Loaded-page state, aggregate summaries, row reads, and repository read batches. |
+| `src/inbox.mjs`, `src/batch.mjs` | Loaded-page state, aggregate summaries, and row and repository read/done actions. |
 | `src/server.mjs`, `src/assets.mjs` | Protected per-panel loopback HTTP server, asset snapshots, and startup recovery. |
 | `src/index.html`, `src/app.mjs`, `src/styles.css` | Renderer, controls, accessibility, and themes. |
 | `src/settings.mjs`, `src/lock.mjs`, `src/startup.mjs` | User-wide preferences, cross-process locking, and session auto-open. |
@@ -70,15 +70,18 @@ output. Development loads source without a build; release builds bundle
 - Treat notification content as untrusted text and preserve URL validation.
   Maintain accessible names, keyboard/focus behavior, and app theme-token support.
 
-### Inbox and mark-as-read behavior
+### Inbox and read/done behavior
 
 - Search and counts cover **loaded unread items**, not the entire GitHub inbox.
   Refresh reconciles loaded pages; a failed refresh must not discard usable data.
-- Read updates require explicit panel actions. Row reads target a loaded thread;
-  repository batches target the shown, search-matching selection. Preserve
-  selection checks, per-thread writes, cross-panel reservations, cancellation,
-  and retry rules. Never replace this with an unbounded mark-all-read endpoint
-  or an agent-facing write action.
+- Read and done updates require explicit panel actions. Row actions target a
+  loaded unread thread; repository batches target the shown, search-matching
+  selection. Read is the default, and retries retain the explicitly chosen
+  action. Preserve selection checks, per-thread writes, cross-panel reservations,
+  cancellation, and retry rules. Never replace this with an unbounded mark-all-read
+  endpoint or an agent-facing write action.
+- GitHub owns read/done state. Never persist per-notification triage history or
+  add a local completion ledger to compensate for missing GitHub API filters.
 - Respect GitHub polling headers, rate limits, retry waits, and abort signals.
   Force refresh may bypass the polling cache, not rate/error backoff.
 

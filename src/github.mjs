@@ -110,9 +110,9 @@ export class GitHubClient {
     this.lastError = null;
     this.sleep = sleep;
     this.writeAvailableAt = 0;
-    this.pendingReads = new Set();
-    this.readReservations = new Map();
-    this.readListeners = new Set();
+    this.pendingThreads = new Set();
+    this.threadReservations = new Map();
+    this.threadListeners = new Set();
     this.revision = 0;
   }
 
@@ -134,30 +134,38 @@ export class GitHubClient {
     });
   }
 
-  reserveReads(ids) {
-    if (ids.some(id => this.pendingReads.has(id) || this.readReservations.has(id))) {
-      throw new InboxError("busy", "A selected notification is already being marked as read in another operation.", 409);
+  reserveThreads(ids) {
+    if (ids.some(id => this.pendingThreads.has(id) || this.threadReservations.has(id))) {
+      throw new InboxError("busy", "A selected notification is already being updated in another operation.", 409);
     }
-    const owner = Symbol("read batch");
-    for (const id of ids) this.readReservations.set(id, owner);
+    const owner = Symbol("notification batch");
+    for (const id of ids) this.threadReservations.set(id, owner);
     return owner;
   }
 
-  releaseReads(owner) {
-    for (const [id, reservedBy] of this.readReservations) {
-      if (reservedBy === owner) this.readReservations.delete(id);
+  releaseThreads(owner) {
+    for (const [id, reservedBy] of this.threadReservations) {
+      if (reservedBy === owner) this.threadReservations.delete(id);
     }
   }
 
-  markRead(id, signal, { owner, beforeWrite } = {}) {
+  markRead(id, signal, options) {
+    return this.#markThread(id, signal, "PATCH", options);
+  }
+
+  markDone(id, signal, options) {
+    return this.#markThread(id, signal, "DELETE", options);
+  }
+
+  #markThread(id, signal, method, { owner, beforeWrite } = {}) {
     if (typeof id !== "string" || !/^[1-9]\d{0,63}$/.test(id)) {
       throw new InboxError("invalid_thread", "Use a valid notification thread ID.", 400);
     }
-    if (this.pendingReads.has(id)) throw new InboxError("busy", "This notification is already being marked as read.", 409);
-    if (this.readReservations.has(id) && this.readReservations.get(id) !== owner) {
+    if (this.pendingThreads.has(id)) throw new InboxError("busy", "This notification is already being updated.", 409);
+    if (this.threadReservations.has(id) && this.threadReservations.get(id) !== owner) {
       throw new InboxError("busy", "This notification belongs to an active repository batch.", 409);
     }
-    this.pendingReads.add(id);
+    this.pendingThreads.add(id);
     const pending = this.queue.then(async () => {
       const delay = this.writeAvailableAt - this.now();
       if (delay > 0) {
@@ -172,7 +180,7 @@ export class GitHubClient {
         new InboxError("rate_limited", "GitHub requests are paused until the rate limit resets.", 429);
       beforeWrite?.();
       try {
-        await this.request(`/notifications/threads/${id}`, signal, "PATCH");
+        await this.request(`/notifications/threads/${id}`, signal, method);
       } finally {
         this.writeAvailableAt = this.now() + 1000;
       }
@@ -182,8 +190,8 @@ export class GitHubClient {
         page.etag = undefined;
         page.modified = undefined;
       }
-      for (const listener of this.readListeners) listener(id);
-    }).finally(() => this.pendingReads.delete(id));
+      for (const listener of this.threadListeners) listener(id);
+    }).finally(() => this.pendingThreads.delete(id));
     this.queue = pending.catch(() => {});
     return pending;
   }
@@ -233,9 +241,9 @@ export class GitHubClient {
         "GitHub sign-in expired. Run gh auth login --hostname github.com. This view retries automatically while visible.", 401);
       if (status === 403 || status === 404) throw new InboxError("permission",
         "GitHub denied notifications access. Check gh auth status; grant notifications scope with gh auth refresh --hostname github.com --scopes notifications. Check organization SSO if applicable. Fine-grained tokens are unsupported.", 403);
-      if (!(method === "PATCH" ? [205, 304] : [200, 304]).includes(status)) throw new InboxError("github_http",
+      if (!(method === "DELETE" ? [204] : method === "PATCH" ? [205, 304] : [200, 304]).includes(status)) throw new InboxError("github_http",
         `GitHub returned HTTP ${status}. Check GitHub status and try again.`, 502);
-      if (method === "PATCH") {
+      if (method !== "GET") {
         clearFailure();
         return;
       }

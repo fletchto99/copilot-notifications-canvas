@@ -90,24 +90,144 @@ test("keyboard row actions mark exactly one notification and move focus to the n
   expect(canvas.writes).toEqual(["2"]);
 });
 
-for (const groupBy of ["repo", "date"]) {
-  test(`keyboard row reads retain focus beside a collapsed ${groupBy} group`, async ({ page, canvas }) => {
+for (const width of [320, 480, 960]) {
+  test(`row icons are compact, visible and have unclipped accessible tooltips at ${width}px`, async ({ page, canvas }, testInfo) => {
+    canvas.rows.splice(3);
+    canvas.rows[0].subject.title = "Add notification filters";
+    canvas.rows[1].subject.title = "Update installation guidance";
+    canvas.rows[2].subject.title = "Review release checklist";
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(canvas.url);
+    await expect(page.locator(".row")).toHaveCount(3);
+    const read = page.locator('[data-focus-key="read:1"]');
+    const done = page.locator('[data-focus-key="done:1"]');
+    const readBounds = await read.boundingBox();
+    const doneBounds = await done.boundingBox();
+    expect(readBounds.width).toBe(32);
+    expect(readBounds.height).toBe(32);
+    expect(doneBounds.y).toBe(readBounds.y);
+    expect(doneBounds.x - readBounds.x - readBounds.width).toBe(4);
+    const toolbar = page.locator("#force-refresh");
+    for (const property of ["border-top-width", "border-top-color", "border-radius", "color"]) {
+      const expected = await toolbar.evaluate((node, property) => getComputedStyle(node).getPropertyValue(property), property);
+      await expect(read).toHaveCSS(property, expected);
+      await expect(done).toHaveCSS(property, expected);
+    }
+    await expect(read).toHaveCSS("border-top-width", "1px");
+    await expect(read).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+    await expect(done).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+    await expect(page.locator(".row > time")).toHaveCount(0);
+    await expect(page.locator(".row .metadata time")).toHaveCount(3);
+    await expect(page.locator(".metadata").getByText("Unread", { exact: true })).toHaveCount(0);
+    await expect(page.locator(".metadata-separator")).toHaveCount(9);
+    for (const separator of await page.locator(".metadata-separator").all()) {
+      await expect(separator).toHaveText("\u00b7");
+      await expect(separator).toHaveAttribute("aria-hidden", "true");
+    }
+    for (const metadata of await page.locator(".metadata").all()) {
+      const fields = await metadata.evaluate(node => [...node.querySelectorAll(".metadata-item")].map(part => {
+        const rect = [...part.children].find(child => !child.classList.contains("metadata-separator")).getBoundingClientRect();
+        return { x: rect.x, y: rect.y };
+      }));
+      for (let index = 1; index < fields.length; index++) {
+        if (fields[index].y > fields[index - 1].y + 1) expect(fields[index].x).toBeCloseTo(fields[0].x);
+      }
+    }
+    await expect(page.locator(".row .metadata time").first()).toHaveAttribute("datetime", canvas.rows[2].updated_at);
+    await expect(read.locator("svg")).toBeVisible();
+    await expect(done.locator("svg")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+    await page.screenshot({ path: testInfo.outputPath(`row-icons-${width}.png`), fullPage: true });
+
+    for (const id of ["3", "2"]) {
+      for (const action of ["read", "done"]) {
+        const button = page.locator(`[data-focus-key="${action}:${id}"]`);
+        const tooltip = page.locator(`#row-${action}-${id}-tooltip`);
+        await page.getByRole("heading", { name: "Unread Notifications", exact: true }).hover();
+        await page.getByRole("searchbox").focus();
+        await expect(tooltip).toBeHidden();
+        await expect(button).not.toHaveAttribute("title");
+        await expect(button).toHaveText("");
+        await expect(button.locator("svg")).toHaveAttribute("aria-hidden", "true");
+        await button.hover();
+        expect(await tooltip.isVisible()).toBe(true);
+        await expect(tooltip).toHaveText(`Mark as ${action}`);
+        await expect(button).toHaveAccessibleDescription(`Mark as ${action}`);
+        const bounds = await tooltip.boundingBox();
+        const card = await button.evaluate(node => {
+          const rect = node.closest(".repo-group").getBoundingClientRect();
+          return { x: rect.x, y: rect.y, right: rect.right };
+        });
+        expect(bounds.x).toBeGreaterThanOrEqual(card.x);
+        expect(bounds.x + bounds.width).toBeLessThanOrEqual(card.right);
+        expect(bounds.y).toBeGreaterThanOrEqual(card.y);
+        expect(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('[role="tooltip"]')?.id,
+          { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 })).toBe(await tooltip.getAttribute("id"));
+        await tooltip.hover();
+        await expect(tooltip).toBeVisible();
+        await button.focus();
+        await button.press("Escape");
+        await expect(tooltip).toBeHidden();
+        await expect(button).toBeFocused();
+        await page.getByRole("searchbox").focus();
+        await button.focus();
+        expect(await tooltip.isVisible()).toBe(true);
+        await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+        await expect(tooltip).toBeHidden();
+      }
+    }
+    expect(canvas.writes).toEqual([]);
+  });
+}
+
+for (const groupBy of ["repo", "date", "none"]) {
+  test(`Tab navigation reaches separate read and Done actions in ${groupBy} view`, async ({ page, canvas }) => {
     canvas.rows.splice(2);
-    canvas.rows[0].repository.full_name = "example/alpha";
-    canvas.rows[0].updated_at = "2026-01-11T12:00:00Z";
-    canvas.rows[1].repository.full_name = "example/zulu";
     await canvas.preferences.update({ groupBy });
     await page.goto(canvas.url);
-    await page.locator(".repo-toggle").nth(1).click();
-    const button = page.locator('[data-thread-id="1"]');
-    await button.focus();
-    await button.press("Enter");
+    await expect(page.locator(".row")).toHaveCount(2);
+    expect(canvas.writes).toEqual([]);
+    const title = page.locator(".row .title").first();
+    await title.focus();
+    await page.keyboard.press("Tab");
+    await expect(page.locator('[data-focus-key="read:1"]')).toBeFocused();
+    await page.keyboard.press("Tab");
+    const done = page.locator('[data-focus-key="done:1"]');
+    await expect(done).toBeFocused();
+    await expect(done).toHaveAccessibleName("Mark as done: <img src=x onerror=alert(1)> Needle widget 1");
+    await done.press("Enter");
     await expect(page.locator(".row")).toHaveCount(1);
-    await expect(page.getByRole("searchbox", { name: searchName })).toBeFocused();
-    await expect(page.locator(".repo-toggle")).toHaveAttribute("aria-expanded", "false");
-    await expect(page.locator(".row")).toBeHidden();
+    await expect(page.locator('[data-focus-key="done:2"]')).toBeFocused();
+    expect(canvas.writes).toEqual(["1"]);
+    expect(canvas.doneWrites).toEqual(["1"]);
+    await page.reload();
+    await expect(page.locator(".row")).toHaveCount(1);
+    await expect(page.locator('[data-focus-key="done:1"]')).toHaveCount(0);
     expect(canvas.writes).toEqual(["1"]);
   });
+}
+
+for (const groupBy of ["repo", "date"]) {
+  for (const action of ["read", "done"]) {
+    test(`keyboard ${action} actions retain focus beside a collapsed ${groupBy} group`, async ({ page, canvas }) => {
+      canvas.rows.splice(2);
+      canvas.rows[0].repository.full_name = "example/alpha";
+      canvas.rows[0].updated_at = "2026-01-11T12:00:00Z";
+      canvas.rows[1].repository.full_name = "example/zulu";
+      await canvas.preferences.update({ groupBy });
+      await page.goto(canvas.url);
+      await page.locator(".repo-toggle").nth(1).click();
+      const button = page.locator(`[data-focus-key="${action}:1"]`);
+      await button.focus();
+      await button.press("Enter");
+      await expect(page.locator(".row")).toHaveCount(1);
+      await expect(page.getByRole("searchbox", { name: searchName })).toBeFocused();
+      await expect(page.locator(".repo-toggle")).toHaveAttribute("aria-expanded", "false");
+      await expect(page.locator(".row")).toBeHidden();
+      expect(canvas.writes).toEqual(["1"]);
+      expect(canvas.doneWrites).toEqual(action === "done" ? ["1"] : []);
+    });
+  }
 }
 
 test("repository actions affect only shown loaded matches, not another repository or unloaded rows", async ({ page, canvas }) => {

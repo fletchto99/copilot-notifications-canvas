@@ -1,6 +1,6 @@
 import { firstPage, RETRY_MS } from "./github.mjs";
 import { groupThreads, InboxError, orderedThreads, validateFilters } from "./model.mjs";
-import { ReadBatch, selectionKey } from "./batch.mjs";
+import { NotificationBatch, selectionKey } from "./batch.mjs";
 
 export class Inbox {
   constructor(client, input = {}) {
@@ -8,17 +8,17 @@ export class Inbox {
     this.filters = { mode: "unread", query: "", ...validateFilters(input) };
     this.pages = [];
     this.busy = false;
-    this.reading = new Set();
-    this.batch = new ReadBatch(this);
+    this.marking = new Set();
+    this.batch = new NotificationBatch(this);
     this.error = null;
     this.nextRefreshAt = 0;
     this.controller = new AbortController();
     this.needsRefresh = false;
-    this.onRead = id => {
+    this.onThreadUpdated = id => {
       this.pages = this.pages.map(page => ({ ...page, items: page.items.filter(item => item.id !== id) }));
       this.needsRefresh = true;
     };
-    client.readListeners.add(this.onRead);
+    client.threadListeners.add(this.onThreadUpdated);
   }
 
   loadedItems() {
@@ -134,7 +134,15 @@ export class Inbox {
     return this.summary();
   }
 
-  async markRead(input) {
+  markRead(input) {
+    return this.#markThread(input, "markRead");
+  }
+
+  markDone(input) {
+    return this.#markThread(input, "markDone");
+  }
+
+  async #markThread(input, method) {
     if (!input || typeof input !== "object" || Array.isArray(input) ||
         Object.keys(input).length !== 1 || typeof input.id !== "string" ||
         !/^[1-9]\d{0,63}$/.test(input.id)) {
@@ -143,15 +151,15 @@ export class Inbox {
     if (this.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
     if (this.busy) throw new InboxError("busy", "Wait for the current inbox request to finish.", 409);
     if (this.batch.locked) throw new InboxError("busy", "Finish or cancel the repository batch first.", 409);
-    if (this.reading.has(input.id)) throw new InboxError("busy", "This notification is already being marked as read.", 409);
+    if (this.marking.has(input.id)) throw new InboxError("busy", "This notification is already being updated.", 409);
     if (!this.pages.some(page => page.items.some(item => item.id === input.id && item.unread))) {
       throw new InboxError("unknown_thread", "This notification is no longer in the loaded inbox. Let the view update automatically before trying again.", 404);
     }
-    this.reading.add(input.id);
+    this.marking.add(input.id);
     try {
-      await this.client.markRead(input.id, this.controller.signal);
+      await this.client[method](input.id, this.controller.signal);
     } finally {
-      this.reading.delete(input.id);
+      this.marking.delete(input.id);
     }
     return this.summary();
   }
@@ -160,6 +168,6 @@ export class Inbox {
     this.controller.abort();
     this.batch.close();
     this.pages = [];
-    this.client.readListeners.delete(this.onRead);
+    this.client.threadListeners.delete(this.onThreadUpdated);
   }
 }

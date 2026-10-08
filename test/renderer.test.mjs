@@ -14,8 +14,8 @@ test("renderer public controls survive bundling and minification", async () => {
     assert.equal(ui.document.querySelectorAll("article").length, 2);
     assert.deepEqual(ui.ids.get("groups").querySelectorAll("a").map(link => link.textContent),
       ["Synthetic notification 1", "Synthetic notification 2"]);
-    assert.deepEqual(ui.ids.get("groups").querySelectorAll("div").filter(node => node.className === "metadata")
-      .map(node => node.children[0].textContent), ["Pull Request #42", "Pull Request #42"]);
+    assert.deepEqual(ui.ids.get("groups").querySelectorAll(".notification-type")
+      .map(node => node.textContent), ["Pull Request #42", "Pull Request #42"]);
     await ui.ids.get("copy-update").events.click();
     assert.deepEqual(ui.copied, ["Install the verified v2.0.0 package."]);
     ui.ids.get("theme").value = "dark";
@@ -335,8 +335,7 @@ test("issue and PR numbers appear in metadata in every grouping and search witho
       const groups = ui.ids.get("groups");
       assert.deepEqual(groups.querySelectorAll("a").map(link => link.textContent),
         ["<img src=x onerror=alert(1)> Fix login", "(Untitled notification)", "New release"]);
-      assert.deepEqual(groups.querySelectorAll("div").filter(node => node.className === "metadata")
-        .map(node => node.children.find(child => child.className !== "repository").textContent),
+      assert.deepEqual(groups.querySelectorAll(".notification-type").map(node => node.textContent),
       ["Issue #7", "Pull Request #8", "Release"]);
       assert.deepEqual(groups.querySelectorAll("a").map(link => link.href),
         ["https://github.com/example/widgets/issues/7", "https://github.com/example/widgets/pull/8",
@@ -344,7 +343,9 @@ test("issue and PR numbers appear in metadata in every grouping and search witho
       assert.deepEqual(groups.querySelectorAll("button").filter(button => button.dataset.threadId)
         .map(button => button.attributes["aria-label"]), [
         "Mark as read: #7 <img src=x onerror=alert(1)> Fix login",
-        "Mark as read: #8 Untitled notification", "Mark as read: New release",
+        "Mark as done: #7 <img src=x onerror=alert(1)> Fix login",
+        "Mark as read: #8 Untitled notification", "Mark as done: #8 Untitled notification",
+        "Mark as read: New release", "Mark as done: New release",
       ]);
       const search = ui.ids.get("search");
       search.value = "#7";

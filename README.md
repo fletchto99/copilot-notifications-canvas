@@ -2,7 +2,7 @@
 
 Unread GitHub notifications in the GitHub Copilot app, grouped by repository or
 date, or shown as a single newest-first list. Search, mark rows or repositories
-as read, and opt into desktop notifications or auto-open.
+as read or done, and opt into desktop notifications or auto-open.
 
 ![Unread Notifications canvas showing a repository group, search, settings, and mark-as-read controls](docs/images/unread-notifications.png)
 
@@ -45,9 +45,24 @@ full procedure, verification requirements, and troubleshooting.
   Search matches titles, numbers and repositories;
   search and counts cover loaded items only. Numbers are omitted when GitHub
   does not provide a valid issue or PR link.
-- **Mark as read:** mark individual rows in any view. In **repo** mode,
-  **Mark N as read** marks only that repository's loaded items matching your search,
-  not older unloaded notifications.
+- **Mark as read:** use the open-envelope icon on an individual row in any view.
+  In **repo** mode, **Mark N as read** marks only that repository's loaded items
+  matching your search, not older unloaded notifications.
+- **Mark as done:** use the checkmark icon to mark an individual row completed on
+  GitHub in any view.
+  This is separate from marking it read. Both actions remove the row from this
+  unread-only canvas after GitHub confirms success. Done status is stored only
+  by GitHub; the canvas keeps no local completion history. Use GitHub's inbox
+  to view read or done notifications.
+  In **repo** mode, the arrow beside **Mark N as read** opens a dropdown with
+  **Mark N as done**, limited to that repository's shown, loaded search matches.
+  Read stays the default; choosing Done never changes future defaults.
+  Both repository actions show progress, allow stopping remaining requests, and
+  retry only unchanged, still-shown remaining items with the original action.
+  Both row icons use compact outlined buttons with immediate hover and
+  keyboard-focus tooltips. Press Escape to dismiss a tooltip; Tab moves between
+  the title, read, and done controls. The last-updated time appears with the
+  dot-separated metadata beneath each title, without a redundant unread label.
 - **Refresh:** automatic checks run about every 60 seconds while the canvas is
   visible and pause while hidden. Returning to the foreground refreshes immediately.
   Longer GitHub polling intervals apply to automatic checks. Foreground returns
@@ -82,8 +97,8 @@ errors. GitHub CLI handles credentials; they never enter the canvas renderer.
 
 GitHub CLI fetches notifications and public release metadata. Update checks do
 not send notification content or download or execute release code. Only explicit
-**Mark as read** actions send read updates; visiting a linked GitHub page may
-also mark a notification read on GitHub.
+**Mark as read** or **Mark as done** actions send notification updates; visiting a
+linked GitHub page may also mark a notification read on GitHub.
 
 ## Documentation
 

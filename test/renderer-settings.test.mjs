@@ -394,7 +394,10 @@ test("none lists all notifications globally newest first with repository metadat
   assert.equal(list.children.length, 1);
   assert.equal(list.children[0].className, "notification-list");
   assert.equal(list.querySelectorAll("section").length, 0);
-  assert.deepEqual(list.querySelectorAll("button").map(node => node.dataset.threadId), ["2", "4", "3", "1"]);
+  for (const action of ["read", "done"]) {
+    assert.deepEqual(list.querySelectorAll("button").filter(node => node.dataset.action === action)
+      .map(node => node.dataset.threadId), ["2", "4", "3", "1"]);
+  }
   assert.deepEqual(list.querySelectorAll("span").filter(node => node.className === "repository").map(node => node.textContent),
     ["example/zulu", "example/zulu", "example/alpha", "example/alpha"]);
   assert.equal(ui.ids.get("collapse").hidden, true);
@@ -465,7 +468,7 @@ test("grouping changes apply immediately, persist across panels and restore repo
     assert.equal(reopened.ids.get("collapse").hidden, groupBy === "none");
     reopened.window.events.pagehide();
   }
-  assert.deepEqual(list.querySelectorAll("button").filter(node => node.dataset.repository).map(node => node.dataset.repository),
+  assert.deepEqual(list.querySelectorAll("button").filter(node => node.dataset.batchAction === "read").map(node => node.dataset.repository),
     ["example/alpha", "example/zulu"]);
   assert.equal(list.querySelectorAll("button").find(node => node.dataset.focusKey === "repo:example/alpha").attributes["aria-expanded"], "false");
   const posts = ui.calls.filter(call => call.path === "/api/settings" && call.options.body);
@@ -603,7 +606,7 @@ test("row reads in none and date modes follow the displayed order for focus", as
       thread("2", { repository: { full_name: "example/zulu" }, updated_at: "2026-01-03T12:00:00Z" }),
       thread("3", { repository: { full_name: "example/alpha" }, updated_at: "2026-01-02T12:00:00Z" }),
     ] });
-    const readButtons = () => ui.ids.get("groups").querySelectorAll("button").filter(node => node.dataset.threadId);
+    const readButtons = () => ui.ids.get("groups").querySelectorAll("button").filter(node => node.dataset.action === "read");
     const first = readButtons()[0];
     first.focus();
     await first.events.click();

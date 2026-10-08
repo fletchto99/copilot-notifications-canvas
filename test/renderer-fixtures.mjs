@@ -41,6 +41,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
   };
   const copied = [];
   const patches = [];
+  const deletions = [];
   const githubCalls = [];
   class Node {
     constructor(tag) {
@@ -93,7 +94,8 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     querySelectorAll(selector) {
       const result = [];
       for (const child of this.children) {
-        if (child.tag === selector || (selector === "[data-focus-key]" && child.dataset.focusKey)) result.push(child);
+        if (child.tag === selector || (selector === "[data-focus-key]" && child.dataset.focusKey) ||
+            (selector.startsWith(".") && child.className?.split(" ").includes(selector.slice(1)))) result.push(child);
         result.push(...child.querySelectorAll(selector));
       }
       return result;
@@ -122,6 +124,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       return ids.get(id) ?? null;
     },
     createElement: tag => new Node(tag),
+    createElementNS: (namespace, tag) => Object.assign(new Node(tag), { namespaceURI: namespace }),
     createDocumentFragment: () => new Node("fragment"),
     querySelectorAll: selector => [...ids.values()].flatMap(node => node.querySelectorAll(selector)),
     addEventListener(name, handler) { this.events[name] = handler; },
@@ -136,10 +139,11 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
   window.matchMedia = () => media;
   const inbox = new Inbox(new GitHubClient({ now: () => now, sleep: async delay => { now += delay; }, run: async args => {
     githubCalls.push(args);
-    if (args.includes("PATCH")) {
-      patches.push(args.at(-1));
-      if (onWrite) return onWrite(args.at(-1), patches.length);
-      return readFailure ? http({}, {}, 403) : "HTTP/2 205 Reset Content\r\n\r\n";
+    if (args.includes("PATCH") || args.includes("DELETE")) {
+      const done = args.includes("DELETE");
+      (done ? deletions : patches).push(args.at(-1));
+      if (onWrite) return onWrite(args.at(-1), patches.length + deletions.length, done ? "DELETE" : "PATCH");
+      return readFailure && !done ? http({}, {}, 403) : `HTTP/2 ${done ? 204 : 205} Synthetic\r\n\r\n`;
     }
     return onFetch ? onFetch(args) : http(rows);
   } }));
@@ -192,6 +196,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
         await inbox.setFilters(input);
       }
       if (path === "/api/read") await inbox.markRead(JSON.parse(options.body));
+      if (path === "/api/done") await inbox.markDone(JSON.parse(options.body));
       if (path.startsWith("/api/batch/")) inbox.batch[path.slice("/api/batch/".length)](JSON.parse(options.body));
       return { ok: true, json: async () => ({ ...inbox.snapshot(), updates: releaseMetadata, development }) };
     },
@@ -203,7 +208,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
   });
   await settle();
   return {
-    calls, document, window, ids, timers, context, inbox, patches, githubCalls, copied, media,
+    calls, document, window, ids, timers, context, inbox, patches, deletions, githubCalls, copied, media,
     get themeDisconnected() { return themeDisconnected; },
     setAppTheme(mode) {
       if (mode === null) delete document.documentElement.attributes["data-color-mode"];

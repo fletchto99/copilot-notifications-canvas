@@ -7,12 +7,13 @@ export function selectionKey(group, query) {
   ])).digest("hex");
 }
 
-function fields(input, keys) {
+function fields(input, keys, optional = []) {
   return input && typeof input === "object" && !Array.isArray(input) &&
-    Object.keys(input).length === keys.length && keys.every(key => Object.hasOwn(input, key));
+    keys.every(key => Object.hasOwn(input, key)) &&
+    Object.keys(input).every(key => keys.includes(key) || optional.includes(key));
 }
 
-export class ReadBatch {
+export class NotificationBatch {
   constructor(inbox) {
     this.inbox = inbox;
     this.operation = null;
@@ -26,7 +27,7 @@ export class ReadBatch {
 
   assertAvailable() {
     if (this.disposed) throw new InboxError("closed", "The canvas was closed.", 410);
-    if (this.locked || this.inbox.busy || this.inbox.reading.size) {
+    if (this.locked || this.inbox.busy || this.inbox.marking.size) {
       throw new InboxError("busy", "Finish or cancel the current inbox operation first.", 409);
     }
   }
@@ -44,19 +45,21 @@ export class ReadBatch {
 
   start(input) {
     this.assertAvailable();
-    if (!fields(input, ["repository", "selectionKey"]) || typeof input.repository !== "string" ||
+    if (!fields(input, ["repository", "selectionKey"], ["action"]) ||
+        (Object.hasOwn(input, "action") && !["read", "done"].includes(input.action)) ||
+        typeof input.repository !== "string" ||
         input.repository.length > 256 || typeof input.selectionKey !== "string" ||
         !/^[a-f0-9]{64}$/.test(input.selectionKey)) {
-      throw new InboxError("invalid_selection", "Choose a currently shown repository group.", 400);
+      throw new InboxError("invalid_selection", "Choose a currently shown repository group and a read or done action.", 400);
     }
     const group = this.inbox.groups().find(item => item.repository === input.repository);
     if (!group || group.selectionKey !== input.selectionKey) {
       throw new InboxError("selection_changed", "The shown group changed. Review its updated count and try again.", 409);
     }
-    this.launch(group.repository, group.items);
+    this.launch(group.repository, group.items, input.action ?? "read");
   }
 
-  launch(repository, items) {
+  launch(repository, items, action = "read") {
     if (!items.length || items.some(item => !/^[1-9]\d{0,63}$/.test(item.id)) ||
         new Set(items.map(item => item.id)).size !== items.length) {
       throw new InboxError("invalid_selection", "The selected group contains no eligible notifications or invalid thread IDs.", 400);
@@ -65,9 +68,9 @@ export class ReadBatch {
       throw this.inbox.client.lastError ??
         new InboxError("rate_limited", "GitHub requests are paused until the rate limit resets.", 429);
     }
-    const owner = this.inbox.client.reserveReads(items.map(item => item.id));
+    const owner = this.inbox.client.reserveThreads(items.map(item => item.id));
     const operation = {
-      token: randomUUID(), repository, status: "running",
+      token: randomUUID(), repository, action, status: "running",
       searchActive: Boolean(this.inbox.filters.query.trim()),
       items: items.map(({ id, updatedAt }) => ({ id, updatedAt, result: "pending" })),
       inFlight: false, cancelled: false, error: null, owner, controller: new AbortController(),
@@ -97,7 +100,8 @@ export class ReadBatch {
             item.result = "skipped";
             continue;
           }
-          await this.inbox.client.markRead(item.id, signal, {
+          const method = operation.action === "done" ? "markDone" : "markRead";
+          await this.inbox.client[method](item.id, signal, {
             owner: operation.owner,
             beforeWrite: () => {
               if (operation.cancelled || signal.aborted) throw new InboxError("batch_cancelled", "Remaining work was cancelled.", 409);
@@ -127,7 +131,7 @@ export class ReadBatch {
       operation.status = operation.items.every(item => item.result === "succeeded") ? "completed" :
         operation.cancelled || signal.aborted ? "cancelled" : "partial";
     } finally {
-      this.inbox.client.releaseReads(operation.owner);
+      this.inbox.client.releaseThreads(operation.owner);
       if (this.disposed || operation.status === "completed") this.operation = null;
     }
   }
@@ -151,7 +155,7 @@ export class ReadBatch {
     if (!remaining.length) {
       throw new InboxError("no_remaining", "No unchanged, shown notifications remain from this batch. Wait for the next automatic refresh, then choose a repository group instead.", 409);
     }
-    this.launch(operation.repository, remaining);
+    this.launch(operation.repository, remaining, operation.action);
   }
 
   dismiss(input) {
@@ -165,7 +169,7 @@ export class ReadBatch {
     if (!operation) return null;
     const count = result => operation.items.filter(item => item.result === result).length;
     return {
-      token: operation.token, repository: operation.repository, status: operation.status,
+      token: operation.token, repository: operation.repository, action: operation.action, status: operation.status,
       total: operation.items.length, succeeded: count("succeeded"), failed: count("failed"),
       skipped: count("skipped"), notAttempted: count("pending") - Number(operation.inFlight),
       inFlight: operation.inFlight, searchActive: operation.searchActive,
