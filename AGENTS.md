@@ -194,7 +194,7 @@ aligned with the test workflow. Setup prepares tools; the agent still selects
 and runs the checks relevant to its task.
 
 Workflow CI uses a separate `actionlint` job with the upstream Docker image pinned
-by version and verified digest in `.github/actions/actionlint/Dockerfile`.
+by version and verified digest in `ci/actionlint/Dockerfile`.
 The local action passes `-color -verbose`; Dependabot's Docker entry manages the
 same Dockerfile consumed by CI. Keep its version aligned with Copilot setup's
 checksum-verified binary and the installation guidance; the dedicated alignment
