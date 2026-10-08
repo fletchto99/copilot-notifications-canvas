@@ -2,6 +2,22 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
+test("CI runs ESLint, Stylelint and Prettier checks without allowing warnings", async () => {
+  const [workflow, { scripts }] = await Promise.all([
+    readFile(new URL("../.github/workflows/tests.yml", import.meta.url), "utf8"),
+    readFile(new URL("../package.json", import.meta.url), "utf8").then(JSON.parse),
+  ]);
+  const lint = workflow.match(/\n {2}lint:\n([\s\S]*?)(?=\n {2}[a-z][\w-]*:|$)/)?.[1];
+  assert.ok(lint, "CI must have a lint job");
+  for (const script of ["lint:js", "lint:css", "format:css:check"]) {
+    assert.match(lint, new RegExp(`^\\s+run: npm run ${script}$`, "m"));
+  }
+  assert.equal(scripts.lint, "npm run lint:js && npm run lint:css && npm run format:css:check");
+  assert.equal(scripts["lint:js"], "eslint . --max-warnings=0");
+  assert.equal(scripts["lint:css"], 'stylelint "src/**/*.css" --max-warnings=0');
+  assert.equal(scripts["format:css:check"], 'prettier --check "src/**/*.css"');
+});
+
 test("browser CI pins the locked Playwright version without installing browsers or system packages", async () => {
   const [workflow, lock] = await Promise.all([
     readFile(new URL("../.github/workflows/tests.yml", import.meta.url), "utf8"),

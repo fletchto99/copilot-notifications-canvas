@@ -72,7 +72,11 @@ jobs:
       - name: Install development dependencies
         run: npm ci --ignore-scripts --no-fund --no-audit
       - name: Lint JavaScript
-        run: npm run lint
+        run: npm run lint:js
+      - name: Lint CSS with Stylelint
+        run: npm run lint:css
+      - name: Check CSS formatting with Prettier
+        run: npm run format:css:check
       - name: Install verified actionlint and lint workflows
         run: |
           curl --fail --silent --show-error --location \

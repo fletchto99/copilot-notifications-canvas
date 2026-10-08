@@ -136,21 +136,21 @@ test("repository header shares its hover background across the toggle and read a
   assert.equal(disclosure.className, "repo-toggle");
   assert.equal(disclosure.parentNode.className, "repo-header");
   assert.equal(groupRead.parentNode, disclosure.parentNode);
-  assert.match(styles, /button:hover:not\(:disabled, \[aria-disabled="true"\], \.repo-toggle\), summary:hover, \.icon-button:hover, \.repo-header:hover, \.row:hover \{\s*background: color-mix\(in srgb, var\(--canvas-text\) 4%, transparent\);/);
-  assert.match(styles, /@media \(prefers-reduced-motion: no-preference\) \{\s*button, a, \.repo-header \{ transition: background-color \.12s ease; \}/);
+  assert.match(styles, /button:hover:not\(:disabled, \[aria-disabled="true"\], \.repo-toggle\),\s+summary:hover,\s+\.icon-button:hover,\s+\.repo-header:hover,\s+\.row:hover \{\s*background: color-mix\(in srgb, var\(--canvas-text\) 4%, transparent\);/);
+  assert.match(styles, /@media \(prefers-reduced-motion: no-preference\) \{\s*button,\s+a,\s+\.repo-header \{\s+transition: background-color 0?\.12s ease;\s+\}/);
   ui.window.events.pagehide();
 });
 
 test("repository toggle focus is inset inside the clipped card", () => {
-  assert.match(styles, /:focus-visible \{ outline: 2px solid var\(--focus\); outline-offset: 3px; \}/);
+  assert.match(styles, /:focus-visible \{\s+outline: 2px solid var\(--focus\);\s+outline-offset: 3px;\s+\}/);
   assert.match(styles, /\.repo-group \{[^}]*overflow: clip;/);
-  assert.match(styles, /\.repo-toggle:focus-visible \{ outline-offset: -5px; \}/);
+  assert.match(styles, /\.repo-toggle:focus-visible \{\s+outline-offset: -5px;\s+\}/);
 });
 
 test("compact toolbar keeps a shrinkable search beside matching inbox, refresh and settings icons", () => {
-  assert.match(styles, /\.toolbar \{ display: flex;[^}]*\}/);
-  assert.match(styles, /\.search \{ flex: 1; min-width: 0; \}/);
-  assert.match(styles, /\.icon-button \{[^}]*flex-shrink: 0;[^}]*width: 38px; height: 38px;[^}]*color: var\(--canvas-text\);/);
+  assert.match(styles, /\.toolbar \{\s+display: flex;[^}]*\}/);
+  assert.match(styles, /\.search \{\s+flex: 1;\s+min-width: 0;\s+\}/);
+  assert.match(styles, /\.icon-button \{[^}]*flex-shrink: 0;[^}]*width: 38px;\s+height: 38px;[^}]*color: var\(--canvas-text\);/);
   assert.match(styles, /\.settings \{[^}]*flex-shrink: 0;/);
   assert.doesNotMatch(styles, /\.toolbar \{[^}]*flex-wrap: wrap/);
   assert.doesNotMatch(styles, /\.search \{[^}]*flex-basis: 100%/);

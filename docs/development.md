@@ -46,6 +46,28 @@ npx playwright install --with-deps chromium webkit
 npm run test:browser
 ```
 
+`npm run lint` runs all three source checks:
+
+- `npm run lint:js` checks JavaScript with ESLint.
+- `npm run lint:css` checks CSS with Stylelint and `stylelint-config-standard`.
+- `npm run format:css:check` checks CSS formatting with Prettier.
+
+CI runs each check as a separate step. Stylelint catches CSS errors and enforces
+CSS conventions; Prettier keeps the stylesheet readable with multiline rules
+and declarations.
+
+The Stylelint configuration retains prefix-style media queries and allows
+shared state and component rules to rely on specificity rather than source
+order. Inline exceptions preserve the existing WebKit select and screen-reader
+clipping fallbacks; unused exceptions fail lint.
+
+Run `npm run format:css` to format `src/**/*.css`, or
+`npm run format:css:check` to check formatting without writing files. These
+formatting commands do not touch JavaScript or other files. For autofixable
+Stylelint findings, run `npm run lint:css -- --fix` before `npm run format:css`.
+Keep source styles in plain CSS; release builds minify the stylesheet
+automatically.
+
 Coverage also works without `npm ci`. It enforces aggregate minimums of 95% for
 lines, branches, and functions, not per-file minimums. Every eligible runtime
 and release/installer module must appear in the report. The coverage reporter

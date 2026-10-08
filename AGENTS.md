@@ -35,6 +35,10 @@ output. Development loads source without a build; release builds bundle
 
 - Match the existing two-space indentation, double quotes, semicolons, explicit
   `.mjs` import extensions, and `node:` imports for built-ins.
+- Keep styles in plain CSS and run `npm run format:css` after stylesheet edits.
+  Stylelint with `stylelint-config-standard` checks CSS; Prettier enforces
+  readable source formatting. ESLint checks JavaScript. Run `npm run lint`
+  before completing changes; CI runs all three checks separately.
 - Prefer existing helpers and injected dependencies over new abstractions or
   runtime packages. `@github/copilot-sdk/extension` is supplied by the host;
   do not add the SDK to this repository's dependencies.
@@ -114,7 +118,11 @@ defined in `package.json`; platform coverage is in
 | --- | --- |
 | Targeted Node tests, for example HTTP and inbox changes | `node --test test/server.test.mjs test/inbox.test.mjs` |
 | All Node unit and HTTP integration tests | `npm test` (or `node --test test/*.test.mjs`) |
-| JavaScript lint, with no warnings | `npm run lint` |
+| JavaScript and CSS lint, with no warnings, plus CSS formatting | `npm run lint` |
+| JavaScript lint (ESLint) | `npm run lint:js` |
+| CSS lint (Stylelint) | `npm run lint:css` |
+| CSS formatting check (Prettier, no writes) | `npm run format:css:check` |
+| Format source CSS | `npm run format:css` |
 | Source coverage with enforced thresholds | `npm run test:coverage` |
 | Workflow lint; requires `actionlint` on PATH | `npm run lint:workflows` |
 | Release build and packaged integration tests | `npm run build && npm run test:package` |
