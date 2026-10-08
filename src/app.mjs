@@ -1,4 +1,4 @@
-import { attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads } from "./model.mjs";
+import { attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads, TRIAGE_CONSENT_VERSION } from "./model.mjs";
 
 const $ = id => document.getElementById(id);
 const token = location.hash.slice(1);
@@ -34,6 +34,15 @@ let actionError = "";
 let batchBusy = false;
 let batchFocusKey;
 let batchMenu;
+let triageOpen = false;
+let triageSelection;
+let triageBusy = false;
+let triagePreparing = false;
+let triageError = "";
+const triageLabels = {
+  attention: "Needs attention", awareness: "For awareness",
+  dismissible: "Possibly dismissible", uncertain: "Insufficient context",
+};
 const iconPaths = {
   read: "M3 9 12 3l9 6v11H3V9Zm0 0 9 6 9-6M3 20l6-7m12 7-6-7",
   done: "m5 12 4 4L19 6",
@@ -41,6 +50,7 @@ const iconPaths = {
 };
 const tooltipControls = [
   ["open-inbox", "inbox-control"],
+  ["copilot-triage", "copilot-control"],
   ["force-refresh", "refresh-control"],
   ["settings-toggle", "settings-toggle"],
 ];
@@ -88,7 +98,8 @@ async function api(path, input) {
       cache: "no-store",
     });
     const result = await response.json();
-    if (!response.ok) throw new Error(result.error?.message ?? `Canvas returned HTTP ${response.status}.`);
+    if (!response.ok) throw Object.assign(
+      new Error(result.error?.message ?? `Canvas returned HTTP ${response.status}.`), { code: result.error?.code });
     return result;
   } finally {
     clearTimeout(timeout);
@@ -114,6 +125,11 @@ function renderSettings() {
   renderTheme();
   $("group-by").disabled = settingsBusy || !preferences;
   $("group-by").value = preferences?.groupBy ?? "repo";
+  $("triage-privacy-text").textContent = $("triage-disclosure").textContent;
+  $("reset-triage-consent").disabled = settingsBusy || triageBusy || !preferences?.triageConsentVersion;
+  $("triage-consent-status").textContent = preferences?.triageConsentVersion === TRIAGE_CONSENT_VERSION
+    ? "Warning acknowledged. Clicking Copilot starts triage directly."
+    : "The data-sharing warning will appear before the next run.";
   for (const [id, key] of [
     ["auto-open", "autoOpen"],
     ["desktop-notifications", "desktopNotifications"],
@@ -152,7 +168,7 @@ function renderSettings() {
 }
 
 async function settingsRequest(input, quiet = false) {
-  if (!visible()) return;
+  if (!visible() || triageBusy) return;
   if (settingsBusy) {
     if (input && !pendingSettings) {
       pendingSettings = { input, focus: document.activeElement };
@@ -162,6 +178,7 @@ async function settingsRequest(input, quiet = false) {
   }
   const previousFocus = document.activeElement;
   settingsBusy = true;
+  renderControls();
   if (!quiet) {
     renderSettings();
     $("settings-status").textContent = input ? "" : "Loading...";
@@ -181,6 +198,7 @@ async function settingsRequest(input, quiet = false) {
     settingsBusy = false;
     $("settings-status").hidden = !$("settings-status").textContent;
     renderSettings();
+    renderControls();
     restoreFocus(previousFocus);
     if (pendingSettings && visible()) {
       const next = pendingSettings;
@@ -260,6 +278,105 @@ function closeSettings(focus = false) {
   $("settings-toggle").setAttribute("aria-expanded", "false");
   $("settings-toggle").dataset.tooltipDismissed = "true";
   if (focus) $("settings-toggle").focus();
+}
+
+function renderTriage() {
+  const triage = state?.triage;
+  const active = triage && triage.status !== "idle" && !triageSelection;
+  const running = triage?.status === "running";
+  const previousFocus = document.activeElement;
+  $("triage-panel").hidden = !triageOpen && !active;
+  $("copilot-triage").setAttribute("aria-expanded", String(!$("triage-panel").hidden));
+  $("copilot-triage").setAttribute("aria-busy", String(running));
+  $("triage-disclosure").hidden = Boolean(active) || !triageSelection || triagePreparing;
+  const changed = triageSelection && triageSelection.key !== state?.selectionKey;
+  const messages = {
+    running: `Copilot is triaging ${triage?.total} shown notifications. Context fetched for ${triage?.inspected}.`,
+    complete: `Copilot triaged ${triage?.total} notifications. Suggestions appear below each row. Review the evidence before using the manual read/done controls.`,
+    cancelled: "Copilot triage was cancelled. No notifications were changed.",
+    stale: "Shown notifications changed. Dismiss this result and run triage again for the updated view.",
+    error: "Copilot triage did not complete. No notifications were changed.",
+  };
+  $("triage-status").textContent = triagePreparing ? "Checking the saved Copilot acknowledgment..." :
+    active ? messages[triage.status] + (triage.settling && !running ? " Stopping the isolated session..." : "") :
+    changed ? "The shown selection changed. Dismiss and reopen Copilot triage to review the updated scope." :
+      `Allow Copilot to analyze these ${triageSelection?.count ?? 0} shown, loaded notifications? Nothing else in your inbox is included.`;
+  $("triage-error").textContent = triageError || triage?.error?.message || "";
+  $("triage-error").hidden = !$("triage-error").textContent;
+  $("triage-start").hidden = Boolean(active) || !triageSelection || triagePreparing;
+  $("triage-start").disabled = triageBusy || busy || settingsBusy || batchBusy || batchLocked() || marking.size > 0 ||
+    state?.status === "loading" || Boolean(changed);
+  $("triage-cancel").hidden = !running;
+  $("triage-cancel").disabled = triageBusy || busy || settingsBusy || batchBusy || marking.size > 0;
+  $("triage-dismiss").hidden = running;
+  $("triage-dismiss").disabled = triageBusy || busy || settingsBusy || batchBusy || marking.size > 0 || Boolean(triage?.settling);
+  if (["triage-start", "triage-cancel", "triage-dismiss"].some(id => $(id) === previousFocus && $(id).hidden)) {
+    restoreFocus(previousFocus, $("triage-panel"));
+  }
+}
+
+function openTriage() {
+  if (!visible() || $("copilot-triage").disabled) return;
+  dismissTooltips();
+  triageOpen = true;
+  triageError = "";
+  if (!state?.triage?.settling && state?.matching) {
+    triageSelection = { key: state.selectionKey, count: state.matching };
+    return triageRequest("prepare");
+  }
+  renderTriage();
+  $("triage-panel").focus();
+}
+
+async function triageRequest(action) {
+  if (!visible() || triageBusy) return;
+  if (action === "dismiss" && (!state?.triage || state.triage.status === "idle")) {
+    triageOpen = false;
+    triageSelection = undefined;
+    renderTriage();
+    $("copilot-triage").focus();
+    return;
+  }
+  if (busy || batchBusy || marking.size || settingsBusy) return;
+  const starting = ["prepare", "start"].includes(action);
+  if (starting && (!triageSelection || (action === "start" && $("triage-start").disabled))) return;
+  const input = starting
+    ? { selectionKey: triageSelection.key, ...(action === "start" ? { consent: true } : {}) } : { token: state.triage.token };
+  triagePreparing = action === "prepare";
+  triageBusy = true;
+  busy = true;
+  triageError = "";
+  renderControls();
+  renderSettings();
+  try {
+    await pollPromise;
+    if (triagePreparing) {
+      preferences = await api("settings");
+      if (preferences.triageConsentVersion !== TRIAGE_CONSENT_VERSION) return;
+      action = "start";
+    }
+    const { settings, ...nextState } = await api(`triage/${action}`, input);
+    if (settings) preferences = settings;
+    state = nextState;
+    triageSelection = undefined;
+    if (action === "dismiss") triageOpen = false;
+  } catch (error) {
+    if (error.code === "triage_consent" && preferences) {
+      preferences = { ...preferences, triageConsentVersion: 0 };
+    }
+    triageError = error.name === "AbortError" ? "The triage request was interrupted. Check its status before trying again." :
+      error.message || "The triage request failed.";
+  } finally {
+    triagePreparing = false;
+    triageBusy = false;
+    busy = false;
+    render();
+    renderSettings();
+    if (action === "dismiss" && !triageError) $("copilot-triage").focus();
+    else $("triage-panel").focus();
+    void flushPendingUpdates();
+    schedule();
+  }
 }
 
 async function markThread(id, action) {
@@ -426,7 +543,7 @@ function renderBatch() {
 
 function schedule() {
   clearTimeout(timer);
-  if (visible()) timer = setTimeout(tick, batchLocked() ? 1000 : 5000);
+  if (visible()) timer = setTimeout(tick, batchLocked() || state?.triage?.settling ? 1000 : 5000);
 }
 
 async function performUpdate(path, input) {
@@ -593,6 +710,9 @@ function renderControls() {
   $("batch-retry").disabled = batchBusy || busy || (state?.batch?.retryAt ?? 0) > Date.now();
   $("batch-dismiss").disabled = batchBusy || busy;
   $("groups").setAttribute("aria-busy", String(loading));
+  $("copilot-triage").disabled = !hasCapability || triageBusy || settingsBusy ||
+    ((!state?.triage || state.triage.status === "idle") && (loading || !state?.matching || Boolean(pendingFilters)));
+  renderTriage();
 }
 
 function displayGroups() {
@@ -667,7 +787,8 @@ function renderGroups(groups, fallbackFocusKey) {
   $("collapse").hidden = !groups.length;
   $("collapse").textContent = groups.some(group => !collapsed.has(group.key)) ? "Collapse all" : "Expand all";
   // Keep focused controls and disclosure state stable across unchanged polls.
-  const key = JSON.stringify(groups);
+  const recommendations = !triageSelection && state?.triage?.status === "complete" ? state.triage.results : [];
+  const key = JSON.stringify([groups, recommendations]);
   if (key === listKey) return;
   listKey = key;
   const previousFocus = document.activeElement;
@@ -738,6 +859,15 @@ function renderGroups(groups, fallbackFocusKey) {
         metadata.append(part);
       }
       content.append(metadata);
+      const recommendation = recommendations.find(result => result.id === item.id);
+      if (recommendation) {
+        const suggestion = element("div", "triage-recommendation");
+        suggestion.append(element("strong", "", `Copilot: ${triageLabels[recommendation.category]}`),
+          element("p", "", recommendation.reason),
+          element("p", "settings-help", recommendation.context === "thread"
+            ? "Based on notification and bounded thread context." : "Based on notification metadata only."));
+        content.append(suggestion);
+      }
       const actions = element("div", "row-actions");
       for (const action of ["read", "done"]) {
         const anchor = element("div", "tooltip-anchor");
@@ -934,6 +1064,9 @@ $("desktop-sound").addEventListener("change", () => {
   if (preferences && !$("desktop-sound").disabled) void settingsRequest({ desktopSound: $("desktop-sound").value });
 });
 $("check-updates").addEventListener("click", checkUpdates);
+$("reset-triage-consent").addEventListener("click", () => {
+  if (!$("reset-triage-consent").disabled) return settingsRequest({ triageConsentVersion: 0 });
+});
 $("copy-update").addEventListener("click", copyUpdatePrompt);
 $("theme").addEventListener("change", () => {
   if (preferences && !$("theme").disabled) {
@@ -965,6 +1098,10 @@ document.addEventListener("keydown", event => {
   dismissTooltips();
 });
 $("open-inbox").addEventListener("click", dismissTooltips);
+$("copilot-triage").addEventListener("click", openTriage);
+for (const action of ["start", "cancel", "dismiss"]) {
+  $(`triage-${action}`).addEventListener("click", () => triageRequest(action));
+}
 window.addEventListener("blur", () => {
   closeBatchMenu();
   dismissTooltips();

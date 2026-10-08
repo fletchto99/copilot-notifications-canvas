@@ -48,11 +48,11 @@ export async function buildRelease({ tag = `v${metadata.version}`, directory = r
     ];
     const runtime = await build({
       ...nodeOptions, entryPoints: [join(source, "extension.mjs")],
-      external: ["@github/copilot-sdk/extension"], metafile: true,
+      external: ["@github/copilot-sdk/extension", "@github/copilot-sdk"], metafile: true,
       plugins: [embeddedAssetsPlugin(assets)],
     });
     const imports = Object.values(runtime.metafile.outputs).flatMap(output => output.imports);
-    if (imports.some(item => !item.path.startsWith("node:") && item.path !== "@github/copilot-sdk/extension")) {
+    if (imports.some(item => !item.path.startsWith("node:") && !["@github/copilot-sdk/extension", "@github/copilot-sdk"].includes(item.path))) {
       throw new Error("The release runtime has an unexpected external dependency.");
     }
     const installer = await build({

@@ -109,7 +109,7 @@ test("the extension entry point wires an isolated session through its complete l
     assert.deepEqual(opens, [{ canvasId: "github-notifications", instanceId: "unread-notifications-startup", input: {} }]);
     const { desktopStatus, ...settings } = await invoke("get_settings", "unread-notifications-startup");
     assert.deepEqual(settings,
-      { autoOpen: true, darkMode: false, desktopNotifications: false, desktopSound: "default", groupBy: "repo", startupStatus: "opened" });
+      { autoOpen: true, darkMode: false, desktopNotifications: false, desktopSound: "default", groupBy: "repo", triageConsentVersion: 0, startupStatus: "opened" });
     assert.equal(desktopStatus.state, "off");
     assert.equal(desktopStatus.platform, process.platform);
     assert.equal(desktopStatus.supported, true);

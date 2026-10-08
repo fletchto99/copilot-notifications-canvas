@@ -5,6 +5,8 @@ import { pathToFileURL } from "node:url";
 import { host } from "./sdk.mjs";
 
 const pending = new Map();
+// Only the fake SDK sees this executable; it never starts a native process.
+process.env.COPILOT_CLI_PATH = process.execPath;
 let nextId = 0;
 childProcess.execFile = (command, args, options, callback) => {
   assert.equal(command, "gh", "Packaged browser tests must not launch native commands");

@@ -609,7 +609,8 @@ input::placeholder {
   font-size: 12px;
 }
 
-.batch-progress {
+.batch-progress,
+.triage-panel {
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 16px;
@@ -617,9 +618,30 @@ input::placeholder {
   overflow-wrap: anywhere;
 }
 
-.batch-progress h2 {
+.batch-progress h2,
+.triage-panel h2 {
   font-size: 16px;
   margin-bottom: 10px;
+}
+
+.triage-panel p + p {
+  margin-top: 10px;
+}
+
+#triage-error {
+  color: var(--danger);
+}
+
+.triage-recommendation {
+  border-left: 2px solid var(--accent);
+  padding-left: 10px;
+  margin-top: 10px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.triage-recommendation p {
+  margin-top: 4px;
 }
 
 .batch-running {
