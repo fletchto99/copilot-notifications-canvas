@@ -9,6 +9,7 @@ import { Preferences } from "../src/settings.mjs";
 import { startServer } from "../src/server.mjs";
 import { Updates, CURRENT_VERSION } from "../src/updates.mjs";
 import { http, next, thread } from "./fixtures.mjs";
+import { syntheticTriage } from "./triage-fixtures.mjs";
 
 export async function createCanvasFixture({
   assetFailure = false, desktopEnabled = false, packaged = false, development, log: report = () => {},
@@ -23,6 +24,7 @@ export async function createCanvasFixture({
   const warnings = [];
   let assetsUnavailable = assetFailure;
   let requestHook;
+  let triageHook = syntheticTriage;
   let offset = 0;
   const rows = Array.from({ length: 53 }, (_, index) => {
     const id = String(index + 1);
@@ -103,6 +105,7 @@ export async function createCanvasFixture({
       ? await (await import("./browser/package-fixtures.mjs")).startPackagedCanvas(root, run, log)
       : await startServer(inbox, {
         preferences, desktop, updates, development, log,
+        triageRun: options => triageHook(options),
         read: (path, options) => {
           if (assetsUnavailable && path.pathname.endsWith("/app.mjs")) {
             throw Object.assign(new Error("Synthetic asset failure"), { code: "ENOENT" });
@@ -116,6 +119,7 @@ export async function createCanvasFixture({
     return {
       root, url: server.url, rows, writes, doneWrites, requests, preferences, deliveries, desktop, errors, warnings, close,
       setRequestHook: hook => { requestHook = hook; },
+      setTriageHook: hook => { triageHook = hook; },
       advance: ms => { offset += ms; return Date.now() + offset; },
       recoverAssets: () => { assetsUnavailable = false; },
     };

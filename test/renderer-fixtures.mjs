@@ -5,8 +5,10 @@ import { fileURLToPath } from "node:url";
 import { Inbox } from "../src/inbox.mjs";
 import { GitHubClient } from "../src/github.mjs";
 import { desktopCapabilities } from "../src/notifier.mjs";
-import { attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads } from "../src/model.mjs";
+import { attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads, TRIAGE_CONSENT_VERSION } from "../src/model.mjs";
 import { http, thread } from "./fixtures.mjs";
+import { NotificationTriage } from "../src/triage.mjs";
+import { syntheticTriage } from "./triage-fixtures.mjs";
 
 export const script = await readFile(process.env.NOTIFICATIONS_TEST_SCRIPT ??
   new URL("../src/app.mjs", import.meta.url), "utf8");
@@ -19,7 +21,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
   initialRows, onWrite, onFetch, onState, onFilters, initialOffline = false, release, development = null,
   onUpdates, clipboardFailure = false, onSettings, retainDisabledFocus = false, desktopPlatform = "darwin", desktopStatus = {},
   storedSettings = { autoOpen: false, darkMode: null, desktopNotifications: false, desktopSound: "default" },
-  appColorMode = "light", systemDark = false } = {}) {
+  appColorMode = "light", systemDark = false, triageRun = syntheticTriage, onTriage } = {}) {
   const calls = [];
   const timers = new Map();
   let timerId = 0;
@@ -125,9 +127,13 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
   for (const id of ["batch-stop", "batch-retry", "batch-dismiss"]) ids.get(id).parentNode = ids.get("batch-progress");
   ids.get("batch-progress").contains = node =>
     ["batch-progress", "batch-stop", "batch-retry", "batch-dismiss"].some(id => ids.get(id) === node);
+  for (const id of ["triage-start", "triage-cancel", "triage-dismiss"]) ids.get(id).parentNode = ids.get("triage-panel");
+  ids.get("triage-panel").contains = node =>
+    ["triage-panel", "triage-start", "triage-cancel", "triage-dismiss"].some(id => ids.get(id) === node);
   ids.get("settings").contains = node =>
     node === ids.get("settings") ||
-    ["settings-toggle", "settings-panel", "auto-open", "theme", "group-by", "check-updates", "desktop-notifications", "desktop-sound"].some(id => ids.get(id).contains(node));
+    ["settings-toggle", "settings-panel", "auto-open", "theme", "group-by", "check-updates", "desktop-notifications", "desktop-sound",
+      "triage-privacy", "triage-privacy-text", "triage-consent-status", "reset-triage-consent"].some(id => ids.get(id).contains(node));
   const document = {
     hidden,
     body: new Node("body"),
@@ -166,9 +172,17 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     }
     return onFetch ? onFetch(args) : http(rows);
   } }));
+  const triage = new NotificationTriage(inbox, { run: triageRun });
+  const settingsSnapshot = () => {
+    const capabilities = desktopCapabilities(desktopPlatform);
+    return { desktopNotifications: false, desktopSound: "default", triageConsentVersion: 0, ...storedSettings,
+      desktopStatus: { ...capabilities, state: "watching",
+        message: capabilities.supported ? "Watching in the background." : capabilities.help, ...desktopStatus },
+    };
+  };
   const context = createContext({
     document, window, location: { hash: `#${token}` }, Intl, AbortController,
-    attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads,
+    attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads, TRIAGE_CONSENT_VERSION,
     navigator: { clipboard: { writeText: async text => {
       if (clipboardFailure) throw new Error("Clipboard denied");
       copied.push(text);
@@ -198,11 +212,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
         const input = options.body ? JSON.parse(options.body) : undefined;
         if (onSettings) await onSettings(input);
         if (input) Object.assign(storedSettings, input);
-        const capabilities = desktopCapabilities(desktopPlatform);
-        return { ok: true, json: async () => ({ desktopNotifications: false, desktopSound: "default", ...storedSettings,
-          desktopStatus: { ...capabilities, state: "watching",
-            message: capabilities.supported ? "Watching in the background." : capabilities.help, ...desktopStatus },
-        }) };
+        return { ok: true, json: async () => settingsSnapshot() };
       }
       if (path === "/api/updates") {
         if (onUpdates) releaseMetadata = await onUpdates();
@@ -211,7 +221,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       if (path === "/api/refresh") await inbox.refresh(JSON.parse(options.body));
       if (path === "/api/more") await inbox.more();
       if (path === "/api/state") {
-        const snapshot = { ...inbox.snapshot(), updates: releaseMetadata, development };
+        const snapshot = { ...inbox.snapshot(), triage: triage.snapshot(), updates: releaseMetadata, development };
         if (onState) await onState();
         return { ok: true, json: async () => snapshot };
       }
@@ -223,17 +233,30 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       if (path === "/api/read") await inbox.markRead(JSON.parse(options.body));
       if (path === "/api/done") await inbox.markDone(JSON.parse(options.body));
       if (path.startsWith("/api/batch/")) inbox.batch[path.slice("/api/batch/".length)](JSON.parse(options.body));
-      return { ok: true, json: async () => ({ ...inbox.snapshot(), updates: releaseMetadata, development }) };
+      if (path.startsWith("/api/triage/")) {
+        const action = path.slice("/api/triage/".length);
+        if (onTriage) await onTriage(action);
+        const input = JSON.parse(options.body);
+        if (action === "start") {
+          triage.validateStart(input, true);
+          if (input.consent === true) storedSettings.triageConsentVersion = TRIAGE_CONSENT_VERSION;
+          triage.start(input, storedSettings.triageConsentVersion === TRIAGE_CONSENT_VERSION);
+          return { ok: true, json: async () => ({ ...inbox.snapshot(), triage: triage.snapshot(),
+            updates: releaseMetadata, development, settings: settingsSnapshot() }) };
+        }
+        triage[action](input);
+      }
+      return { ok: true, json: async () => ({ ...inbox.snapshot(), triage: triage.snapshot(), updates: releaseMetadata, development }) };
     },
   });
-  if (!process.env.NOTIFICATIONS_TEST_SCRIPT) assert.match(script, /^import \{ attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads \} from "\.\/model\.mjs";/);
+  if (!process.env.NOTIFICATIONS_TEST_SCRIPT) assert.match(script, /^import \{ attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads, TRIAGE_CONSENT_VERSION \} from "\.\/model\.mjs";/);
   // Preserve source offsets for the coverage report when removing the injected import.
-  runInContext(script.replace(/^import \{ attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads \} from "\.\/model\.mjs";/, match => " ".repeat(match.length)), context, {
+  runInContext(script.replace(/^import \{ attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads, TRIAGE_CONSENT_VERSION \} from "\.\/model\.mjs";/, match => " ".repeat(match.length)), context, {
     filename: process.env.NOTIFICATIONS_TEST_SCRIPT ?? fileURLToPath(new URL("../src/app.mjs", import.meta.url)),
   });
   await settle();
   return {
-    calls, document, window, ids, timers, context, inbox, patches, deletions, githubCalls, copied, media,
+    calls, document, window, ids, timers, context, inbox, triage, patches, deletions, githubCalls, copied, media,
     get themeDisconnected() { return themeDisconnected; },
     attentionObserved,
     resizeAttention: () => attentionResized(),
