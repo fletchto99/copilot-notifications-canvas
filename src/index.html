@@ -108,13 +108,16 @@
       </div>
       <div class="status-line">
         <span id="count" role="status" aria-live="polite" title="Counts include loaded notifications only.">Waiting for inbox...</span>
-        <button id="collapse" class="text-button" type="button">Collapse all</button>
+        <div class="status-actions">
+          <div id="shown-actions" role="group" aria-label="Shown notification actions" hidden></div>
+          <button id="collapse" class="text-button" type="button">Collapse all</button>
+        </div>
       </div>
     </header>
     <div id="attention-panel" role="tabpanel" aria-labelledby="attention-all" tabindex="0">
       <div id="settings-error" class="notice" role="alert" hidden></div>
       <div id="notice" class="notice" role="alert" hidden></div>
-      <section id="batch-progress" class="batch-progress" aria-label="Repository notification operation" tabindex="-1" hidden>
+      <section id="batch-progress" class="batch-progress" aria-label="Notification operation" tabindex="-1" hidden>
         <h2 id="batch-title"></h2>
         <p id="batch-counts"></p>
         <p id="batch-error" role="alert" hidden></p>

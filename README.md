@@ -73,8 +73,13 @@ full procedure, verification requirements, and troubleshooting.
   In **repo** mode, the arrow beside **Mark N as read** opens a dropdown with
   **Mark N as done**, limited to that repository's shown, loaded attention and
   search matches.
+  In **none** and **date** grouping, the same split control appears beside the
+  unread/matching count. It targets all loaded attention and search matches
+  across repositories and dates, including collapsed date groups, but never
+  unloaded notifications. It is hidden when no notifications match.
+  Date grouping keeps **Collapse all** alongside it.
   Read stays the default; choosing Done never changes future defaults.
-  Both repository actions show progress, allow stopping remaining requests, and
+  All batch actions show progress, allow stopping remaining requests, and
   retry only unchanged, still-shown remaining items with the original action.
   Both row icons use compact outlined buttons with immediate hover and
   keyboard-focus tooltips. Press Escape to dismiss a tooltip; Tab moves between

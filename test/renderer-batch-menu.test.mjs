@@ -131,7 +131,7 @@ test("a stale Done selection refreshes the count without widening or writing the
   ui.inbox.pages[0].items.push({ ...ui.inbox.pages[0].items[0], id: "3" });
   await done.events.click();
   assert.deepEqual(ui.deletions, []);
-  assert.match(ui.ids.get("notice").textContent, /shown group changed/);
+  assert.match(ui.ids.get("notice").textContent, /shown selection changed/);
   const updated = controls(ui);
   assert.equal(updated.read.textContent, "Mark 3 as read");
   assert.equal(updated.done.textContent, "Mark 3 as done");

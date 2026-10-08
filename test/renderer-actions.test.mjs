@@ -468,7 +468,7 @@ test("a group changed before the click is accepted reloads its count instead of 
   ui.inbox.pages[0].items.push({ ...ui.inbox.pages[0].items[0], id: "3", title: "Synthetic newcomer" });
   await oldButton.events.click();
   assert.deepEqual(ui.patches, []);
-  assert.match(ui.ids.get("notice").textContent, /shown group changed/);
+  assert.match(ui.ids.get("notice").textContent, /shown selection changed/);
   const currentButton = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.repository);
   assert.equal(currentButton.textContent, "Mark 3 as read");
   assert.equal(currentButton.disabled, false);

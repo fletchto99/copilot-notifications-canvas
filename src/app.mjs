@@ -33,7 +33,8 @@ const marking = new Map();
 let actionError = "";
 let batchBusy = false;
 let batchFocusKey;
-let repositoryMenu;
+let batchMenu;
+let shownControlsKey;
 const iconPaths = {
   read: "M3 9 12 3l9 6v11H3V9Zm0 0 9 6 9-6M3 20l6-7m12 7-6-7",
   done: "m5 12 4 4L19 6",
@@ -298,7 +299,8 @@ function batchLocked() {
 }
 
 function focusKey(key) {
-  return [...$("groups").querySelectorAll("[data-focus-key]")].find(node => node.dataset.focusKey === key);
+  return [...$("groups").querySelectorAll("[data-focus-key]"), ...$("shown-actions").querySelectorAll("[data-focus-key]")]
+    .find(node => node.dataset.focusKey === key);
 }
 
 function restoreFocus(previous, preferred) {
@@ -317,24 +319,24 @@ function restoreFocus(previous, preferred) {
   (target && !target.disabled ? target : $("search")).focus({ preventScroll: true });
 }
 
-function closeRepositoryMenu(focus = false) {
-  if (!repositoryMenu) return;
-  const { trigger, panel } = repositoryMenu;
-  repositoryMenu = undefined;
+function closeBatchMenu(focus = false) {
+  if (!batchMenu) return;
+  const { trigger, panel } = batchMenu;
+  batchMenu = undefined;
   panel.hidden = true;
   trigger.setAttribute("aria-expanded", "false");
   if (focus && visible()) trigger.focus();
 }
 
-function toggleRepositoryMenu(container, trigger, panel, option) {
+function toggleBatchMenu(container, trigger, panel, option) {
   if (!visible() || busy || batchBusy || batchLocked() || marking.size) return;
   trigger.focus();
-  const closing = repositoryMenu?.trigger === trigger;
-  closeRepositoryMenu();
+  const closing = batchMenu?.trigger === trigger;
+  closeBatchMenu();
   dismissTooltips();
   if (closing) return;
   closeSettings();
-  repositoryMenu = { container, trigger, panel };
+  batchMenu = { container, trigger, panel };
   panel.hidden = false;
   trigger.setAttribute("aria-expanded", "true");
   option.focus();
@@ -346,7 +348,7 @@ async function batchRequest(action, input) {
   batchBusy = true;
   let failed = false;
   const previousFocus = document.activeElement;
-  closeRepositoryMenu();
+  closeBatchMenu();
   dismissTooltips();
   renderControls();
   try {
@@ -356,7 +358,7 @@ async function batchRequest(action, input) {
     actionError = "";
   } catch (error) {
     failed = true;
-    actionError = error.message || "The repository action failed. Try again.";
+    actionError = error.message || "The notification action failed. Try again.";
     try {
       state = await api("state");
     } catch {
@@ -390,7 +392,8 @@ function renderBatch() {
   }
   const running = ["running", "stopping"].includes(batch.status);
   $("batch-progress").className = running ? "batch-running" : "batch-progress";
-  $("batch-title").textContent = `${batch.repository}: ${batch.status === "stopping" ? "Stopping after the current request" :
+  const target = batch.scope === "shown" ? "Shown notifications" : batch.repository;
+  $("batch-title").textContent = `${target}: ${batch.status === "stopping" ? "Stopping after the current request" :
     running ? `Marking as ${batch.action}...` : `Some notifications remain to mark as ${batch.action}`}`;
   $("batch-counts").hidden = running;
   $("batch-counts").textContent = running ? "" : `${batch.succeeded} succeeded / ${batch.failed} failed / ${batch.skipped} skipped / ${batch.notAttempted} not attempted (${batch.total} selected)`;
@@ -545,17 +548,19 @@ function renderControls() {
   const waiting = state && Date.now() < state.nextRefreshAt;
   renderRefreshStatus();
   $("more").disabled = loading || state?.needsRefresh || Boolean(state?.error && waiting);
-  for (const button of $("groups").querySelectorAll("button")) {
+  for (const button of [...$("groups").querySelectorAll("button"), ...$("shown-actions").querySelectorAll("button")]) {
     if (!button.dataset.disclosure) button.disabled = loading || marking.has(button.dataset.threadId);
     if (button.dataset.threadId) {
       button.setAttribute("aria-busy", String(marking.get(button.dataset.threadId) === button.dataset.action));
     }
-    if (button.dataset.repository) {
-      const batch = batchLocked() && state.batch.repository === button.dataset.repository ? state.batch : null;
+    if (button.dataset.batchAction) {
+      const batch = batchLocked() && state.batch.scope === button.dataset.batchScope &&
+        (state.batch.scope === "shown" || state.batch.repository === button.dataset.repository) ? state.batch : null;
       const progress = batch ? batch.status === "stopping" ? "Stopping..." : `Marking ${batch.succeeded}/${batch.total}...` : null;
+      const destination = button.dataset.repository ? ` in ${button.dataset.repository}` : "";
       button.textContent = progress ?? `Mark ${button.dataset.count} as ${button.dataset.batchAction}`;
-      button.setAttribute("aria-label", progress ? `${progress} as ${batch.action} in ${button.dataset.repository}` :
-        `Mark ${button.dataset.count} shown, loaded notifications as ${button.dataset.batchAction} in ${button.dataset.repository}`);
+      button.setAttribute("aria-label", progress ? `${progress} as ${batch.action}${destination}` :
+        `Mark ${button.dataset.count} shown, loaded notifications as ${button.dataset.batchAction}${destination}`);
       button.setAttribute("aria-busy", String(Boolean(batch)));
     }
   }
@@ -595,6 +600,71 @@ function displayGroups() {
   return [...dates.values()];
 }
 
+function createBatchControls({ repository, selectionKey, count, menuId }) {
+  const scope = repository ? "repository" : "shown";
+  const key = repository ?? "shown";
+  const name = repository ?? "shown notifications";
+  const controls = element("div", "repo-actions");
+  controls.addEventListener("mousedown", event => {
+    // Do not let WebKit focus the surrounding tabpanel and dismiss an open menu before click.
+    if (event.button === 0 && batchMenu?.container === controls) event.preventDefault();
+  });
+  const read = element("button", "repo-read", `Mark ${count} as read`);
+  const more = element("button", "icon-button repo-more");
+  more.type = "button";
+  more.dataset.focusKey = `bulk-menu:${key}`;
+  more.setAttribute("aria-label", `More actions for ${name}`);
+  more.setAttribute("aria-expanded", "false");
+  more.append(actionIcon("more"));
+  const menu = element("div", "repo-menu");
+  menu.id = menuId;
+  menu.hidden = true;
+  menu.setAttribute("role", "group");
+  menu.setAttribute("aria-label", `Actions for ${name}`);
+  more.setAttribute("aria-controls", menu.id);
+  const done = element("button", "repo-done", `Mark ${count} as done`);
+  read.dataset.focusKey = `bulk:${key}`;
+  done.dataset.focusKey = `bulk-done:${key}`;
+  for (const [button, action] of [[read, "read"], [done, "done"]]) {
+    button.type = "button";
+    if (repository) button.dataset.repository = repository;
+    button.dataset.count = String(count);
+    button.dataset.batchScope = scope;
+    button.dataset.batchAction = action;
+    button.setAttribute("aria-label", `Mark ${count} shown, loaded notifications as ${action}${repository ? ` in ${repository}` : ""}`);
+    button.disabled = busy || marking.size > 0 || batchBusy || batchLocked();
+    button.addEventListener("click", () => {
+      if (busy || batchBusy || batchLocked() || marking.size || (action === "done" && menu.hidden)) return;
+      // WebKit pointer clicks can blur the button before this handler.
+      button.focus();
+      batchFocusKey = read.dataset.focusKey;
+      return batchRequest("start", { ...(repository ? { repository } : { scope: "shown" }), selectionKey, action });
+    });
+  }
+  more.disabled = read.disabled;
+  more.addEventListener("click", () => toggleBatchMenu(controls, more, menu, done));
+  menu.append(done);
+  controls.append(read, more, menu);
+  return controls;
+}
+
+function renderShownControls() {
+  const container = $("shown-actions");
+  const key = state?.matching && ["none", "date"].includes(preferences?.groupBy) ? state.selectionKey : null;
+  if (key === shownControlsKey) return;
+  const previousFocus = document.activeElement;
+  const hadFocus = container.contains(previousFocus);
+  const ownMenu = batchMenu && container.contains(batchMenu.container);
+  const focused = ownMenu && batchMenu.panel.contains(previousFocus) ? batchMenu.trigger.dataset.focusKey : previousFocus?.dataset.focusKey;
+  if (ownMenu) closeBatchMenu();
+  const fragment = document.createDocumentFragment();
+  if (key) fragment.append(createBatchControls({ repository: null, selectionKey: key, count: state.matching, menuId: "shown-menu" }));
+  container.hidden = !key;
+  container.replaceChildren(fragment);
+  shownControlsKey = key;
+  if (hadFocus) restoreFocus(previousFocus, focusKey(focused) ?? $("search"));
+}
+
 function renderGroups(groups, fallbackFocusKey) {
   $("collapse").hidden = !groups.length || !groups[0].key;
   $("collapse").textContent = groups.some(group => !collapsed.has(group.key)) ? "Collapse all" : "Expand all";
@@ -603,8 +673,9 @@ function renderGroups(groups, fallbackFocusKey) {
   if (key === listKey) return;
   listKey = key;
   const previousFocus = document.activeElement;
-  const focused = repositoryMenu?.panel.contains(previousFocus) ? repositoryMenu.trigger.dataset.focusKey : previousFocus?.dataset.focusKey;
-  closeRepositoryMenu();
+  const ownMenu = batchMenu && $("groups").contains(batchMenu.container);
+  const focused = ownMenu && batchMenu.panel.contains(previousFocus) ? batchMenu.trigger.dataset.focusKey : previousFocus?.dataset.focusKey;
+  if (ownMenu) closeBatchMenu();
   const fragment = document.createDocumentFragment();
   for (const [index, group] of groups.entries()) {
     const rows = element("div", group.key ? "repo-items" : "notification-list");
@@ -630,47 +701,9 @@ function renderGroups(groups, fallbackFocusKey) {
       });
       header.append(disclosure);
       if (group.repository) {
-        const controls = element("div", "repo-actions");
-        controls.addEventListener("mousedown", event => {
-          // Do not let WebKit focus the surrounding tabpanel and dismiss an open menu before click.
-          if (event.button === 0 && repositoryMenu?.container === controls) event.preventDefault();
-        });
-        const markGroup = element("button", "repo-read", `Mark ${group.items.length} as read`);
-        const more = element("button", "icon-button repo-more");
-        more.type = "button";
-        more.dataset.focusKey = `bulk-menu:${group.repository}`;
-        more.setAttribute("aria-label", `More actions for ${group.repository}`);
-        more.setAttribute("aria-expanded", "false");
-        more.append(actionIcon("more"));
-        const menu = element("div", "repo-menu");
-        menu.id = `repo-menu-${index}`;
-        menu.hidden = true;
-        menu.setAttribute("role", "group");
-        menu.setAttribute("aria-label", `Actions for ${group.repository}`);
-        more.setAttribute("aria-controls", menu.id);
-        const done = element("button", "repo-done", `Mark ${group.items.length} as done`);
-        markGroup.dataset.focusKey = `bulk:${group.repository}`;
-        done.dataset.focusKey = `bulk-done:${group.repository}`;
-        for (const [button, action] of [[markGroup, "read"], [done, "done"]]) {
-          button.type = "button";
-          button.dataset.repository = group.repository;
-          button.dataset.count = String(group.items.length);
-          button.dataset.batchAction = action;
-          button.setAttribute("aria-label", `Mark ${group.items.length} shown, loaded notifications as ${action} in ${group.repository}`);
-          button.disabled = busy || marking.size > 0 || batchBusy || batchLocked();
-          button.addEventListener("click", () => {
-            if (busy || batchBusy || batchLocked() || marking.size || (action === "done" && menu.hidden)) return;
-            // WebKit pointer clicks can blur the button before this handler.
-            button.focus();
-            batchFocusKey = markGroup.dataset.focusKey;
-            return batchRequest("start", { repository: group.repository, selectionKey: group.selectionKey, action });
-          });
-        }
-        more.disabled = markGroup.disabled;
-        more.addEventListener("click", () => toggleRepositoryMenu(controls, more, menu, done));
-        menu.append(done);
-        controls.append(markGroup, more, menu);
-        header.append(controls);
+        header.append(createBatchControls({
+          repository: group.repository, selectionKey: group.selectionKey, count: group.items.length, menuId: `repo-menu-${index}`,
+        }));
       }
       section.append(header, rows);
       fragment.append(section);
@@ -752,6 +785,7 @@ function render(fallbackFocusKey) {
   const development = state?.development;
   $("development-build").hidden = !development;
   $("development-build").textContent = development ? `dev (v${development.version}) ${development.branch}` : "";
+  renderShownControls();
   renderControls();
   const error = actionError || state?.error?.message || connectionError;
   const loading = state?.status === "idle" || state?.status === "loading";
@@ -915,10 +949,10 @@ $("group-by").addEventListener("change", () => {
 });
 document.addEventListener("click", event => {
   if ($("settings").open && !$("settings").contains(event.target)) closeSettings();
-  if (repositoryMenu && !repositoryMenu.container.contains(event.target)) closeRepositoryMenu();
+  if (batchMenu && !batchMenu.container.contains(event.target)) closeBatchMenu();
 });
 document.addEventListener("focusin", event => {
-  if (repositoryMenu && !repositoryMenu.container.contains(event.target)) closeRepositoryMenu();
+  if (batchMenu && !batchMenu.container.contains(event.target)) closeBatchMenu();
 });
 document.addEventListener("keydown", event => {
   if (event.key !== "Escape") return;
@@ -926,15 +960,15 @@ document.addEventListener("keydown", event => {
     event.preventDefault();
     closeSettings(true);
   }
-  if (repositoryMenu) {
+  if (batchMenu) {
     event.preventDefault();
-    closeRepositoryMenu(true);
+    closeBatchMenu(true);
   }
   dismissTooltips();
 });
 $("open-inbox").addEventListener("click", dismissTooltips);
 window.addEventListener("blur", () => {
-  closeRepositoryMenu();
+  closeBatchMenu();
   dismissTooltips();
 });
 $("more").addEventListener("click", () => update("more", {}));
@@ -976,7 +1010,7 @@ function visibilityChanged() {
     void tick();
     void settingsRequest();
   } else {
-    closeRepositoryMenu();
+    closeBatchMenu();
     dismissTooltips();
     for (const controller of requestControllers) controller.abort();
     closeSettings();
@@ -998,7 +1032,7 @@ systemTheme.addEventListener("change", renderTheme);
 renderTheme();
 window.addEventListener("pagehide", () => {
   stopped = true;
-  closeRepositoryMenu();
+  closeBatchMenu();
   dismissTooltips();
   clearTimeout(timer);
   clearTimeout(tooltipTimer);
