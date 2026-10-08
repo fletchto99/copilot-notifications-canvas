@@ -82,6 +82,8 @@ full procedure, verification requirements, and troubleshooting.
   dot-separated metadata beneath each title, without a redundant unread label.
 - **Responsive layout:** panel padding and header spacing stay consistent while
   resizing. Header text, notification titles, and metadata remain visible.
+  Repository controls stay right-aligned and wrap only when the repository name,
+  unread count, and controls no longer fit together.
   Timestamps stay in the metadata; both row actions remain available in narrow panels.
 - **Refresh:** automatic checks run about every 60 seconds while the canvas is
   visible and pause while hidden. Returning to the foreground refreshes immediately.

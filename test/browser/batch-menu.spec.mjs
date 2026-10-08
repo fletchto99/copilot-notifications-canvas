@@ -6,6 +6,58 @@ const readName = "Mark 2 shown, loaded notifications as read in example/widgets"
 const doneName = "Mark 2 shown, loaded notifications as done in example/widgets";
 const moreName = "More actions for example/widgets";
 
+for (const repository of ["example/ui", "example/notifications-and-workflow-tools", `example/${"long-".repeat(30)}repository`]) {
+  test(`repository header wraps by content width for ${repository}`, async ({ page, canvas }, testInfo) => {
+    canvas.rows.splice(2);
+    for (const row of canvas.rows) row.repository.full_name = repository;
+    await page.goto(canvas.url);
+    const header = page.locator(".repo-header");
+    const toggle = header.locator(".repo-toggle");
+    await expect(header.locator(".repo-name")).toHaveText(repository);
+    const intrinsicWidth = await toggle.evaluate(node => {
+      const { flex, maxWidth } = node.style;
+      node.style.flex = "0 0 max-content";
+      node.style.maxWidth = "none";
+      const width = node.getBoundingClientRect().width;
+      node.style.flex = flex;
+      node.style.maxWidth = maxWidth;
+      return width;
+    });
+    for (const width of [960, 600, 481, 480, 400, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      const layout = await header.evaluate(node => {
+        const header = node.getBoundingClientRect();
+        const toggle = node.querySelector(".repo-toggle").getBoundingClientRect();
+        const actions = node.querySelector(".repo-actions").getBoundingClientRect();
+        const style = getComputedStyle(node);
+        const paddingRight = parseFloat(style.paddingRight);
+        return {
+          available: header.width - paddingRight, gap: parseFloat(style.columnGap),
+          actionsWidth: actions.width, actionsRight: actions.right, headerRight: header.right - paddingRight,
+          wrapped: actions.top >= toggle.bottom, toggleWidth: toggle.width,
+        };
+      });
+      expect(layout.wrapped).toBe(intrinsicWidth + layout.actionsWidth + layout.gap > layout.available + 0.5);
+      expect(layout.actionsRight).toBeCloseTo(layout.headerRight);
+      expect(layout.toggleWidth).toBeLessThanOrEqual(layout.available + 0.5);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+      await expect(header.locator(".repo-count")).toHaveText("2 unread");
+      if (repository === "example/ui" && width >= 400) expect(layout.wrapped).toBe(false);
+      if (width === 480 || width === 320) {
+        await page.screenshot({ path: testInfo.outputPath(`header-wrap-${width}.png`), fullPage: true });
+      }
+    }
+    await toggle.click();
+    await page.getByRole("button", { name: `More actions for ${repository}`, exact: true }).click();
+    const menu = header.locator(".repo-menu");
+    await expect(menu).toBeVisible();
+    const bounds = await menu.boundingBox();
+    expect(bounds.x).toBeGreaterThanOrEqual(0);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(320);
+    expect(canvas.writes).toEqual([]);
+  });
+}
+
 test("repository Done honors attention and search filters without changing the selected tab", async ({ page, canvas }) => {
   for (const row of canvas.rows) row.reason = "subscribed";
   canvas.rows[0].reason = "mention";

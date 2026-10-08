@@ -102,12 +102,12 @@ input::placeholder { color: var(--muted); }
 .update-banner textarea { width: 100%; resize: vertical; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: transparent; font-family: var(--font-mono, monospace); font-size: 12px; }
 .repo-group { border: 1px solid var(--border); border-radius: 10px; margin-bottom: 14px; overflow: clip; }
 .repo-group:has(.repo-menu:not([hidden])) { position: relative; z-index: 1; overflow: visible; }
-.repo-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-right: 12px; }
-.repo-toggle { flex: 1; min-width: 0; border: 0; border-radius: 0; text-align: left; white-space: normal; overflow-wrap: anywhere; padding: 12px 16px; font-weight: var(--font-weight-semibold, 600); }
+.repo-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0 8px; padding-right: 12px; }
+.repo-toggle { flex: 1 1 auto; min-width: 0; max-width: 100%; border: 0; border-radius: 0; text-align: left; white-space: normal; overflow-wrap: anywhere; padding: 12px 16px; font-weight: var(--font-weight-semibold, 600); }
 .repo-toggle:focus-visible { outline-offset: -5px; }
 .repo-toggle::before { content: "+"; color: var(--muted); }
 .repo-toggle[aria-expanded="true"]::before { content: "-"; }
-.repo-actions { position: relative; display: flex; flex-shrink: 0; }
+.repo-actions { position: relative; display: flex; flex-shrink: 0; margin: 6px 0 6px auto; }
 .repo-read { flex-shrink: 0; font-size: 12px; padding: 5px 8px; border-radius: 7px 0 0 7px; }
 .repo-more { width: 28px; height: 32px; padding: 6px 4px; border-left: 0; border-radius: 0 7px 7px 0; }
 .repo-menu { position: absolute; z-index: 3; top: calc(100% + 4px); right: 0; width: max-content; min-width: 100%; max-width: calc(100vw - 56px); padding: 4px; border: 1px solid var(--border); border-radius: 7px; background: var(--canvas-background); box-shadow: 0 4px 12px #0002; }
@@ -158,10 +158,6 @@ footer:has(#development-build[hidden]) { display: none; }
   .row-actions { grid-column: 2; justify-self: start; }
   .row-actions .tooltip { left: 0; right: auto; }
   summary { padding: 12px; }
-  .repo-header { flex-wrap: wrap; padding: 0; gap: 0; }
-  .repo-toggle { flex-basis: 100%; }
-  .repo-actions { margin: 0 12px 10px; }
-  .repo-menu { left: 0; right: auto; }
 }
 @media (prefers-reduced-motion: no-preference) {
   button, a, .repo-header { transition: background-color .12s ease; }
