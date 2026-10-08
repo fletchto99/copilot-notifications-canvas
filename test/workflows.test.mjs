@@ -91,7 +91,7 @@ test("Copilot cloud sessions and reviews share lightweight setup without browser
 test("workflow lint uses a verbose Dependabot-managed local Docker action on a Docker-capable runner", async () => {
   const [workflow, action, dependabot] = await Promise.all([
     readFile(new URL("../.github/workflows/tests.yml", import.meta.url), "utf8"),
-    readFile(new URL("../.github/actions/actionlint/action.yml", import.meta.url), "utf8"),
+    readFile(new URL("../ci/actionlint/action.yml", import.meta.url), "utf8"),
     readFile(new URL("../.github/dependabot.yml", import.meta.url), "utf8"),
   ]);
   const job = id => {
@@ -112,21 +112,21 @@ test("workflow lint uses a verbose Dependabot-managed local Docker action on a D
   assert.match(actionlint, /timeout-minutes: 5/);
   assert.match(actionlint, /uses: actions\/checkout@[a-f0-9]{40}/);
   assert.match(actionlint, /persist-credentials: false/);
-  assert.match(actionlint, /uses: \.\/\.github\/actions\/actionlint(?:\n|$)/);
-  assert.ok(actionlint.indexOf("uses: actions/checkout@") < actionlint.indexOf("uses: ./.github/actions/actionlint"));
+  assert.match(actionlint, /uses: \.\/ci\/actionlint(?:\n|$)/);
+  assert.ok(actionlint.indexOf("uses: actions/checkout@") < actionlint.indexOf("uses: ./ci/actionlint"));
   assert.doesNotMatch(actionlint, /npm|setup-node|curl|docker:\/\/|args:/);
 
   assert.match(action, /runs:\n {2}using: docker\n {2}image: Dockerfile\n {2}args:\n {4}- -color\n {4}- -verbose(?:\n|$)/);
   assert.doesNotMatch(action, /entrypoint:|shellcheck=|pyflakes=/);
   const docker = dependabot.match(/\n {2}- package-ecosystem: docker\n([\s\S]*?)(?=\n {2}- package-ecosystem:|$)/)?.[1];
   assert.ok(docker, "Dependabot must manage the Dockerfile actually consumed by CI");
-  assert.match(docker, /directory: \/\.github\/actions\/actionlint(?:\n|$)/);
+  assert.match(docker, /directory: \/ci\/actionlint(?:\n|$)/);
   assert.match(docker, /schedule:\n {6}interval: weekly/);
 });
 
 test("the pinned actionlint Docker image, Copilot setup binary and installation guidance stay aligned", async () => {
   const [dockerfile, setup, doctor, development] = await Promise.all([
-    readFile(new URL("../.github/actions/actionlint/Dockerfile", import.meta.url), "utf8"),
+    readFile(new URL("../ci/actionlint/Dockerfile", import.meta.url), "utf8"),
     readFile(new URL("../.github/workflows/copilot-setup-steps.yml", import.meta.url), "utf8"),
     readFile(new URL("../scripts/doctor.mjs", import.meta.url), "utf8"),
     readFile(new URL("../docs/development.md", import.meta.url), "utf8"),

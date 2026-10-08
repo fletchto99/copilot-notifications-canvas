@@ -190,8 +190,8 @@ Build output and test reports remain in their ignored directories.
 
 CI separates source linting (`Lint`, on `ubuntu-slim`) from workflow linting
 (`Actionlint`, on `ubuntu-latest`). Workflow lint uses the repository-owned
-[Docker action](../.github/actions/actionlint/action.yml). Its
-[Dockerfile](../.github/actions/actionlint/Dockerfile) contains only the
+[Docker action](../ci/actionlint/action.yml). Its
+[Dockerfile](../ci/actionlint/Dockerfile) contains only the
 [official actionlint Docker image](https://github.com/rhysd/actionlint/blob/main/docs/usage.md#docker),
 pinned by version and digest, including its ShellCheck and Pyflakes integrations.
 The action always passes `-color -verbose`, listing checked workflows and the
@@ -204,7 +204,9 @@ source lint, and release jobs use `ubuntu-slim`. The container digests pin the
 tool environments independently of the host Ubuntu release.
 
 The weekly `docker` entry in [Dependabot configuration](../.github/dependabot.yml)
-tracks the Dockerfile actually used by CI. It takes effect on the default branch;
+tracks the Dockerfile actually used by CI. The action lives under `ci/` so Docker
+dependency updates do not need to modify files under `.github/`.
+The configuration takes effect on the default branch;
 the `github-actions` updater does not track inline `docker://` references.
 Dependabot can propose image tag and digest updates, but it does not update the
 binary URL/checksum in Copilot setup or the installation guidance. For version
