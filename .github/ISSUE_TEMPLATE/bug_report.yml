@@ -1,0 +1,29 @@
+name: Bug report
+description: Report unexpected behavior using synthetic examples.
+body:
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior and acceptance criteria
+      description: What should happen, and how will we know the bug is fixed?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction and actual behavior
+      description: Include steps and synthetic examples. Do not include real notifications, credentials, or loopback capability URLs.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS, Copilot app/CLI version, extension version or source commit, and Node.js version when relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Additional evidence
+      description: Optional sanitized errors, synthetic screenshots, or related issues.

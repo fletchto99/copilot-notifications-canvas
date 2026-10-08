@@ -32,6 +32,79 @@ checkout while a session uses it. A project-local checkout shadows a user-wide
 installation. If both providers are registered, pass
 `extensionId: project:github-notifications` when opening the local canvas.
 
+### Synthetic preview
+
+```sh
+npm run dev:fixture
+```
+
+This standalone preview needs only Node.js, not development dependencies,
+GitHub sign-in, or the Copilot host. It shares the browser tests' synthetic
+fixture and runs the real renderer and protected loopback server. The sample
+inbox includes pagination, search, and multiple attention categories. GitHub
+reads, read/done updates, release checks, and desktop delivery are simulated.
+
+Choose a reproducible preset with `--scenario`:
+
+```sh
+npm run dev:fixture -- --scenario=stale
+npm run dev:fixture -- --help
+```
+
+| Scenario | Behavior |
+| --- | --- |
+| `populated` | Default inbox with 53 notifications, pagination, and multiple attention categories. |
+| `empty` | Successful response with no notifications. |
+| `long-titles` | Long wrapping and unbroken titles and a long repository name for narrow-panel checks. |
+| `rate-limited` | Notification reads return HTTP 429 with a 120-second retry header. Real provider backoff applies, including to Force refresh. |
+| `stale` | The first notification read succeeds. Click **Force refresh** to fail the next read with HTTP 503 while retaining the loaded rows. |
+
+`--scenario stale` is also accepted. Unknown names, extra arguments, and duplicate
+options fail before starting a server. Restart the command to switch or reset
+scenarios; there is no in-page scenario switcher. The error presets continue
+failing notification reads after their retry waits, so the provider may increase
+backoff. Settings and synthetic release checks remain available. Scenario
+definitions in `test/preview-scenarios.mjs` reuse the shared request hooks rather
+than forcing renderer state.
+
+Open the printed `file://` launcher in a browser. It redirects to the preview
+without printing its capability URL to terminal logs. The launcher is stored
+with owner-only permissions in a private temporary directory; do not share it
+or the resulting browser URL. The footer identifies the preview and selected scenario.
+GitHub links in the renderer still navigate to GitHub when explicitly clicked.
+
+Settings and desktop coordination files stay in that temporary directory, never
+in your real `COPILOT_HOME`. Desktop alerts start off; enabling them only records
+simulated deliveries in memory. Ctrl+C or SIGTERM stops the server and removes
+the launcher and temporary settings. Each run starts fresh. After source or
+asset changes, stop and restart the preview; it does not hot-reload. This does
+not validate host SDK integration or host-provided theme tokens.
+
+### Environment check
+
+Select Node.js 24 using the repository's `.node-version` and your version
+manager, then run:
+
+```sh
+npm run doctor
+```
+
+The read-only check reports the supported Node version, installed development
+dependency versions, `actionlint` availability, and Chromium/WebKit executable
+paths. It exits nonzero if a prerequisite is missing or cannot be inspected and
+prints remediation commands. It does not install tools, launch browsers,
+authenticate with GitHub, inspect notification data, or change preferences.
+It runs even before development dependencies are installed.
+
+Use `npm ci --ignore-scripts --engine-strict` to restore development dependencies. For
+`actionlint`, macOS users can run `brew install actionlint`; with Go installed,
+run `go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12` and add Go's
+binary directory to `PATH`. Linux users can also follow the checksum-verified
+installation steps in the [setup workflow](../.github/workflows/copilot-setup-steps.yml).
+Browser installation is described below. Finding browser executables does not
+prove that Linux system libraries or headless launch dependencies are available;
+the browser tests provide that validation.
+
 ## Tests and checks
 
 Unit and HTTP integration tests need no dependency installation:
@@ -103,6 +176,48 @@ Playwright downloads browser binaries and may need permission to install Linux
 system libraries. Use `-- --project=webkit` with `npm run test:browser` to run one
 engine.
 
+For an explicit full local check after targeted tests, run:
+
+```sh
+npm run check:full
+```
+
+This runs the environment check, JavaScript/workflow lint, all Node tests with
+coverage, the release build, packaged integration tests, and browser/accessibility
+tests in both Chromium and WebKit, stopping at the first failure. It never
+installs missing prerequisites, skips unavailable checks, or publishes a release.
+Build output and test reports remain in their ignored directories.
+
+CI separates source linting (`Lint`, on `ubuntu-slim`) from workflow linting
+(`Actionlint`, on `ubuntu-latest`). Workflow lint uses the repository-owned
+[Docker action](../.github/actions/actionlint/action.yml). Its
+[Dockerfile](../.github/actions/actionlint/Dockerfile) contains only the
+[official actionlint Docker image](https://github.com/rhysd/actionlint/blob/main/docs/usage.md#docker),
+pinned by version and digest, including its ShellCheck and Pyflakes integrations.
+The action always passes `-color -verbose`, listing checked workflows and the
+final error count even on successful runs. It needs no Node setup or npm
+installation. The Docker action needs a full Linux
+VM: [`ubuntu-slim`](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#single-cpu-runners)
+is an unprivileged container and does not support Docker-in-Docker.
+Docker-based jobs and Copilot setup use `ubuntu-latest`; lightweight Linux tests,
+source lint, and release jobs use `ubuntu-slim`. The container digests pin the
+tool environments independently of the host Ubuntu release.
+
+The weekly `docker` entry in [Dependabot configuration](../.github/dependabot.yml)
+tracks the Dockerfile actually used by CI. It takes effect on the default branch;
+the `github-actions` updater does not track inline `docker://` references.
+Dependabot can propose image tag and digest updates, but it does not update the
+binary URL/checksum in Copilot setup or the installation guidance. For version
+bumps, update those companion pins, the doctor remediation command, and the
+versioned Go installation command above. A dedicated alignment test rejects
+version drift. Digest-only changes for the same version retain that alignment.
+Always verify new image digests and binary checksums before accepting an update.
+
+Copilot setup still installs that binary so agents can run `npm run lint:workflows`
+in their own session; the CI container does not provision the agent environment.
+If CI check names change, repository administrators must coordinate corresponding
+required-check rules separately; editing a workflow does not update those rules.
+
 See the [test workflow](../.github/workflows/tests.yml) for platform coverage and
 required checks. Browser CI runs both engines in the official Playwright image,
 which includes browser binaries and system libraries; it does not run APT or
@@ -117,7 +232,7 @@ specific Copilot build; reload and inspect the real extension after SDK changes.
 ## Copilot cloud agent and code review
 
 [Copilot setup steps](../.github/workflows/copilot-setup-steps.yml) prepare an
-Ubuntu 24.04 environment with Node.js 24, locked development dependencies,
+full Ubuntu runner (`ubuntu-latest`) with Node.js 24, locked development dependencies,
 and checksum-verified `actionlint`. Cloud-agent sessions and code reviews share
 this lightweight setup, without a separate review workflow. It checks tool
 availability without running the test suite, installing the extension, or

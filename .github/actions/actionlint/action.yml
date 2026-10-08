@@ -1,0 +1,8 @@
+name: Actionlint
+description: Lint GitHub Actions workflows with verbose diagnostics.
+runs:
+  using: docker
+  image: Dockerfile
+  args:
+    - -color
+    - -verbose

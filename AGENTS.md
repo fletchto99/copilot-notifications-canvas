@@ -129,6 +129,7 @@ defined in `package.json`; platform coverage is in
 
 | Check | Command |
 | --- | --- |
+| Read-only development prerequisite check | `npm run doctor` |
 | Targeted Node tests, for example HTTP and inbox changes | `node --test test/server.test.mjs test/inbox.test.mjs` |
 | All Node unit and HTTP integration tests | `npm test` (or `node --test test/*.test.mjs`) |
 | JavaScript and CSS lint, with no warnings, plus CSS formatting | `npm run lint` |
@@ -142,6 +143,17 @@ defined in `package.json`; platform coverage is in
 | Release build and packaged integration tests | `npm run build && npm run test:package` |
 | Browser and accessibility tests in Chromium and WebKit | `npm run test:browser` |
 | One browser engine | `npm run test:browser -- --project=webkit` |
+| Explicit full local validation, stopping on any failure | `npm run check:full` |
+
+Use `npm run dev:fixture` for a standalone synthetic UI preview without GitHub
+sign-in or the Copilot host. It shares the browser fixtures and uses temporary
+settings and simulated writes/alerts. Select `populated`, `empty`, `long-titles`,
+`rate-limited`, or `stale` with `-- --scenario=<name>`; use `-- --help` for usage.
+Open its private launcher, not the live notification canvas, for screenshots.
+Never share the launcher or capability URL.
+See [development](docs/development.md#synthetic-preview) for cleanup and
+limitations. `.node-version` selects the preferred development Node major;
+keep it aligned with the setup workflow.
 
 Node tests and coverage need no dependency installation and retain Node.js 22
 runtime compatibility coverage. For development tools, use Node.js 24 or later.
@@ -180,6 +192,15 @@ browser tests; report any network or permission limitations explicitly. Keep
 the workflow's Node version, action pins, and verified `actionlint` version
 aligned with the test workflow. Setup prepares tools; the agent still selects
 and runs the checks relevant to its task.
+
+Workflow CI uses a separate `actionlint` job with the upstream Docker image pinned
+by version and verified digest in `.github/actions/actionlint/Dockerfile`.
+The local action passes `-color -verbose`; Dependabot's Docker entry manages the
+same Dockerfile consumed by CI. Keep its version aligned with Copilot setup's
+checksum-verified binary and the installation guidance; the dedicated alignment
+test must stay enforced. The Docker action runs on `ubuntu-latest`, not the
+unprivileged `ubuntu-slim` runner; source lint remains on `ubuntu-slim`.
+Preserve the image's ShellCheck and Pyflakes integrations and read-only permissions.
 
 Browser CI uses a digest-pinned Playwright image with browsers and system
 libraries already installed. When updating Playwright, update the image's
