@@ -80,7 +80,7 @@ jobs:
       - name: Lint embedded recovery JavaScript and CSS
         run: npm run lint:recovery
   actionlint:
-    name: actionlint
+    name: Actionlint
     permissions:
       contents: read
     runs-on: ubuntu-24.04

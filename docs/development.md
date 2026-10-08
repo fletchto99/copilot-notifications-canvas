@@ -189,7 +189,7 @@ installs missing prerequisites, skips unavailable checks, or publishes a release
 Build output and test reports remain in their ignored directories.
 
 CI separates source linting (`Lint`, on `ubuntu-slim`) from workflow linting
-(`actionlint`, on `ubuntu-24.04`). Workflow lint uses the
+(`Actionlint`, on `ubuntu-24.04`). Workflow lint uses the
 [official actionlint Docker image](https://github.com/rhysd/actionlint/blob/main/docs/usage.md#docker),
 pinned by version and digest, including its ShellCheck and Pyflakes integrations.
 It needs no Node setup or npm installation. The Docker action needs a full Linux

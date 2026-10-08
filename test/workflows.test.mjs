@@ -105,7 +105,7 @@ test("workflow lint has a separate pinned Docker job on a Docker-capable runner"
   const actionlint = job("actionlint");
   const image = actionlint.match(/uses: docker:\/\/rhysd\/actionlint:(\d+\.\d+\.\d+)@sha256:[a-f0-9]{64}\n/);
   assert.ok(image, "Workflow lint must use the version- and digest-pinned upstream image");
-  assert.match(actionlint, /name: actionlint\n/);
+  assert.match(actionlint, /name: Actionlint\n/);
   assert.match(actionlint, /permissions:\n {6}contents: read/);
   assert.match(actionlint, /runs-on: ubuntu-24\.04/);
   assert.match(actionlint, /timeout-minutes: 5/);
