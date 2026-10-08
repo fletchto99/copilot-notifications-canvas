@@ -38,7 +38,10 @@ output. Development loads source without a build; release builds bundle
 - Keep styles in plain CSS and run `npm run format:css` after stylesheet edits.
   Stylelint with `stylelint-config-standard` checks CSS; Prettier enforces
   readable source formatting. ESLint checks JavaScript. Run `npm run lint`
-  before completing changes; CI runs all three checks separately.
+  before completing changes; CI runs these checks and `npm run lint:recovery`
+  separately. The recovery check lints the embedded JavaScript and CSS actually
+  served when renderer assets are unavailable, using the browser ESLint rules
+  and the same Stylelint configuration.
 - Prefer existing helpers and injected dependencies over new abstractions or
   runtime packages. `@github/copilot-sdk/extension` is supplied by the host;
   do not add the SDK to this repository's dependencies.
@@ -130,6 +133,7 @@ defined in `package.json`; platform coverage is in
 | JavaScript lint (ESLint) | `npm run lint:js` |
 | CSS lint (Stylelint) | `npm run lint:css` |
 | CSS formatting check (Prettier, no writes) | `npm run format:css:check` |
+| Embedded recovery JavaScript and CSS lint (requires development dependencies) | `npm run lint:recovery` |
 | Format source CSS | `npm run format:css` |
 | Source coverage with enforced thresholds | `npm run test:coverage` |
 | Workflow lint; requires `actionlint` on PATH | `npm run lint:workflows` |
@@ -139,6 +143,8 @@ defined in `package.json`; platform coverage is in
 
 Node tests and coverage need no dependency installation. If a tooling check
 fails because development packages are missing, use `npm ci --ignore-scripts`.
+The recovery lint integration tests run only through the tooling check, not
+the dependency-free `test/*.test.mjs` suite.
 For missing browser binaries, use
 `npx playwright install --with-deps chromium webkit`; this downloads browsers
 and may require permission to install Linux system libraries.

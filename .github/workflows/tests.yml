@@ -77,6 +77,8 @@ jobs:
         run: npm run lint:css
       - name: Check CSS formatting with Prettier
         run: npm run format:css:check
+      - name: Lint embedded recovery JavaScript and CSS
+        run: npm run lint:recovery
       - name: Install verified actionlint and lint workflows
         run: |
           curl --fail --silent --show-error --location \

@@ -6,9 +6,10 @@
     "node": ">=22"
   },
   "scripts": {
-    "lint": "npm run lint:js && npm run lint:css && npm run format:css:check",
+    "lint": "npm run lint:js && npm run lint:css && npm run format:css:check && npm run lint:recovery",
     "lint:js": "eslint . --max-warnings=0",
     "lint:css": "stylelint \"src/**/*.css\" --max-warnings=0",
+    "lint:recovery": "node --test test/recovery-lint.integration.mjs",
     "lint:workflows": "actionlint",
     "format:css": "prettier --write \"src/**/*.css\"",
     "format:css:check": "prettier --check \"src/**/*.css\"",

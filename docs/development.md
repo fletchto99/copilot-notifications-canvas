@@ -46,15 +46,25 @@ npx playwright install --with-deps chromium webkit
 npm run test:browser
 ```
 
-`npm run lint` runs all three source checks:
+`npm run lint` runs all source checks:
 
 - `npm run lint:js` checks JavaScript with ESLint.
 - `npm run lint:css` checks CSS with Stylelint and `stylelint-config-standard`.
 - `npm run format:css:check` checks CSS formatting with Prettier.
+- `npm run lint:recovery` checks the embedded recovery JavaScript and CSS with
+  the same browser ESLint rules and Stylelint configuration.
 
 CI runs each check as a separate step. Stylelint catches CSS errors and enforces
 CSS conventions; Prettier keeps the stylesheet readable with multiline rules
 and declarations.
+
+The recovery lint check starts an isolated loopback server with synthetic
+missing renderer assets and lints the fallback content it serves. It makes no
+GitHub requests, sends no desktop alerts, and checks invalid snippets to verify
+that the lint rules reject errors. Its tooling-only integration tests require
+development dependencies and stay outside the dependency-free Node test suite.
+The fallback remains embedded in the provider; no development build or runtime
+recovery-file reads are introduced.
 
 The Stylelint configuration retains prefix-style media queries and allows
 shared state and component rules to rely on specificity rather than source

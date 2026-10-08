@@ -9,13 +9,15 @@ test("CI runs ESLint, Stylelint and Prettier checks without allowing warnings", 
   ]);
   const lint = workflow.match(/\n {2}lint:\n([\s\S]*?)(?=\n {2}[a-z][\w-]*:|$)/)?.[1];
   assert.ok(lint, "CI must have a lint job");
-  for (const script of ["lint:js", "lint:css", "format:css:check"]) {
+  for (const script of ["lint:js", "lint:css", "format:css:check", "lint:recovery"]) {
     assert.match(lint, new RegExp(`^\\s+run: npm run ${script}$`, "m"));
   }
-  assert.equal(scripts.lint, "npm run lint:js && npm run lint:css && npm run format:css:check");
+  assert.equal(scripts.lint, "npm run lint:js && npm run lint:css && npm run format:css:check && npm run lint:recovery");
   assert.equal(scripts["lint:js"], "eslint . --max-warnings=0");
   assert.equal(scripts["lint:css"], 'stylelint "src/**/*.css" --max-warnings=0');
   assert.equal(scripts["format:css:check"], 'prettier --check "src/**/*.css"');
+  assert.equal(scripts["lint:recovery"], "node --test test/recovery-lint.integration.mjs");
+  assert.equal(scripts.test, "node --test test/*.test.mjs");
 });
 
 test("browser CI pins the locked Playwright version without installing browsers or system packages", async () => {
