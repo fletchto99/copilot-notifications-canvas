@@ -86,10 +86,11 @@ test("Copilot cloud sessions and reviews share lightweight setup without browser
   await assert.rejects(readFile(new URL("../.github/workflows/copilot-code-review.yml", import.meta.url)), { code: "ENOENT" });
 });
 
-test("workflow lint has a separate pinned Docker job on a Docker-capable runner", async () => {
-  const [workflow, setup] = await Promise.all([
+test("workflow lint uses a verbose Dependabot-managed local Docker action on a Docker-capable runner", async () => {
+  const [workflow, action, dependabot] = await Promise.all([
     readFile(new URL("../.github/workflows/tests.yml", import.meta.url), "utf8"),
-    readFile(new URL("../.github/workflows/copilot-setup-steps.yml", import.meta.url), "utf8"),
+    readFile(new URL("../.github/actions/actionlint/action.yml", import.meta.url), "utf8"),
+    readFile(new URL("../.github/dependabot.yml", import.meta.url), "utf8"),
   ]);
   const job = id => {
     const match = workflow.match(new RegExp(`\\n {2}${id}:\\n([\\s\\S]*?)(?=\\n {2}[\\w-]+:|$)`));
@@ -103,21 +104,42 @@ test("workflow lint has a separate pinned Docker job on a Docker-capable runner"
   assert.doesNotMatch(sourceLint, /actionlint|curl|docker:\/\//);
 
   const actionlint = job("actionlint");
-  const image = actionlint.match(/uses: docker:\/\/rhysd\/actionlint:(\d+\.\d+\.\d+)@sha256:[a-f0-9]{64}\n/);
-  assert.ok(image, "Workflow lint must use the version- and digest-pinned upstream image");
   assert.match(actionlint, /name: Actionlint\n/);
   assert.match(actionlint, /permissions:\n {6}contents: read/);
   assert.match(actionlint, /runs-on: ubuntu-24\.04/);
   assert.match(actionlint, /timeout-minutes: 5/);
   assert.match(actionlint, /uses: actions\/checkout@[a-f0-9]{40}/);
   assert.match(actionlint, /persist-credentials: false/);
-  assert.match(actionlint, /args: -color/);
-  assert.doesNotMatch(actionlint, /npm|setup-node|curl|shellcheck=|pyflakes=/);
+  assert.match(actionlint, /uses: \.\/\.github\/actions\/actionlint(?:\n|$)/);
+  assert.ok(actionlint.indexOf("uses: actions/checkout@") < actionlint.indexOf("uses: ./.github/actions/actionlint"));
+  assert.doesNotMatch(actionlint, /npm|setup-node|curl|docker:\/\/|args:/);
+
+  assert.match(action, /runs:\n {2}using: docker\n {2}image: Dockerfile\n {2}args:\n {4}- -color\n {4}- -verbose(?:\n|$)/);
+  assert.doesNotMatch(action, /entrypoint:|shellcheck=|pyflakes=/);
+  const docker = dependabot.match(/\n {2}- package-ecosystem: docker\n([\s\S]*?)(?=\n {2}- package-ecosystem:|$)/)?.[1];
+  assert.ok(docker, "Dependabot must manage the Dockerfile actually consumed by CI");
+  assert.match(docker, /directory: \/\.github\/actions\/actionlint(?:\n|$)/);
+  assert.match(docker, /schedule:\n {6}interval: weekly/);
+});
+
+test("the pinned actionlint Docker image, Copilot setup binary and installation guidance stay aligned", async () => {
+  const [dockerfile, setup, doctor, development] = await Promise.all([
+    readFile(new URL("../.github/actions/actionlint/Dockerfile", import.meta.url), "utf8"),
+    readFile(new URL("../.github/workflows/copilot-setup-steps.yml", import.meta.url), "utf8"),
+    readFile(new URL("../scripts/doctor.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../docs/development.md", import.meta.url), "utf8"),
+  ]);
+  const image = dockerfile.match(/^FROM rhysd\/actionlint:(\d+\.\d+\.\d+)@sha256:[a-f0-9]{64}\n?$/);
+  assert.ok(image, "The local Docker action must contain only the version- and digest-pinned upstream image");
 
   assert.ok(setup.includes(`/download/v${image[1]}/actionlint_${image[1]}_linux_amd64.tar.gz`),
     "Copilot setup and workflow CI must use the same actionlint version");
   assert.match(setup, /echo "[a-f0-9]{64} {2}\$RUNNER_TEMP\/actionlint\.tar\.gz" \| sha256sum --check/);
   assert.ok(setup.indexOf("sha256sum --check") < setup.indexOf("tar -xzf"));
+  for (const content of [doctor, development]) {
+    assert.ok(content.includes(`go install github.com/rhysd/actionlint/cmd/actionlint@v${image[1]}`),
+      "Doctor remediation and development guidance must name the same actionlint version");
+  }
 });
 
 test("local validation cannot skip prerequisites or browser engines and preserves preview entry points", async () => {

@@ -90,9 +90,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Lint GitHub Actions workflows
-        uses: docker://rhysd/actionlint:1.7.12@sha256:9d36088643581e728c969f35141f88139fec77280b2be23c1f66f8e40e1025e7
-        with:
-          args: -color
+        uses: ./.github/actions/actionlint
   browser:
     name: Browser (${{ matrix.browser }})
     runs-on: ubuntu-24.04

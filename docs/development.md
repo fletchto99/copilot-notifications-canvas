@@ -189,15 +189,27 @@ installs missing prerequisites, skips unavailable checks, or publishes a release
 Build output and test reports remain in their ignored directories.
 
 CI separates source linting (`Lint`, on `ubuntu-slim`) from workflow linting
-(`Actionlint`, on `ubuntu-24.04`). Workflow lint uses the
+(`Actionlint`, on `ubuntu-24.04`). Workflow lint uses the repository-owned
+[Docker action](../.github/actions/actionlint/action.yml). Its
+[Dockerfile](../.github/actions/actionlint/Dockerfile) contains only the
 [official actionlint Docker image](https://github.com/rhysd/actionlint/blob/main/docs/usage.md#docker),
 pinned by version and digest, including its ShellCheck and Pyflakes integrations.
-It needs no Node setup or npm installation. The Docker action needs a full Linux
+The action always passes `-color -verbose`, listing checked workflows and the
+final error count even on successful runs. It needs no Node setup or npm
+installation. The Docker action needs a full Linux
 VM: [`ubuntu-slim`](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#single-cpu-runners)
 is an unprivileged container and does not support Docker-in-Docker.
 
-When updating actionlint, verify and update the image digest and version together,
-keeping its version aligned with the checksum-verified binary in Copilot setup.
+The weekly `docker` entry in [Dependabot configuration](../.github/dependabot.yml)
+tracks the Dockerfile actually used by CI. It takes effect on the default branch;
+the `github-actions` updater does not track inline `docker://` references.
+Dependabot can propose image tag and digest updates, but it does not update the
+binary URL/checksum in Copilot setup or the installation guidance. For version
+bumps, update those companion pins, the doctor remediation command, and the
+versioned Go installation command above. A dedicated alignment test rejects
+version drift. Digest-only changes for the same version retain that alignment.
+Always verify new image digests and binary checksums before accepting an update.
+
 Copilot setup still installs that binary so agents can run `npm run lint:workflows`
 in their own session; the CI container does not provision the agent environment.
 If CI check names change, repository administrators must coordinate corresponding
