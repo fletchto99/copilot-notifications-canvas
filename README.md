@@ -39,91 +39,16 @@ full procedure, verification requirements, and troubleshooting.
 
 ## Usage
 
-- **Browse and search:** loads up to 50 notifications at a time; **Load more**
-  continues while GitHub has more pages. Issue and PR numbers appear beside the
-  type below each title (for example, `Issue #42` or `Pull Request #42`).
-  Search matches titles, numbers and repositories;
-  search and counts cover loaded items only. Numbers are omitted when GitHub
-  does not provide a valid issue or PR link.
-  Clearing loaded items is not necessarily the end of your inbox: **Loaded
-  notifications cleared** offers **Refresh notifications** to reconcile remaining
-  unread items. **All caught up** appears only after the loaded inbox is empty
-  with no known remaining pages or pending reconciliation.
-- **Attention tabs:** new panels start on **All** (all loaded unread items).
-  **Review requested** shows review requests, **Mentioned** includes personal
-  and team mentions, **Assigned** shows assignments, and **Participating**
-  shows threads you authored or commented on. These use GitHub's notification
-  reason, not a full history of your involvement; a thread's reason can change.
-  Tabs combine with search in every grouping mode and stay selected during
-  refresh and pagination. Each tab's count, such as **Review requested (3)**,
-  includes all loaded unread items in that category, independent of search.
-  The status line reports matches for the selected tab and search.
-  Use Left/Right Arrow or Home/End to switch tabs.
-  When tabs do not all fit, edge arrows scroll the strip without changing your
-  selected filter. The scrollbar stays hidden; touch and trackpad scrolling
-  still work. Passive count updates only scroll the tab strip, not the page.
-  Clearing the search leaves the selected attention tab unchanged.
-- **Mark as read:** use the open-envelope icon on an individual row in any view.
-  In **repo** mode, every nonempty group also offers **Mark N as read**, even
-  when only one notification matches. This marks only that repository's loaded
-  items matching your attention tab and search, not hidden or older unloaded
-  notifications.
-- **Mark as done:** use the checkmark icon to mark an individual row completed on
-  GitHub in any view.
-  This is separate from marking it read. Both actions remove the row from this
-  unread-only canvas after GitHub confirms success. Done status is stored only
-  by GitHub; the canvas keeps no local completion history. Use GitHub's inbox
-  to view read or done notifications.
-  In **repo** mode, the arrow beside **Mark N as read** opens a dropdown with
-  **Mark N as done**, limited to that repository's shown, loaded attention and
-  search matches.
-  In **none** grouping, notifications appear newest-first in one **All
-  notifications** group, with repository names in each row's metadata. Its header
-  contains the same split control, targeting all loaded attention and search
-  matches across repositories. Use the header or **Collapse all** / **Expand all**
-  to collapse or expand the group; the bulk actions remain available when collapsed.
-  In **date** grouping, each date header has its own split control, limited to
-  that browser-local calendar day's loaded matches, including when collapsed.
-  Date grouping keeps **Collapse all** in the count row, without a list-wide action.
-  Neither action includes unloaded notifications.
-  Read stays the default; choosing Done never changes future defaults.
-  All batch actions show progress, allow stopping remaining requests, and
-  retry only unchanged, still-shown remaining items with the original action.
-  Stopped batches summarize what was marked and what remains; **Continue remaining**
-  resumes that selection, while failed batches retain **Retry remaining** and details.
-  Both row icons use compact outlined buttons with immediate hover and
-  keyboard-focus tooltips labeled **Mark as read** and **Mark as done**.
-  Press Escape to dismiss a tooltip; Tab moves between
-  the title, read, and done controls. The last-updated time appears with the
-  dot-separated metadata beneath each title, without a redundant unread label.
-- **Responsive layout:** panel padding and header spacing stay consistent while
-  resizing. Header text, notification titles, and metadata remain visible.
-  Repository controls stay right-aligned beside the name and count. When they no
-  longer fit together, the controls wrap onto a left-aligned second row.
-  Timestamps stay in the metadata; both row actions stay beside the content in
-  narrow panels while titles and metadata wrap.
-- **Refresh:** automatic checks run about every 60 seconds while the canvas is
-  visible and pause while hidden. Returning to the foreground refreshes immediately.
-  Longer GitHub polling intervals apply to automatic checks. Foreground returns
-  and the **Force refresh** icon immediately left of **Settings** check loaded
-  pages without waiting for the polling interval, but cannot bypass rate limits
-  or error retry waits. During backoff, the canvas displays a retry time and
-  refresh controls remain focusable but cannot send another request until then.
-  Its theme-matched tooltip appears immediately on hover
-  or keyboard focus and reports seconds since the last successful update.
-  Its elapsed time updates every 15 seconds while visible. Inbox and Settings
-  use the same immediate tooltips; press Escape to dismiss them.
-  When desktop alerts are enabled, foreground checks feed the same results to
-  the desktop watcher. It continues checking about every minute while
-  the canvas is hidden; the OS controls when alerts appear.
-- **Open GitHub:** the inbox icon beside **Settings** opens your
-  [GitHub inbox](https://github.com/notifications).
+- Filter with the attention tabs or search by title, issue/PR number, or repository.
+- Choose **All notifications**, **Repository**, or **Date** in **Settings**.
+- Use the envelope to mark a row **read**, or the checkmark to mark it **done**.
+  Each group header offers the same bulk actions.
+- Use **Load more** for older notifications. Search, counts, and bulk actions
+  cover **loaded items only**, not your entire GitHub inbox.
 
-Open **Settings** for grouping, theme, auto-open, desktop notifications, and sound.
-**Group By** offers **All notifications**, **Repository**, and **Date**.
-Settings closes on Escape, an outside click, or keyboard focus moving outside it.
-Preferences persist across sessions; auto-open and desktop alerts are off by
-default. See the [settings guide](docs/settings.md) for details and platform support.
+See the [usage guide](docs/usage.md) for filtering, bulk actions, keyboard
+controls, and refresh behavior. [Settings](docs/settings.md) covers saved
+preferences and opt-in desktop alerts.
 
 ## Privacy
 
@@ -145,6 +70,7 @@ linked GitHub page may also mark a notification read on GitHub.
 
 ## Documentation
 
+- [Usage](docs/usage.md): browsing, filtering, Read/Done actions, and keyboard controls.
 - [Installation](docs/installation.md): setup, updates, and verification.
 - [Settings](docs/settings.md): preferences, desktop alerts, and troubleshooting.
 - [Development](docs/development.md): local development, tests, packaging, and releases.

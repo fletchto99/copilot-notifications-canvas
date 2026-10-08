@@ -1,6 +1,6 @@
 # Settings
 
-[README](../README.md) | [Installation](installation.md) | [Development](development.md)
+[README](../README.md) | [Usage](usage.md) | [Installation](installation.md) | [Development](development.md)
 
 Open **Settings** in the canvas to change these preferences. They are saved
 across sessions and preserved during packaged upgrades.

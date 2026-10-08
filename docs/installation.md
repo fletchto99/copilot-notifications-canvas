@@ -1,6 +1,6 @@
 # Installation and updating
 
-[README](../README.md) | [Settings](settings.md) | [Development](development.md)
+[README](../README.md) | [Usage](usage.md) | [Settings](settings.md) | [Development](development.md)
 
 ## Prerequisites
 
