@@ -14,18 +14,28 @@
       <h1>Unread Notifications</h1>
       <p id="subtitle" class="subtitle">A little less noise. One repository at a time.</p>
       <section id="update-banner" class="update-banner" aria-label="Canvas update" hidden>
-        <p id="update-title" role="status" aria-live="polite"></p>
-        <div class="update-actions">
-          <a id="release-notes" target="_blank" rel="noopener noreferrer">Release notes</a>
-          <a id="update-instructions" target="_blank" rel="noopener noreferrer">Update instructions</a>
-          <button id="copy-update" type="button">Copy update prompt</button>
+        <div class="update-heading">
+          <p id="update-title" role="status" aria-live="polite"></p>
+          <span id="update-current-version"></span>
         </div>
-        <details id="update-prompt-details">
-          <summary>Prompt to paste into Copilot</summary>
-          <label class="sr-only" for="update-prompt">Update prompt</label>
-          <textarea id="update-prompt" readonly rows="8" spellcheck="false"></textarea>
-        </details>
-        <p id="copy-status" class="settings-help" role="status" aria-live="polite"></p>
+        <div class="update-actions">
+          <button id="copy-update" type="button">Copy update prompt</button>
+          <a id="release-notes" target="_blank" rel="noopener noreferrer">Release notes</a>
+          <button id="update-details-toggle" type="button" aria-expanded="false" aria-controls="update-prompt-details">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true" focusable="false">
+              <path d="M4 2 9 6 4 10Z"/>
+            </svg>
+            Update details
+          </button>
+          <p id="copy-status" class="settings-help" role="status" aria-live="polite"></p>
+        </div>
+        <div id="update-prompt-details" class="update-details-content" hidden>
+          <p>Copy the prompt, then paste it into Copilot to review and run the update.</p>
+          <a id="update-instructions" target="_blank" rel="noopener noreferrer">Read the update instructions</a>
+          <label for="update-prompt">Update prompt</label>
+          <textarea id="update-prompt" readonly rows="5" spellcheck="false"></textarea>
+        </div>
+        <p id="update-stale" role="status" hidden></p>
       </section>
       <div id="attention-navigation" class="attention-navigation">
         <button id="attention-previous" class="attention-scroll" type="button" aria-label="Scroll attention tabs left" aria-controls="attention-tabs" aria-disabled="true" hidden>
