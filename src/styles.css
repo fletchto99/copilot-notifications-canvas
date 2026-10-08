@@ -484,12 +484,28 @@ input::placeholder {
   overflow-wrap: anywhere;
 }
 
+.update-heading {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+}
+
+#update-title {
+  font-weight: var(--font-weight-semibold, 600);
+}
+
+#update-current-version {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .update-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px 16px;
-  margin-top: 8px;
+  gap: 8px 16px;
+  margin-top: 10px;
   font-size: 12px;
 }
 
@@ -498,13 +514,44 @@ input::placeholder {
   white-space: normal;
 }
 
-.update-banner summary {
-  padding: 10px 0;
+#copy-update {
+  min-width: 143px;
+}
+
+#update-details-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px 0;
+  border: 0;
+  color: var(--muted);
+}
+
+#update-details-toggle svg {
+  flex: none;
+}
+
+#update-details-toggle[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+
+.update-details-content {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
   font-size: 12px;
-  font-weight: 400;
+}
+
+.update-details-content p,
+.update-details-content label {
+  color: var(--muted);
 }
 
 .update-banner textarea {
+  display: block;
+  min-width: 0;
   width: 100%;
   resize: vertical;
   padding: 8px;
@@ -512,6 +559,21 @@ input::placeholder {
   border-radius: 6px;
   background: transparent;
   font-family: var(--font-mono, monospace);
+  font-size: 12px;
+}
+
+#copy-status {
+  margin: 0;
+  font-size: 12px;
+}
+
+#copy-status:empty {
+  display: none;
+}
+
+#update-stale {
+  margin-top: 10px;
+  color: var(--muted);
   font-size: 12px;
 }
 

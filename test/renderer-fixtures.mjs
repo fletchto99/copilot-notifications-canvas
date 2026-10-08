@@ -143,6 +143,12 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     addEventListener(name, handler) { this.events[name] = handler; },
   };
   const window = { events: {}, addEventListener(name, handler) { this.events[name] = handler; } };
+  const updateDetails = ids.get("update-prompt-details");
+  updateDetails.contains = node =>
+    ["update-prompt-details", "update-instructions", "update-prompt"].some(id => ids.get(id) === node);
+  for (const id of ["update-instructions", "update-prompt"]) ids.get(id).parentNode = updateDetails;
+  updateDetails.hidden = true;
+  ids.get("update-details-toggle").setAttribute("aria-expanded", "false");
   if (appColorMode !== null) document.documentElement.setAttribute("data-color-mode", appColorMode);
   const media = {
     matches: systemDark, events: {},

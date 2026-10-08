@@ -61,7 +61,8 @@ test("update banner sits below the subtitle and above the inbox controls with it
   const positions = ['class="subtitle"', 'id="update-banner"', 'class="toolbar"', 'id="count"', 'id="groups"']
     .map(marker => html.indexOf(marker));
   assert.ok(positions.every((position, index) => position >= 0 && (index === 0 || position > positions[index - 1])));
-  assert.match(html, /<details id="update-prompt-details">/);
+  assert.match(html, /<button id="update-details-toggle"[^>]*aria-expanded="false" aria-controls="update-prompt-details"/);
+  assert.match(html, /<div id="update-prompt-details"[^>]* hidden>/);
 });
 
 test("Settings combines the running version and update status in one text row below Check for updates", async () => {
@@ -108,7 +109,8 @@ test("update banner shows release links and copies a prompt without installing o
     releaseUrl: "https://github.com/fletchto99/copilot-notifications-canvas/releases/tag/v0.2.0",
   } });
   assert.equal(ui.ids.get("update-banner").hidden, false);
-  assert.match(ui.ids.get("update-title").textContent, /v0\.2\.0.*v0\.1\.0/);
+  assert.equal(ui.ids.get("update-title").textContent, "Update available \u00b7 v0.2.0");
+  assert.equal(ui.ids.get("update-current-version").textContent, "Currently v0.1.0");
   assert.equal(ui.ids.get("installed-version").textContent, "Notifications Canvas v0.1.0");
   assert.match(ui.ids.get("release-notes").href, /\/releases\/tag\/v0\.2\.0$/);
   assert.match(ui.ids.get("update-instructions").href, /#installation-and-updating$/);
@@ -117,7 +119,8 @@ test("update banner shows release links and copies a prompt without installing o
   await ui.ids.get("copy-update").events.click();
   assert.deepEqual(ui.copied, ["Synthetic safe update prompt"]);
   assert.equal(ui.calls.length, count);
-  assert.match(ui.ids.get("copy-status").textContent, /Copied.*Paste/);
+  assert.equal(ui.ids.get("copy-update").textContent, "Copied");
+  assert.equal(ui.ids.get("copy-status").textContent, "Paste into Copilot to review and run.");
   assert.equal(ui.calls.some(call => call.path === "/api/settings" && call.options.body), false);
 });
 
@@ -126,11 +129,110 @@ test("clipboard denial exposes a selectable prompt and does not claim it was cop
     status: "available", latestVersion: "0.2.0", prompt: "Manual copy prompt",
   } });
   await ui.ids.get("copy-update").events.click();
-  assert.equal(ui.ids.get("update-prompt-details").open, true);
+  assert.equal(ui.ids.get("update-prompt-details").hidden, false);
+  assert.equal(ui.ids.get("update-details-toggle").attributes["aria-expanded"], "true");
   assert.equal(ui.ids.get("update-prompt").selected, true);
   assert.equal(ui.document.activeElement, ui.ids.get("update-prompt"));
   assert.match(ui.ids.get("copy-status").textContent, /Clipboard unavailable/);
   assert.deepEqual(ui.copied, []);
+});
+
+test("update details toggle without requests and restore focus before hiding the prompt", async () => {
+  const ui = await renderer({ release: { status: "available", prompt: "Synthetic update prompt" } });
+  const details = ui.ids.get("update-prompt-details");
+  const toggle = ui.ids.get("update-details-toggle");
+  const count = ui.calls.length;
+  assert.equal(details.hidden, true);
+  toggle.focus();
+  toggle.events.click();
+  assert.equal(details.hidden, false);
+  assert.equal(toggle.attributes["aria-expanded"], "true");
+  assert.equal(ui.document.activeElement, toggle);
+  ui.ids.get("update-prompt").focus();
+  toggle.events.click();
+  assert.equal(details.hidden, true);
+  assert.equal(toggle.attributes["aria-expanded"], "false");
+  assert.equal(ui.document.activeElement, toggle);
+  assert.equal(ui.calls.length, count);
+});
+
+test("copy feedback expires, restarts on another copy, and resets on failure or a different release", async () => {
+  const ui = await renderer({ release: { status: "available", prompt: "Synthetic update prompt" } });
+  const copy = ui.ids.get("copy-update");
+  const feedbackTimers = () => [...ui.timers.values()].filter(timer => timer.delay === 4000);
+  await copy.events.click();
+  await copy.events.click();
+  assert.equal(feedbackTimers().length, 1);
+  await ui.fireTimer(4000);
+  assert.equal(copy.textContent, "Copy update prompt");
+  assert.equal(ui.ids.get("copy-status").textContent, "Paste into Copilot to review and run.");
+  await copy.events.click();
+  const writeText = ui.context.navigator.clipboard.writeText;
+  ui.context.navigator.clipboard.writeText = async () => { throw new Error("Clipboard denied"); };
+  await copy.events.click();
+  assert.equal(copy.textContent, "Copy update prompt");
+  assert.equal(feedbackTimers().length, 0);
+  assert.match(ui.ids.get("copy-status").textContent, /Clipboard unavailable/);
+  ui.context.navigator.clipboard.writeText = writeText;
+  await copy.events.click();
+  assert.equal(copy.textContent, "Copied");
+  ui.setRelease({ prompt: "Next release prompt", latestVersion: "0.3.0" });
+  await ui.fireTimer();
+  assert.equal(copy.textContent, "Copy update prompt");
+  assert.equal(ui.ids.get("copy-status").textContent, "");
+  assert.equal(feedbackTimers().length, 0);
+  await copy.events.click();
+  ui.setRelease({ status: "current" });
+  await ui.fireTimer();
+  assert.equal(ui.ids.get("update-banner").hidden, true);
+  assert.equal(ui.ids.get("update-prompt-details").hidden, true);
+  assert.equal(ui.ids.get("copy-status").textContent, "");
+  assert.equal(copy.textContent, "Copy update prompt");
+  assert.equal(feedbackTimers().length, 0);
+  ui.window.events.pagehide();
+  assert.equal(ui.timers.size, 0);
+});
+
+test("copying requires an available prompt and a visible canvas", async () => {
+  for (const release of [{}, { status: "available", prompt: null }]) {
+    const ui = await renderer({ release });
+    await ui.ids.get("copy-update").events.click();
+    assert.deepEqual(ui.copied, []);
+  }
+  const ui = await renderer({ release: { status: "available", prompt: "Synthetic update prompt" } });
+  ui.intersect(false);
+  await ui.ids.get("copy-update").events.click();
+  assert.deepEqual(ui.copied, []);
+});
+
+test("late clipboard results cannot update a changed, hidden, or closed canvas", async t => {
+  for (const reject of [false, true]) {
+    for (const change of ["release", "unavailable", "hidden", "closed"]) {
+      await t.test(`${reject ? "denied" : "copied"} after ${change}`, async () => {
+        const ui = await renderer({ release: { status: "available", prompt: "Old release prompt" } });
+        let complete;
+        ui.context.navigator.clipboard.writeText = () => new Promise((resolve, fail) => {
+          complete = () => reject ? fail(new Error("Clipboard denied")) : resolve();
+        });
+        const copying = ui.ids.get("copy-update").events.click();
+        if (change === "release" || change === "unavailable") {
+          ui.setRelease(change === "release" ? { prompt: "New release prompt" } : { status: "current" });
+          await ui.fireTimer();
+        } else if (change === "hidden") {
+          ui.intersect(false);
+        } else {
+          ui.window.events.pagehide();
+        }
+        complete();
+        await copying;
+        assert.equal(ui.ids.get("copy-status").textContent, "");
+        assert.equal(ui.ids.get("update-prompt-details").hidden, true);
+        assert.equal([...ui.timers.values()].some(timer => timer.delay === 4000), false);
+        ui.window.events.pagehide();
+        assert.equal(ui.timers.size, 0);
+      });
+    }
+  }
 });
 
 test("current, ahead, absent and failed release checks keep the banner out of the inbox", async () => {
@@ -155,7 +257,9 @@ test("a last-known available update stays usable but warns when its latest check
     error: "Synthetic release check failure.",
   } });
   assert.equal(ui.ids.get("update-banner").hidden, false);
-  assert.match(ui.ids.get("update-title").textContent, /v0\.2\.0.*Last known release; the latest check failed/);
+  assert.match(ui.ids.get("update-title").textContent, /v0\.2\.0/);
+  assert.equal(ui.ids.get("update-stale").hidden, false);
+  assert.equal(ui.ids.get("update-stale").textContent, "Last known release; the latest check failed.");
   assert.match(ui.ids.get("update-status").textContent, /Synthetic release check failure/);
   assert.equal(ui.ids.get("notice").hidden, true);
   await ui.ids.get("copy-update").events.click();
@@ -163,7 +267,8 @@ test("a last-known available update stays usable but warns when its latest check
   ui.setRelease({ error: null });
   await ui.fireTimer();
   assert.equal(ui.ids.get("update-banner").hidden, false);
-  assert.doesNotMatch(ui.ids.get("update-title").textContent, /Last known release/);
+  assert.equal(ui.ids.get("update-stale").hidden, true);
+  assert.equal(ui.ids.get("update-stale").textContent, "");
   assert.equal(ui.ids.get("update-status").textContent, " - Update available: v0.2.0.");
   assert.equal(ui.document.querySelectorAll("article").length, 1);
   assert.equal(ui.calls.some(call => call.path === "/api/settings" && call.options.body), false);

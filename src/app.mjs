@@ -28,6 +28,7 @@ let soundOptionsKey;
 let releaseState;
 let updatesBusy = false;
 let updateError = "";
+let copyFeedbackTimer;
 const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
 const marking = new Map();
 let actionError = "";
@@ -217,14 +218,35 @@ function renderUpdates(updates = releaseState) {
   $("update-status").hidden = !message;
   const available = updates.status === "available";
   $("update-banner").hidden = !available;
-  if (!available) return;
-  $("update-title").textContent = `Canvas update available: v${updates.latestVersion} (running v${updates.currentVersion}).${updates.error ? " Last known release; the latest check failed." : ""}`;
+  if (!available) {
+    resetCopyFeedback();
+    setUpdateDetails(false);
+    return;
+  }
+  $("update-title").textContent = `Update available \u00b7 v${updates.latestVersion}`;
+  $("update-current-version").textContent = `Currently v${updates.currentVersion}`;
+  $("update-stale").hidden = !updates.error;
+  $("update-stale").textContent = updates.error ? "Last known release; the latest check failed." : "";
   $("release-notes").href = updates.releaseUrl;
   $("update-instructions").href = updates.instructionsUrl;
   if ($("update-prompt").value !== updates.prompt) {
     $("update-prompt").value = updates.prompt;
-    $("copy-status").textContent = "";
+    resetCopyFeedback();
   }
+}
+
+function setUpdateDetails(open) {
+  const details = $("update-prompt-details");
+  const toggle = $("update-details-toggle");
+  if (!open && details.contains(document.activeElement)) toggle.focus();
+  details.hidden = !open;
+  toggle.setAttribute("aria-expanded", String(open));
+}
+
+function resetCopyFeedback() {
+  clearTimeout(copyFeedbackTimer);
+  $("copy-update").textContent = "Copy update prompt";
+  $("copy-status").textContent = "";
 }
 
 async function checkUpdates() {
@@ -243,12 +265,21 @@ async function checkUpdates() {
 }
 
 async function copyUpdatePrompt() {
-  if (!visible() || !releaseState?.prompt) return;
+  if (!visible() || releaseState?.status !== "available" || !releaseState.prompt) return;
+  const prompt = releaseState.prompt;
   try {
-    await navigator.clipboard.writeText(releaseState.prompt);
-    $("copy-status").textContent = "Copied. Paste the prompt into Copilot to review and run the update.";
+    await navigator.clipboard.writeText(prompt);
+    if (!visible() || releaseState?.status !== "available" || releaseState.prompt !== prompt) return;
+    resetCopyFeedback();
+    $("copy-update").textContent = "Copied";
+    $("copy-status").textContent = "Paste into Copilot to review and run.";
+    copyFeedbackTimer = setTimeout(() => {
+      $("copy-update").textContent = "Copy update prompt";
+    }, 4000);
   } catch {
-    $("update-prompt-details").open = true;
+    if (!visible() || releaseState?.status !== "available" || releaseState.prompt !== prompt) return;
+    resetCopyFeedback();
+    setUpdateDetails(true);
     $("update-prompt").focus();
     $("update-prompt").select();
     $("copy-status").textContent = "Clipboard unavailable. Copy the selected prompt and paste it into Copilot.";
@@ -935,6 +966,9 @@ $("desktop-sound").addEventListener("change", () => {
 });
 $("check-updates").addEventListener("click", checkUpdates);
 $("copy-update").addEventListener("click", copyUpdatePrompt);
+$("update-details-toggle").addEventListener("click", () => {
+  setUpdateDetails($("update-prompt-details").hidden);
+});
 $("theme").addEventListener("change", () => {
   if (preferences && !$("theme").disabled) {
     const themes = { system: null, dark: true, light: false };
@@ -1036,6 +1070,7 @@ window.addEventListener("pagehide", () => {
   clearTimeout(timer);
   clearTimeout(tooltipTimer);
   clearTimeout(searchTimer);
+  clearTimeout(copyFeedbackTimer);
   for (const controller of requestControllers) controller.abort();
   observer.disconnect();
   themeObserver.disconnect();

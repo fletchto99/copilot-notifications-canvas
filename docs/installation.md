@@ -23,6 +23,17 @@ not include those tooling dependencies.
 Use the [installation prompt in the README](../README.md#installation-and-updating)
 for a fresh installation or a packaged-release upgrade.
 
+When an update is available, the canvas shows a compact notice with the new
+version, the installed version, **Copy update prompt**, and **Release notes**.
+Choose **Update details** to expand the instructions and manually selectable
+prompt below the action row. The disclosure button stays in place when opened.
+If clipboard access fails, these details open automatically and select the
+prompt for manual copying.
+
+Copying the prompt does not install anything. Paste it into Copilot to review
+and run the verified update. A failed release check leaves any last-known update
+visible with a warning.
+
 ## Manual installation and updates
 
 Packaged releases (starting with **v0.2.0**) install user-wide into
