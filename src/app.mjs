@@ -490,7 +490,7 @@ async function blockingUpdate(path, input) {
     if (!succeeded && path === "filters") pendingFilters = { ...input, ...pendingFilters };
     render();
     restoreFocus(previousFocus);
-    if (succeeded || path !== "filters" || pendingRefresh) void flushPendingUpdates();
+    if (succeeded || path !== "filters" || (pendingRefresh && !requestsPaused())) void flushPendingUpdates();
     schedule();
   }
 }

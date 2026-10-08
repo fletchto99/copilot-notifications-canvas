@@ -3,7 +3,7 @@ import { test, expect } from "./fixtures.mjs";
 import { http, next } from "../fixtures.mjs";
 
 for (const packaged of [false, true]) {
-  test.describe(packaged ? "packaged empty-window recovery" : "source empty-window recovery", () => {
+  test.describe(packaged ? "packaged UX recovery" : "source UX recovery", () => {
     test.use({ packaged });
 
     test("cleared loaded rows offer refresh while unread items remain on later pages", async ({ page, canvas }) => {
@@ -31,6 +31,72 @@ for (const packaged of [false, true]) {
       await expect(page.getByRole("searchbox")).toBeFocused();
       await expect(page.locator("#more")).toBeEnabled();
       expect(canvas.writes).toEqual(["1", "2"]);
+    });
+
+    test("failed filters retry on the polling cadence while a foreground refresh is paused", async ({ page, canvas }) => {
+      canvas.rows.splice(2);
+      let fetches = 0;
+      canvas.setRequestHook(args => {
+        if (args.includes("GET") && args.at(-1).startsWith("/notifications?") && ++fetches === 1) {
+          return http(canvas.rows, { "x-ratelimit-remaining": "0" });
+        }
+      });
+      await page.clock.install();
+      await page.clock.pauseAt(new Date(Date.now() + 1000));
+      await page.goto(canvas.url);
+      await expect(page.locator(".row")).toHaveCount(2);
+      await expect(page.locator("#group-by")).toBeEnabled();
+      await expect(page.locator("#retry-status")).toBeVisible();
+      await page.evaluate(() => {
+        for (const hidden of [true, false]) {
+          Object.defineProperty(document, "hidden", { configurable: true, value: hidden });
+          document.dispatchEvent(new Event("visibilitychange"));
+        }
+      });
+      let attempts = 0;
+      let fail = true;
+      await page.route("**/api/filters", async route => {
+        attempts++;
+        if (fail && attempts <= 4) {
+          canvas.expectConsoleError("/api/filters", "Failed to load resource: the server responded with a status of 409 (Conflict)");
+          await route.fulfill({
+            status: 409, contentType: "application/json",
+            body: JSON.stringify({ error: { message: "Synthetic filter failure" } }),
+          });
+        } else {
+          await route.continue();
+        }
+      });
+      const search = page.getByRole("searchbox");
+      await search.fill("Needle widget 2");
+      await page.clock.runFor(250);
+      await expect(page.locator("#notice")).toContainText("Synthetic filter failure");
+      await page.clock.runFor(4999);
+      expect(attempts).toBe(1);
+      expect(fetches).toBe(1);
+      await expect(search).toHaveValue("Needle widget 2");
+      await expect(page.locator(".row")).toHaveCount(2);
+      await page.clock.runFor(1);
+      await expect.poll(() => attempts).toBe(2);
+      await expect(page.locator("#groups")).toHaveAttribute("aria-busy", "false");
+      fail = false;
+      await page.clock.runFor(5000);
+      await expect(page.locator(".row")).toHaveCount(1);
+      await expect(page.locator("#notice")).toBeHidden();
+      expect(attempts).toBe(3);
+      expect(fetches).toBe(1);
+      if (!packaged) {
+        // Only the source fixture injects the provider clock; packaged providers use real time.
+        await page.clock.setFixedTime(new Date(canvas.advance(121_000)));
+        await page.clock.runFor(5000);
+        await expect(page.locator("#retry-status")).toBeHidden();
+        await expect(page.locator("#force-refresh")).toHaveAttribute("aria-disabled", "false");
+        expect(fetches).toBe(2);
+      }
+      expect(attempts).toBe(3);
+      await expect(search).toHaveValue("Needle widget 2");
+      await expect(page.locator(".row")).toHaveCount(1);
+      expect(canvas.writes).toEqual([]);
     });
   });
 }

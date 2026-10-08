@@ -116,6 +116,54 @@ test("retry deadlines distinguish backoff from polling and keep paused refresh c
   }
 });
 
+test("failed filters wait for the polling cadence while a foreground refresh is paused", async t => {
+  for (const recoverAtDeadline of [false, true]) {
+    let fetches = 0;
+    let attempts = 0;
+    let fail = true;
+    const ui = await renderer({
+      onFetch: () => http([thread()], ++fetches === 1 ? { "x-ratelimit-remaining": "0" } : {}),
+      onFilters: () => {
+        attempts++;
+        if (attempts === 4) ui.intersect(false);
+        if (fail) throw new Error("Synthetic filter failure");
+      },
+    });
+    t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+    const deadline = ui.inbox.summary().retryAt;
+    ui.intersect(false);
+    ui.intersect(true);
+    await settle();
+    await runInContext('update("filters", { query: "notification", attention: "review_requested" })', ui.context);
+    await settle();
+    assert.equal(attempts, 1);
+    assert.equal(fetches, 1);
+    assert.match(ui.ids.get("notice").textContent, /Synthetic filter failure/);
+    assert.equal(ui.inbox.filters.query, "");
+    assert.equal(ui.ids.get("force-refresh").attributes["aria-disabled"], "true");
+    ui.advance(5000);
+    await ui.fireTimer();
+    assert.equal(attempts, 2);
+    assert.equal(fetches, 1);
+    fail = false;
+    ui.advance(recoverAtDeadline ? deadline - ui.advance(0) : 5000);
+    await ui.fireTimer();
+    await settle();
+    assert.equal(attempts, 3);
+    assert.deepEqual(ui.inbox.filters, { mode: "unread", query: "notification", attention: "review_requested" });
+    assert.equal(ui.ids.get("notice").hidden, true);
+    assert.equal(fetches, recoverAtDeadline ? 2 : 1);
+    if (!recoverAtDeadline) {
+      ui.advance(deadline - ui.advance(0));
+      await ui.fireTimer();
+    }
+    assert.equal(fetches, 2);
+    assert.equal(attempts, 3);
+    assert.equal(ui.calls.filter(call => call.path === "/api/refresh" && call.options.body === '{"force":true}').length, 1);
+    assert.equal(ui.ids.get("force-refresh").attributes["aria-disabled"], "false");
+  }
+});
+
 test("row failures immediately reconcile backoff and failed reconciliation remains explicit", async t => {
   for (const disconnect of [false, true]) {
     const ui = await renderer({ onWrite: () => {
