@@ -90,7 +90,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Lint GitHub Actions workflows
-        uses: ./.github/actions/actionlint
+        uses: ./ci/actionlint
   browser:
     name: Browser (${{ matrix.browser }})
     runs-on: ubuntu-latest
