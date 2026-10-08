@@ -124,6 +124,40 @@ for (const packaged of [false, true]) {
       expect(canvas.writes).toEqual([]);
     });
 
+    for (const newerFails of [false, true]) {
+      test(`an older clipboard result cannot overwrite a newer ${newerFails ? "failure" : "success"} or steal focus`, async ({ page, canvas }) => {
+        await prepareUpdate(page, canvas);
+        await page.goto(canvas.url);
+        await expect(page.locator("#update-banner")).toBeVisible();
+        await page.evaluate(() => {
+          window.updateCopyAttempts = [];
+          navigator.clipboard.writeText = () => new Promise((resolve, reject) => {
+            window.updateCopyAttempts.push(fails => fails
+              ? reject(new DOMException("Synthetic clipboard denial.", "NotAllowedError")) : resolve());
+          });
+        });
+        const copy = page.locator("#copy-update");
+        const details = page.locator("#update-prompt-details");
+        const search = page.getByRole("searchbox");
+        await copy.click();
+        await copy.click();
+        expect(await page.evaluate(() => window.updateCopyAttempts.length)).toBe(2);
+        await page.evaluate(fails => window.updateCopyAttempts[1](fails), newerFails);
+        const expectedStatus = newerFails
+          ? "Clipboard unavailable. Copy the selected prompt and paste it into Copilot."
+          : "Paste into Copilot to review and run.";
+        await expect(page.locator("#copy-status")).toHaveText(expectedStatus);
+        await search.focus();
+        await page.evaluate(fails => window.updateCopyAttempts[0](!fails), newerFails);
+        await expect(page.locator("#copy-status")).toHaveText(expectedStatus);
+        await expect(copy).toHaveText(newerFails ? "Copy update prompt" : "Copied");
+        await expect(search).toBeFocused();
+        if (newerFails) await expect(details).toBeVisible();
+        else await expect(details).toBeHidden();
+        expect(canvas.writes).toEqual([]);
+      });
+    }
+
     test("a failed release check keeps its last-known update warning visible until recovery", async ({ page, canvas }) => {
       const updates = await prepareUpdate(page, canvas);
       updates.error = "Synthetic release check failure.";

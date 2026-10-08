@@ -205,6 +205,104 @@ test("copying requires an available prompt and a visible canvas", async () => {
   assert.deepEqual(ui.copied, []);
 });
 
+test("only the latest overlapping clipboard attempt can change feedback or focus", async t => {
+  for (const olderFails of [false, true]) {
+    for (const newerFails of [false, true]) {
+      for (const newerFinishesFirst of [false, true]) {
+        await t.test(`older ${olderFails ? "fails" : "copies"}, newer ${newerFails ? "fails" : "copies"}, ${newerFinishesFirst ? "newer" : "older"} finishes first`, async () => {
+          const ui = await renderer({ release: { status: "available", prompt: "Synthetic update prompt" } });
+          try {
+            const attempts = [];
+            ui.context.navigator.clipboard.writeText = () => new Promise((resolve, reject) => {
+              attempts.push(fails => fails ? reject(new Error("Clipboard denied")) : resolve());
+            });
+            const copy = ui.ids.get("copy-update");
+            copy.focus();
+            const pending = [copy.events.click(), copy.events.click()];
+            await ui.fireTimer();
+            const snapshot = () => ({
+              label: copy.textContent,
+              status: ui.ids.get("copy-status").textContent,
+              hidden: ui.ids.get("update-prompt-details").hidden,
+              expanded: ui.ids.get("update-details-toggle").attributes["aria-expanded"],
+              focus: ui.document.activeElement,
+              timers: [...ui.timers].filter(([, timer]) => timer.delay === 4000),
+            });
+            const initial = snapshot();
+            const finish = async index => {
+              attempts[index](index === 0 ? olderFails : newerFails);
+              await pending[index];
+            };
+            if (newerFinishesFirst) {
+              await finish(1);
+              const latest = snapshot();
+              ui.ids.get("search").focus();
+              await finish(0);
+              assert.deepEqual(snapshot(), { ...latest, focus: ui.ids.get("search") });
+            } else {
+              await finish(0);
+              assert.deepEqual(snapshot(), initial);
+              await finish(1);
+            }
+            assert.equal(copy.textContent, newerFails ? "Copy update prompt" : "Copied");
+            assert.equal(ui.ids.get("copy-status").textContent, newerFails
+              ? "Clipboard unavailable. Copy the selected prompt and paste it into Copilot."
+              : "Paste into Copilot to review and run.");
+            assert.equal(ui.ids.get("update-prompt-details").hidden, !newerFails);
+            assert.equal(snapshot().timers.length, newerFails ? 0 : 1);
+          } finally {
+            ui.window.events.pagehide();
+          }
+        });
+      }
+    }
+  }
+});
+
+test("clipboard attempts stay invalid after the original release or visibility returns", async t => {
+  for (const reject of [false, true]) {
+    for (const change of ["prompt", "version", "installed-version", "unavailable", "visibility"]) {
+      await t.test(`${reject ? "denied" : "copied"} after ${change} returns`, async () => {
+        const release = { status: "available", prompt: "Original prompt", latestVersion: "0.2.0", currentVersion: "0.1.0" };
+        const ui = await renderer({ release });
+        try {
+          let complete;
+          ui.context.navigator.clipboard.writeText = () => new Promise((resolve, fail) => {
+            complete = () => reject ? fail(new Error("Clipboard denied")) : resolve();
+          });
+          const copying = ui.ids.get("copy-update").events.click();
+          if (change === "visibility") {
+            ui.intersect(false);
+            ui.intersect(true);
+            await settle();
+          } else {
+            const changes = {
+              prompt: { prompt: "Different prompt" },
+              version: { latestVersion: "0.3.0" },
+              "installed-version": { currentVersion: "0.0.9" },
+              unavailable: { status: "current" },
+            };
+            ui.setRelease(changes[change]);
+            await ui.fireTimer();
+            ui.setRelease(release);
+            await ui.fireTimer();
+          }
+          ui.ids.get("search").focus();
+          complete();
+          await copying;
+          assert.equal(ui.ids.get("copy-status").textContent, "");
+          assert.equal(ui.ids.get("copy-update").textContent, "Copy update prompt");
+          assert.equal(ui.ids.get("update-prompt-details").hidden, true);
+          assert.equal(ui.document.activeElement, ui.ids.get("search"));
+          assert.equal([...ui.timers.values()].some(timer => timer.delay === 4000), false);
+        } finally {
+          ui.window.events.pagehide();
+        }
+      });
+    }
+  }
+});
+
 test("late clipboard results cannot update a changed, hidden, or closed canvas", async t => {
   for (const reject of [false, true]) {
     for (const change of ["release", "unavailable", "hidden", "closed"]) {
