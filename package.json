@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=24"
   },
   "scripts": {
     "lint": "npm run lint:js && npm run lint:css && npm run format:css:check && npm run lint:recovery",

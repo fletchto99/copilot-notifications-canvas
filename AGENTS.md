@@ -9,8 +9,10 @@ installation safeguards, and release process.
 ## Project and source layout
 
 Unread Notifications is a GitHub Copilot canvas extension for **github.com**.
-It uses Node.js 22 or later, JavaScript ES modules, a plain HTML/CSS/JavaScript
-renderer, and GitHub CLI for authenticated API calls. There is no application
+Its runtime supports Node.js 22 or later, with JavaScript ES modules, a plain
+HTML/CSS/JavaScript renderer, and GitHub CLI for authenticated API calls.
+Development tooling requires Node.js 24 or later; `.node-version` selects the
+preferred Node.js 24 development line. There is no application
 framework or separately installed runtime SDK.
 
 | Path | Responsibility |
@@ -141,8 +143,13 @@ defined in `package.json`; platform coverage is in
 | Browser and accessibility tests in Chromium and WebKit | `npm run test:browser` |
 | One browser engine | `npm run test:browser -- --project=webkit` |
 
-Node tests and coverage need no dependency installation. If a tooling check
-fails because development packages are missing, use `npm ci --ignore-scripts`.
+Node tests and coverage need no dependency installation and retain Node.js 22
+runtime compatibility coverage. For development tools, use Node.js 24 or later.
+If packages are missing, use `npm ci --ignore-scripts --engine-strict`.
+CI validates the exact tooling minimum on Node.js 24.0.0 in the lint job and
+reads `.node-version` for browser checks, cloud setup, and release tooling.
+All CI dependency installs must enable strict engine checks; keep the Node.js 22
+runtime test matrix entry and the release bundle's `node22` target.
 The recovery lint integration tests run only through the tooling check, not
 the dependency-free `test/*.test.mjs` suite.
 For missing browser binaries, use

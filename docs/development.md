@@ -8,6 +8,13 @@ points to the shared repository guidance.
 
 ## Local development
 
+Development tooling requires Node.js 24 or later (`package.json` declares
+`>=24`). The checked-in `.node-version` selects the Node.js 24 development line;
+use a current patched release. With nvm, run
+`nvm install "$(cat .node-version)"`. The extension runtime and installer still
+support Node.js 22 or later; their dependency-free tests retain Node.js 22
+coverage.
+
 Provider modules and renderer assets live in `src/`. The entry point at
 `.github/extensions/github-notifications/extension.mjs` imports
 `src/extension.mjs`, so opening this repository as a Copilot project loads the
@@ -36,7 +43,7 @@ node --test test/*.test.mjs
 For lint, coverage, packaging, and browser checks:
 
 ```sh
-npm ci --ignore-scripts
+npm ci --ignore-scripts --engine-strict
 npm run lint
 npm run lint:workflows  # Requires actionlint on PATH.
 npm run test:coverage
@@ -57,6 +64,12 @@ npm run test:browser
 CI runs each check as a separate step. Stylelint catches CSS errors and enforces
 CSS conventions; Prettier keeps the stylesheet readable with multiline rules
 and declarations.
+
+The lint job uses the exact minimum, Node.js 24.0.0. Browser checks, cloud setup,
+and release tooling read `.node-version` to use current Node.js 24. Every CI
+dependency install uses `--engine-strict` so unsupported package engines fail
+instead of only warning. Release bundles still target Node.js 22; the
+development requirement does not raise the runtime minimum.
 
 The recovery lint check starts an isolated loopback server with synthetic
 missing renderer assets and lints the fallback content it serves. It makes no
@@ -102,7 +115,7 @@ specific Copilot build; reload and inspect the real extension after SDK changes.
 ## Copilot cloud agent and code review
 
 [Copilot setup steps](../.github/workflows/copilot-setup-steps.yml) prepare an
-Ubuntu 24.04 environment with Node.js 22, locked development dependencies,
+Ubuntu 24.04 environment with Node.js 24, locked development dependencies,
 and checksum-verified `actionlint`. Cloud-agent sessions and code reviews share
 this lightweight setup, without a separate review workflow. It checks tool
 availability without running the test suite, installing the extension, or
@@ -118,8 +131,8 @@ and accessibility validation still runs in CI's pre-provisioned container.
 
 Copilot uses the shared setup once the workflow is on the default branch. It
 does not configure local Copilot app/CLI sessions. Manual runs and path-filtered
-pull-request/main runs validate setup when the workflow or dependency manifests
-change; the agent still runs the checks relevant to its task.
+pull-request/main runs validate setup when the workflow, `.node-version`, or
+dependency manifests change; the agent still runs the checks relevant to its task.
 
 ## Packaging
 

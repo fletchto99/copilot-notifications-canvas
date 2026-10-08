@@ -9,13 +9,16 @@ as read or done, and opt into desktop notifications or auto-open.
 ## Prerequisites
 
 - A GitHub Copilot app build with extension canvas support (experimental).
-- Node.js 22 or later.
+- Node.js 22 or later for the extension runtime and installer.
 - [GitHub CLI](https://cli.github.com/) (`gh`) available to the app and signed
   into **github.com** with `notifications` or `repo` scope.
 
 GitHub.com only; fine-grained personal access tokens are not supported.
 See the [installation guide](docs/installation.md#prerequisites) for CLI
 verification requirements and the sign-in check.
+
+[Development tooling](docs/development.md#local-development) requires Node.js 24
+or later; this does not change the packaged extension's runtime requirement.
 
 <a id="installation"></a>
 <a id="updating"></a>
