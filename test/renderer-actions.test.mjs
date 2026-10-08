@@ -317,7 +317,7 @@ test("repository header shares its hover background across the toggle and read a
 test("repository toggle focus is inset inside the clipped card", () => {
   assert.match(styles, /:focus-visible \{ outline: 2px solid var\(--focus\); outline-offset: 3px; \}/);
   assert.match(styles, /\.repo-group \{[^}]*overflow: clip;/);
-  assert.match(styles, /\.repo-toggle:focus-visible \{ outline-offset: -5px; \}/);
+  assert.match(styles, /\.repo-toggle:focus-visible \{ outline-offset: -3px; \}/);
 });
 
 test("compact toolbar keeps a shrinkable search beside matching inbox, refresh and settings icons", () => {

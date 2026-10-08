@@ -30,15 +30,18 @@ for (const repository of ["example/ui", "example/notifications-and-workflow-tool
         const toggle = node.querySelector(".repo-toggle").getBoundingClientRect();
         const actions = node.querySelector(".repo-actions").getBoundingClientRect();
         const style = getComputedStyle(node);
+        const paddingLeft = parseFloat(style.paddingLeft);
         const paddingRight = parseFloat(style.paddingRight);
         return {
-          available: header.width - paddingRight, gap: parseFloat(style.columnGap),
+          available: header.width - paddingLeft - paddingRight, gap: parseFloat(style.columnGap),
           actionsWidth: actions.width, actionsRight: actions.right, headerRight: header.right - paddingRight,
+          actionsLeft: actions.left, headerLeft: header.left + paddingLeft,
           wrapped: actions.top >= toggle.bottom, toggleWidth: toggle.width,
         };
       });
       expect(layout.wrapped).toBe(intrinsicWidth + layout.actionsWidth + layout.gap > layout.available + 0.5);
-      expect(layout.actionsRight).toBeCloseTo(layout.headerRight);
+      if (layout.wrapped) expect(layout.actionsLeft).toBeCloseTo(layout.headerLeft);
+      else expect(layout.actionsRight).toBeCloseTo(layout.headerRight);
       expect(layout.toggleWidth).toBeLessThanOrEqual(layout.available + 0.5);
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
       await expect(header.locator(".repo-count")).toHaveText("2 unread");
