@@ -6,6 +6,9 @@
     "node": ">=22"
   },
   "scripts": {
+    "dev:fixture": "node scripts/dev-fixture.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "check:full": "npm run doctor && npm run lint && npm run lint:workflows && npm run test:coverage && npm run build && npm run test:package && npm run test:browser -- --project=chromium --project=webkit",
     "lint": "eslint . --max-warnings=0",
     "lint:workflows": "actionlint",
     "test": "node --test test/*.test.mjs",

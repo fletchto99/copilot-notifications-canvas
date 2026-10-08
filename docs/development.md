@@ -25,6 +25,79 @@ checkout while a session uses it. A project-local checkout shadows a user-wide
 installation. If both providers are registered, pass
 `extensionId: project:github-notifications` when opening the local canvas.
 
+### Synthetic preview
+
+```sh
+npm run dev:fixture
+```
+
+This standalone preview needs only Node.js, not development dependencies,
+GitHub sign-in, or the Copilot host. It shares the browser tests' synthetic
+fixture and runs the real renderer and protected loopback server. The sample
+inbox includes pagination, search, and multiple attention categories. GitHub
+reads, mark-as-read updates, release checks, and desktop delivery are simulated.
+
+Choose a reproducible preset with `--scenario`:
+
+```sh
+npm run dev:fixture -- --scenario=stale
+npm run dev:fixture -- --help
+```
+
+| Scenario | Behavior |
+| --- | --- |
+| `populated` | Default inbox with 53 notifications, pagination, and multiple attention categories. |
+| `empty` | Successful response with no notifications. |
+| `long-titles` | Long wrapping and unbroken titles and a long repository name for narrow-panel checks. |
+| `rate-limited` | Notification reads return HTTP 429 with a 120-second retry header. Real provider backoff applies, including to Force refresh. |
+| `stale` | The first notification read succeeds. Click **Force refresh** to fail the next read with HTTP 503 while retaining the loaded rows. |
+
+`--scenario stale` is also accepted. Unknown names, extra arguments, and duplicate
+options fail before starting a server. Restart the command to switch or reset
+scenarios; there is no in-page scenario switcher. The error presets continue
+failing notification reads after their retry waits, so the provider may increase
+backoff. Settings and synthetic release checks remain available. Scenario
+definitions in `test/preview-scenarios.mjs` reuse the shared request hooks rather
+than forcing renderer state.
+
+Open the printed `file://` launcher in a browser. It redirects to the preview
+without printing its capability URL to terminal logs. The launcher is stored
+with owner-only permissions in a private temporary directory; do not share it
+or the resulting browser URL. The footer identifies the preview and selected scenario.
+GitHub links in the renderer still navigate to GitHub when explicitly clicked.
+
+Settings and desktop coordination files stay in that temporary directory, never
+in your real `COPILOT_HOME`. Desktop alerts start off; enabling them only records
+simulated deliveries in memory. Ctrl+C or SIGTERM stops the server and removes
+the launcher and temporary settings. Each run starts fresh. After source or
+asset changes, stop and restart the preview; it does not hot-reload. This does
+not validate host SDK integration or host-provided theme tokens.
+
+### Environment check
+
+Select Node.js 22 using the repository's `.node-version` and your version
+manager, then run:
+
+```sh
+npm run doctor
+```
+
+The read-only check reports the supported Node version, installed development
+dependency versions, `actionlint` availability, and Chromium/WebKit executable
+paths. It exits nonzero if a prerequisite is missing or cannot be inspected and
+prints remediation commands. It does not install tools, launch browsers,
+authenticate with GitHub, inspect notification data, or change preferences.
+It runs even before development dependencies are installed.
+
+Use `npm ci --ignore-scripts` to restore development dependencies. For
+`actionlint`, macOS users can run `brew install actionlint`; with Go installed,
+run `go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12` and add Go's
+binary directory to `PATH`. Linux users can also follow the checksum-verified
+installation steps in the [setup workflow](../.github/workflows/copilot-setup-steps.yml).
+Browser installation is described below. Finding browser executables does not
+prove that Linux system libraries or headless launch dependencies are available;
+the browser tests provide that validation.
+
 ## Tests and checks
 
 Unit and HTTP integration tests need no dependency installation:
@@ -55,6 +128,18 @@ tests validate the build separately.
 Playwright downloads browser binaries and may need permission to install Linux
 system libraries. Use `-- --project=webkit` with `npm run test:browser` to run one
 engine.
+
+For an explicit full local check after targeted tests, run:
+
+```sh
+npm run check:full
+```
+
+This runs the environment check, JavaScript/workflow lint, all Node tests with
+coverage, the release build, packaged integration tests, and browser/accessibility
+tests in both Chromium and WebKit, stopping at the first failure. It never
+installs missing prerequisites, skips unavailable checks, or publishes a release.
+Build output and test reports remain in their ignored directories.
 
 See the [test workflow](../.github/workflows/tests.yml) for platform coverage and
 required checks. Browser CI runs both engines in the official Playwright image,

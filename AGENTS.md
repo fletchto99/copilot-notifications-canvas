@@ -112,6 +112,7 @@ defined in `package.json`; platform coverage is in
 
 | Check | Command |
 | --- | --- |
+| Read-only development prerequisite check | `npm run doctor` |
 | Targeted Node tests, for example HTTP and inbox changes | `node --test test/server.test.mjs test/inbox.test.mjs` |
 | All Node unit and HTTP integration tests | `npm test` (or `node --test test/*.test.mjs`) |
 | JavaScript lint, with no warnings | `npm run lint` |
@@ -120,6 +121,17 @@ defined in `package.json`; platform coverage is in
 | Release build and packaged integration tests | `npm run build && npm run test:package` |
 | Browser and accessibility tests in Chromium and WebKit | `npm run test:browser` |
 | One browser engine | `npm run test:browser -- --project=webkit` |
+| Explicit full local validation, stopping on any failure | `npm run check:full` |
+
+Use `npm run dev:fixture` for a standalone synthetic UI preview without GitHub
+sign-in or the Copilot host. It shares the browser fixtures and uses temporary
+settings and simulated writes/alerts. Select `populated`, `empty`, `long-titles`,
+`rate-limited`, or `stale` with `-- --scenario=<name>`; use `-- --help` for usage.
+Open its private launcher, not the live notification canvas, for screenshots.
+Never share the launcher or capability
+URL. See [development](docs/development.md#synthetic-preview) for cleanup and
+limitations. `.node-version` selects the primary CI Node major for local tools;
+keep it aligned with the setup workflow.
 
 Node tests and coverage need no dependency installation. If a tooling check
 fails because development packages are missing, use `npm ci --ignore-scripts`.

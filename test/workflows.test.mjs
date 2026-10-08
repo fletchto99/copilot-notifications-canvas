@@ -27,3 +27,21 @@ test("Copilot cloud sessions and reviews share lightweight setup without browser
   assert.doesNotMatch(setup, /playwright install|apt-get|npm run (?:test|build)/);
   await assert.rejects(readFile(new URL("../.github/workflows/copilot-code-review.yml", import.meta.url)), { code: "ENOENT" });
 });
+
+test("local tooling selects the primary CI Node major and full validation cannot skip prerequisites or browser engines", async () => {
+  const [node, setup, workflow, manifest] = await Promise.all([
+    readFile(new URL("../.node-version", import.meta.url), "utf8"),
+    readFile(new URL("../.github/workflows/copilot-setup-steps.yml", import.meta.url), "utf8"),
+    readFile(new URL("../.github/workflows/tests.yml", import.meta.url), "utf8"),
+    readFile(new URL("../package.json", import.meta.url), "utf8").then(JSON.parse),
+  ]);
+  assert.match(node.trim(), /^\d+$/);
+  assert.ok(setup.includes(`node-version: "${node.trim()}"`));
+  assert.ok(workflow.includes(`node: "${node.trim()}"`));
+  assert.deepEqual(manifest.scripts["check:full"].split(" && "), [
+    "npm run doctor", "npm run lint", "npm run lint:workflows", "npm run test:coverage",
+    "npm run build", "npm run test:package", "npm run test:browser -- --project=chromium --project=webkit",
+  ]);
+  assert.equal(manifest.scripts["dev:fixture"], "node scripts/dev-fixture.mjs");
+  assert.equal(manifest.scripts.doctor, "node scripts/doctor.mjs");
+});
