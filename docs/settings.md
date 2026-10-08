@@ -7,11 +7,15 @@ across sessions and preserved during packaged upgrades.
 
 | Setting | Default | Options and behavior |
 | --- | --- | --- |
-| Group By | repo | **repo**: alphabetical repositories, newest items first. **none**: one newest-first list. **date**: newest local calendar day first. All use last-updated times. |
+| Group By | Repository | **Repository**: alphabetical repositories, newest items first. **All notifications**: one collapsible, newest-first group. **Date**: newest local calendar day first. All use last-updated times. |
 | Theme | System | **System** follows Copilot, falling back to the OS theme. **Dark** and **Light** override it. |
 | Auto-open | Off | Opens once per new session, including general chats; not on resume, reload, or after closing the panel. |
 | Desktop notifications | Off | Enables native alerts while a Notifications canvas is open and its extension process is running. |
 | Sound | System default | System-specific sounds for desktop alerts; see the platform table below. |
+
+The saved grouping values remain `repo`, `none`, and `date`; the display labels
+do not change existing preferences. Press Escape, click outside Settings, or move
+keyboard focus outside it to close the panel.
 
 ## Desktop notifications
 

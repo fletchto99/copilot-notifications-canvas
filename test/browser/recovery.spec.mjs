@@ -146,9 +146,9 @@ test("batch cancellation waits for the in-flight write and retry writes only rem
     await expect(page.locator("#batch-title")).toContainText("Stopping");
     canvas.setRequestHook(undefined);
     held.release();
-    await expect(page.getByRole("button", { name: "Retry remaining (1)", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Continue remaining (1)", exact: true })).toBeVisible();
     expect(canvas.writes).toEqual(["1"]);
-    await page.getByRole("button", { name: "Retry remaining (1)", exact: true }).click();
+    await page.getByRole("button", { name: "Continue remaining (1)", exact: true }).click();
     await expect(page.locator(".row")).toHaveCount(0);
     expect(canvas.writes).toEqual(["1", "2"]);
   } finally {

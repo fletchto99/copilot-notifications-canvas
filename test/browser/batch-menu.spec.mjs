@@ -163,9 +163,10 @@ test("a Done batch stops after the in-flight request and retries the original re
     await expect(page.locator("#batch-title")).toContainText("Stopping");
     canvas.setRequestHook(undefined);
     release();
-    const retry = page.getByRole("button", { name: "Retry remaining (1)", exact: true });
+    const retry = page.getByRole("button", { name: "Continue remaining (1)", exact: true });
     await expect(retry).toBeVisible();
-    await expect(page.locator("#batch-title")).toContainText("remain to mark as done");
+    await expect(page.locator("#batch-title")).toContainText("Stopped");
+    await expect(page.locator("#batch-counts")).toHaveText("1 marked done, 1 remaining");
     expect(canvas.doneWrites).toEqual(["1"]);
     await expect(page.locator(".repo-read")).toHaveText("Mark 1 as read");
     await expect(page.locator(".repo-more")).toBeVisible();

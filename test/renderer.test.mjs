@@ -28,7 +28,8 @@ test("renderer public controls survive bundling and minification", async () => {
     ui.ids.get("group-by").value = "none";
     ui.ids.get("group-by").events.change();
     await settle();
-    assert.equal(ui.ids.get("collapse").hidden, true);
+    assert.equal(ui.ids.get("collapse").hidden, false);
+    assert.equal(ui.ids.get("groups").querySelectorAll(".repo-name")[0].textContent, "All notifications");
     assert.equal(ui.document.querySelectorAll("article").length, 2);
     ui.ids.get("group-by").value = "repo";
     ui.ids.get("group-by").events.change();
@@ -386,7 +387,7 @@ test("inbox status leads with unread counts and adds matching counts only while 
   ui.window.events.pagehide();
 });
 
-test("counts return when notifications arrive and hide after the last read without moving toolbar controls", async () => {
+test("counts return on arrivals and stay visible until an empty inbox is reconciled", async () => {
   const ui = await renderer({ initialRows: [] });
   const search = ui.ids.get("search");
   const settings = ui.ids.get("settings");
@@ -399,6 +400,10 @@ test("counts return when notifications arrive and hide after the last read witho
   assert.equal(ui.ids.get("count").hidden, false);
   assert.equal(ui.ids.get("count").textContent, "1 unread");
   await ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "1").events.click();
+  assert.equal(ui.ids.get("count").hidden, false);
+  assert.equal(ui.ids.get("empty-title").textContent, "Loaded notifications cleared");
+  ui.setRows([]);
+  await ui.ids.get("empty-refresh").events.click();
   assert.equal(ui.ids.get("count").hidden, true);
   assert.equal(ui.ids.get("collapse").hidden, true);
   assert.equal(ui.ids.get("empty").hidden, false);
@@ -570,16 +575,16 @@ test("failed updates keep the last successful update time in the refresh tooltip
   const ui = await renderer({ onFetch: () => ++fetches === 1 ? http([thread()]) : http({}, {}, 500) });
   ui.advance(15_000);
   await ui.ids.get("force-refresh").events.click();
-  assert.equal(ui.ids.get("refresh-tooltip-text").textContent, "Last updated 15 seconds ago");
+  assert.match(ui.ids.get("refresh-tooltip-text").textContent, /^GitHub requests paused\. Retry after .+\. Last updated 15 seconds ago$/);
   assert.equal(ui.ids.get("notice").hidden, false);
   ui.advance(15_000);
   await ui.fireTimer(15_000);
-  assert.equal(ui.ids.get("refresh-tooltip-text").textContent, "Last updated 30 seconds ago");
+  assert.match(ui.ids.get("refresh-tooltip-text").textContent, /^GitHub requests paused\. Retry after .+\. Last updated 30 seconds ago$/);
 });
 
 test("an initial GitHub error does not claim a successful update in the tooltip", async () => {
   const ui = await renderer({ onFetch: () => http({}, {}, 401) });
-  assert.equal(ui.ids.get("refresh-tooltip-text").textContent, "Not updated yet");
+  assert.match(ui.ids.get("refresh-tooltip-text").textContent, /^GitHub requests paused\. Retry after .+\. Not updated yet$/);
   assert.equal(ui.inbox.summary().nextRefreshAt - ui.advance(0), 120_000);
   assert.equal(ui.ids.get("notice").hidden, false);
 });
@@ -723,7 +728,7 @@ test("queued Force refresh preserves the latest search edit during a filter requ
   assert.equal(ui.document.querySelectorAll("a")[0].textContent, "Synthetic notification 2");
 });
 
-test("Force refresh remains clickable during GitHub backoff and reports the wait without retrying upstream", async () => {
+test("Force refresh remains focusable during GitHub backoff and explains why activation is paused", async () => {
   let fetches = 0;
   const ui = await renderer({ onFetch: () => ++fetches === 2 ?
     http({}, { "retry-after": "600" }, 429) : http([thread()]) });
@@ -734,7 +739,8 @@ test("Force refresh remains clickable during GitHub backoff and reports the wait
   assert.equal(button.disabled, false);
   await button.events.click();
   assert.equal(fetches, 2);
-  assert.equal(ui.ids.get("refresh-tooltip-text").textContent, "Last updated 0 seconds ago");
+  assert.match(ui.ids.get("refresh-tooltip-text").textContent, /^GitHub requests paused\. Retry after .+\. Last updated 0 seconds ago$/);
+  assert.equal(button.attributes["aria-disabled"], "true");
   assert.equal(button.disabled, false);
   ui.advance(600_000);
   await button.events.click();
@@ -832,7 +838,8 @@ test("returning to foreground cannot bypass rate limits or error backoff", async
     ui.intersect(true);
     await settle();
     assert.equal(fetches, 1);
-    assert.equal(ui.ids.get("notice").hidden, false);
+    assert.equal(ui.ids.get("retry-status").hidden, false);
+    assert.equal(ui.ids.get("force-refresh").attributes["aria-disabled"], "true");
     assert.equal(ui.ids.get("force-refresh").attributes["aria-busy"], "false");
     ui.advance(deadline - ui.advance(0));
     await ui.fireTimer();

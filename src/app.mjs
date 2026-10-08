@@ -34,7 +34,6 @@ let actionError = "";
 let batchBusy = false;
 let batchFocusKey;
 let batchMenu;
-let shownControlsKey;
 const iconPaths = {
   read: "M3 9 12 3l9 6v11H3V9Zm0 0 9 6 9-6M3 20l6-7m12 7-6-7",
   done: "m5 12 4 4L19 6",
@@ -259,6 +258,7 @@ async function copyUpdatePrompt() {
 function closeSettings(focus = false) {
   $("settings").open = false;
   $("settings-toggle").setAttribute("aria-expanded", "false");
+  $("settings-toggle").dataset.tooltipDismissed = "true";
   if (focus) $("settings-toggle").focus();
 }
 
@@ -281,6 +281,11 @@ async function markThread(id, action) {
     nextFocusKey = next ? `${action}:${next.id}` : null;
   } catch (error) {
     actionError = `Could not mark the notification as ${action}. ${error.message || "Try again."}`;
+    try {
+      state = await api("state");
+    } catch {
+      actionError += " Could not reconnect. Reopen this panel to inspect its current state.";
+    }
   } finally {
     marking.delete(id);
     render(nextFocusKey);
@@ -298,8 +303,12 @@ function batchLocked() {
   return ["running", "stopping"].includes(state?.batch?.status);
 }
 
+function requestsPaused() {
+  return (state?.retryAt ?? 0) > Date.now();
+}
+
 function focusKey(key) {
-  return [...$("groups").querySelectorAll("[data-focus-key]"), ...$("shown-actions").querySelectorAll("[data-focus-key]")]
+  return [...$("groups").querySelectorAll("[data-focus-key]")]
     .find(node => node.dataset.focusKey === key);
 }
 
@@ -391,20 +400,24 @@ function renderBatch() {
     return;
   }
   const running = ["running", "stopping"].includes(batch.status);
+  const cancelled = batch.status === "cancelled" && !batch.error;
+  const remaining = batch.failed + batch.notAttempted;
   $("batch-progress").className = running ? "batch-running" : "batch-progress";
   const target = batch.scope === "shown" ? "Shown notifications" : batch.scope === "date" ? dateLabel(batch.date) : batch.repository;
   $("batch-title").textContent = `${target}: ${batch.status === "stopping" ? "Stopping after the current request" :
-    running ? `Marking as ${batch.action}...` : `Some notifications remain to mark as ${batch.action}`}`;
+    running ? `Marking as ${batch.action}...` : cancelled ? "Stopped" : `Some notifications remain to mark as ${batch.action}`}`;
   $("batch-counts").hidden = running;
-  $("batch-counts").textContent = running ? "" : `${batch.succeeded} succeeded / ${batch.failed} failed / ${batch.skipped} skipped / ${batch.notAttempted} not attempted (${batch.total} selected)`;
+  $("batch-counts").textContent = running ? "" : cancelled
+    ? `${batch.succeeded} marked ${batch.action}, ${remaining} remaining${batch.skipped ? `, ${batch.skipped} skipped` : ""}`
+    : `${batch.succeeded} succeeded / ${batch.failed} failed / ${batch.skipped} skipped / ${batch.notAttempted} not attempted (${batch.total} selected)`;
   const retryTime = batch.retryAt > Date.now() ? ` Retry after ${new Date(batch.retryAt).toLocaleTimeString()}.` : "";
   const detail = batch.error?.message ?? (batch.skipped ? "Skipped notifications were changed or no longer unread in the loaded inbox. Review their current state separately." : "");
   $("batch-error").hidden = !detail;
   $("batch-error").textContent = detail + retryTime;
   $("batch-stop").hidden = !running;
   $("batch-stop").disabled = batchBusy || busy || batch.status === "stopping";
-  $("batch-retry").hidden = running || batch.failed + batch.notAttempted === 0;
-  $("batch-retry").textContent = `Retry remaining (${batch.failed + batch.notAttempted})`;
+  $("batch-retry").hidden = running || remaining === 0;
+  $("batch-retry").textContent = `${cancelled ? "Continue" : "Retry"} remaining (${remaining})`;
   $("batch-retry").disabled = batchBusy || busy || batch.retryAt > Date.now();
   $("batch-dismiss").hidden = running;
   $("batch-dismiss").disabled = batchBusy || busy;
@@ -484,7 +497,7 @@ async function blockingUpdate(path, input) {
 
 async function flushPendingUpdates() {
   if (busy || batchBusy || marking.size || batchLocked() || !visible()) return;
-  if (pendingRefresh) {
+  if (pendingRefresh && !requestsPaused()) {
     pendingRefresh = false;
     return blockingUpdate("refresh", { force: true });
   }
@@ -502,7 +515,7 @@ async function tick() {
   if ($("settings").open) void settingsRequest(undefined, true);
   if (marking.size) return schedule();
   if (batchLocked() || batchBusy) return update();
-  if (pendingRefresh) return flushPendingUpdates();
+  if (pendingRefresh && !requestsPaused()) return flushPendingUpdates();
   if (!state || (state.status !== "loading" && Date.now() >= state.nextRefreshAt)) {
     await update("refresh", {});
   } else {
@@ -512,14 +525,21 @@ async function tick() {
 
 function renderRefreshStatus(updateAge = false) {
   const fetchedAt = state?.lastFetchedAt ?? null;
+  const paused = requestsPaused();
   const progress = pendingRefresh ? "Refresh queued. " : refreshing ? "Refreshing. " : "";
-  const key = `${fetchedAt}:${progress}`;
+  const pause = paused ? `GitHub requests paused. Retry after ${new Date(state.retryAt).toLocaleTimeString()}.` : "";
+  $("retry-status").hidden = !paused;
+  if ($("retry-status").textContent !== pause) $("retry-status").textContent = pause;
+  for (const id of ["force-refresh", "empty-refresh"]) {
+    $(id).setAttribute("aria-disabled", String(paused));
+    $(id).setAttribute("aria-busy", String(!paused && (pendingRefresh || refreshing)));
+  }
+  const key = `${fetchedAt}:${progress}:${pause}`;
   if (!updateAge && key === refreshStatusKey) return;
   refreshStatusKey = key;
   const seconds = fetchedAt === null ? null : Math.floor(Math.max(0, Date.now() - fetchedAt) / 1000);
   const updated = seconds === null ? "Not updated yet" : `Last updated ${seconds} second${seconds === 1 ? "" : "s"} ago`;
-  $("refresh-tooltip-text").textContent = progress + updated;
-  $("force-refresh").setAttribute("aria-busy", String(pendingRefresh || refreshing));
+  $("refresh-tooltip-text").textContent = (paused ? `${pause} ` : progress) + updated;
 }
 
 function bindTooltip(control, anchor) {
@@ -548,7 +568,7 @@ function renderControls() {
   const waiting = state && Date.now() < state.nextRefreshAt;
   renderRefreshStatus();
   $("more").disabled = loading || state?.needsRefresh || Boolean(state?.error && waiting);
-  for (const button of [...$("groups").querySelectorAll("button"), ...$("shown-actions").querySelectorAll("button")]) {
+  for (const button of $("groups").querySelectorAll("button")) {
     if (!button.dataset.disclosure) button.disabled = loading || marking.has(button.dataset.threadId);
     if (button.dataset.threadId) {
       button.setAttribute("aria-busy", String(marking.get(button.dataset.threadId) === button.dataset.action));
@@ -582,7 +602,9 @@ function displayGroups() {
     return groups.map(group => ({ ...group, key: `repo:${group.repository}`, label: group.repository }));
   }
   const items = orderedThreads(groups.flatMap(group => group.items));
-  if (groupBy === "none") return items.length ? [{ items }] : [];
+  if (groupBy === "none") return items.length ? [{
+    key: "shown", label: "All notifications", unread: items.length, items, selectionKey: state.selectionKey,
+  }] : [];
   return groupThreadsByDate(items, Intl.DateTimeFormat().resolvedOptions().timeZone)
     .map(group => ({ ...group, selectionKey: state.selectionKey }));
 }
@@ -641,25 +663,8 @@ function createBatchControls({ repository, date, timeZone, selectionKey, count, 
   return controls;
 }
 
-function renderShownControls() {
-  const container = $("shown-actions");
-  const key = state?.matching && preferences?.groupBy === "none" ? state.selectionKey : null;
-  if (key === shownControlsKey) return;
-  const previousFocus = document.activeElement;
-  const hadFocus = container.contains(previousFocus);
-  const ownMenu = batchMenu && container.contains(batchMenu.container);
-  const focused = ownMenu && batchMenu.panel.contains(previousFocus) ? batchMenu.trigger.dataset.focusKey : previousFocus?.dataset.focusKey;
-  if (ownMenu) closeBatchMenu();
-  const fragment = document.createDocumentFragment();
-  if (key) fragment.append(createBatchControls({ repository: null, selectionKey: key, count: state.matching, menuId: "shown-menu" }));
-  container.hidden = !key;
-  container.replaceChildren(fragment);
-  shownControlsKey = key;
-  if (hadFocus) restoreFocus(previousFocus, focusKey(focused) ?? $("search"));
-}
-
 function renderGroups(groups, fallbackFocusKey) {
-  $("collapse").hidden = !groups.length || !groups[0].key;
+  $("collapse").hidden = !groups.length;
   $("collapse").textContent = groups.some(group => !collapsed.has(group.key)) ? "Collapse all" : "Expand all";
   // Keep focused controls and disclosure state stable across unchanged polls.
   const key = JSON.stringify(groups);
@@ -671,39 +676,32 @@ function renderGroups(groups, fallbackFocusKey) {
   if (ownMenu) closeBatchMenu();
   const fragment = document.createDocumentFragment();
   for (const [index, group] of groups.entries()) {
-    const rows = element("div", group.key ? "repo-items" : "notification-list");
-    if (group.key) {
-      const section = element("section", "repo-group");
-      const header = element("div", "repo-header");
-      rows.id = `group-items-${index}`;
-      rows.hidden = collapsed.has(group.key);
-      const disclosure = element("button", "repo-toggle");
-      disclosure.type = "button";
-      disclosure.dataset.disclosure = "true";
-      disclosure.dataset.focusKey = group.key;
-      disclosure.setAttribute("aria-controls", rows.id);
+    const rows = element("div", "repo-items");
+    const section = element("section", "repo-group");
+    const header = element("div", "repo-header");
+    rows.id = `group-items-${index}`;
+    rows.hidden = collapsed.has(group.key);
+    const disclosure = element("button", "repo-toggle");
+    disclosure.type = "button";
+    disclosure.dataset.disclosure = "true";
+    disclosure.dataset.focusKey = group.key;
+    disclosure.setAttribute("aria-controls", rows.id);
+    disclosure.setAttribute("aria-expanded", String(!rows.hidden));
+    disclosure.append(element("span", "repo-name", group.label),
+      element("span", "repo-count", `${group.unread} unread`));
+    disclosure.addEventListener("click", () => {
+      rows.hidden = !rows.hidden;
+      if (rows.hidden) collapsed.add(group.key);
+      else collapsed.delete(group.key);
       disclosure.setAttribute("aria-expanded", String(!rows.hidden));
-      disclosure.append(element("span", "repo-name", group.label),
-        element("span", "repo-count", `${group.unread} unread`));
-      disclosure.addEventListener("click", () => {
-        rows.hidden = !rows.hidden;
-        if (rows.hidden) collapsed.add(group.key);
-        else collapsed.delete(group.key);
-        disclosure.setAttribute("aria-expanded", String(!rows.hidden));
-        $("collapse").textContent = groups.some(item => !collapsed.has(item.key)) ? "Collapse all" : "Expand all";
-      });
-      header.append(disclosure);
-      if (group.repository || group.date) {
-        header.append(createBatchControls({
-          repository: group.repository, date: group.date, timeZone: group.timeZone,
-          selectionKey: group.selectionKey, count: group.items.length, menuId: `repo-menu-${index}`,
-        }));
-      }
-      section.append(header, rows);
-      fragment.append(section);
-    } else {
-      fragment.append(rows);
-    }
+      $("collapse").textContent = groups.some(item => !collapsed.has(item.key)) ? "Collapse all" : "Expand all";
+    });
+    header.append(disclosure, createBatchControls({
+      repository: group.repository, date: group.date, timeZone: group.timeZone,
+      selectionKey: group.selectionKey, count: group.items.length, menuId: `repo-menu-${index}`,
+    }));
+    section.append(header, rows);
+    fragment.append(section);
     for (const item of group.items) {
       const row = element("article", "row unread");
       const dot = element("span", "dot");
@@ -779,12 +777,12 @@ function render(fallbackFocusKey) {
   const development = state?.development;
   $("development-build").hidden = !development;
   $("development-build").textContent = development ? `dev (v${development.version}) ${development.branch}` : "";
-  renderShownControls();
   renderControls();
   const error = actionError || state?.error?.message || connectionError;
   const loading = state?.status === "idle" || state?.status === "loading";
   const filtered = Boolean(state?.filters.query || (state && state.filters.attention !== "all"));
-  const caughtUp = Boolean(state && !error && !loading && !filtered && !state.groups.length);
+  const cleared = Boolean(state && !state.loaded && (state.hasMore || state.needsRefresh));
+  const caughtUp = Boolean(state && !error && !loading && !filtered && !state.groups.length && !cleared);
   const attention = state?.filters.attention ?? "all";
   const focusedTab = [...attentionTabs.values()].find(tab => tab === document.activeElement);
   let tabsChanged = false;
@@ -827,14 +825,19 @@ function render(fallbackFocusKey) {
   $("empty").hidden = Boolean(state.groups.length);
   $("empty-title").textContent = error ? "Your inbox is unavailable" :
     loading ? "Loading your inbox" :
-    filtered ? "No matches in loaded notifications" : "All caught up \u{1F389}";
+    filtered ? "No matches in loaded notifications" :
+    cleared ? "Loaded notifications cleared" : "All caught up \u{1F389}";
+  const moreHelp = state.hasMore ? state.needsRefresh
+    ? " Refresh to check for more notifications." : " Load more to search older notifications." : "";
   $("empty-description").textContent = error ? "Resolve the message above. This view retries automatically while visible when the retry time arrives." :
-    attention !== "all" ? "Try another attention filter or search, or load more notifications." :
-    state.filters.query ? "Try another title, number or repository, or load more notifications." :
     loading ? "Using your existing GitHub CLI sign-in." :
+    attention !== "all" ? `Try another attention filter or search.${moreHelp}` :
+    state.filters.query ? `Try another title, number or repository.${moreHelp}` :
+    cleared ? state.needsRefresh ? "Refresh to check for remaining unread notifications." : "Load more to continue through your unread notifications." :
     groupBy === "repo" ? "New notifications will appear here, grouped by repository." :
     groupBy === "date" ? "New notifications will appear here, grouped by date." :
     "New notifications will appear here, newest first.";
+  $("empty-refresh").hidden = !cleared || !state.needsRefresh || Boolean(error) || loading;
   renderBatch();
 }
 
@@ -946,6 +949,7 @@ document.addEventListener("click", event => {
   if (batchMenu && !batchMenu.container.contains(event.target)) closeBatchMenu();
 });
 document.addEventListener("focusin", event => {
+  if ($("settings").open && !$("settings").contains(event.target)) closeSettings();
   if (batchMenu && !batchMenu.container.contains(event.target)) closeBatchMenu();
 });
 document.addEventListener("keydown", event => {
@@ -966,12 +970,13 @@ window.addEventListener("blur", () => {
   dismissTooltips();
 });
 $("more").addEventListener("click", () => update("more", {}));
-$("force-refresh").addEventListener("click", () => {
-  if (!visible()) return;
+function requestRefresh() {
+  if (!visible() || requestsPaused()) return;
   pendingRefresh = true;
   renderControls();
   return flushPendingUpdates();
-});
+}
+for (const id of ["force-refresh", "empty-refresh"]) $(id).addEventListener("click", requestRefresh);
 for (const [control, anchor] of tooltipControls) {
   bindTooltip($(control), $(anchor));
 }

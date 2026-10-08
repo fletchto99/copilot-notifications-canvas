@@ -30,8 +30,9 @@ test("attention tabs default to All, combine with search in every grouping, and 
       await button.events.click();
       assert.deepEqual(shown(ui), ids);
       const bulk = ui.ids.get("groups").querySelectorAll("button").filter(button => button.dataset.batchAction === "read");
-      assert.equal(bulk.length, groupBy !== "none" && ids.length > 0 ? 1 : 0);
-      assert.equal(bulk.every(button => button.dataset.batchScope === (groupBy === "repo" ? "repository" : "date")), true);
+      assert.equal(bulk.length, ids.length > 0 ? 1 : 0);
+      const scope = groupBy === "repo" ? "repository" : groupBy === "date" ? "date" : "shown";
+      assert.equal(bulk.every(button => button.dataset.batchScope === scope), true);
       assert.equal(button.attributes["aria-selected"], "true");
       assert.equal(button.tabIndex, 0);
       assert.equal(ui.document.activeElement, button);

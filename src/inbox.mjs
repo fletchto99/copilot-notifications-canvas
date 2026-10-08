@@ -59,6 +59,7 @@ export class Inbox {
       needsRefresh: this.needsRefresh,
       lastFetchedAt: this.pages.length ? Math.min(...this.pages.map(page => page.fetchedAt)) : null,
       nextRefreshAt: Math.max(this.nextRefreshAt, this.client.blockedUntil),
+      retryAt: this.client.blockedUntil,
       batch: this.batch.snapshot(),
       groups,
     };
@@ -127,7 +128,7 @@ export class Inbox {
 
   async more() {
     if (this.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
-    if (this.needsRefresh) throw new InboxError("refresh_required", "Refresh notifications before loading more after marking a notification read.", 409);
+    if (this.needsRefresh) throw new InboxError("refresh_required", "Refresh notifications before loading more after marking a notification as read or done.", 409);
     if (!this.pages.at(-1)?.next) throw new InboxError("no_more_pages", "No more notifications to load.", 409);
     return this.execute(async () => {
       const revision = this.client.revision;
@@ -161,7 +162,7 @@ export class Inbox {
     if (!input || typeof input !== "object" || Array.isArray(input) ||
         Object.keys(input).length !== 1 || typeof input.id !== "string" ||
         !/^[1-9]\d{0,63}$/.test(input.id)) {
-      throw new InboxError("invalid_thread", "Choose one valid notification to mark as read.", 400);
+      throw new InboxError("invalid_thread", "Choose one valid notification to mark as read or done.", 400);
     }
     if (this.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
     if (this.busy) throw new InboxError("busy", "Wait for the current inbox request to finish.", 409);

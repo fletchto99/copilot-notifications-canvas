@@ -34,7 +34,7 @@ test.describe("date-scoped actions", () => {
       await canvas.preferences.update({ groupBy: "date" });
       await page.goto(canvas.url);
       await filterInbox(page);
-      await expect(page.locator("#shown-actions")).toBeHidden();
+      await expect(page.locator('[data-batch-scope="shown"]')).toHaveCount(0);
       await expect(page.locator(".repo-name")).toHaveText(["January 13, 2026", label]);
       await expect(page.getByRole("button", { name: "Collapse all", exact: true })).toBeVisible();
       const group = page.locator(".repo-group").filter({ has: page.getByRole("button", { name: moreName, exact: true }) });
@@ -59,7 +59,7 @@ test.describe("date-scoped actions", () => {
       for (const id of ["3", "4", "5", "51"]) expect(canvas.rows.find(row => row.id === id).unread).toBe(true);
       expect(canvas.requests.some(endpoint => endpoint.includes("page=2"))).toBe(false);
       await expect(page.getByRole("tab", { name: "Mentioned (2)", exact: true })).toHaveAttribute("aria-selected", "true");
-      await expect(page.locator("#shown-actions")).toBeHidden();
+      await expect(page.locator('[data-batch-scope="shown"]')).toHaveCount(0);
       await expect(page.locator("#batch-progress")).toBeHidden();
     });
   }
@@ -99,7 +99,7 @@ test.describe("date-scoped actions", () => {
       await expect(group.locator(".repo-menu")).toBeHidden();
       await page.getByRole("searchbox").fill("No matching notification");
       await expect(page.locator(".repo-group")).toHaveCount(0);
-      await expect(page.locator("#shown-actions")).toBeHidden();
+      await expect(page.locator('[data-batch-scope="shown"]')).toHaveCount(0);
       expect(canvas.writes).toEqual([]);
     });
   }
@@ -127,20 +127,20 @@ test.describe("date-scoped actions", () => {
       await page.getByLabel("Settings", { exact: true }).click();
       await page.getByRole("combobox", { name: "Group By", exact: true }).selectOption("none");
       await page.keyboard.press("Escape");
-      await expect(page.locator("#shown-actions .repo-read")).toBeDisabled();
-      await expect(page.locator("#shown-actions .repo-read")).toHaveText("Mark 3 as read");
+      await expect(page.locator('[data-focus-key="bulk:shown"]')).toBeDisabled();
+      await expect(page.locator('[data-focus-key="bulk:shown"]')).toHaveText("Mark 3 as read");
       await page.getByRole("button", { name: "Stop remaining", exact: true }).click();
       canvas.setRequestHook(undefined);
       release();
-      const retry = page.getByRole("button", { name: "Retry remaining (1)", exact: true });
+      const retry = page.getByRole("button", { name: "Continue remaining (1)", exact: true });
       await expect(retry).toBeVisible();
       expect(canvas.doneWrites).toEqual(["1"]);
-      await expect(page.locator("#batch-title")).toContainText(`${label}: Some notifications remain to mark as done`);
+      await expect(page.locator("#batch-title")).toContainText(`${label}: Stopped`);
       await retry.click();
       await expect(page.locator(".row")).toHaveCount(1);
       expect(canvas.doneWrites).toEqual(["1", "2"]);
       expect(canvas.rows.find(row => row.id === "3").unread).toBe(true);
-      await expect(page.locator("#shown-actions .repo-read")).toHaveText("Mark 1 as read");
+      await expect(page.locator('[data-focus-key="bulk:shown"]')).toHaveText("Mark 1 as read");
     } finally {
       release();
     }
@@ -180,7 +180,7 @@ test.describe("packaged date-specific controls", () => {
     await page.getByLabel("Settings", { exact: true }).click();
     await page.getByRole("combobox", { name: "Group By", exact: true }).selectOption("date");
     await page.keyboard.press("Escape");
-    await expect(page.locator("#shown-actions")).toBeHidden();
+    await expect(page.locator('[data-batch-scope="shown"]')).toHaveCount(0);
     await page.getByRole("button", { name: moreName, exact: true }).click();
     await page.getByRole("button", { name: actionName("done"), exact: true }).click();
     await expect(page.locator(".row")).toHaveCount(1);

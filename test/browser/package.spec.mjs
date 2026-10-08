@@ -32,8 +32,10 @@ test("installed bundle supports search, saved settings and exact row writes in a
   await page.getByRole("combobox", { name: "Theme", exact: true }).selectOption("dark");
   await expect(page.locator("html")).toHaveAttribute("data-notification-theme", "dark");
   await page.getByRole("combobox", { name: "Group By", exact: true }).selectOption("none");
-  await expect(page.locator(".repo-group")).toHaveCount(0);
+  await expect(page.locator(".repo-group")).toHaveCount(1);
+  await expect(page.locator(".repo-name")).toHaveText("All notifications");
   await page.keyboard.press("Escape");
+  await expect(page.getByRole("button", { name: "Mark as read: Needle widget 2", exact: true })).toHaveAccessibleDescription("Mark as read");
   await page.getByRole("button", { name: "Mark as read: Needle widget 2", exact: true }).click();
   await expect(page.locator(".row")).toHaveCount(0);
   await expect(page.locator("#empty-title")).toHaveText("No matches in loaded notifications");
@@ -49,6 +51,7 @@ test("installed bundle supports search, saved settings and exact row writes in a
   await expect(done.locator("svg")).toBeVisible();
   await done.hover();
   await expect(page.locator("#row-done-3-tooltip")).toBeVisible();
+  await expect(page.locator("#row-done-3-tooltip")).toHaveText("Mark as done");
   await done.click();
   await expect(page.locator(".row")).toHaveCount(48);
   await expect(page.getByRole("tab", { name: "All (48)", exact: true })).toHaveAttribute("aria-selected", "true");
@@ -56,7 +59,8 @@ test("installed bundle supports search, saved settings and exact row writes in a
   expect(canvas.doneWrites).toEqual(["3"]);
   await page.reload();
   await expect(page.locator("html")).toHaveAttribute("data-notification-theme", "dark");
-  await expect(page.locator(".repo-group")).toHaveCount(0);
+  await expect(page.locator(".repo-group")).toHaveCount(1);
+  await expect(page.locator(".repo-name")).toHaveText("All notifications");
   await expect(page.locator('[data-focus-key="done:3"]')).toHaveCount(0);
   expect((await canvas.preferences.read()).groupBy).toBe("none");
 });

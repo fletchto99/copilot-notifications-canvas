@@ -899,26 +899,30 @@ test("Settings supports keyboard dismissal and persists theme and auto-open acro
   expect(canvas.deliveries).toEqual([]);
 });
 
-test("ungrouped notifications stay globally newest first through pagination, search and reload", async ({ page, canvas }) => {
+test("All notifications stays globally newest first through pagination, search and reload", async ({ page, canvas }) => {
   await page.goto(canvas.url);
   await expect(page.locator(".row")).toHaveCount(50);
   await page.getByLabel("Settings", { exact: true }).click();
   const grouping = page.getByRole("combobox", { name: "Group By", exact: true });
   await expect(grouping).toHaveValue("repo");
   await grouping.selectOption("none");
-  await expect(page.locator(".repo-group")).toHaveCount(0);
-  await expect(page.locator("#collapse")).toBeHidden();
+  await expect(page.locator(".repo-group")).toHaveCount(1);
+  await expect(page.locator(".repo-name")).toHaveText("All notifications");
+  await expect(page.locator(".repo-count")).toHaveText("50 unread");
+  await expect(page.locator("#collapse")).toBeVisible();
   await expect(page.locator(".row .title")).toHaveText(canvas.rows.slice(0, 50).map(row => row.subject.title));
   await expect(page.locator(".row .repository").nth(2)).toHaveText("example/tools");
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Load more (up to 50)", exact: true }).click();
   await expect(page.locator(".row .title")).toHaveText(canvas.rows.map(row => row.subject.title));
+  await expect(page.locator(".repo-count")).toHaveText("53 unread");
   await page.getByRole("searchbox", { name: searchName }).fill("Needle");
   await expect(page.locator(".row .title")).toHaveText(canvas.rows.filter(row => row.subject.title.includes("Needle")).map(row => row.subject.title));
   await page.reload();
   await page.getByLabel("Settings", { exact: true }).click();
   await expect(grouping).toHaveValue("none");
-  await expect(page.locator(".repo-group")).toHaveCount(0);
+  await expect(page.locator(".repo-group")).toHaveCount(1);
+  await expect(page.locator(".repo-name")).toHaveText("All notifications");
   expect(canvas.writes).toEqual([]);
 });
 
@@ -934,7 +938,7 @@ test("date groups span repositories and keep row-action focus in newest-first or
   await expect(page.locator(".repo-name")).toHaveText(["January 10, 2026", "January 9, 2026"]);
   await expect(page.locator(".row .title")).toHaveText([2, 1, 0, 3].map(index => canvas.rows[index].subject.title));
   await expect(page.locator('.repo-group [data-batch-scope="date"].repo-read')).toHaveCount(2);
-  await expect(page.locator("#shown-actions")).toBeHidden();
+  await expect(page.locator('[data-batch-scope="shown"]')).toHaveCount(0);
   await page.keyboard.press("Escape");
   const read = page.getByRole("button", { name: "Mark as read: Needle tool", exact: true });
   await read.focus();
@@ -987,7 +991,7 @@ for (const width of [320, 480, 960]) {
         for (const row of rows) {
           expect(row.metadataContainsTime).toBe(true);
           expect(row.timeBottom).toBeLessThanOrEqual(row.contentBottom);
-          expect(row.contentBottom).toBeLessThan(row.readTop);
+          expect(row.readTop).toBeLessThan(row.contentBottom);
           expect(row.readTop).toBe(row.doneTop);
           expect(row.readRight).toBeLessThan(row.doneLeft);
           expect(row.readHeight).toBeGreaterThanOrEqual(28);

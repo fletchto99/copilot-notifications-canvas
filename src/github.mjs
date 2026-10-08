@@ -163,7 +163,7 @@ export class GitHubClient {
     }
     if (this.pendingThreads.has(id)) throw new InboxError("busy", "This notification is already being updated.", 409);
     if (this.threadReservations.has(id) && this.threadReservations.get(id) !== owner) {
-      throw new InboxError("busy", "This notification belongs to an active repository batch.", 409);
+      throw new InboxError("busy", "This notification belongs to an active batch.", 409);
     }
     this.pendingThreads.add(id);
     const pending = this.queue.then(async () => {

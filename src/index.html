@@ -96,9 +96,9 @@
             <div class="select-setting">
               <label for="group-by">Group By</label>
               <select id="group-by" disabled>
-                <option value="none">none</option>
-                <option value="repo" selected>repo</option>
-                <option value="date">date</option>
+                <option value="none">All notifications</option>
+                <option value="repo" selected>Repository</option>
+                <option value="date">Date</option>
               </select>
             </div>
             <button id="check-updates" type="button">Check for updates</button>
@@ -108,11 +108,9 @@
       </div>
       <div class="status-line">
         <span id="count" role="status" aria-live="polite" title="Counts include loaded notifications only.">Waiting for inbox...</span>
-        <div class="status-actions">
-          <div id="shown-actions" role="group" aria-label="Shown notification actions" hidden></div>
-          <button id="collapse" class="text-button" type="button">Collapse all</button>
-        </div>
+        <button id="collapse" class="text-button" type="button">Collapse all</button>
       </div>
+      <p id="retry-status" class="retry-status" role="status" hidden></p>
     </header>
     <div id="attention-panel" role="tabpanel" aria-labelledby="attention-all" tabindex="0">
       <div id="settings-error" class="notice" role="alert" hidden></div>
@@ -131,6 +129,7 @@
         <div id="empty-symbol" class="empty-symbol" aria-hidden="true">/</div>
         <h2 id="empty-title">Connecting to GitHub</h2>
         <p id="empty-description">Using your existing GitHub CLI sign-in.</p>
+        <button id="empty-refresh" type="button" aria-describedby="retry-status" hidden>Refresh notifications</button>
       </section>
       <section id="groups" aria-label="Notifications by repository"></section>
       <div class="pagination">

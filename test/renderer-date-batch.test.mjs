@@ -27,7 +27,7 @@ test("each date header has independent read and Done controls without an overall
     const ui = await renderer({ storedSettings: { groupBy: "date" }, initialRows: rows });
     t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
     await runInContext('update("filters", { attention: "mentioned", query: "notification" })', ui.context);
-    assert.equal(ui.ids.get("shown-actions").hidden, true);
+    assert.equal(ui.ids.get("groups").querySelectorAll("button").some(button => button.dataset.batchScope === "shown"), false);
     assert.equal(ui.ids.get("collapse").hidden, false);
     assert.equal(controls(ui).read.textContent, "Mark 2 as read");
     assert.equal(controls(ui, otherDate).read.textContent, "Mark 1 as read");
@@ -51,7 +51,7 @@ test("each date header has independent read and Done controls without an overall
     assert.deepEqual(ui.inbox.loadedItems().map(item => item.id), ["3"]);
     assert.equal(controls(ui).read, undefined);
     assert.equal(controls(ui, otherDate).read.textContent, "Mark 1 as read");
-    assert.equal(ui.ids.get("shown-actions").hidden, true);
+    assert.equal(ui.ids.get("groups").querySelectorAll("button").some(button => button.dataset.batchScope === "shown"), false);
     assert.equal(ui.ids.get("batch-progress").hidden, true);
   }
 });
@@ -82,7 +82,7 @@ test("date progress is scoped to its own header and remains date-specific throug
   grouping.value = "none";
   grouping.events.change();
   await settle();
-  const shownRead = ui.ids.get("shown-actions").querySelectorAll("button").find(button => button.dataset.batchAction === "read");
+  const shownRead = ui.ids.get("groups").querySelectorAll("button").find(button => button.dataset.focusKey === "bulk:shown");
   assert.equal(shownRead.disabled, true);
   assert.equal(shownRead.textContent, "Mark 3 as read");
   assert.equal(shownRead.attributes["aria-busy"], "false");
@@ -92,7 +92,9 @@ test("date progress is scoped to its own header and remains date-specific throug
   await runInContext("update()", ui.context);
   assert.deepEqual(ui.deletions, ["/notifications/threads/1"]);
   assert.equal(ui.inbox.batch.snapshot().date, selectedDate);
-  assert.equal(ui.ids.get("batch-title").textContent, `${dateLabel(selectedDate)}: Some notifications remain to mark as done`);
+  assert.equal(ui.ids.get("batch-title").textContent, `${dateLabel(selectedDate)}: Stopped`);
+  assert.equal(ui.ids.get("batch-counts").textContent, "1 marked done, 1 remaining");
+  assert.equal(ui.ids.get("batch-retry").textContent, "Continue remaining (1)");
   await ui.ids.get("batch-retry").events.click();
   await ui.inbox.batch.done;
   await runInContext("update()", ui.context);
