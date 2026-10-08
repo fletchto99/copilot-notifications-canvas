@@ -60,9 +60,10 @@ full procedure, verification requirements, and troubleshooting.
   still work. Passive count updates only scroll the tab strip, not the page.
   Clearing the search leaves the selected attention tab unchanged.
 - **Mark as read:** use the open-envelope icon on an individual row in any view.
-  In **repo** mode, groups with multiple matching notifications also offer
-  **Mark N as read**. This marks only that repository's loaded items matching
-  your attention tab and search, not hidden or older unloaded notifications.
+  In **repo** mode, every nonempty group also offers **Mark N as read**, even
+  when only one notification matches. This marks only that repository's loaded
+  items matching your attention tab and search, not hidden or older unloaded
+  notifications.
 - **Mark as done:** use the checkmark icon to mark an individual row completed on
   GitHub in any view.
   This is separate from marking it read. Both actions remove the row from this

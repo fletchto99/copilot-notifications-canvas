@@ -268,7 +268,7 @@ test("mark-read failure retains the row with a usable retry control", async () =
   assert.match(ui.ids.get("notice").textContent, /Could not mark/);
 });
 
-test("single-item repository groups show a simple count and only the row read action", async () => {
+test("single-item repository groups retain their split control alongside row actions", async () => {
   const ui = await renderer({ initialRows: [thread("1"), thread("2")] });
   const buttons = () => ui.ids.get("groups").querySelectorAll("button");
   const bulk = () => buttons().filter(button => button.dataset.batchAction === "read");
@@ -276,19 +276,25 @@ test("single-item repository groups show a simple count and only the row read ac
   assert.equal(bulk().length, 1);
   assert.equal(count(), "2 unread");
   await runInContext('update("filters", { query: "notification 1" })', ui.context);
-  assert.equal(bulk().length, 0);
+  assert.equal(bulk().length, 1);
+  assert.equal(bulk()[0].textContent, "Mark 1 as read");
+  assert.equal(buttons().find(button => button.dataset.batchAction === "done").textContent, "Mark 1 as done");
   assert.equal(count(), "1 unread");
   assert.equal(buttons().find(button => button.dataset.threadId === "1").disabled, false);
+  await runInContext('update("filters", { query: "no match" })', ui.context);
+  assert.equal(bulk().length, 0);
   await runInContext('update("filters", { query: "" })', ui.context);
   assert.equal(bulk().length, 1);
   const row = buttons().find(button => button.dataset.threadId === "1");
   row.focus();
   await row.events.click();
-  assert.equal(bulk().length, 0);
+  assert.equal(bulk().length, 1);
+  assert.equal(bulk()[0].textContent, "Mark 1 as read");
   assert.equal(count(), "1 unread");
   assert.equal(ui.document.activeElement, buttons().find(button => button.dataset.threadId === "2"));
   await ui.document.activeElement.events.click();
   assert.equal(ui.document.querySelectorAll("article").length, 0);
+  assert.equal(bulk().length, 0);
   assert.deepEqual(ui.patches, ["/notifications/threads/1", "/notifications/threads/2"]);
   assert.equal(ui.calls.some(call => call.path.startsWith("/api/batch/")), false);
   ui.window.events.pagehide();

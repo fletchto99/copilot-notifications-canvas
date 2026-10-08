@@ -443,7 +443,7 @@ for (const width of [320, 480, 960]) {
   });
 }
 
-test("a repository batch button disappears at one matching row without removing its row action", async ({ page, canvas }) => {
+test("repository split controls remain usable for a single matching notification", async ({ page, canvas }) => {
   canvas.rows.splice(2);
   await page.setViewportSize({ width: 320, height: 800 });
   await page.goto(canvas.url);
@@ -451,19 +451,23 @@ test("a repository batch button disappears at one matching row without removing 
   await expect(page.locator(".repo-read")).toHaveCount(1);
   await page.getByRole("searchbox").fill("Needle widget 2");
   await expect(page.locator(".repo-count")).toHaveText("1 unread");
-  await expect(page.locator(".repo-read")).toHaveCount(0);
+  await expect(page.locator(".repo-read")).toHaveText("Mark 1 as read");
+  await expect(page.locator(".repo-more")).toBeVisible();
   await expect(page.locator('[data-focus-key="read:2"]')).toBeVisible();
   await expect(page.locator('[data-focus-key="done:2"]')).toBeVisible();
   await page.getByRole("searchbox").fill("");
   await expect(page.locator(".repo-read")).toHaveCount(1);
   await page.locator('[data-focus-key="read:1"]').click();
   await expect(page.locator(".repo-count")).toHaveText("1 unread");
-  await expect(page.locator(".repo-read")).toHaveCount(0);
+  await expect(page.locator(".repo-read")).toHaveText("Mark 1 as read");
   await expect(page.locator('[data-focus-key="read:2"]')).toBeVisible();
   await expect(page.locator('[data-focus-key="done:2"]')).toBeVisible();
-  await page.locator('[data-focus-key="read:2"]').click();
+  await page.getByRole("button", { name: "More actions for example/widgets", exact: true }).click();
+  await page.getByRole("button", { name: "Mark 1 shown, loaded notifications as done in example/widgets", exact: true }).click();
   await expect(page.locator(".row")).toHaveCount(0);
+  await expect(page.locator(".repo-actions")).toHaveCount(0);
   expect(canvas.writes).toEqual(["1", "2"]);
+  expect(canvas.doneWrites).toEqual(["2"]);
 });
 
 for (const groupBy of ["repo", "date", "none"]) {
@@ -964,7 +968,7 @@ for (const width of [320, 480, 960]) {
         return context.measureText(node.placeholder).width <= node.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
       })).toBe(true);
       await expect(page.locator(".repo-count")).toHaveText(["1 unread", "3 unread"]);
-      await expect(page.getByRole("button", { name: "Mark 1 shown, loaded notifications as read in example/tools", exact: true })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Mark 1 shown, loaded notifications as read in example/tools", exact: true })).toBeVisible();
       await expect(page.getByRole("button", { name: "Mark 3 shown, loaded notifications as read in example/widgets", exact: true })).toBeVisible();
       await expect(page.locator(".eyebrow")).toBeVisible();
       await expect(page.locator("#subtitle")).toBeVisible();

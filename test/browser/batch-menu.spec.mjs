@@ -112,7 +112,8 @@ test("a Done batch stops after the in-flight request and retries the original re
     await expect(retry).toBeVisible();
     await expect(page.locator("#batch-title")).toContainText("remain to mark as done");
     expect(canvas.doneWrites).toEqual(["1"]);
-    await expect(page.locator(".repo-actions")).toHaveCount(0);
+    await expect(page.locator(".repo-read")).toHaveText("Mark 1 as read");
+    await expect(page.locator(".repo-more")).toBeVisible();
     await expect(page.locator('[data-focus-key="read:2"]')).toBeVisible();
     await expect(page.locator('[data-focus-key="done:2"]')).toBeVisible();
     canvas.rows.push(thread("3"));
@@ -145,7 +146,8 @@ test("failed Done batches keep their action after backoff and do not widen retri
   await retry.click();
   await expect(page.locator(".row")).toHaveCount(1);
   expect(canvas.doneWrites).toEqual(["1", "2"]);
-  await expect(page.locator(".repo-actions")).toHaveCount(0);
+  await expect(page.locator(".repo-read")).toHaveText("Mark 1 as read");
+  await expect(page.locator(".repo-more")).toBeVisible();
   await expect(page.locator('[data-focus-key="read:3"]')).toBeVisible();
   await expect(page.locator('[data-focus-key="done:3"]')).toBeVisible();
 });

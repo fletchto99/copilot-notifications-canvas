@@ -12,7 +12,7 @@ test("installed bundle supports search, saved settings and exact row writes in a
   await expect(page.locator(".eyebrow")).toBeVisible();
   await expect(page.locator("#subtitle")).toBeVisible();
   await expect(page.getByRole("searchbox")).toHaveAttribute("placeholder", "Search...");
-  await expect(page.getByRole("button", { name: "Mark 1 shown, loaded notifications as read in example/tools", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Mark 1 shown, loaded notifications as read in example/tools", exact: true })).toBeVisible();
   const next = page.getByRole("button", { name: "Scroll attention tabs right", exact: true });
   await expect(next).toBeVisible();
   await next.click();
@@ -61,15 +61,15 @@ test("installed bundle supports search, saved settings and exact row writes in a
   expect((await canvas.preferences.read()).groupBy).toBe("none");
 });
 
-test("installed bundle sends repository Done actions through the split control", async ({ page, canvas }) => {
-  canvas.rows.splice(2);
+test("installed bundle sends single-notification Done actions through the split control", async ({ page, canvas }) => {
+  canvas.rows.splice(1);
   await page.goto(canvas.url);
   await page.getByRole("button", { name: "More actions for example/widgets", exact: true }).click();
-  const done = page.getByRole("button", { name: "Mark 2 shown, loaded notifications as done in example/widgets", exact: true });
+  const done = page.getByRole("button", { name: "Mark 1 shown, loaded notifications as done in example/widgets", exact: true });
   await expect(done).toBeFocused();
   expect(canvas.doneWrites).toEqual([]);
   await done.press("Enter");
   await expect(page.locator(".row")).toHaveCount(0);
-  expect(canvas.doneWrites).toEqual(["1", "2"]);
-  expect(canvas.writes).toEqual(["1", "2"]);
+  expect(canvas.doneWrites).toEqual(["1"]);
+  expect(canvas.writes).toEqual(["1"]);
 });

@@ -629,7 +629,7 @@ function renderGroups(groups, fallbackFocusKey) {
         $("collapse").textContent = groups.some(item => !collapsed.has(item.key)) ? "Collapse all" : "Expand all";
       });
       header.append(disclosure);
-      if (group.repository && group.items.length > 1) {
+      if (group.repository) {
         const controls = element("div", "repo-actions");
         controls.addEventListener("mousedown", event => {
           // Do not let WebKit focus the surrounding tabpanel and dismiss an open menu before click.
