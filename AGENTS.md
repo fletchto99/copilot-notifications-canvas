@@ -146,10 +146,10 @@ defined in `package.json`; platform coverage is in
 Node tests and coverage need no dependency installation and retain Node.js 22
 runtime compatibility coverage. For development tools, use Node.js 24 or later.
 If packages are missing, use `npm ci --ignore-scripts --engine-strict`.
-CI validates the exact tooling minimum on Node.js 24.0.0 in the lint job and
-reads `.node-version` for browser checks, cloud setup, and release tooling.
+CI reads `.node-version` for lint, Windows and browser checks, cloud setup, and
+release tooling. The runtime test matrix explicitly covers Node.js 22 and 24.
 All CI dependency installs must enable strict engine checks; keep the Node.js 22
-runtime test matrix entry and the release bundle's `node22` target.
+runtime coverage job and the release bundle's `node22` target.
 The recovery lint integration tests run only through the tooling check, not
 the dependency-free `test/*.test.mjs` suite.
 For missing browser binaries, use

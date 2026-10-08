@@ -65,11 +65,13 @@ CI runs each check as a separate step. Stylelint catches CSS errors and enforces
 CSS conventions; Prettier keeps the stylesheet readable with multiline rules
 and declarations.
 
-The lint job uses the exact minimum, Node.js 24.0.0. Browser checks, cloud setup,
-and release tooling read `.node-version` to use current Node.js 24. Every CI
-dependency install uses `--engine-strict` so unsupported package engines fail
-instead of only warning. Release bundles still target Node.js 22; the
-development requirement does not raise the runtime minimum.
+Lint, Windows and browser checks, cloud setup, and release tooling read
+`.node-version` to use current Node.js 24. The runtime test matrix explicitly
+covers Node.js 22 and 24, with source coverage on Node.js 22. Every CI dependency
+install uses `--engine-strict` so unsupported package engines fail instead of
+only warning. Release bundles still target Node.js 22; the development
+requirement does not raise the runtime minimum. CI does not separately test the
+initial 24.0.0 release.
 
 The recovery lint check starts an isolated loopback server with synthetic
 missing renderer assets and lints the fallback content it serves. It makes no

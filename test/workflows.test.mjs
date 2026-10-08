@@ -37,7 +37,7 @@ test("browser CI pins the locked Playwright version without installing browsers 
   assert.doesNotMatch(browser, /playwright install|apt-get/);
 });
 
-test("CI validates the Node 24 tooling minimum with strict engines while preserving Node 22 runtime support", async () => {
+test("CI uses the preferred Node version for tooling while preserving Node 22 runtime coverage", async () => {
   const [manifest, lock, preferredNode, tests, setup, release, build] = await Promise.all([
     readFile(new URL("../package.json", import.meta.url), "utf8").then(JSON.parse),
     readFile(new URL("../package-lock.json", import.meta.url), "utf8").then(JSON.parse),
@@ -50,24 +50,30 @@ test("CI validates the Node 24 tooling minimum with strict engines while preserv
   assert.equal(preferredNode.trim(), "24");
   assert.equal(manifest.engines.node, ">=24");
   assert.equal(lock.packages[""].engines.node, manifest.engines.node);
-  const lint = tests.match(/\n {2}lint:\n([\s\S]*?)(?=\n {2}[a-z][\w-]*:|$)/)?.[1];
-  assert.ok(lint);
-  assert.match(lint, /node-version: "24\.0\.0"/);
-  const browser = tests.slice(tests.indexOf("\n  browser:"));
-  assert.match(browser, /node-version-file: \.node-version/);
-  assert.match(setup, /node-version-file: \.node-version/);
+  const runtime = tests.match(/\n {2}test:\n([\s\S]*?)(?=\n {2}[a-z][\w-]*:|$)/)?.[1];
+  assert.ok(runtime);
+  assert.match(runtime, /node-version: \$\{\{ matrix\.node \}\}/);
+  for (const job of ["windows", "lint", "browser"]) {
+    const configuration = tests.match(new RegExp(`\\n {2}${job}:\\n([\\s\\S]*?)(?=\\n {2}[a-z][\\w-]*:|$)`))?.[1];
+    assert.ok(configuration, job);
+    assert.match(configuration, /node-version-file: \.node-version/);
+    assert.doesNotMatch(configuration, /^\s+node-version:/m);
+  }
   assert.equal([...setup.matchAll(/^\s+- \.node-version$/gm)].length, 2);
-  const releaseVersions = [...release.matchAll(/node-version-file: (\S+)/g)];
-  assert.ok(releaseVersions.length > 0);
-  for (const [, versionFile] of releaseVersions) assert.equal(versionFile, ".node-version");
-  for (const workflow of [browser, setup, release]) assert.doesNotMatch(workflow, /^\s+node-version:/m);
+  for (const workflow of [setup, release]) {
+    const versionFiles = [...workflow.matchAll(/node-version-file: (\S+)/g)];
+    assert.ok(versionFiles.length > 0);
+    for (const [, versionFile] of versionFiles) assert.equal(versionFile, ".node-version");
+    assert.doesNotMatch(workflow, /^\s+node-version:/m);
+  }
   for (const workflow of [tests, setup, release]) {
     const installs = workflow.match(/^\s+run: npm ci[^\n]+$/gm) ?? [];
     assert.ok(installs.length > 0);
     for (const command of installs) assert.match(command, / --engine-strict(?:\s|$)/);
   }
-  assert.match(tests, /node: "22"/);
-  assert.match(tests, /if: matrix\.node == '22'\n\s+run: npm run test:coverage/);
+  assert.match(runtime, /node: "22"/);
+  assert.match(runtime, /node: "24"/);
+  assert.match(runtime, /if: matrix\.node == '22'\n\s+run: npm run test:coverage/);
   assert.match(build, /target: "node22"/);
 });
 
