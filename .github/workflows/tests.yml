@@ -58,7 +58,7 @@ jobs:
       - name: Test Windows installation, settings, locks and notification arguments
         run: node --test test/platform.test.mjs test/lock.test.mjs test/settings.test.mjs test/notifier.test.mjs
   lint:
-    name: JavaScript and workflows
+    name: lint
     runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:
@@ -73,14 +73,20 @@ jobs:
         run: npm ci --ignore-scripts --no-fund --no-audit
       - name: Lint JavaScript
         run: npm run lint
-      - name: Install verified actionlint and lint workflows
-        run: |
-          curl --fail --silent --show-error --location \
-            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
-            --output "$RUNNER_TEMP/actionlint.tar.gz"
-          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $RUNNER_TEMP/actionlint.tar.gz" | sha256sum --check
-          tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
-          PATH="$RUNNER_TEMP:$PATH" npm run lint:workflows
+  actionlint:
+    name: actionlint
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Lint GitHub Actions workflows
+        uses: docker://rhysd/actionlint:1.7.12@sha256:9d36088643581e728c969f35141f88139fec77280b2be23c1f66f8e40e1025e7
+        with:
+          args: -color
   browser:
     name: Browser (${{ matrix.browser }})
     runs-on: ubuntu-24.04

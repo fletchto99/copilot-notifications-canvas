@@ -28,6 +28,40 @@ test("Copilot cloud sessions and reviews share lightweight setup without browser
   await assert.rejects(readFile(new URL("../.github/workflows/copilot-code-review.yml", import.meta.url)), { code: "ENOENT" });
 });
 
+test("workflow lint has a separate pinned Docker job on a Docker-capable runner", async () => {
+  const [workflow, setup] = await Promise.all([
+    readFile(new URL("../.github/workflows/tests.yml", import.meta.url), "utf8"),
+    readFile(new URL("../.github/workflows/copilot-setup-steps.yml", import.meta.url), "utf8"),
+  ]);
+  const job = id => {
+    const match = workflow.match(new RegExp(`\\n {2}${id}:\\n([\\s\\S]*?)(?=\\n {2}[\\w-]+:|$)`));
+    assert.ok(match, `Missing ${id} job`);
+    return match[1];
+  };
+  const javascript = job("lint");
+  assert.match(javascript, /name: lint\n/);
+  assert.match(javascript, /runs-on: ubuntu-slim/);
+  assert.match(javascript, /npm run lint(?:\n|$)/);
+  assert.doesNotMatch(javascript, /actionlint|curl|docker:\/\//);
+
+  const actionlint = job("actionlint");
+  const image = actionlint.match(/uses: docker:\/\/rhysd\/actionlint:(\d+\.\d+\.\d+)@sha256:[a-f0-9]{64}\n/);
+  assert.ok(image, "Workflow lint must use the version- and digest-pinned upstream image");
+  assert.match(actionlint, /name: actionlint\n/);
+  assert.match(actionlint, /permissions:\n {6}contents: read/);
+  assert.match(actionlint, /runs-on: ubuntu-24\.04/);
+  assert.match(actionlint, /timeout-minutes: 5/);
+  assert.match(actionlint, /uses: actions\/checkout@[a-f0-9]{40}/);
+  assert.match(actionlint, /persist-credentials: false/);
+  assert.match(actionlint, /args: -color/);
+  assert.doesNotMatch(actionlint, /npm|setup-node|curl|shellcheck=|pyflakes=/);
+
+  assert.ok(setup.includes(`/download/v${image[1]}/actionlint_${image[1]}_linux_amd64.tar.gz`),
+    "Copilot setup and workflow CI must use the same actionlint version");
+  assert.match(setup, /echo "[a-f0-9]{64} {2}\$RUNNER_TEMP\/actionlint\.tar\.gz" \| sha256sum --check/);
+  assert.ok(setup.indexOf("sha256sum --check") < setup.indexOf("tar -xzf"));
+});
+
 test("local tooling selects the primary CI Node major and full validation cannot skip prerequisites or browser engines", async () => {
   const [node, setup, workflow, manifest] = await Promise.all([
     readFile(new URL("../.node-version", import.meta.url), "utf8"),

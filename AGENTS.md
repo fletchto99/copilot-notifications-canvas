@@ -172,6 +172,12 @@ the workflow's Node version, action pins, and verified `actionlint` version
 aligned with the test workflow. Setup prepares tools; the agent still selects
 and runs the checks relevant to its task.
 
+Workflow CI uses a separate `actionlint` job with the upstream Docker image pinned
+by version and verified digest. Keep that version aligned with Copilot setup's
+checksum-verified binary. The Docker action runs on `ubuntu-24.04`, not the
+unprivileged `ubuntu-slim` runner; JavaScript lint remains on `ubuntu-slim`.
+Preserve the image's ShellCheck and Pyflakes integrations and read-only permissions.
+
 Browser CI uses a digest-pinned Playwright image with browsers and system
 libraries already installed. When updating Playwright, update the image's
 version and verified digest in `.github/workflows/tests.yml` together with the

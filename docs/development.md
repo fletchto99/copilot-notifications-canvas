@@ -141,6 +141,21 @@ tests in both Chromium and WebKit, stopping at the first failure. It never
 installs missing prerequisites, skips unavailable checks, or publishes a release.
 Build output and test reports remain in their ignored directories.
 
+CI separates JavaScript linting (`lint`, on `ubuntu-slim`) from workflow linting
+(`actionlint`, on `ubuntu-24.04`). Workflow lint uses the
+[official actionlint Docker image](https://github.com/rhysd/actionlint/blob/main/docs/usage.md#docker),
+pinned by version and digest, including its ShellCheck and Pyflakes integrations.
+It needs no Node setup or npm installation. The Docker action needs a full Linux
+VM: [`ubuntu-slim`](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#single-cpu-runners)
+is an unprivileged container and does not support Docker-in-Docker.
+
+When updating actionlint, verify and update the image digest and version together,
+keeping its version aligned with the checksum-verified binary in Copilot setup.
+Copilot setup still installs that binary so agents can run `npm run lint:workflows`
+in their own session; the CI container does not provision the agent environment.
+If CI check names change, repository administrators must coordinate corresponding
+required-check rules separately; editing a workflow does not update those rules.
+
 See the [test workflow](../.github/workflows/tests.yml) for platform coverage and
 required checks. Browser CI runs both engines in the official Playwright image,
 which includes browser binaries and system libraries; it does not run APT or
