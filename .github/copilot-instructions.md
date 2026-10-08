@@ -9,7 +9,8 @@ Quick orientation:
 
 - Edit `src/`; `.github/extensions/github-notifications/extension.mjs` is only
   the development discovery shim. Do not edit generated or installed bundles.
-- Use Node.js 22 or later and ES modules. The Copilot SDK is host-provided.
+- Use ES modules and the Node.js version in `.node-version` for development.
+  See `AGENTS.md` for runtime compatibility. The Copilot SDK is host-provided.
 - Start with relevant `node --test` tests. Use the validation section in
   `AGENTS.md` to select lint, browser, coverage, and packaged checks.
 - Keep notification content out of agent results and logs. Validate with

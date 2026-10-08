@@ -5,7 +5,7 @@
 ## Prerequisites
 
 - A GitHub Copilot app build with extension canvas support (experimental).
-- Node.js 22 or later.
+- Node.js 22 or later for the extension runtime and installer.
 - [GitHub CLI](https://cli.github.com/) (`gh`) available to the app and signed
   into **github.com** with `notifications` or `repo` scope. It must support
   `gh release verify`, `gh release verify-asset`, and `gh attestation verify`
@@ -13,6 +13,10 @@
 
 GitHub.com only; fine-grained personal access tokens are not supported.
 Check sign-in with `gh auth status --hostname github.com`.
+
+Contributors need Node.js 24 or later for
+[development tooling](development.md#local-development). Packaged releases do
+not include those tooling dependencies.
 
 ## Install or update with Copilot
 

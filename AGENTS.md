@@ -9,8 +9,10 @@ installation safeguards, and release process.
 ## Project and source layout
 
 Unread Notifications is a GitHub Copilot canvas extension for **github.com**.
-It uses Node.js 22 or later, JavaScript ES modules, a plain HTML/CSS/JavaScript
-renderer, and GitHub CLI for authenticated API calls. There is no application
+Its runtime supports Node.js 22 or later, with JavaScript ES modules, a plain
+HTML/CSS/JavaScript renderer, and GitHub CLI for authenticated API calls.
+Development tooling requires Node.js 24 or later; `.node-version` selects the
+preferred Node.js 24 development line. There is no application
 framework or separately installed runtime SDK.
 
 | Path | Responsibility |
@@ -35,6 +37,13 @@ output. Development loads source without a build; release builds bundle
 
 - Match the existing two-space indentation, double quotes, semicolons, explicit
   `.mjs` import extensions, and `node:` imports for built-ins.
+- Keep styles in plain CSS and run `npm run format:css` after stylesheet edits.
+  Stylelint with `stylelint-config-standard` checks CSS; Prettier enforces
+  readable source formatting. ESLint checks JavaScript. Run `npm run lint`
+  before completing changes; CI runs these checks and `npm run lint:recovery`
+  separately. The recovery check lints the embedded JavaScript and CSS actually
+  served when renderer assets are unavailable, using the browser ESLint rules
+  and the same Stylelint configuration.
 - Prefer existing helpers and injected dependencies over new abstractions or
   runtime packages. `@github/copilot-sdk/extension` is supplied by the host;
   do not add the SDK to this repository's dependencies.
@@ -122,15 +131,27 @@ defined in `package.json`; platform coverage is in
 | --- | --- |
 | Targeted Node tests, for example HTTP and inbox changes | `node --test test/server.test.mjs test/inbox.test.mjs` |
 | All Node unit and HTTP integration tests | `npm test` (or `node --test test/*.test.mjs`) |
-| JavaScript lint, with no warnings | `npm run lint` |
+| JavaScript and CSS lint, with no warnings, plus CSS formatting | `npm run lint` |
+| JavaScript lint (ESLint) | `npm run lint:js` |
+| CSS lint (Stylelint) | `npm run lint:css` |
+| CSS formatting check (Prettier, no writes) | `npm run format:css:check` |
+| Embedded recovery JavaScript and CSS lint (requires development dependencies) | `npm run lint:recovery` |
+| Format source CSS | `npm run format:css` |
 | Source coverage with enforced thresholds | `npm run test:coverage` |
 | Workflow lint; requires `actionlint` on PATH | `npm run lint:workflows` |
 | Release build and packaged integration tests | `npm run build && npm run test:package` |
 | Browser and accessibility tests in Chromium and WebKit | `npm run test:browser` |
 | One browser engine | `npm run test:browser -- --project=webkit` |
 
-Node tests and coverage need no dependency installation. If a tooling check
-fails because development packages are missing, use `npm ci --ignore-scripts`.
+Node tests and coverage need no dependency installation and retain Node.js 22
+runtime compatibility coverage. For development tools, use Node.js 24 or later.
+If packages are missing, use `npm ci --ignore-scripts --engine-strict`.
+CI reads `.node-version` for lint, Windows and browser checks, cloud setup, and
+release tooling. The runtime test matrix explicitly covers Node.js 22 and 24.
+All CI dependency installs must enable strict engine checks; keep the Node.js 22
+runtime coverage job and the release bundle's `node22` target.
+The recovery lint integration tests run only through the tooling check, not
+the dependency-free `test/*.test.mjs` suite.
 For missing browser binaries, use
 `npx playwright install --with-deps chromium webkit`; this downloads browsers
 and may require permission to install Linux system libraries.

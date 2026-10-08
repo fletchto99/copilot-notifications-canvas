@@ -8,6 +8,13 @@ points to the shared repository guidance.
 
 ## Local development
 
+Development tooling requires Node.js 24 or later (`package.json` declares
+`>=24`). The checked-in `.node-version` selects the Node.js 24 development line;
+use a current patched release. With nvm, run
+`nvm install "$(cat .node-version)"`. The extension runtime and installer still
+support Node.js 22 or later; their dependency-free tests retain Node.js 22
+coverage.
+
 Provider modules and renderer assets live in `src/`. The entry point at
 `.github/extensions/github-notifications/extension.mjs` imports
 `src/extension.mjs`, so opening this repository as a Copilot project loads the
@@ -36,7 +43,7 @@ node --test test/*.test.mjs
 For lint, coverage, packaging, and browser checks:
 
 ```sh
-npm ci --ignore-scripts
+npm ci --ignore-scripts --engine-strict
 npm run lint
 npm run lint:workflows  # Requires actionlint on PATH.
 npm run test:coverage
@@ -45,6 +52,46 @@ npm run test:package
 npx playwright install --with-deps chromium webkit
 npm run test:browser
 ```
+
+`npm run lint` runs all source checks:
+
+- `npm run lint:js` checks JavaScript with ESLint.
+- `npm run lint:css` checks CSS with Stylelint and `stylelint-config-standard`.
+- `npm run format:css:check` checks CSS formatting with Prettier.
+- `npm run lint:recovery` checks the embedded recovery JavaScript and CSS with
+  the same browser ESLint rules and Stylelint configuration.
+
+CI runs each check as a separate step. Stylelint catches CSS errors and enforces
+CSS conventions; Prettier keeps the stylesheet readable with multiline rules
+and declarations.
+
+Lint, Windows and browser checks, cloud setup, and release tooling read
+`.node-version` to use current Node.js 24. The runtime test matrix explicitly
+covers Node.js 22 and 24, with source coverage on Node.js 22. Every CI dependency
+install uses `--engine-strict` so unsupported package engines fail instead of
+only warning. Release bundles still target Node.js 22; the development
+requirement does not raise the runtime minimum. CI does not separately test the
+initial 24.0.0 release.
+
+The recovery lint check starts an isolated loopback server with synthetic
+missing renderer assets and lints the fallback content it serves. It makes no
+GitHub requests, sends no desktop alerts, and checks invalid snippets to verify
+that the lint rules reject errors. Its tooling-only integration tests require
+development dependencies and stay outside the dependency-free Node test suite.
+The fallback remains embedded in the provider; no development build or runtime
+recovery-file reads are introduced.
+
+The Stylelint configuration retains prefix-style media queries and allows
+shared state and component rules to rely on specificity rather than source
+order. Inline exceptions preserve the existing WebKit select and screen-reader
+clipping fallbacks; unused exceptions fail lint.
+
+Run `npm run format:css` to format `src/**/*.css`, or
+`npm run format:css:check` to check formatting without writing files. These
+formatting commands do not touch JavaScript or other files. For autofixable
+Stylelint findings, run `npm run lint:css -- --fix` before `npm run format:css`.
+Keep source styles in plain CSS; release builds minify the stylesheet
+automatically.
 
 Coverage also works without `npm ci`. It enforces aggregate minimums of 95% for
 lines, branches, and functions, not per-file minimums. Every eligible runtime
@@ -70,7 +117,7 @@ specific Copilot build; reload and inspect the real extension after SDK changes.
 ## Copilot cloud agent and code review
 
 [Copilot setup steps](../.github/workflows/copilot-setup-steps.yml) prepare an
-Ubuntu 24.04 environment with Node.js 22, locked development dependencies,
+Ubuntu 24.04 environment with Node.js 24, locked development dependencies,
 and checksum-verified `actionlint`. Cloud-agent sessions and code reviews share
 this lightweight setup, without a separate review workflow. It checks tool
 availability without running the test suite, installing the extension, or
@@ -86,8 +133,8 @@ and accessibility validation still runs in CI's pre-provisioned container.
 
 Copilot uses the shared setup once the workflow is on the default branch. It
 does not configure local Copilot app/CLI sessions. Manual runs and path-filtered
-pull-request/main runs validate setup when the workflow or dependency manifests
-change; the agent still runs the checks relevant to its task.
+pull-request/main runs validate setup when the workflow, `.node-version`, or
+dependency manifests change; the agent still runs the checks relevant to its task.
 
 ## Packaging
 
