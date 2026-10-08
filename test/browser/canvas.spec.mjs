@@ -933,8 +933,8 @@ test("date groups span repositories and keep row-action focus in newest-first or
   await page.getByRole("combobox", { name: "Group By", exact: true }).selectOption("date");
   await expect(page.locator(".repo-name")).toHaveText(["January 10, 2026", "January 9, 2026"]);
   await expect(page.locator(".row .title")).toHaveText([2, 1, 0, 3].map(index => canvas.rows[index].subject.title));
-  await expect(page.locator(".repo-group .repo-read")).toHaveCount(0);
-  await expect(page.locator("#shown-actions .repo-read")).toBeVisible();
+  await expect(page.locator('.repo-group [data-batch-scope="date"].repo-read')).toHaveCount(2);
+  await expect(page.locator("#shown-actions")).toBeHidden();
   await page.keyboard.press("Escape");
   const read = page.getByRole("button", { name: "Mark as read: Needle tool", exact: true });
   await read.focus();

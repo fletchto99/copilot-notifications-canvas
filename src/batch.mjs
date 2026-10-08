@@ -14,6 +14,12 @@ function fields(input, keys, optional = []) {
     Object.keys(input).every(key => keys.includes(key) || optional.includes(key));
 }
 
+function validDate(value) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const timestamp = Date.parse(`${value}T00:00:00Z`);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString().slice(0, 10) === value;
+}
+
 export class NotificationBatch {
   constructor(inbox) {
     this.inbox = inbox;
@@ -47,22 +53,26 @@ export class NotificationBatch {
   start(input) {
     this.assertAvailable();
     const shown = input?.scope === "shown";
-    if (!fields(input, shown ? ["scope", "selectionKey"] : ["repository", "selectionKey"], ["action"]) ||
+    const dated = input?.scope === "date";
+    const required = dated ? ["scope", "date", "timeZone", "selectionKey"] :
+      shown ? ["scope", "selectionKey"] : ["repository", "selectionKey"];
+    if (!fields(input, required, ["action"]) ||
         (Object.hasOwn(input, "action") && !["read", "done"].includes(input.action)) ||
-        (!shown && (typeof input.repository !== "string" || input.repository.length > 256)) ||
+        (!shown && !dated && (typeof input.repository !== "string" || input.repository.length > 256)) ||
+        (dated && (!validDate(input.date) || typeof input.timeZone !== "string" || !input.timeZone || input.timeZone.length > 128)) ||
         typeof input.selectionKey !== "string" ||
         !/^[a-f0-9]{64}$/.test(input.selectionKey)) {
       throw new InboxError("invalid_selection", "Choose currently shown notifications and a read or done action.", 400);
     }
-    const selection = shown ? this.inbox.shownSelection() :
+    const selection = dated ? this.inbox.dateSelection(input.date, input.timeZone) : shown ? this.inbox.shownSelection() :
       this.inbox.groups().find(item => item.repository === input.repository);
     if (!selection || selection.selectionKey !== input.selectionKey) {
       throw new InboxError("selection_changed", "The shown selection changed. Review its updated count and try again.", 409);
     }
-    this.launch(selection.repository, selection.items, input.action ?? "read", shown ? "shown" : "repository");
+    this.launch(selection.repository, selection.items, input.action ?? "read", dated ? "date" : shown ? "shown" : "repository", input);
   }
 
-  launch(repository, items, action = "read", scope = "repository") {
+  launch(repository, items, action = "read", scope = "repository", { date, timeZone } = {}) {
     if (!items.length || items.some(item => !/^[1-9]\d{0,63}$/.test(item.id)) ||
         new Set(items.map(item => item.id)).size !== items.length) {
       throw new InboxError("invalid_selection", "The selected group contains no eligible notifications or invalid thread IDs.", 400);
@@ -74,6 +84,7 @@ export class NotificationBatch {
     const owner = this.inbox.client.reserveThreads(items.map(item => item.id));
     const operation = {
       token: randomUUID(), repository, scope, action, status: "running",
+      ...(scope === "date" ? { date, timeZone } : {}),
       searchActive: Boolean(this.inbox.filters.query.trim()),
       items: items.map(({ id, updatedAt, repository }) => ({ id, updatedAt, repository, result: "pending" })),
       inFlight: false, cancelled: false, error: null, owner, controller: new AbortController(),
@@ -153,7 +164,8 @@ export class NotificationBatch {
   retry(input) {
     this.assertAvailable();
     const operation = this.identify(input);
-    const selection = operation.scope === "shown" ? this.inbox.shownSelection() :
+    const selection = operation.scope === "date" ? this.inbox.dateSelection(operation.date, operation.timeZone) :
+      operation.scope === "shown" ? this.inbox.shownSelection() :
       this.inbox.groups().find(group => group.repository === operation.repository);
     const shown = new Set(selection?.items.map(item => item.id));
     const remaining = operation.items.filter(item => ["pending", "failed"].includes(item.result) &&
@@ -161,7 +173,7 @@ export class NotificationBatch {
     if (!remaining.length) {
       throw new InboxError("no_remaining", "No unchanged, shown notifications remain from this batch. Wait for the next automatic refresh, then review the current selection.", 409);
     }
-    this.launch(operation.repository, remaining, operation.action, operation.scope);
+    this.launch(operation.repository, remaining, operation.action, operation.scope, operation);
   }
 
   dismiss(input) {
@@ -176,6 +188,7 @@ export class NotificationBatch {
     const count = result => operation.items.filter(item => item.result === result).length;
     return {
       token: operation.token, repository: operation.repository, scope: operation.scope, action: operation.action, status: operation.status,
+      ...(operation.scope === "date" ? { date: operation.date, timeZone: operation.timeZone } : {}),
       total: operation.items.length, succeeded: count("succeeded"), failed: count("failed"),
       skipped: count("skipped"), notAttempted: count("pending") - Number(operation.inFlight),
       inFlight: operation.inFlight, searchActive: operation.searchActive,

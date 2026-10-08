@@ -1,5 +1,5 @@
 import { firstPage, RETRY_MS } from "./github.mjs";
-import { attentionCounts, groupThreads, InboxError, orderedThreads, validateFilters } from "./model.mjs";
+import { attentionCounts, groupThreads, groupThreadsByDate, InboxError, orderedThreads, validateFilters } from "./model.mjs";
 import { NotificationBatch, selectionKey } from "./batch.mjs";
 
 export class Inbox {
@@ -35,6 +35,13 @@ export class Inbox {
     return { ...selection, selectionKey: selectionKey(selection, this.filters) };
   }
 
+  dateSelection(date, timeZone) {
+    const shown = this.shownSelection();
+    const group = groupThreadsByDate(shown.items, timeZone).find(group => group.date === date);
+    // Bind the date subset to the same filtered snapshot the renderer used.
+    return group ? { ...group, repository: null, selectionKey: shown.selectionKey } : undefined;
+  }
+
   snapshot() {
     const items = this.loadedItems();
     const groups = this.groups(items);
@@ -59,7 +66,7 @@ export class Inbox {
 
   summary() {
     const { filters, groups, batch, selectionKey, ...state } = this.snapshot();
-    const { repository, token, ...batchCounts } = batch ?? {};
+    const { repository, token, date, timeZone, ...batchCounts } = batch ?? {};
     return { ...state, batch: batch ? batchCounts : null, mode: filters.mode, attention: filters.attention,
       searchActive: Boolean(filters.query), repositories: groups.length };
   }

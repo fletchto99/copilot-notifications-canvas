@@ -4,7 +4,7 @@ Unread GitHub notifications in the GitHub Copilot app, grouped by repository or
 date, or shown as a single newest-first list. Search, mark rows or repositories
 as read or done, and opt into desktop notifications or auto-open.
 
-![Unread Notifications canvas showing attention tabs with counts, search, settings, and a notification with a mark-as-read action](docs/images/unread-notifications.png)
+![Unread Notifications canvas showing attention tabs, two demo notifications, and row and repository read/done controls](docs/images/unread-notifications.png)
 
 ## Prerequisites
 
@@ -73,11 +73,12 @@ full procedure, verification requirements, and troubleshooting.
   In **repo** mode, the arrow beside **Mark N as read** opens a dropdown with
   **Mark N as done**, limited to that repository's shown, loaded attention and
   search matches.
-  In **none** and **date** grouping, the same split control appears beside the
-  unread/matching count. It targets all loaded attention and search matches
-  across repositories and dates, including collapsed date groups, but never
-  unloaded notifications. It is hidden when no notifications match.
-  Date grouping keeps **Collapse all** alongside it.
+  In **none** grouping, the same split control appears beside the unread/matching
+  count and targets all loaded attention and search matches across repositories.
+  In **date** grouping, each date header has its own split control, limited to
+  that browser-local calendar day's loaded matches, including when collapsed.
+  Date grouping keeps **Collapse all** in the count row, without a list-wide action.
+  Neither action includes unloaded notifications.
   Read stays the default; choosing Done never changes future defaults.
   All batch actions show progress, allow stopping remaining requests, and
   retry only unchanged, still-shown remaining items with the original action.

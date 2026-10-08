@@ -44,6 +44,118 @@ function start(inbox, repository = "example/widgets", action = "read") {
   return { token: inbox.batch.snapshot().token };
 }
 
+function dateSelection(inbox, date, timeZone = "UTC", action = "done") {
+  return { scope: "date", date, timeZone, action, selectionKey: inbox.snapshot().selectionKey };
+}
+
+test("date batches select one local calendar day across repositories, including 23- and 25-hour days", async t => {
+  for (const [date, start, end] of [
+    ["2026-03-08", "2026-03-08T08:00:00Z", "2026-03-09T07:00:00Z"],
+    ["2026-11-01", "2026-11-01T07:00:00Z", "2026-11-02T08:00:00Z"],
+  ]) {
+    for (const action of ["read", "done"]) {
+      const rows = [
+        thread("1", { updated_at: new Date(Date.parse(start) - 1).toISOString() }),
+        thread("2", { updated_at: start, repository: { full_name: "example/alpha" } }),
+        thread("3", { updated_at: new Date(Date.parse(end) - 1).toISOString(), repository: { full_name: "example/beta" } }),
+        thread("4", { updated_at: end }),
+      ];
+      const { inbox, writes, methods, client } = await fixture({ rows });
+      t.after(() => inbox.close());
+      inbox.batch.start(dateSelection(inbox, date, "America/Los_Angeles", action));
+      assert.equal(inbox.batch.snapshot().scope, "date");
+      assert.equal(inbox.batch.snapshot().date, date);
+      assert.equal(inbox.batch.snapshot().timeZone, "America/Los_Angeles");
+      assert.equal(inbox.batch.snapshot().total, 2);
+      assert.doesNotMatch(JSON.stringify(inbox.summary()), /"date":|"timeZone":|America\/|example\/|selectionKey|"token"|"items"/);
+      await inbox.batch.done;
+      assert.deepEqual(writes, ["/notifications/threads/3", "/notifications/threads/2"]);
+      assert.deepEqual(methods, [action === "done" ? "DELETE" : "PATCH", action === "done" ? "DELETE" : "PATCH"]);
+      assert.deepEqual(inbox.loadedItems().map(item => item.id), ["4", "1"]);
+      assert.equal(client.threadReservations.size, 0);
+    }
+  }
+});
+
+test("date batch inputs reject invalid days, zones, and stale filtered snapshots without writes", async t => {
+  const { inbox, writes } = await fixture();
+  t.after(() => inbox.close());
+  const input = dateSelection(inbox, "2026-01-10");
+  for (const value of [null, "2026-2-10", "2026-02-30", "2026-13-01"]) {
+    assert.throws(() => inbox.batch.start({ ...input, date: value }), { code: "invalid_selection" });
+  }
+  for (const value of [undefined, null, "", "x".repeat(129)]) {
+    assert.throws(() => inbox.batch.start({ ...input, timeZone: value }), { code: "invalid_selection" });
+  }
+  assert.throws(() => inbox.batch.start({ ...input, timeZone: "Invalid/Zone" }), { code: "invalid_time_zone" });
+  assert.throws(() => inbox.batch.start({ ...input, repository: "example/widgets" }), { code: "invalid_selection" });
+  assert.throws(() => inbox.batch.start({ ...input, ids: ["1"] }), { code: "invalid_selection" });
+  assert.throws(() => inbox.batch.start({ ...input, date: "2026-01-09" }), { code: "selection_changed" });
+  assert.throws(() => inbox.batch.start({ ...input, selectionKey: inbox.groups()[0].selectionKey }), { code: "selection_changed" });
+  await inbox.setFilters({ attention: "review_requested" });
+  assert.throws(() => inbox.batch.start(input), { code: "selection_changed" });
+  assert.deepEqual(writes, []);
+});
+
+test("date retries preserve the original day and zone and cannot reach changed dates or new arrivals", async t => {
+  let attempts = 0;
+  const rows = [
+    thread("1", { updated_at: "2026-01-12T10:00:00Z", reason: "mention" }),
+    thread("2", { updated_at: "2026-01-12T11:00:00Z", reason: "mention", repository: { full_name: "example/other" } }),
+    thread("3", { updated_at: "2026-01-12T12:00:00Z", reason: "mention" }),
+    thread("9", { updated_at: "2026-01-13T12:00:00Z", reason: "mention" }),
+  ];
+  const { inbox, writes, methods, advance } = await fixture({ run: args => {
+    if (args.includes("GET")) return http(rows);
+    return ++attempts === 2 ? http({}, {}, 500) : "HTTP/2 204 No Content\r\n\r\n";
+  } });
+  t.after(() => inbox.close());
+  inbox.batch.start(dateSelection(inbox, "2026-01-12"));
+  const token = { token: inbox.batch.snapshot().token };
+  await inbox.batch.done;
+  assert.equal(inbox.batch.snapshot().succeeded, 1);
+  assert.equal(inbox.batch.snapshot().failed, 1);
+  inbox.pages[0].items.find(item => item.id === "2").updatedAt = "2026-01-13T11:00:00.000Z";
+  inbox.pages[0].items.push(...normalizeThreads([thread("4", { updated_at: "2026-01-12T13:00:00Z", reason: "mention" })]));
+  await inbox.setFilters({ attention: "mentioned" });
+  assert.throws(() => inbox.batch.retry({ ...token, date: "2026-01-13" }), { code: "invalid_batch" });
+  assert.throws(() => inbox.batch.retry({ ...token, timeZone: "Asia/Tokyo" }), { code: "invalid_batch" });
+  advance();
+  advance();
+  inbox.batch.retry(token);
+  assert.equal(inbox.batch.snapshot().date, "2026-01-12");
+  assert.equal(inbox.batch.snapshot().timeZone, "UTC");
+  assert.equal(inbox.batch.snapshot().scope, "date");
+  assert.equal(inbox.batch.snapshot().action, "done");
+  assert.equal(inbox.batch.snapshot().total, 1);
+  await inbox.batch.done;
+  assert.deepEqual(writes, ["/notifications/threads/3", "/notifications/threads/2", "/notifications/threads/1"]);
+  assert.deepEqual(methods, ["DELETE", "DELETE", "DELETE"]);
+  assert.deepEqual(inbox.loadedItems().map(item => item.id).sort(), ["2", "4", "9"]);
+});
+
+test("the protected date batch HTTP path dispatches only the selected day's threads", async t => {
+  const { inbox, writes } = await fixture({ rows: [
+    thread("1"), thread("2", { repository: { full_name: "example/other" } }), laterThread("3"),
+  ] });
+  const server = await startServer(inbox);
+  t.after(() => server.close());
+  const url = new URL(server.url);
+  const response = await fetch(`${url.origin}/api/batch/start`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${url.hash.slice(1)}`, Origin: url.origin, "Content-Type": "application/json" },
+    body: JSON.stringify(dateSelection(inbox, "2026-01-10")),
+  });
+  assert.equal(response.status, 202);
+  const snapshot = await response.json();
+  assert.equal(snapshot.batch.scope, "date");
+  assert.equal(snapshot.batch.date, "2026-01-10");
+  assert.equal(snapshot.batch.total, 2);
+  await inbox.batch.done;
+  assert.deepEqual(writes, ["/notifications/threads/1", "/notifications/threads/2"]);
+  assert.deepEqual(inbox.loadedItems().map(item => item.id), ["3"]);
+});
+
 test("Done batches issue spaced DELETEs for only loaded attention and search matches and synchronize other panels", async t => {
   const rows = [
     thread("1", { reason: "mention" }), thread("2", { reason: "team_mention" }),

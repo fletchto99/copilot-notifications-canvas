@@ -23,7 +23,8 @@ async function openFiltered(page, canvas, groupBy) {
   await expect(page.locator(".row")).toHaveCount(3);
 }
 
-for (const groupBy of ["none", "date"]) {
+test.describe("ungrouped shown batches", () => {
+  const groupBy = "none";
   for (const action of ["read", "done"]) {
     test(`${groupBy} view batches ${action} only for loaded matches across repositories and dates`, async ({ page, canvas }) => {
       await openFiltered(page, canvas, groupBy);
@@ -31,13 +32,7 @@ for (const groupBy of ["none", "date"]) {
       await expect(root).toBeVisible();
       await expect(root.locator(".repo-read")).toHaveText("Mark 3 as read");
       await expect(page.locator(".repo-group .repo-read")).toHaveCount(0);
-      if (groupBy === "date") {
-        await page.getByRole("button", { name: "Collapse all", exact: true }).click();
-        await expect(page.locator(".row:visible")).toHaveCount(0);
-        await expect(page.getByRole("button", { name: "Expand all", exact: true })).toBeVisible();
-      } else {
-        await expect(page.locator("#collapse")).toBeHidden();
-      }
+      await expect(page.locator("#collapse")).toBeHidden();
       expect(canvas.writes).toEqual([]);
       if (action === "done") {
         await page.getByRole("button", { name: "More actions for shown notifications", exact: true }).focus();
@@ -66,8 +61,7 @@ for (const groupBy of ["none", "date"]) {
       const more = root.getByRole("button", { name: "More actions for shown notifications", exact: true });
       await expect(root.locator(".repo-read")).toHaveCSS("color", await more.evaluate(node => getComputedStyle(node).color));
       await expect(page.locator("#count")).toHaveText("50 unread \u00b7 3 matching");
-      if (groupBy === "date") await expect(page.locator("#collapse")).toBeVisible();
-      else await expect(page.locator("#collapse")).toBeHidden();
+      await expect(page.locator("#collapse")).toBeHidden();
       const status = await page.locator(".status-line").boundingBox();
       const count = await page.locator("#count").boundingBox();
       const actions = await page.locator(".status-actions").boundingBox();
@@ -96,12 +90,12 @@ for (const groupBy of ["none", "date"]) {
       expect(canvas.writes).toEqual([]);
     });
   }
-}
+});
 
 test("shown batches stop and retry their original scope after switching to repository grouping", async ({ page, canvas }) => {
   canvas.rows.splice(3);
   canvas.rows[1].repository.full_name = "example/tools";
-  await canvas.preferences.update({ groupBy: "date" });
+  await canvas.preferences.update({ groupBy: "none" });
   await page.goto(canvas.url);
   let release;
   let entered;
@@ -160,21 +154,19 @@ test("failed shown batches retry only their unchanged selection after backoff", 
 
 test.describe("packaged list-wide controls", () => {
   test.use({ packaged: true });
-  for (const groupBy of ["none", "date"]) {
-    test(`installed bundle supports ${groupBy} list-wide Done`, async ({ page, canvas }) => {
-      canvas.rows.splice(2);
-      canvas.rows[1].repository.full_name = "example/tools";
-      await page.goto(canvas.url);
-      await page.getByLabel("Settings", { exact: true }).click();
-      await page.getByRole("combobox", { name: "Group By", exact: true }).selectOption(groupBy);
-      await page.keyboard.press("Escape");
-      const more = page.getByRole("button", { name: "More actions for shown notifications", exact: true });
-      await expect(more).toBeVisible();
-      await more.click();
-      await page.getByRole("button", { name: "Mark 2 shown, loaded notifications as done", exact: true }).click();
-      await expect(page.locator(".row")).toHaveCount(0);
-      await expect(page.locator("#shown-actions")).toBeHidden();
-      expect(canvas.doneWrites).toEqual(["1", "2"]);
-    });
-  }
+  test("installed bundle supports ungrouped list-wide Done", async ({ page, canvas }) => {
+    canvas.rows.splice(2);
+    canvas.rows[1].repository.full_name = "example/tools";
+    await page.goto(canvas.url);
+    await page.getByLabel("Settings", { exact: true }).click();
+    await page.getByRole("combobox", { name: "Group By", exact: true }).selectOption("none");
+    await page.keyboard.press("Escape");
+    const more = page.getByRole("button", { name: "More actions for shown notifications", exact: true });
+    await expect(more).toBeVisible();
+    await more.click();
+    await page.getByRole("button", { name: "Mark 2 shown, loaded notifications as done", exact: true }).click();
+    await expect(page.locator(".row")).toHaveCount(0);
+    await expect(page.locator("#shown-actions")).toBeHidden();
+    expect(canvas.doneWrites).toEqual(["1", "2"]);
+  });
 });

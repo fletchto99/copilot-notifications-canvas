@@ -19,36 +19,33 @@ function controls(ui) {
   return { root, read, more, done, menu: done?.parentNode };
 }
 
-test("ungrouped and date views offer bounded read and Done actions across repositories", async t => {
-  for (const groupBy of ["none", "date"]) {
-    for (const action of ["read", "done"]) {
-      const ui = await renderer({ storedSettings: { groupBy }, initialRows: rows });
-      t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
-      assert.equal(controls(ui).root.hidden, false);
-      assert.equal(controls(ui).read.textContent, "Mark 3 as read");
-      assert.equal(ui.ids.get("collapse").hidden, groupBy === "none");
-      await runInContext('update("filters", { attention: "mentioned", query: "notification" })', ui.context);
-      const { read, more, done } = controls(ui);
-      assert.equal(read.textContent, "Mark 2 as read");
-      assert.equal(done.textContent, "Mark 2 as done");
-      assert.equal(read.attributes["aria-label"], "Mark 2 shown, loaded notifications as read");
-      if (groupBy === "date") ui.ids.get("collapse").events.click();
-      if (action === "done") more.events.click();
-      await (action === "done" ? done : read).events.click();
-      const request = ui.calls.find(call => call.path === "/api/batch/start");
-      const input = JSON.parse(request.options.body);
-      assert.equal(input.scope, "shown");
-      assert.equal(input.action, action);
-      assert.equal(Object.hasOwn(input, "repository"), false);
-      await ui.inbox.batch.done;
-      await runInContext("update()", ui.context);
-      assert.deepEqual(action === "done" ? ui.deletions : ui.patches, ["/notifications/threads/1", "/notifications/threads/2"]);
-      assert.deepEqual(action === "done" ? ui.patches : ui.deletions, []);
-      assert.equal(ui.inbox.summary().loaded, 1);
-      assert.equal(controls(ui).root.hidden, true);
-      assert.equal(ui.ids.get("empty-title").textContent, "No matches in loaded notifications");
-      assert.equal(ui.calls.some(call => call.path === "/api/settings" && call.options.body), false);
-    }
+test("ungrouped view offers bounded read and Done actions across repositories", async t => {
+  for (const action of ["read", "done"]) {
+    const ui = await renderer({ storedSettings: { groupBy: "none" }, initialRows: rows });
+    t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+    assert.equal(controls(ui).root.hidden, false);
+    assert.equal(controls(ui).read.textContent, "Mark 3 as read");
+    assert.equal(ui.ids.get("collapse").hidden, true);
+    await runInContext('update("filters", { attention: "mentioned", query: "notification" })', ui.context);
+    const { read, more, done } = controls(ui);
+    assert.equal(read.textContent, "Mark 2 as read");
+    assert.equal(done.textContent, "Mark 2 as done");
+    assert.equal(read.attributes["aria-label"], "Mark 2 shown, loaded notifications as read");
+    if (action === "done") more.events.click();
+    await (action === "done" ? done : read).events.click();
+    const request = ui.calls.find(call => call.path === "/api/batch/start");
+    const input = JSON.parse(request.options.body);
+    assert.equal(input.scope, "shown");
+    assert.equal(input.action, action);
+    assert.equal(Object.hasOwn(input, "repository"), false);
+    await ui.inbox.batch.done;
+    await runInContext("update()", ui.context);
+    assert.deepEqual(action === "done" ? ui.deletions : ui.patches, ["/notifications/threads/1", "/notifications/threads/2"]);
+    assert.deepEqual(action === "done" ? ui.patches : ui.deletions, []);
+    assert.equal(ui.inbox.summary().loaded, 1);
+    assert.equal(controls(ui).root.hidden, true);
+    assert.equal(ui.ids.get("empty-title").textContent, "No matches in loaded notifications");
+    assert.equal(ui.calls.some(call => call.path === "/api/settings" && call.options.body), false);
   }
 });
 
@@ -73,9 +70,9 @@ test("list-wide controls are absent in repository and empty views and follow gro
   grouping.value = "date";
   grouping.events.change();
   await settle();
-  assert.equal(controls(ui).root.hidden, false);
+  assert.equal(controls(ui).root.hidden, true);
   assert.equal(ui.ids.get("collapse").hidden, false);
-  assert.equal(controls(ui).read.textContent, "Mark 3 as read");
+  assert.equal(ui.ids.get("groups").querySelectorAll("button").filter(node => node.dataset.batchScope === "date" && node.dataset.batchAction === "read").length, 3);
 });
 
 test("list-wide menus retain focus on unchanged polls and close when the selected items change", async t => {
@@ -99,7 +96,7 @@ test("list-wide menus retain focus on unchanged polls and close when the selecte
 });
 
 test("a stale list-wide selection reports the change without silently broadening the batch", async t => {
-  const ui = await renderer({ storedSettings: { groupBy: "date" }, initialRows: rows });
+  const ui = await renderer({ storedSettings: { groupBy: "none" }, initialRows: rows });
   t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
   controls(ui).more.events.click();
   const old = controls(ui).done;
@@ -113,7 +110,7 @@ test("a stale list-wide selection reports the change without silently broadening
 
 test("shown batch progress, cancellation and retry keep the original scope after grouping changes", async t => {
   let release;
-  const ui = await renderer({ storedSettings: { groupBy: "date" }, initialRows: rows,
+  const ui = await renderer({ storedSettings: { groupBy: "none" }, initialRows: rows,
     onWrite: (_path, count, method) => {
       assert.equal(method, "DELETE");
       return count === 1 ? new Promise(resolve => { release = () => resolve("HTTP/2 204 No Content\r\n\r\n"); })

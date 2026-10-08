@@ -1,4 +1,4 @@
-import { attentionFilters, notificationTitle, orderedThreads } from "./model.mjs";
+import { attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads } from "./model.mjs";
 
 const $ = id => document.getElementById(id);
 const token = location.hash.slice(1);
@@ -392,7 +392,7 @@ function renderBatch() {
   }
   const running = ["running", "stopping"].includes(batch.status);
   $("batch-progress").className = running ? "batch-running" : "batch-progress";
-  const target = batch.scope === "shown" ? "Shown notifications" : batch.repository;
+  const target = batch.scope === "shown" ? "Shown notifications" : batch.scope === "date" ? dateLabel(batch.date) : batch.repository;
   $("batch-title").textContent = `${target}: ${batch.status === "stopping" ? "Stopping after the current request" :
     running ? `Marking as ${batch.action}...` : `Some notifications remain to mark as ${batch.action}`}`;
   $("batch-counts").hidden = running;
@@ -555,9 +555,12 @@ function renderControls() {
     }
     if (button.dataset.batchAction) {
       const batch = batchLocked() && state.batch.scope === button.dataset.batchScope &&
-        (state.batch.scope === "shown" || state.batch.repository === button.dataset.repository) ? state.batch : null;
+        (state.batch.scope === "date"
+          ? state.batch.date === button.dataset.batchDate && state.batch.timeZone === button.dataset.batchTimeZone
+          : state.batch.scope === "shown" || state.batch.repository === button.dataset.repository) ? state.batch : null;
       const progress = batch ? batch.status === "stopping" ? "Stopping..." : `Marking ${batch.succeeded}/${batch.total}...` : null;
-      const destination = button.dataset.repository ? ` in ${button.dataset.repository}` : "";
+      const destination = button.dataset.batchDate ? ` on ${dateLabel(button.dataset.batchDate)}` :
+        button.dataset.repository ? ` in ${button.dataset.repository}` : "";
       button.textContent = progress ?? `Mark ${button.dataset.count} as ${button.dataset.batchAction}`;
       button.setAttribute("aria-label", progress ? `${progress} as ${batch.action}${destination}` :
         `Mark ${button.dataset.count} shown, loaded notifications as ${button.dataset.batchAction}${destination}`);
@@ -580,30 +583,16 @@ function displayGroups() {
   }
   const items = orderedThreads(groups.flatMap(group => group.items));
   if (groupBy === "none") return items.length ? [{ items }] : [];
-  const dates = new Map();
-  for (const item of items) {
-    const date = new Date(item.updatedAt);
-    const key = `date:${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
-    let group = dates.get(key);
-    if (!group) {
-      group = {
-        key,
-        label: date.toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" }),
-        unread: 0,
-        items: [],
-      };
-      dates.set(key, group);
-    }
-    group.items.push(item);
-    group.unread++;
-  }
-  return [...dates.values()];
+  return groupThreadsByDate(items, Intl.DateTimeFormat().resolvedOptions().timeZone)
+    .map(group => ({ ...group, selectionKey: state.selectionKey }));
 }
 
-function createBatchControls({ repository, selectionKey, count, menuId }) {
-  const scope = repository ? "repository" : "shown";
-  const key = repository ?? "shown";
-  const name = repository ?? "shown notifications";
+function createBatchControls({ repository, date, timeZone, selectionKey, count, menuId }) {
+  const scope = date ? "date" : repository ? "repository" : "shown";
+  const key = repository ?? (date ? `date:${date}` : "shown");
+  const name = repository ?? (date ? dateLabel(date) : "shown notifications");
+  const destination = date ? ` on ${name}` : repository ? ` in ${repository}` : "";
+  const target = date ? { scope: "date", date, timeZone } : repository ? { repository } : { scope: "shown" };
   const controls = element("div", "repo-actions");
   controls.addEventListener("mousedown", event => {
     // Do not let WebKit focus the surrounding tabpanel and dismiss an open menu before click.
@@ -628,17 +617,21 @@ function createBatchControls({ repository, selectionKey, count, menuId }) {
   for (const [button, action] of [[read, "read"], [done, "done"]]) {
     button.type = "button";
     if (repository) button.dataset.repository = repository;
+    if (date) {
+      button.dataset.batchDate = date;
+      button.dataset.batchTimeZone = timeZone;
+    }
     button.dataset.count = String(count);
     button.dataset.batchScope = scope;
     button.dataset.batchAction = action;
-    button.setAttribute("aria-label", `Mark ${count} shown, loaded notifications as ${action}${repository ? ` in ${repository}` : ""}`);
+    button.setAttribute("aria-label", `Mark ${count} shown, loaded notifications as ${action}${destination}`);
     button.disabled = busy || marking.size > 0 || batchBusy || batchLocked();
     button.addEventListener("click", () => {
       if (busy || batchBusy || batchLocked() || marking.size || (action === "done" && menu.hidden)) return;
       // WebKit pointer clicks can blur the button before this handler.
       button.focus();
       batchFocusKey = read.dataset.focusKey;
-      return batchRequest("start", { ...(repository ? { repository } : { scope: "shown" }), selectionKey, action });
+      return batchRequest("start", { ...target, selectionKey, action });
     });
   }
   more.disabled = read.disabled;
@@ -650,7 +643,7 @@ function createBatchControls({ repository, selectionKey, count, menuId }) {
 
 function renderShownControls() {
   const container = $("shown-actions");
-  const key = state?.matching && ["none", "date"].includes(preferences?.groupBy) ? state.selectionKey : null;
+  const key = state?.matching && preferences?.groupBy === "none" ? state.selectionKey : null;
   if (key === shownControlsKey) return;
   const previousFocus = document.activeElement;
   const hadFocus = container.contains(previousFocus);
@@ -700,9 +693,10 @@ function renderGroups(groups, fallbackFocusKey) {
         $("collapse").textContent = groups.some(item => !collapsed.has(item.key)) ? "Collapse all" : "Expand all";
       });
       header.append(disclosure);
-      if (group.repository) {
+      if (group.repository || group.date) {
         header.append(createBatchControls({
-          repository: group.repository, selectionKey: group.selectionKey, count: group.items.length, menuId: `repo-menu-${index}`,
+          repository: group.repository, date: group.date, timeZone: group.timeZone,
+          selectionKey: group.selectionKey, count: group.items.length, menuId: `repo-menu-${index}`,
         }));
       }
       section.append(header, rows);

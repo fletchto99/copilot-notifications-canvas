@@ -18,7 +18,7 @@ framework or separately installed runtime SDK.
 | `.github/extensions/github-notifications/extension.mjs` | Development discovery shim importing `src/extension.mjs`. Keep it thin. |
 | `src/extension.mjs` | SDK registration, agent-facing actions, panel lifecycle, and shared services. |
 | `src/github.mjs`, `src/model.mjs` | GitHub CLI requests, caching, rate limits, validation, normalization, and grouping. |
-| `src/inbox.mjs`, `src/batch.mjs` | Loaded-page state, aggregate summaries, and row, repository, and shown-list read/done actions. |
+| `src/inbox.mjs`, `src/batch.mjs` | Loaded-page state, aggregate summaries, and row, repository, date, and shown-list read/done actions. |
 | `src/server.mjs`, `src/assets.mjs` | Protected per-panel loopback HTTP server, asset snapshots, and startup recovery. |
 | `src/index.html`, `src/app.mjs`, `src/styles.css` | Renderer, controls, accessibility, and themes. |
 | `src/settings.mjs`, `src/lock.mjs`, `src/startup.mjs` | User-wide preferences, cross-process locking, and session auto-open. |
@@ -75,11 +75,13 @@ output. Development loads source without a build; release builds bundle
 - Search and counts cover **loaded unread items**, not the entire GitHub inbox.
   Refresh reconciles loaded pages; a failed refresh must not discard usable data.
 - Read and done updates require explicit panel actions. Row actions target a
-  loaded unread thread; repository and shown-list batches target the loaded
+  loaded unread thread; repository, date, and shown-list batches target the loaded
   attention/search matches identified by their selection key. Shown-list batches
   may span repositories, but never fetch or include unloaded items. Read is the
   default, and retries retain the original scope and explicitly chosen action
   without adding new items. Keep selection keys out of agent-facing summaries.
+  Date actions use the renderer's time zone, not the provider's local zone, and
+  retain that date and zone through retries. Keep date context out of agent results.
   Preserve selection checks, per-thread writes, cross-panel reservations,
   cancellation, and retry rules. Never replace this with an unbounded mark-all-read
   endpoint or an agent-facing write action.
