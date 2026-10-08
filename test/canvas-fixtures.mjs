@@ -16,6 +16,7 @@ export async function createCanvasFixture({
   const root = await mkdtemp(join(tmpdir(), "notification-fixture-"));
   const directory = join(root, "home", "extensions", "github-notifications", "artifacts");
   const writes = [];
+  const doneWrites = [];
   const deliveries = [];
   const requests = [];
   const errors = [];
@@ -45,13 +46,14 @@ export async function createCanvasFixture({
     if (endpoint === "/repos/fletchto99/copilot-notifications-canvas/releases/latest" && args.includes("GET")) {
       return http({ tag_name: `v${CURRENT_VERSION}`, draft: false, prerelease: false });
     }
-    if (args.includes("PATCH")) {
+    if (args.includes("PATCH") || args.includes("DELETE")) {
       const match = /^\/notifications\/threads\/(\d+)$/.exec(endpoint);
       const row = rows.find(item => item.id === match?.[1]);
       assert.ok(row?.unread, `Unexpected or repeated synthetic write: ${endpoint}`);
       row.unread = false;
       writes.push(row.id);
-      return "HTTP/2 205 Reset Content\r\n\r\n";
+      if (args.includes("DELETE")) doneWrites.push(row.id);
+      return `HTTP/2 ${args.includes("DELETE") ? 204 : 205} Synthetic\r\n\r\n`;
     }
     const url = new URL(endpoint, "https://api.github.com");
     assert.ok(args.includes("GET") && url.origin === "https://api.github.com" && url.pathname === "/notifications",
@@ -112,7 +114,7 @@ export async function createCanvasFixture({
       if (ready) desktop.add("synthetic-fixture");
     });
     return {
-      root, url: server.url, rows, writes, requests, preferences, deliveries, desktop, errors, warnings, close,
+      root, url: server.url, rows, writes, doneWrites, requests, preferences, deliveries, desktop, errors, warnings, close,
       setRequestHook: hook => { requestHook = hook; },
       advance: ms => { offset += ms; return Date.now() + offset; },
       recoverAssets: () => { assetsUnavailable = false; },

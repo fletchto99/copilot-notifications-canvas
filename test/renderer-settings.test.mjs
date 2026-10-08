@@ -371,7 +371,7 @@ test("settings failures are visible and do not claim a saved toggle", async () =
 
 test("Group By is a labeled select immediately above Check for updates and defaults to repo", async () => {
   assert.match(html, /<div class="select-setting">\s*<label for="group-by">Group By<\/label>\s*<select id="group-by" disabled>/);
-  assert.match(html, /<option value="none">none<\/option>\s*<option value="repo" selected>repo<\/option>\s*<option value="date">date<\/option>/);
+  assert.match(html, /<option value="none">All notifications<\/option>\s*<option value="repo" selected>Repository<\/option>\s*<option value="date">Date<\/option>/);
   assert.match(html, /<select id="group-by"[^>]*>[\s\S]*?<\/select>\s*<\/div>\s*<button id="check-updates"/);
   const ui = await renderer();
   assert.equal(ui.ids.get("group-by").value, "repo");
@@ -381,7 +381,7 @@ test("Group By is a labeled select immediately above Check for updates and defau
   assert.equal(ui.ids.get("settings").open, true);
 });
 
-test("none lists all notifications globally newest first with repository metadata and no group controls", async () => {
+test("none lists notifications globally newest first in one group with repository metadata", async () => {
   const ui = await renderer({ storedSettings: { groupBy: "none" }, initialRows: [
     thread("1", { repository: { full_name: "example/alpha" }, updated_at: "2026-01-01T00:00:00Z" }),
     thread("4", { repository: { full_name: "example/zulu" }, updated_at: "2026-01-03T00:00:00Z" }),
@@ -392,12 +392,16 @@ test("none lists all notifications globally newest first with repository metadat
   const list = ui.ids.get("groups");
   assert.equal(ui.ids.get("group-by").value, "none");
   assert.equal(list.children.length, 1);
-  assert.equal(list.children[0].className, "notification-list");
-  assert.equal(list.querySelectorAll("section").length, 0);
-  assert.deepEqual(list.querySelectorAll("button").map(node => node.dataset.threadId), ["2", "4", "3", "1"]);
+  assert.equal(list.children[0].className, "repo-group");
+  assert.equal(list.querySelectorAll("section").length, 1);
+  assert.equal(list.querySelectorAll(".repo-name")[0].textContent, "All notifications");
+  for (const action of ["read", "done"]) {
+    assert.deepEqual(list.querySelectorAll("button").filter(node => node.dataset.action === action)
+      .map(node => node.dataset.threadId), ["2", "4", "3", "1"]);
+  }
   assert.deepEqual(list.querySelectorAll("span").filter(node => node.className === "repository").map(node => node.textContent),
     ["example/zulu", "example/zulu", "example/alpha", "example/alpha"]);
-  assert.equal(ui.ids.get("collapse").hidden, true);
+  assert.equal(ui.ids.get("collapse").hidden, false);
   assert.equal(list.attributes["aria-label"], "Notifications, newest first");
   assert.match(ui.ids.get("subtitle").textContent, /Newest notifications first/);
   const first = list.querySelectorAll("a")[0];
@@ -464,10 +468,10 @@ test("grouping changes apply immediately, persist across panels and restore repo
     assert.deepEqual(storedSettings, { autoOpen: true, darkMode: false, groupBy });
     const reopened = await renderer({ storedSettings });
     assert.equal(reopened.ids.get("group-by").value, groupBy);
-    assert.equal(reopened.ids.get("collapse").hidden, groupBy === "none");
+    assert.equal(reopened.ids.get("collapse").hidden, false);
     reopened.window.events.pagehide();
   }
-  assert.deepEqual(list.querySelectorAll("button").filter(node => node.dataset.repository).map(node => node.dataset.repository),
+  assert.deepEqual(list.querySelectorAll("button").filter(node => node.dataset.batchAction === "read").map(node => node.dataset.repository),
     ["example/alpha", "example/zulu"]);
   assert.equal(list.querySelectorAll("button").find(node => node.dataset.focusKey === "repo:example/alpha").attributes["aria-expanded"], "false");
   const posts = ui.calls.filter(call => call.path === "/api/settings" && call.options.body);
@@ -500,7 +504,7 @@ test("failed grouping saves retain the prior list, restore the select and report
   select.events.change();
   await settle();
   assert.equal(select.value, "none");
-  assert.equal(ui.ids.get("collapse").hidden, true);
+  assert.equal(ui.ids.get("collapse").hidden, false);
   assert.equal(ui.ids.get("settings-error").hidden, true);
 });
 
@@ -519,7 +523,7 @@ test("a pending grouping save blocks duplicates and does not steal newly moved f
   ui.ids.get("search").focus();
   release();
   await settle();
-  assert.equal(ui.ids.get("groups").children[0].className, "notification-list");
+  assert.equal(ui.ids.get("groups").querySelectorAll(".repo-name")[0].textContent, "All notifications");
   assert.equal(ui.document.activeElement, ui.ids.get("search"));
 });
 
@@ -545,7 +549,7 @@ test("a grouping change during a background settings read is queued without chan
   await settle();
   assert.equal(ui.document.activeElement, select);
   assert.equal(select.value, "none");
-  assert.equal(ui.ids.get("groups").children[0].className, "notification-list");
+  assert.equal(ui.ids.get("groups").querySelectorAll(".repo-name")[0].textContent, "All notifications");
   assert.deepEqual(storedSettings, { groupBy: "none", desktopNotifications: true, desktopSound: "Ping" });
   assert.deepEqual(ui.calls.filter(call => call.path === "/api/settings" && call.options.body)
     .map(call => JSON.parse(call.options.body)), [{ groupBy: "none" }]);
@@ -605,7 +609,7 @@ test("row reads in none and date modes follow the displayed order for focus", as
       thread("2", { repository: { full_name: "example/zulu" }, updated_at: "2026-01-03T12:00:00Z" }),
       thread("3", { repository: { full_name: "example/alpha" }, updated_at: "2026-01-02T12:00:00Z" }),
     ] });
-    const readButtons = () => ui.ids.get("groups").querySelectorAll("button").filter(node => node.dataset.threadId);
+    const readButtons = () => ui.ids.get("groups").querySelectorAll("button").filter(node => node.dataset.action === "read");
     const first = readButtons()[0];
     first.focus();
     await first.events.click();

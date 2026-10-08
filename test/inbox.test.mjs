@@ -66,7 +66,7 @@ test("each snapshot loads items once and observes subsequent changes", async t =
   assert.deepEqual(snapshot.groups, inbox.groups());
 
   loadedItems.mock.resetCalls();
-  inbox.onRead("1");
+  inbox.onThreadUpdated("1");
   const updated = inbox.snapshot();
   assert.equal(loadedItems.mock.callCount(), 1);
   assert.equal(updated.loaded, 0);
@@ -261,13 +261,14 @@ test("closed inbox actions reject without queuing requests or restoring loaded r
     () => inbox.more(),
     () => inbox.setFilters({ query: "widgets" }),
     () => inbox.markRead({ id: "1" }),
+    () => inbox.markDone({ id: "1" }),
   ]) {
     await assert.rejects(action(), { code: "closed" });
   }
   assert.equal(calls.length, 1);
   assert.equal(inbox.summary().loaded, 0);
-  assert.equal(client.readListeners.size, 0);
-  assert.equal(client.pendingReads.size, 0);
+  assert.equal(client.threadListeners.size, 0);
+  assert.equal(client.pendingThreads.size, 0);
 });
 
 test("pending refreshes report loading with the previous rows and reject row writes", async () => {
@@ -289,6 +290,7 @@ test("pending refreshes report loading with the previous rows and reject row wri
     assert.equal(inbox.summary().status, "loading");
     assert.equal(inbox.summary().loaded, 1);
     await assert.rejects(inbox.markRead({ id: "1" }), { code: "busy" });
+    await assert.rejects(inbox.markDone({ id: "1" }), { code: "busy" });
     assert.equal(calls.length, 2);
     assert.ok(calls.every(args => args.includes("GET")));
   } finally {
@@ -323,6 +325,7 @@ test("active repository batches block refresh, pagination and row reads without 
       () => inbox.refresh({ force: true }),
       () => inbox.more(),
       () => inbox.markRead({ id: "2" }),
+      () => inbox.markDone({ id: "2" }),
     ]) {
       await assert.rejects(action(), { code: "busy" });
     }
@@ -335,8 +338,8 @@ test("active repository batches block refresh, pagination and row reads without 
     inbox.close();
   }
   assert.equal(calls.length, 2);
-  assert.equal(client.readReservations.size, 0);
-  assert.equal(client.pendingReads.size, 0);
+  assert.equal(client.threadReservations.size, 0);
+  assert.equal(client.pendingThreads.size, 0);
 });
 
 test("pagination rejects an unopened inbox and an exhausted page without requesting more data", async () => {

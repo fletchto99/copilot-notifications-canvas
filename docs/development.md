@@ -1,6 +1,6 @@
 # Development
 
-[README](../README.md) | [Installation](installation.md) | [Settings](settings.md)
+[README](../README.md) | [Usage](usage.md) | [Installation](installation.md) | [Settings](settings.md)
 
 Coding agents should follow [AGENTS.md](../AGENTS.md). Copilot also loads
 [`.github/copilot-instructions.md`](../.github/copilot-instructions.md), which
@@ -35,7 +35,7 @@ This standalone preview needs only Node.js, not development dependencies,
 GitHub sign-in, or the Copilot host. It shares the browser tests' synthetic
 fixture and runs the real renderer and protected loopback server. The sample
 inbox includes pagination, search, and multiple attention categories. GitHub
-reads, mark-as-read updates, release checks, and desktop delivery are simulated.
+reads, read/done updates, release checks, and desktop delivery are simulated.
 
 Choose a reproducible preset with `--scenario`:
 

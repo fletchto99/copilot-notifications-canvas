@@ -136,11 +136,12 @@ test("error presets intercept notification reads only, not writes or release che
     for (const args of [
       ["--method", "GET", "/repos/fletchto99/copilot-notifications-canvas/releases/latest"],
       ["--method", "PATCH", "/notifications/threads/1"],
+      ["--method", "DELETE", "/notifications/threads/1"],
     ]) assert.equal(hook(args), undefined);
   }
 });
 
-test("synthetic preview uses the protected server, temporary preferences and in-memory read updates", async t => {
+test("synthetic preview uses the protected server, temporary preferences and in-memory read/done updates", async t => {
   const preview = await startPreview();
   t.after(() => preview.close());
   const launcher = await readFile(new URL(preview.launcher), "utf8");
@@ -165,6 +166,10 @@ test("synthetic preview uses the protected server, temporary preferences and in-
   assert.equal((await post("/api/read", { id: "3" })).loaded, 52);
   assert.deepEqual(preview.writes, ["3"]);
   assert.equal(preview.rows[2].unread, false);
+  assert.equal((await post("/api/done", { id: "2" })).loaded, 51);
+  assert.deepEqual(preview.writes, ["3", "2"]);
+  assert.deepEqual(preview.doneWrites, ["2"]);
+  assert.equal(preview.rows[1].unread, false);
   await post("/api/settings", { darkMode: true, autoOpen: true });
   assert.equal((await preview.preferences.read()).darkMode, true);
   assert.equal((await preview.preferences.read()).autoOpen, true);

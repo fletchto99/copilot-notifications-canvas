@@ -11,6 +11,8 @@ export const test = base.extend({
   canvas: async ({ page, context, assetFailure, desktopEnabled, packaged, development }, use) => {
     const canvas = await createCanvasFixture({ assetFailure, desktopEnabled, packaged, development });
     const { errors, warnings } = canvas;
+    const consoleErrors = [];
+    const expectedConsoleErrors = [];
     try {
       const origin = new URL(canvas.url).origin;
       await context.route("**/*", async route => {
@@ -21,10 +23,14 @@ export const test = base.extend({
       });
       page.on("pageerror", error => errors.push(error.message));
       page.on("console", message => {
-        if (message.type() === "error") errors.push(message.text());
+        if (message.type() === "error") consoleErrors.push({ text: message.text(), url: message.location().url });
       });
-      await use(canvas);
+      await use({
+        ...canvas,
+        expectConsoleError: (path, text) => expectedConsoleErrors.push({ text, url: new URL(path, origin).href }),
+      });
       expect(errors, "Browser execution, CSP, and external-network errors").toEqual([]);
+      expect(consoleErrors, "Exact expected browser console errors").toEqual(expectedConsoleErrors);
       expect(warnings).toEqual(assetFailure
         ? ["Could not load the notifications canvas assets (ENOENT). Retrying in the background."] : []);
     } finally {

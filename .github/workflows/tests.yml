@@ -44,7 +44,7 @@ jobs:
         if: matrix.node != '22'
         run: npm test
   windows:
-    name: Windows filesystem (Node.js 24)
+    name: Node.js 24 (windows-latest)
     runs-on: windows-latest
     timeout-minutes: 5
     steps:

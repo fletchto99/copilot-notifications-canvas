@@ -42,6 +42,10 @@ test("the private preview launcher opens an accessible synthetic inbox with work
   await page.getByRole("button", { name: "Mark as read: Needle widget 2", exact: true }).click();
   await expect(page.locator(".row")).toHaveCount(49);
   expect(preview.writes).toEqual(["2"]);
+  await page.getByRole("button", { name: "Mark as done: Needle tool", exact: true }).click();
+  await expect(page.locator(".row")).toHaveCount(48);
+  expect(preview.writes).toEqual(["2", "3"]);
+  expect(preview.doneWrites).toEqual(["3"]);
   await page.getByLabel("Settings", { exact: true }).click();
   await page.getByRole("combobox", { name: "Theme", exact: true }).selectOption("dark");
   await expect(page.locator("html")).toHaveAttribute("data-notification-theme", "dark");
@@ -91,11 +95,10 @@ test.describe("rate-limited preview", () => {
     const reads = () => preview.requests.filter(path => path.startsWith("/notifications?")).length;
     expect(reads()).toBe(1);
     const refresh = page.getByRole("button", { name: "Force refresh", exact: true });
-    const [response] = await Promise.all([
-      page.waitForResponse(response => response.url().endsWith("/api/refresh")),
-      refresh.click(),
-    ]);
-    expect(response.status()).toBe(429);
+    await expect(refresh).toHaveAttribute("aria-disabled", "true");
+    await expect(page.locator("#retry-status")).toHaveText(/^GitHub requests paused\. Retry after .+\.$/);
+    await refresh.focus();
+    await refresh.press("Enter");
     await expect(refresh).toHaveAttribute("aria-busy", "false");
     expect(reads()).toBe(1);
     expect(preview.writes).toEqual([]);
