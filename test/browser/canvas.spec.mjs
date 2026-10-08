@@ -4,6 +4,84 @@ import { CURRENT_VERSION } from "../../src/updates.mjs";
 
 const searchName = "Search loaded notification titles, issue or PR numbers, and repositories";
 
+for (const packaged of [false, true]) {
+  test.describe(`passive tab updates (${packaged ? "packaged" : "source"})`, () => {
+    test.use({ packaged });
+    for (const [label, reason, hiddenSide] of [
+      ["Review requested", "review_requested", "left"],
+      ["Participating", "comment", "right"],
+    ]) {
+      test(`preserve page scroll and reveal a focused tab hidden to the ${hiddenSide}`, async ({ page, canvas }) => {
+        canvas.rows.splice(50);
+        for (const row of canvas.rows) row.reason = reason;
+        await page.setViewportSize({ width: 320, height: 640 });
+        await page.clock.install();
+        await page.goto(canvas.url);
+        await expect(page.locator(".row")).toHaveCount(50);
+        const tab = page.getByRole("tab", { name: new RegExp(`^${label} \\(\\d+\\)$`) });
+        await tab.click();
+        await expect(tab).toHaveAttribute("aria-selected", "true");
+        await tab.focus();
+        await page.locator("#attention-tabs").evaluate((node, side) => {
+          node.scrollLeft = side === "left" ? node.scrollWidth : 0;
+        }, hiddenSide);
+        await page.evaluate(() => window.scrollTo(0, 900));
+        const unchanged = page.waitForResponse(response => response.url().endsWith("/api/state"));
+        await page.clock.fastForward(5000);
+        await unchanged;
+        expect(await page.evaluate(() => scrollY)).toBe(900);
+
+        const url = new URL(canvas.url);
+        const read = await page.request.post(new URL("/api/read", url).href, {
+          headers: { Authorization: `Bearer ${url.hash.slice(1)}`, Origin: url.origin },
+          data: { id: "1" },
+        });
+        expect(read.status()).toBe(200);
+        await page.clock.fastForward(5000);
+        await expect(tab).toHaveText(`${label} (49)`);
+        await expect(page.locator(".row")).toHaveCount(49);
+        expect(await page.evaluate(() => scrollY)).toBe(900);
+        await expect(tab).toBeFocused();
+        const bounds = await tab.evaluate(node => {
+          const tab = node.getBoundingClientRect();
+          const strip = node.parentElement.getBoundingClientRect();
+          return { left: tab.left, right: tab.right, stripLeft: strip.left, stripRight: strip.right };
+        });
+        expect(bounds.left).toBeGreaterThanOrEqual(bounds.stripLeft);
+        expect(bounds.right).toBeLessThanOrEqual(bounds.stripRight);
+        expect(canvas.writes).toEqual(["1"]);
+      });
+    }
+  });
+}
+
+test("the header keeps its typography and spacing while resizing across the compact breakpoint", async ({ page, canvas }) => {
+  canvas.rows.splice(1);
+  await page.goto(canvas.url);
+  const title = page.getByRole("heading", { name: "Unread Notifications", exact: true });
+  const initial = await title.evaluate(node => ({
+    fontSize: getComputedStyle(node).fontSize,
+    lineHeight: getComputedStyle(node).lineHeight,
+  }));
+  const headerLayout = () => page.locator("header").evaluate(header => ({
+    padding: getComputedStyle(header.parentElement).padding,
+    elements: [".eyebrow", "h1", ".subtitle", ".attention-navigation", ".toolbar", ".status-line"].map(selector => {
+      const rect = header.querySelector(selector).getBoundingClientRect();
+      return { selector, x: rect.x, y: rect.y, height: rect.height };
+    }),
+  }));
+  const initialLayout = await headerLayout();
+  for (const width of [480, 320, 481, 960]) {
+    await page.setViewportSize({ width, height: 800 });
+    await expect(title).toHaveCSS("font-size", initial.fontSize);
+    await expect(title).toHaveCSS("line-height", initial.lineHeight);
+    expect((await title.boundingBox()).height).toBe(parseFloat(initial.lineHeight));
+    expect(await headerLayout()).toEqual(initialLayout);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+  }
+  expect(canvas.writes).toEqual([]);
+});
+
 test.describe("development footer", () => {
   const branch = `feature/<footer>&${"long-branch-name-".repeat(20)}`;
   test.use({ development: { version: CURRENT_VERSION, branch } });
@@ -47,6 +125,7 @@ test("real assets load under CSP, render titles as text, and support search and 
   const response = await page.goto(canvas.url);
   expect(response.headers()["content-security-policy"]).toContain("default-src 'none'");
   await expect(page.locator(".row")).toHaveCount(50);
+  await expect(page.locator(".metadata").getByText("Unread", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "<img src=x onerror=alert(1)> Needle widget 1", exact: true })).toBeVisible();
   await expect(page.locator(".row img")).toHaveCount(0);
   await page.getByRole("searchbox", { name: searchName }).fill("Needle");
@@ -56,6 +135,29 @@ test("real assets load under CSP, render titles as text, and support search and 
   await expect(page.getByRole("button", { name: "Load more (up to 50)", exact: true })).toBeHidden();
   await page.getByRole("searchbox", { name: searchName }).fill("");
   await expect(page.locator(".row")).toHaveCount(53);
+  expect(canvas.writes).toEqual([]);
+});
+
+test("clearing search leaves the selected attention tab unchanged", async ({ page, canvas }) => {
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.goto(canvas.url);
+  await expect(page.locator(".row")).toHaveCount(50);
+  const requests = canvas.requests.length;
+  const search = page.getByRole("searchbox");
+  for (const [label, count] of [["Review requested", 50], ["Assigned", 0]]) {
+    const tab = page.getByRole("tab", { name: `${label} (${count})`, exact: true });
+    await tab.click();
+    await search.fill("No matching notification");
+    await expect(page.locator(".row")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Clear filters", exact: true })).toHaveCount(0);
+    await search.fill("");
+    await expect(search).toBeFocused();
+    await expect(tab).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator(".row")).toHaveCount(count);
+  }
+  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+  expect(results.violations).toEqual([]);
+  expect(canvas.requests.length).toBe(requests);
   expect(canvas.writes).toEqual([]);
 });
 
@@ -77,6 +179,167 @@ test("issue and PR numbers render in metadata and search selects the notificatio
   await page.getByRole("button", { name: "Mark as read: #7 <img src=x onerror=alert(1)> Needle widget 1", exact: true }).click();
   await expect(page.locator(".row")).toHaveCount(0);
   expect(canvas.writes).toEqual(["1"]);
+});
+
+test("attention tabs combine with search and constrain repository reads to matching loaded reasons", async ({ page, canvas }) => {
+  for (const row of canvas.rows) row.reason = "subscribed";
+  canvas.rows[0].reason = "review_requested";
+  canvas.rows[2].reason = "review_requested";
+  canvas.rows[3].reason = "review_requested";
+  canvas.rows[3].subject.title = "Needle review widget";
+  canvas.rows[50].reason = "review_requested";
+  await page.goto(canvas.url);
+  await expect(page.getByRole("tab", { name: "All (50)", exact: true })).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("searchbox").fill("Needle");
+  await page.getByRole("tab", { name: /^Review requested \(\d+\)$/ }).click();
+  await expect(page.locator(".row")).toHaveCount(3);
+  await expect(page.locator("#count")).toHaveText("50 unread \u00b7 3 matching");
+  await expect(page.getByRole("tab", { name: "All (50)", exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Review requested (3)", exact: true })).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("button", { name: "Mark 2 shown, loaded notifications as read in example/widgets", exact: true }).click();
+  await expect(page.locator(".row")).toHaveCount(1);
+  expect(canvas.writes).toEqual(["1", "4"]);
+  expect(canvas.rows.find(row => row.id === "2").unread).toBe(true);
+  expect(canvas.rows.find(row => row.id === "51").unread).toBe(true);
+  await expect(page.getByRole("tab", { name: "Review requested (1)", exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: /^Assigned \(\d+\)$/ }).click();
+  await expect(page.locator("#empty-title")).toHaveText("No matches in loaded notifications");
+  await expect(page.locator("#count")).toHaveText("48 unread \u00b7 0 matching");
+  await expect(page.getByRole("tab", { name: "All (48)", exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Review requested (1)", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Force refresh", exact: true }).click();
+  await expect(page.getByRole("tab", { name: /^Assigned \(\d+\)$/ })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("searchbox")).toHaveValue("Needle");
+  await page.getByRole("tab", { name: /^Review requested \(\d+\)$/ }).click();
+  await page.getByRole("button", { name: "Load more (up to 50)", exact: true }).click();
+  await expect(page.locator(".row")).toHaveCount(2);
+  await expect(page.getByRole("tab", { name: "Review requested (2)", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "All (51)", exact: true })).toBeVisible();
+});
+
+test("attention tabs are keyboard accessible and fit narrow light and dark panels", async ({ page, canvas }, testInfo) => {
+  canvas.rows.splice(7);
+  ["review_requested", "mention", "team_mention", "assign", "author", "comment", "subscribed"]
+    .forEach((reason, index) => { canvas.rows[index].reason = reason; });
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.goto(canvas.url);
+  const tabs = page.getByRole("tablist", { name: "Attention filters" });
+  await expect(tabs.getByRole("tab")).toHaveText(["All (7)", "Review requested (1)", "Mentioned (2)", "Assigned (1)", "Participating (2)"]);
+  await page.getByRole("tab", { name: /^All \(\d+\)$/ }).focus();
+  await page.keyboard.press("ArrowLeft");
+  const participating = page.getByRole("tab", { name: /^Participating \(\d+\)$/ });
+  await expect(participating).toBeFocused();
+  await expect(participating).toBeInViewport({ ratio: 1 });
+  await expect(participating).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tabpanel", { name: "Participating (2)", exact: true })).toBeVisible();
+  await expect(page.locator(".row")).toHaveCount(2);
+  await page.keyboard.press("Home");
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowRight");
+  const mentioned = page.getByRole("tab", { name: /^Mentioned \(\d+\)$/ });
+  await expect(mentioned).toBeFocused();
+  await expect(mentioned).toBeInViewport({ ratio: 1 });
+  await expect(mentioned).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(".row")).toHaveCount(2);
+  for (const colorScheme of ["light", "dark"]) {
+    await page.emulateMedia({ colorScheme });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+    const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+    expect(results.violations).toEqual([]);
+    await page.screenshot({ path: testInfo.outputPath(`attention-${colorScheme}.png`) });
+  }
+  await page.keyboard.press("End");
+  await expect(participating).toBeFocused();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("tab", { name: /^All \(\d+\)$/ })).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(page.getByRole("button", { name: "Scroll attention tabs right", exact: true })).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(page.getByRole("searchbox")).toBeFocused();
+  expect(canvas.writes).toEqual([]);
+});
+
+test("overflow arrows scroll without filtering and stay accessible at both ends", async ({ page, canvas }, testInfo) => {
+  canvas.rows.splice(2);
+  await page.setViewportSize({ width: 320, height: 800 });
+  const filters = [];
+  page.on("request", request => {
+    if (new URL(request.url()).pathname === "/api/filters") filters.push(request);
+  });
+  await page.goto(canvas.url);
+  const previous = page.getByRole("button", { name: "Scroll attention tabs left", exact: true });
+  const next = page.getByRole("button", { name: "Scroll attention tabs right", exact: true });
+  const strip = page.getByRole("tablist", { name: "Attention filters" });
+  const all = page.getByRole("tab", { name: "All (2)", exact: true });
+  await expect(previous).toBeVisible();
+  await expect(previous).toBeDisabled();
+  await expect(next).toBeEnabled();
+  await expect(all).toHaveAttribute("aria-selected", "true");
+  await expect(strip).toHaveCSS("scrollbar-width", "none");
+  expect(await strip.evaluate(node => getComputedStyle(node, "::-webkit-scrollbar").display)).toBe("none");
+  await expect(page.locator(".row")).toHaveCount(2);
+  await page.screenshot({ path: testInfo.outputPath("overflow-start.png") });
+  await next.focus();
+  await next.press("Enter");
+  await expect.poll(() => strip.evaluate(node => node.scrollLeft)).toBeGreaterThan(0);
+  await expect(next).toBeFocused();
+  await expect(previous).toBeEnabled();
+  for (let index = 0; index < 6 && await next.isEnabled(); index++) await next.press("Enter");
+  await expect(next).toBeDisabled();
+  await expect(next).toBeFocused();
+  await expect(next).toHaveCSS("opacity", "1");
+  await expect(page.getByRole("tab", { name: /^Participating \(\d+\)$/ })).toBeInViewport({ ratio: 1 });
+  const end = await strip.evaluate(node => node.scrollLeft);
+  await next.press("Enter");
+  expect(await strip.evaluate(node => node.scrollLeft)).toBe(end);
+  await expect(all).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(".row")).toHaveCount(2);
+  expect(filters).toEqual([]);
+  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+  expect(results.violations).toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath("overflow-end.png") });
+  await previous.focus();
+  for (let index = 0; index < 6 && await previous.isEnabled(); index++) await previous.press("Space");
+  await expect(previous).toBeDisabled();
+  await expect(previous).toBeFocused();
+  await expect(all).toBeInViewport({ ratio: 1 });
+  await strip.evaluate(node => { node.scrollLeft = node.scrollWidth; });
+  await expect(previous).toBeEnabled();
+  await expect(next).toBeDisabled();
+  await page.setViewportSize({ width: 960, height: 800 });
+  await expect(previous).toBeHidden();
+  await expect(next).toBeHidden();
+  await expect(all).toBeFocused();
+  await page.setViewportSize({ width: 320, height: 800 });
+  await expect(next).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+  expect(canvas.writes).toEqual([]);
+});
+
+test("search preserves total tab counts and overflow controls without resizing", async ({ page, canvas }) => {
+  await page.goto(canvas.url);
+  const strip = page.getByRole("tablist", { name: "Attention filters" });
+  const next = page.getByRole("button", { name: "Scroll attention tabs right", exact: true });
+  await expect(page.getByRole("tab", { name: "All (50)", exact: true })).toBeVisible();
+  await expect(next).toBeHidden();
+  const width = await strip.evaluate(node => {
+    const style = getComputedStyle(node);
+    const main = getComputedStyle(document.querySelector("main"));
+    return Math.ceil([...node.children].reduce((sum, tab) => sum + tab.getBoundingClientRect().width, 0) +
+      parseFloat(style.gap) * (node.children.length - 1) + parseFloat(style.paddingLeft) + parseFloat(style.paddingRight) +
+      parseFloat(main.paddingLeft) + parseFloat(main.paddingRight) - 4);
+  });
+  await page.setViewportSize({ width, height: 800 });
+  await expect(next).toBeVisible();
+  const counts = await strip.getByRole("tab").allTextContents();
+  for (const [query, matching] of [["Needle", 3], ["No matching notification", 0], ["", 50]]) {
+    await page.getByRole("searchbox").fill(query);
+    await expect(page.locator("#count")).toHaveText(query ? `50 unread \u00b7 ${matching} matching` : "50 unread");
+    await expect(strip.getByRole("tab")).toHaveText(counts);
+    await expect(page.locator(".row")).toHaveCount(matching);
+    await expect(next).toBeVisible();
+  }
+  expect(canvas.writes).toEqual([]);
 });
 
 test("keyboard row actions mark exactly one notification and move focus to the next row", async ({ page, canvas }) => {
@@ -180,6 +443,29 @@ for (const width of [320, 480, 960]) {
   });
 }
 
+test("a repository batch button disappears at one matching row without removing its row action", async ({ page, canvas }) => {
+  canvas.rows.splice(2);
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.goto(canvas.url);
+  await expect(page.locator(".repo-count")).toHaveText("2 unread");
+  await expect(page.locator(".repo-read")).toHaveCount(1);
+  await page.getByRole("searchbox").fill("Needle widget 2");
+  await expect(page.locator(".repo-count")).toHaveText("1 unread");
+  await expect(page.locator(".repo-read")).toHaveCount(0);
+  await expect(page.locator('[data-focus-key="read:2"]')).toBeVisible();
+  await expect(page.locator('[data-focus-key="done:2"]')).toBeVisible();
+  await page.getByRole("searchbox").fill("");
+  await expect(page.locator(".repo-read")).toHaveCount(1);
+  await page.locator('[data-focus-key="read:1"]').click();
+  await expect(page.locator(".repo-count")).toHaveText("1 unread");
+  await expect(page.locator(".repo-read")).toHaveCount(0);
+  await expect(page.locator('[data-focus-key="read:2"]')).toBeVisible();
+  await expect(page.locator('[data-focus-key="done:2"]')).toBeVisible();
+  await page.locator('[data-focus-key="read:2"]').click();
+  await expect(page.locator(".row")).toHaveCount(0);
+  expect(canvas.writes).toEqual(["1", "2"]);
+});
+
 for (const groupBy of ["repo", "date", "none"]) {
   test(`Tab navigation reaches separate read and Done actions in ${groupBy} view`, async ({ page, canvas }) => {
     canvas.rows.splice(2);
@@ -248,7 +534,7 @@ test("repository actions affect only shown loaded matches, not another repositor
 test("refresh preserves keyboard focus and collapsed repository state", async ({ page, canvas }) => {
   await page.goto(canvas.url);
   await expect(page.locator(".row")).toHaveCount(50);
-  const disclosure = page.getByRole("button", { name: /example\/widgets 49 \/ 49 unread/ });
+  const disclosure = page.getByRole("button", { name: /example\/widgets 49 unread/ });
   await disclosure.focus();
   await disclosure.press("Enter");
   await expect(disclosure).toHaveAttribute("aria-expanded", "false");
@@ -669,11 +955,47 @@ for (const width of [320, 480, 960]) {
       await page.goto(canvas.url);
       await expect(page.locator(".row")).toHaveCount(4);
       await expect(page.locator("html")).toHaveAttribute("data-notification-theme", theme);
+      const search = page.getByRole("searchbox", { name: searchName });
+      await expect(search).toHaveAttribute("placeholder", "Search...");
+      expect(await search.evaluate(node => {
+        const style = getComputedStyle(node);
+        const context = document.createElement("canvas").getContext("2d");
+        context.font = `${style.fontSize} ${style.fontFamily}`;
+        return context.measureText(node.placeholder).width <= node.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      })).toBe(true);
+      await expect(page.locator(".repo-count")).toHaveText(["1 unread", "3 unread"]);
+      await expect(page.getByRole("button", { name: "Mark 1 shown, loaded notifications as read in example/tools", exact: true })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Mark 3 shown, loaded notifications as read in example/widgets", exact: true })).toBeVisible();
+      await expect(page.locator(".eyebrow")).toBeVisible();
+      await expect(page.locator("#subtitle")).toBeVisible();
+      await expect(page.locator(".attention-navigation")).toHaveCSS("margin-top", "20px");
+      if (width <= 480) {
+        const rows = await page.locator(".row").evaluateAll(nodes => nodes.map(node => {
+          const time = node.querySelector("time").getBoundingClientRect();
+          const read = node.querySelector(".mark-read").getBoundingClientRect();
+          const done = node.querySelector(".mark-done").getBoundingClientRect();
+          const content = node.querySelector(".row-content").getBoundingClientRect();
+          return { timeBottom: time.bottom, readTop: read.top, doneTop: done.top, readRight: read.right,
+            doneLeft: done.left, readHeight: read.height, doneHeight: done.height, contentBottom: content.bottom,
+            metadataContainsTime: node.querySelector(".metadata").contains(node.querySelector("time")) };
+        }));
+        for (const row of rows) {
+          expect(row.metadataContainsTime).toBe(true);
+          expect(row.timeBottom).toBeLessThanOrEqual(row.contentBottom);
+          expect(row.contentBottom).toBeLessThan(row.readTop);
+          expect(row.readTop).toBe(row.doneTop);
+          expect(row.readRight).toBeLessThan(row.doneLeft);
+          expect(row.readHeight).toBeGreaterThanOrEqual(28);
+          expect(row.doneHeight).toBeGreaterThanOrEqual(28);
+        }
+      }
+      await expect(page.locator(".row .title").filter({ hasText: "A long notification title" })).toHaveText(canvas.rows[0].subject.title);
       const inboxLink = page.locator(".toolbar").getByRole("link", { name: "Open GitHub inbox", exact: true });
       await expect(inboxLink).toBeVisible();
       await expect(inboxLink).toHaveAttribute("href", "https://github.com/notifications");
       await expect(page.locator("footer a")).toHaveCount(0);
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+      await page.screenshot({ path: testInfo.outputPath(`${theme}-${width}-inbox.png`), fullPage: true });
       await page.getByLabel("Settings", { exact: true }).click();
       await expect(page.getByRole("combobox", { name: "Theme", exact: true })).toBeEnabled();
       const bounds = await page.locator("#settings-panel").boundingBox();

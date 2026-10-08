@@ -663,7 +663,10 @@ test("manual and foreground refreshes queue behind row and repository writes wit
     ["row", "foreground"], ["repository", "foreground"]]) {
     let release;
     const ui = await renderer({
-      onWrite: () => new Promise(resolve => { release = () => resolve("HTTP/2 205 Reset Content\r\n\r\n"); }),
+      initialRows: [thread("1"), thread("2")],
+      onWrite: (_path, count) => count === 1
+        ? new Promise(resolve => { release = () => resolve("HTTP/2 205 Reset Content\r\n\r\n"); })
+        : "HTTP/2 205 Reset Content\r\n\r\n",
     });
     const read = ui.ids.get("groups").querySelectorAll("button")
       .find(node => kind === "row" ? node.dataset.threadId : node.dataset.repository);
@@ -687,7 +690,8 @@ test("manual and foreground refreshes queue behind row and repository writes wit
       await runInContext("update()", ui.context);
     }
     await settle();
-    assert.deepEqual(ui.patches, ["/notifications/threads/1"]);
+    assert.deepEqual(ui.patches, kind === "row" ? ["/notifications/threads/1"] :
+      ["/notifications/threads/1", "/notifications/threads/2"]);
     assert.equal(ui.calls.filter(call => call.path === "/api/refresh").length, 2);
     assert.equal(ui.document.querySelectorAll("article").length, 0);
     assert.equal(ui.ids.get("refresh-tooltip-text").textContent, "Last updated 0 seconds ago");

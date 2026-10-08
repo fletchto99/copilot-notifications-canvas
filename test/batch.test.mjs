@@ -44,11 +44,12 @@ function start(inbox, repository = "example/widgets", action = "read") {
   return { token: inbox.batch.snapshot().token };
 }
 
-test("Done batches issue spaced DELETEs for only loaded search matches and synchronize other panels", async t => {
+test("Done batches issue spaced DELETEs for only loaded attention and search matches and synchronize other panels", async t => {
   const rows = [
-    thread("1"), thread("2"),
-    thread("3", { subject: { title: "Excluded", type: "Issue", url: null } }),
-    thread("4", { repository: { full_name: "example/other" } }),
+    thread("1", { reason: "mention" }), thread("2", { reason: "team_mention" }),
+    thread("3", { reason: "review_requested" }),
+    thread("4", { reason: "mention", repository: { full_name: "example/other" } }),
+    thread("5", { reason: "mention", subject: { title: "Excluded", type: "Issue", url: null } }),
   ];
   const { inbox, client, writes, methods, waits } = await fixture({
     run: async args => args.includes("DELETE") ? "HTTP/2 204 No Content\r\n\r\n" : http(rows, { link: next }),
@@ -56,7 +57,7 @@ test("Done batches issue spaced DELETEs for only loaded search matches and synch
   const other = new Inbox(client);
   t.after(() => { inbox.close(); other.close(); });
   await other.refresh();
-  await inbox.setFilters({ query: "notification" });
+  await inbox.setFilters({ attention: "mentioned", query: "notification" });
   start(inbox, "example/widgets", "done");
   assert.equal(inbox.batch.snapshot().action, "done");
   assert.equal(inbox.batch.snapshot().total, 2);
@@ -69,7 +70,7 @@ test("Done batches issue spaced DELETEs for only loaded search matches and synch
   assert.deepEqual(waits, [1000]);
   assert.equal(inbox.batch.snapshot(), null);
   for (const panel of [inbox, other]) {
-    assert.deepEqual(panel.loadedItems().map(item => item.id), ["3", "4"]);
+    assert.deepEqual(panel.loadedItems().map(item => item.id), ["3", "4", "5"]);
     assert.equal(panel.summary().needsRefresh, true);
     assert.equal(panel.summary().hasMore, true);
   }
@@ -237,6 +238,36 @@ test("strict bounded selection requests reject unknown, forged, stale, cross-rep
   assert.throws(() => inbox.batch.start({ repository: group.repository, selectionKey: group.selectionKey }),
     { code: "selection_changed" });
   assert.deepEqual(writes, []);
+});
+
+test("repository reads respect attention and search, and filter changes invalidate even identical selections", async () => {
+  const { inbox, writes } = await fixture({
+    rows: [thread("1", { reason: "mention" }), thread("2", { reason: "review_requested" }),
+      thread("3", { reason: "team_mention" }), thread("4", { reason: "mention", repository: { full_name: "example/other" } })],
+  });
+  await inbox.setFilters({ query: "notification 1" });
+  const before = selection(inbox);
+  await inbox.setFilters({ attention: "mentioned" });
+  assert.equal(inbox.summary().matching, 1);
+  assert.throws(() => inbox.batch.start(before), { code: "selection_changed" });
+  start(inbox);
+  await assert.rejects(inbox.setFilters({ attention: "all" }), { code: "busy" });
+  await inbox.batch.done;
+  assert.deepEqual(writes, ["/notifications/threads/1"]);
+  assert.deepEqual(inbox.loadedItems().map(item => item.id), ["2", "3", "4"]);
+});
+
+test("retry excludes original batch items hidden by a new attention filter", async () => {
+  const { inbox, writes } = await fixture({
+    rows: [thread("1", { reason: "mention" }), thread("2", { reason: "review_requested" })],
+  });
+  const token = start(inbox);
+  inbox.batch.cancel(token);
+  await inbox.batch.done;
+  await inbox.setFilters({ attention: "review_requested" });
+  inbox.batch.retry(token);
+  await inbox.batch.done;
+  assert.deepEqual(writes, ["/notifications/threads/2"]);
 });
 
 test("batch controls reject malformed, missing and stale operation tokens without changing the current selection", async () => {

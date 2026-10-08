@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { Inbox } from "../src/inbox.mjs";
 import { GitHubClient } from "../src/github.mjs";
 import { desktopCapabilities } from "../src/notifier.mjs";
-import { notificationTitle, orderedThreads } from "../src/model.mjs";
+import { attentionFilters, notificationTitle, orderedThreads } from "../src/model.mjs";
 import { http, thread } from "./fixtures.mjs";
 
 export const script = await readFile(process.env.NOTIFICATIONS_TEST_SCRIPT ??
@@ -26,6 +26,9 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
   let intersect;
   let themeChanged;
   let themeDisconnected = false;
+  let attentionResized;
+  let attentionDisconnected = false;
+  const attentionObserved = [];
   let now = Date.now();
   let offline = initialOffline;
   let rows = initialRows ?? [
@@ -54,6 +57,9 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       this.value = "";
       this._disabled = false;
       this._hidden = false;
+      this.scrollLeft = 0;
+      this.scrollWidth = 0;
+      this.clientWidth = 0;
     }
     get disabled() { return this._disabled; }
     set disabled(value) {
@@ -79,7 +85,14 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       for (const child of this.children) child.parentNode = this;
     }
     addEventListener(name, handler) { this.events[name] = handler; }
+    removeEventListener(name) { delete this.events[name]; }
     select() { this.selected = true; }
+    getBoundingClientRect() { return this.bounds ?? { left: 0, right: 0 }; }
+    scrollIntoView(options) { this.lastScroll = options; }
+    scrollBy({ left }) {
+      this.scrollLeft = Math.max(0, Math.min(this.scrollWidth - this.clientWidth, this.scrollLeft + left));
+      this.events.scroll?.();
+    }
     focus() {
       if (this.disabled) return;
       let node = this;
@@ -121,7 +134,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     documentElement: new Node("html"),
     events: {},
     getElementById(id) {
-      return ids.get(id) ?? null;
+      return ids.get(id) ?? document.querySelectorAll("button").find(node => node.id === id) ?? null;
     },
     createElement: tag => new Node(tag),
     createElementNS: (namespace, tag) => Object.assign(new Node(tag), { namespaceURI: namespace }),
@@ -148,7 +161,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     return onFetch ? onFetch(args) : http(rows);
   } }));
   const context = createContext({
-    document, window, location: { hash: `#${token}` }, Intl, AbortController, notificationTitle, orderedThreads,
+    document, window, location: { hash: `#${token}` }, Intl, AbortController, attentionFilters, notificationTitle, orderedThreads,
     navigator: { clipboard: { writeText: async text => {
       if (clipboardFailure) throw new Error("Clipboard denied");
       copied.push(text);
@@ -165,6 +178,11 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       constructor(callback) { themeChanged = callback; }
       observe() {}
       disconnect() { themeDisconnected = true; }
+    },
+    ResizeObserver: class {
+      constructor(callback) { attentionResized = callback; }
+      observe(node) { attentionObserved.push(node); }
+      disconnect() { attentionDisconnected = true; }
     },
     fetch: async (path, options) => {
       if (offline) throw new Error("Synthetic connection failure");
@@ -201,15 +219,18 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       return { ok: true, json: async () => ({ ...inbox.snapshot(), updates: releaseMetadata, development }) };
     },
   });
-  if (!process.env.NOTIFICATIONS_TEST_SCRIPT) assert.match(script, /^import \{ notificationTitle, orderedThreads \} from "\.\/model\.mjs";/);
+  if (!process.env.NOTIFICATIONS_TEST_SCRIPT) assert.match(script, /^import \{ attentionFilters, notificationTitle, orderedThreads \} from "\.\/model\.mjs";/);
   // Preserve source offsets for the coverage report when removing the injected import.
-  runInContext(script.replace(/^import \{ notificationTitle, orderedThreads \} from "\.\/model\.mjs";/, match => " ".repeat(match.length)), context, {
+  runInContext(script.replace(/^import \{ attentionFilters, notificationTitle, orderedThreads \} from "\.\/model\.mjs";/, match => " ".repeat(match.length)), context, {
     filename: process.env.NOTIFICATIONS_TEST_SCRIPT ?? fileURLToPath(new URL("../src/app.mjs", import.meta.url)),
   });
   await settle();
   return {
     calls, document, window, ids, timers, context, inbox, patches, deletions, githubCalls, copied, media,
     get themeDisconnected() { return themeDisconnected; },
+    attentionObserved,
+    resizeAttention: () => attentionResized(),
+    get attentionDisconnected() { return attentionDisconnected; },
     setAppTheme(mode) {
       if (mode === null) delete document.documentElement.attributes["data-color-mode"];
       else document.documentElement.setAttribute("data-color-mode", mode);

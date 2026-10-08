@@ -246,7 +246,7 @@ test("mark-read keeps repository groups alphabetical as their newest and last no
     thread("4", { repository: { full_name: "example/zulu" }, updated_at: "2026-01-10T00:00:00Z" }),
   ] });
   const repositories = () => ui.ids.get("groups").querySelectorAll("button")
-    .filter(node => node.dataset.batchAction === "read").map(node => node.dataset.repository);
+    .filter(node => node.dataset.disclosure).map(node => node.dataset.focusKey.slice("repo:".length));
   assert.deepEqual(repositories(), ["example/alpha", "example/middle", "example/zulu"]);
 
   await ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "1").events.click();
@@ -268,8 +268,34 @@ test("mark-read failure retains the row with a usable retry control", async () =
   assert.match(ui.ids.get("notice").textContent, /Could not mark/);
 });
 
+test("single-item repository groups show a simple count and only the row read action", async () => {
+  const ui = await renderer({ initialRows: [thread("1"), thread("2")] });
+  const buttons = () => ui.ids.get("groups").querySelectorAll("button");
+  const bulk = () => buttons().filter(button => button.dataset.batchAction === "read");
+  const count = () => buttons().find(button => button.dataset.disclosure).children[1].textContent;
+  assert.equal(bulk().length, 1);
+  assert.equal(count(), "2 unread");
+  await runInContext('update("filters", { query: "notification 1" })', ui.context);
+  assert.equal(bulk().length, 0);
+  assert.equal(count(), "1 unread");
+  assert.equal(buttons().find(button => button.dataset.threadId === "1").disabled, false);
+  await runInContext('update("filters", { query: "" })', ui.context);
+  assert.equal(bulk().length, 1);
+  const row = buttons().find(button => button.dataset.threadId === "1");
+  row.focus();
+  await row.events.click();
+  assert.equal(bulk().length, 0);
+  assert.equal(count(), "1 unread");
+  assert.equal(ui.document.activeElement, buttons().find(button => button.dataset.threadId === "2"));
+  await ui.document.activeElement.events.click();
+  assert.equal(ui.document.querySelectorAll("article").length, 0);
+  assert.deepEqual(ui.patches, ["/notifications/threads/1", "/notifications/threads/2"]);
+  assert.equal(ui.calls.some(call => call.path.startsWith("/api/batch/")), false);
+  ui.window.events.pagehide();
+});
+
 test("repository header shares its hover background across the toggle and read action", async () => {
-  const ui = await renderer();
+  const ui = await renderer({ initialRows: [thread("1"), thread("2")] });
   const buttons = ui.ids.get("groups").querySelectorAll("button");
   const disclosure = buttons.find(node => node.dataset.disclosure);
   const groupRead = buttons.find(node => node.dataset.focusKey === "bulk:example/widgets");
@@ -277,7 +303,7 @@ test("repository header shares its hover background across the toggle and read a
   assert.equal(disclosure.parentNode.className, "repo-header");
   assert.equal(groupRead.parentNode.className, "repo-actions");
   assert.equal(groupRead.parentNode.parentNode, disclosure.parentNode);
-  assert.match(styles, /button:hover:not\(:disabled, \.repo-toggle\), summary:hover, \.icon-button:hover:not\(:disabled\), \.repo-header:hover, \.row:hover \{\s*background: color-mix\(in srgb, var\(--canvas-text\) 4%, transparent\);/);
+  assert.match(styles, /button:hover:not\(:disabled, \[aria-disabled="true"\], \.repo-toggle\), summary:hover, \.icon-button:hover:not\(:disabled\), \.repo-header:hover, \.row:hover \{\s*background: color-mix\(in srgb, var\(--canvas-text\) 4%, transparent\);/);
   assert.match(styles, /@media \(prefers-reduced-motion: no-preference\) \{\s*button, a, \.repo-header \{ transition: background-color \.12s ease; \}/);
   ui.window.events.pagehide();
 });
@@ -319,12 +345,15 @@ test("toolbar force refresh preserves the native notification toggle and selecte
 test("repository action starts from one click with no dialog and preserves independent disclosure", async () => {
   let release;
   const ui = await renderer({
-    onWrite: () => new Promise(resolve => { release = () => resolve("HTTP/2 205 Reset Content\r\n\r\n"); }),
+    initialRows: [thread("1"), thread("2")],
+    onWrite: (_path, count) => count === 1
+      ? new Promise(resolve => { release = () => resolve("HTTP/2 205 Reset Content\r\n\r\n"); })
+      : "HTTP/2 205 Reset Content\r\n\r\n",
   });
   const buttons = ui.ids.get("groups").querySelectorAll("button");
   const disclosure = buttons.find(node => node.dataset.disclosure);
   const groupRead = buttons.find(node => node.dataset.focusKey === "bulk:example/widgets");
-  assert.match(groupRead.textContent, /Mark 1 as read/);
+  assert.match(groupRead.textContent, /Mark 2 as read/);
   assert.equal(disclosure.contains(groupRead), false);
   assert.equal(groupRead.contains(disclosure), false);
   disclosure.events.click();
@@ -335,7 +364,7 @@ test("repository action starts from one click with no dialog and preserves indep
   assert.deepEqual(ui.calls.filter(call => call.path.startsWith("/api/batch/")).map(call => call.path), ["/api/batch/start"]);
   assert.equal(ui.document.activeElement, ui.ids.get("batch-stop"));
   assert.equal(disclosure.attributes["aria-expanded"], "false");
-  assert.match(groupRead.textContent, /Marking 0\/1/);
+  assert.match(groupRead.textContent, /Marking 0\/2/);
   assert.equal(groupRead.attributes["aria-busy"], "true");
   assert.doesNotMatch(html, /<dialog|batch-confirm|batch-start|batch-cancel/);
   assert.doesNotMatch(script, /showModal|batch\/prepare|Repository action finished/);
@@ -352,23 +381,25 @@ test("repository action starts from one click with no dialog and preserves indep
 test("one-click repository read honors search, blocks duplicate clicks and quietly clears successful rows", async () => {
   let release;
   const ui = await renderer({
-    initialRows: [thread("1"), thread("2")],
-    onWrite: () => new Promise(resolve => { release = () => resolve("HTTP/2 205 Reset Content\r\n\r\n"); }),
+    initialRows: [thread("1"), thread("2"), thread("10")],
+    onWrite: (_path, count) => count === 1
+      ? new Promise(resolve => { release = () => resolve("HTTP/2 205 Reset Content\r\n\r\n"); })
+      : "HTTP/2 205 Reset Content\r\n\r\n",
   });
   await runInContext('update("filters", { query: "notification 1" })', ui.context);
   const groupRead = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.focusKey.startsWith("bulk:"));
-  assert.equal(groupRead.textContent, "Mark 1 as read");
+  assert.equal(groupRead.textContent, "Mark 2 as read");
   groupRead.focus();
   const first = groupRead.events.click();
   await groupRead.events.click();
   await first;
   assert.equal(ui.ids.get("search").disabled, true);
-  assert.equal(ui.inbox.batch.snapshot().total, 1);
+  assert.equal(ui.inbox.batch.snapshot().total, 2);
   assert.equal(ui.inbox.batch.snapshot().searchActive, true);
   assert.equal(ui.document.activeElement, ui.ids.get("batch-stop"));
   await settle();
   await runInContext("update()", ui.context);
-  assert.match(groupRead.textContent, /Marking 0\/1/);
+  assert.match(groupRead.textContent, /Marking 0\/2/);
   assert.equal(ui.ids.has("refresh"), false);
   assert.equal(ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "1").disabled, true);
   release();
@@ -378,7 +409,7 @@ test("one-click repository read honors search, blocks duplicate clicks and quiet
   assert.equal(ui.ids.get("batch-progress").hidden, true);
   assert.equal(ui.ids.get("batch-counts").textContent, "");
   assert.equal(ui.ids.get("notice").hidden, true);
-  assert.deepEqual(ui.patches, ["/notifications/threads/1"]);
+  assert.deepEqual(ui.patches, ["/notifications/threads/1", "/notifications/threads/10"]);
   assert.equal(ui.inbox.summary().loaded, 1);
   assert.equal(ui.document.querySelectorAll("article").length, 0);
   assert.equal(ui.document.activeElement, ui.ids.get("search"));
@@ -416,7 +447,7 @@ test("partial batch progress shows retryable remaining counts without repeating 
 });
 
 test("batch failure to reconnect is visible and never silently retries a mutation", async () => {
-  const ui = await renderer();
+  const ui = await renderer({ initialRows: [thread("1"), thread("2")] });
   ui.setOffline(true);
   await ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.focusKey.startsWith("bulk:")).events.click();
   assert.equal(ui.ids.has("batch-confirm"), false);
@@ -425,22 +456,25 @@ test("batch failure to reconnect is visible and never silently retries a mutatio
 });
 
 test("a group changed before the click is accepted reloads its count instead of marking a wider selection", async () => {
-  const ui = await renderer();
+  const ui = await renderer({ initialRows: [thread("1"), thread("2")] });
   const oldButton = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.repository);
-  assert.equal(oldButton.textContent, "Mark 1 as read");
+  assert.equal(oldButton.textContent, "Mark 2 as read");
   ui.inbox.pages[0].items.push({ ...ui.inbox.pages[0].items[0], id: "3", title: "Synthetic newcomer" });
   await oldButton.events.click();
   assert.deepEqual(ui.patches, []);
   assert.match(ui.ids.get("notice").textContent, /shown group changed/);
   const currentButton = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.repository);
-  assert.equal(currentButton.textContent, "Mark 2 as read");
+  assert.equal(currentButton.textContent, "Mark 3 as read");
   assert.equal(currentButton.disabled, false);
 });
 
 test("stop remains usable during a long batch and the final successful request clears its controls quietly", async () => {
   let release;
   const ui = await renderer({
-    onWrite: () => new Promise(resolve => { release = () => resolve("HTTP/2 205 Reset Content\r\n\r\n"); }),
+    initialRows: [thread("1"), thread("2")],
+    onWrite: (_path, count) => count === 2
+      ? new Promise(resolve => { release = () => resolve("HTTP/2 205 Reset Content\r\n\r\n"); })
+      : "HTTP/2 205 Reset Content\r\n\r\n",
   });
   await ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.repository).events.click();
   await settle();
@@ -458,7 +492,7 @@ test("stop remains usable during a long batch and the final successful request c
 });
 
 test("local status polling preserves keyboard focus on row and repository read controls", async () => {
-  const ui = await renderer();
+  const ui = await renderer({ initialRows: [thread("1"), thread("2")] });
   for (const key of ["read:1", "bulk:example/widgets"]) {
     const button = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.focusKey === key);
     button.focus();
@@ -600,8 +634,10 @@ test("a search debounce already pending before a read is flushed after the read"
 test("pending search is retained while a repository batch runs", async () => {
   let release;
   const ui = await renderer({
-    initialRows: [thread("1"), thread("2", { repository: { full_name: "example/other" } })],
-    onWrite: () => new Promise(resolve => { release = () => resolve("HTTP/2 205 Reset Content\r\n\r\n"); }),
+    initialRows: [thread("1"), thread("2", { repository: { full_name: "example/other" } }), thread("3")],
+    onWrite: (_path, count) => count === 1
+      ? new Promise(resolve => { release = () => resolve("HTTP/2 205 Reset Content\r\n\r\n"); })
+      : "HTTP/2 205 Reset Content\r\n\r\n",
   });
   const search = ui.ids.get("search");
   search.value = "other";

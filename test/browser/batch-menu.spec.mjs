@@ -6,6 +6,30 @@ const readName = "Mark 2 shown, loaded notifications as read in example/widgets"
 const doneName = "Mark 2 shown, loaded notifications as done in example/widgets";
 const moreName = "More actions for example/widgets";
 
+test("repository Done honors attention and search filters without changing the selected tab", async ({ page, canvas }) => {
+  for (const row of canvas.rows) row.reason = "subscribed";
+  canvas.rows[0].reason = "mention";
+  canvas.rows[1].reason = "team_mention";
+  canvas.rows[2].reason = "mention";
+  canvas.rows[3].reason = "mention";
+  canvas.rows[50].reason = "mention";
+  await page.goto(canvas.url);
+  await page.getByRole("searchbox").fill("Needle");
+  const mentioned = page.getByRole("tab", { name: /^Mentioned \(\d+\)$/ });
+  await mentioned.click();
+  await expect(page.locator(".row")).toHaveCount(3);
+  await expect(page.locator("#count")).toHaveText("50 unread \u00b7 3 matching");
+  await page.getByRole("button", { name: moreName, exact: true }).click();
+  await page.getByRole("button", { name: doneName, exact: true }).click();
+  await expect(page.locator(".row")).toHaveCount(1);
+  await expect(mentioned).toHaveAttribute("aria-selected", "true");
+  await expect(mentioned).toHaveText("Mentioned (2)");
+  expect(canvas.doneWrites).toEqual(["1", "2"]);
+  expect(canvas.rows.find(row => row.id === "3").unread).toBe(true);
+  expect(canvas.rows.find(row => row.id === "4").unread).toBe(true);
+  expect(canvas.rows.find(row => row.id === "51").unread).toBe(true);
+});
+
 for (const width of [320, 960]) {
   for (const collapsed of [false, true]) {
     test(`repository dropdown works at ${width}px with ${collapsed ? "collapsed" : "expanded"} rows`, async ({ page, canvas }, testInfo) => {
@@ -88,7 +112,9 @@ test("a Done batch stops after the in-flight request and retries the original re
     await expect(retry).toBeVisible();
     await expect(page.locator("#batch-title")).toContainText("remain to mark as done");
     expect(canvas.doneWrites).toEqual(["1"]);
-    await expect(page.locator(".repo-read")).toHaveText("Mark 1 as read");
+    await expect(page.locator(".repo-actions")).toHaveCount(0);
+    await expect(page.locator('[data-focus-key="read:2"]')).toBeVisible();
+    await expect(page.locator('[data-focus-key="done:2"]')).toBeVisible();
     canvas.rows.push(thread("3"));
     await retry.click();
     await expect(page.locator(".row")).toHaveCount(0);
@@ -119,5 +145,7 @@ test("failed Done batches keep their action after backoff and do not widen retri
   await retry.click();
   await expect(page.locator(".row")).toHaveCount(1);
   expect(canvas.doneWrites).toEqual(["1", "2"]);
-  await expect(page.locator(".repo-read")).toHaveText("Mark 1 as read");
+  await expect(page.locator(".repo-actions")).toHaveCount(0);
+  await expect(page.locator('[data-focus-key="read:3"]')).toBeVisible();
+  await expect(page.locator('[data-focus-key="done:3"]')).toBeVisible();
 });

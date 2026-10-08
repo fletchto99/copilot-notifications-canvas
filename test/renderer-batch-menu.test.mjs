@@ -14,17 +14,18 @@ function controls(ui, repository = "example/widgets") {
 
 test("the split control opens Done without writing and starts only the counted search selection", async t => {
   let release;
-  const ui = await renderer({ initialRows: [thread("1"), thread("2")],
-    onWrite: (_path, _count, method) => {
+  const ui = await renderer({ initialRows: [thread("1"), thread("10"), thread("2")],
+    onWrite: (_path, count, method) => {
       assert.equal(method, "DELETE");
-      return new Promise(resolve => { release = () => resolve("HTTP/2 204 No Content\r\n\r\n"); });
+      return count === 1 ? new Promise(resolve => { release = () => resolve("HTTP/2 204 No Content\r\n\r\n"); })
+        : "HTTP/2 204 No Content\r\n\r\n";
     },
   });
   t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
   await runInContext('update("filters", { query: "notification 1" })', ui.context);
   const { read, trigger, done, panel } = controls(ui);
-  assert.equal(read.textContent, "Mark 1 as read");
-  assert.equal(done.textContent, "Mark 1 as done");
+  assert.equal(read.textContent, "Mark 2 as read");
+  assert.equal(done.textContent, "Mark 2 as done");
   assert.equal(panel.hidden, true);
   await done.events.click();
   assert.deepEqual(ui.deletions, []);
@@ -39,7 +40,7 @@ test("the split control opens Done without writing and starts only the counted s
   assert.equal(panel.hidden, true);
   assert.equal(trigger.attributes["aria-expanded"], "false");
   assert.equal(ui.inbox.batch.snapshot().action, "done");
-  assert.equal(ui.inbox.batch.snapshot().total, 1);
+  assert.equal(ui.inbox.batch.snapshot().total, 2);
   assert.equal(ui.document.activeElement, ui.ids.get("batch-stop"));
   assert.match(ui.ids.get("batch-title").textContent, /Marking as done/);
   assert.equal(trigger.disabled, true);
@@ -47,6 +48,7 @@ test("the split control opens Done without writing and starts only the counted s
   assert.deepEqual(ui.patches, []);
   release();
   await ui.inbox.batch.done;
+  assert.deepEqual(ui.deletions, ["/notifications/threads/1", "/notifications/threads/10"]);
   await runInContext("update()", ui.context);
   assert.equal(ui.ids.get("batch-progress").hidden, true);
   assert.equal(ui.inbox.summary().loaded, 1);
@@ -54,7 +56,8 @@ test("the split control opens Done without writing and starts only the counted s
 });
 
 test("repository dropdowns dismiss on Escape, focus leaving, outside clicks and window blur", async t => {
-  const ui = await renderer({ initialRows: [thread("1"), thread("2", { repository: { full_name: "example/other" } })] });
+  const ui = await renderer({ initialRows: [thread("1"), thread("2"),
+    thread("3", { repository: { full_name: "example/other" } }), thread("4", { repository: { full_name: "example/other" } })] });
   t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
   const { trigger, done, panel } = controls(ui);
   for (const dismiss of [
@@ -82,8 +85,26 @@ test("repository dropdowns dismiss on Escape, focus leaving, outside clicks and 
   assert.deepEqual(ui.deletions, []);
 });
 
+test("an open split control retains focus on primary pointer presses instead of focusing its tabpanel", async t => {
+  const ui = await renderer({ initialRows: [thread("1"), thread("2")] });
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  const { read, trigger, panel } = controls(ui);
+  const press = button => {
+    let prevented = false;
+    read.parentNode.events.mousedown({ button, preventDefault: () => { prevented = true; } });
+    return prevented;
+  };
+  assert.equal(press(0), false);
+  trigger.events.click();
+  assert.equal(panel.hidden, false);
+  assert.equal(press(0), true);
+  assert.equal(press(2), false);
+  assert.deepEqual(ui.deletions, []);
+  assert.deepEqual(ui.patches, []);
+});
+
 test("unchanged polls preserve a dropdown, but changed groups close it and focus the updated trigger", async t => {
-  const ui = await renderer();
+  const ui = await renderer({ initialRows: [thread("1"), thread("2")] });
   t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
   const { trigger, panel, done } = controls(ui);
   trigger.events.click();
@@ -103,7 +124,7 @@ test("unchanged polls preserve a dropdown, but changed groups close it and focus
 });
 
 test("a stale Done selection refreshes the count without widening or writing the selection", async t => {
-  const ui = await renderer();
+  const ui = await renderer({ initialRows: [thread("1"), thread("2")] });
   t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
   const { trigger, done } = controls(ui);
   trigger.events.click();
@@ -112,14 +133,14 @@ test("a stale Done selection refreshes the count without widening or writing the
   assert.deepEqual(ui.deletions, []);
   assert.match(ui.ids.get("notice").textContent, /shown group changed/);
   const updated = controls(ui);
-  assert.equal(updated.read.textContent, "Mark 2 as read");
-  assert.equal(updated.done.textContent, "Mark 2 as done");
+  assert.equal(updated.read.textContent, "Mark 3 as read");
+  assert.equal(updated.done.textContent, "Mark 3 as done");
   assert.equal(updated.panel.hidden, true);
   assert.equal(ui.document.activeElement, updated.read);
 });
 
 test("failed Done batches show their action and retry as Done without changing the primary read action", async t => {
-  const ui = await renderer({ onWrite: (_path, count, method) => {
+  const ui = await renderer({ initialRows: [thread("1"), thread("2")], onWrite: (_path, count, method) => {
     assert.equal(method, "DELETE");
     return count === 1 ? http({}, {}, 500) : "HTTP/2 204 No Content\r\n\r\n";
   } });
@@ -129,14 +150,14 @@ test("failed Done batches show their action and retry as Done without changing t
   await ui.inbox.batch.done;
   await runInContext("update()", ui.context);
   assert.match(ui.ids.get("batch-title").textContent, /remain to mark as done/);
-  assert.equal(controls(ui).read.textContent, "Mark 1 as read");
+  assert.equal(controls(ui).read.textContent, "Mark 2 as read");
   assert.equal(ui.ids.get("batch-retry").disabled, true);
   ui.advance();
   await runInContext("update()", ui.context);
   await ui.ids.get("batch-retry").events.click();
   await ui.inbox.batch.done;
   await runInContext("update()", ui.context);
-  assert.deepEqual(ui.deletions, ["/notifications/threads/1", "/notifications/threads/1"]);
+  assert.deepEqual(ui.deletions, ["/notifications/threads/1", "/notifications/threads/1", "/notifications/threads/2"]);
   assert.deepEqual(ui.patches, []);
   assert.equal(ui.ids.get("batch-progress").hidden, true);
 });

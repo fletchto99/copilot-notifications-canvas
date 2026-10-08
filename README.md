@@ -4,7 +4,7 @@ Unread GitHub notifications in the GitHub Copilot app, grouped by repository or
 date, or shown as a single newest-first list. Search, mark rows or repositories
 as read or done, and opt into desktop notifications or auto-open.
 
-![Unread Notifications canvas showing a repository group, search, settings, and mark-as-read controls](docs/images/unread-notifications.png)
+![Unread Notifications canvas showing attention tabs with counts, search, settings, and a notification with a mark-as-read action](docs/images/unread-notifications.png)
 
 ## Prerequisites
 
@@ -45,9 +45,24 @@ full procedure, verification requirements, and troubleshooting.
   Search matches titles, numbers and repositories;
   search and counts cover loaded items only. Numbers are omitted when GitHub
   does not provide a valid issue or PR link.
+- **Attention tabs:** new panels start on **All** (all loaded unread items).
+  **Review requested** shows review requests, **Mentioned** includes personal
+  and team mentions, **Assigned** shows assignments, and **Participating**
+  shows threads you authored or commented on. These use GitHub's notification
+  reason, not a full history of your involvement; a thread's reason can change.
+  Tabs combine with search in every grouping mode and stay selected during
+  refresh and pagination. Each tab's count, such as **Review requested (3)**,
+  includes all loaded unread items in that category, independent of search.
+  The status line reports matches for the selected tab and search.
+  Use Left/Right Arrow or Home/End to switch tabs.
+  When tabs do not all fit, edge arrows scroll the strip without changing your
+  selected filter. The scrollbar stays hidden; touch and trackpad scrolling
+  still work. Passive count updates only scroll the tab strip, not the page.
+  Clearing the search leaves the selected attention tab unchanged.
 - **Mark as read:** use the open-envelope icon on an individual row in any view.
-  In **repo** mode, **Mark N as read** marks only that repository's loaded items
-  matching your search, not older unloaded notifications.
+  In **repo** mode, groups with multiple matching notifications also offer
+  **Mark N as read**. This marks only that repository's loaded items matching
+  your attention tab and search, not hidden or older unloaded notifications.
 - **Mark as done:** use the checkmark icon to mark an individual row completed on
   GitHub in any view.
   This is separate from marking it read. Both actions remove the row from this
@@ -55,7 +70,8 @@ full procedure, verification requirements, and troubleshooting.
   by GitHub; the canvas keeps no local completion history. Use GitHub's inbox
   to view read or done notifications.
   In **repo** mode, the arrow beside **Mark N as read** opens a dropdown with
-  **Mark N as done**, limited to that repository's shown, loaded search matches.
+  **Mark N as done**, limited to that repository's shown, loaded attention and
+  search matches.
   Read stays the default; choosing Done never changes future defaults.
   Both repository actions show progress, allow stopping remaining requests, and
   retry only unchanged, still-shown remaining items with the original action.
@@ -63,6 +79,9 @@ full procedure, verification requirements, and troubleshooting.
   keyboard-focus tooltips. Press Escape to dismiss a tooltip; Tab moves between
   the title, read, and done controls. The last-updated time appears with the
   dot-separated metadata beneath each title, without a redundant unread label.
+- **Responsive layout:** panel padding and header spacing stay consistent while
+  resizing. Header text, notification titles, and metadata remain visible.
+  Timestamps stay in the metadata; both row actions remain available in narrow panels.
 - **Refresh:** automatic checks run about every 60 seconds while the canvas is
   visible and pause while hidden. Returning to the foreground refreshes immediately.
   Longer GitHub polling intervals apply to automatic checks. Foreground returns

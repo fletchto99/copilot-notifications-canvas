@@ -427,7 +427,7 @@ test("date groups by local calendar day across repositories, newest first, with 
     [["thread:3", "thread:2"], ["thread:1", "thread:4"], ["thread:5"]]);
   assert.equal(disclosures()[0].children[0].textContent,
     new Date(2026, 1, 1).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" }));
-  assert.equal(disclosures()[0].children[1].textContent, "2 / 2 unread");
+  assert.equal(disclosures()[0].children[1].textContent, "2 unread");
   assert.equal(list.querySelectorAll("button").some(node => node.dataset.repository), false);
   assert.equal(list.querySelectorAll("span").filter(node => node.className === "repository").length, 5);
   assert.equal(list.attributes["aria-label"], "Notifications by date");
@@ -450,6 +450,8 @@ test("grouping changes apply immediately, persist across panels and restore repo
   const ui = await renderer({ storedSettings, initialRows: [
     thread("1", { repository: { full_name: "example/zulu" } }),
     thread("2", { repository: { full_name: "example/alpha" } }),
+    thread("3", { repository: { full_name: "example/zulu" } }),
+    thread("4", { repository: { full_name: "example/alpha" } }),
   ] });
   const select = ui.ids.get("group-by");
   const list = ui.ids.get("groups");
