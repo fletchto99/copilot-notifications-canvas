@@ -4,6 +4,172 @@ import { runInContext } from "node:vm";
 import { http, thread } from "./fixtures.mjs";
 import { renderer, script, html, styles, settle } from "./renderer-fixtures.mjs";
 
+test("row actions use distinct decorative SVGs with accessible names and shared tooltip behavior", async t => {
+  const ui = await renderer();
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  const paths = [];
+  for (const action of ["read", "done"]) {
+    const button = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.focusKey === `${action}:1`);
+    const anchor = button.parentNode;
+    const tooltip = anchor.children.find(node => node.attributes.role === "tooltip");
+    const svg = button.querySelectorAll("svg")[0];
+    paths.push(svg.querySelectorAll("path")[0].attributes.d);
+    assert.equal(button.textContent, "");
+    assert.ok(button.className.split(" ").includes("icon-button"));
+    assert.equal(button.attributes["aria-label"], `Mark as ${action}: <img src=x onerror=alert(1)>`);
+    assert.equal(button.attributes["aria-describedby"], tooltip.id);
+    assert.equal(button.attributes["aria-busy"], "false");
+    assert.equal(tooltip.children[0].textContent, `Mark as ${action}`);
+    assert.equal(svg.namespaceURI, "http://www.w3.org/2000/svg");
+    assert.equal(svg.attributes["aria-hidden"], "true");
+    assert.equal(svg.attributes.focusable, "false");
+    assert.equal(button.title, undefined);
+    for (const event of ["pointerenter", "focus"]) {
+      button.events[event]();
+      assert.equal(anchor.dataset.tooltipDismissed, undefined);
+      ui.document.events.keydown({ key: "Escape" });
+      assert.equal(anchor.dataset.tooltipDismissed, "true");
+      button.events[event]();
+      assert.equal(anchor.dataset.tooltipDismissed, undefined);
+      ui.window.events.blur();
+      assert.equal(anchor.dataset.tooltipDismissed, "true");
+    }
+  }
+  assert.notEqual(paths[0], paths[1]);
+  assert.deepEqual(ui.patches, []);
+  assert.deepEqual(ui.deletions, []);
+});
+
+test("timestamps remain inside row metadata in every grouping", async t => {
+  for (const groupBy of ["repo", "date", "none"]) {
+    const row = thread();
+    const ui = await renderer({ storedSettings: { groupBy }, initialRows: [row] });
+    t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+    const article = ui.ids.get("groups").querySelectorAll("article")[0];
+    const times = article.querySelectorAll("time");
+    assert.equal(times.length, 1);
+    assert.equal(times[0].parentNode.className, "metadata-item");
+    assert.equal(times[0].parentNode.parentNode.className, "metadata");
+    assert.equal(times[0].dateTime, new Date(row.updated_at).toISOString());
+    assert.equal(times[0].attributes["aria-label"], new Date(row.updated_at).toLocaleString());
+    assert.deepEqual(article.children.map(node => node.tag), ["span", "div", "div"]);
+    assert.equal(article.children[2].className, "row-actions");
+  }
+});
+
+test("Done is a distinct explicit row action in every grouping and focuses the next Done button", async t => {
+  for (const groupBy of ["repo", "date", "none"]) {
+    const ui = await renderer({ storedSettings: { groupBy }, initialRows: [thread("1"), thread("2")] });
+    t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+    const buttons = () => ui.ids.get("groups").querySelectorAll("button");
+    const done = buttons().find(button => button.dataset.focusKey === "done:1");
+    assert.equal(done.textContent, "");
+    assert.equal(done.querySelectorAll("svg").length, 1);
+    assert.equal(done.attributes["aria-label"], "Mark as done: #42 Synthetic notification 1");
+    assert.ok(buttons().some(button => button.dataset.focusKey === "read:1"));
+    assert.equal(ui.calls.some(call => ["/api/read", "/api/done"].includes(call.path)), false);
+    done.focus();
+    await done.events.click();
+    assert.deepEqual(ui.deletions, ["/notifications/threads/1"]);
+    assert.deepEqual(ui.patches, []);
+    assert.equal(ui.document.querySelectorAll("article").length, 1);
+    const next = buttons().find(button => button.dataset.focusKey === "done:2");
+    assert.equal(ui.document.activeElement, next);
+    await next.events.click();
+    assert.equal(ui.document.activeElement, ui.ids.get("search"));
+    assert.equal(ui.document.querySelectorAll("article").length, 0);
+  }
+});
+
+test("a pending Done action keeps rows until confirmation and blocks read, Done and repository clicks", async t => {
+  let finish;
+  const ui = await renderer({
+    onWrite: () => new Promise(resolve => { finish = () => resolve("HTTP/2 204 No Content\r\n\r\n"); }),
+  });
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  const buttons = ui.ids.get("groups").querySelectorAll("button");
+  const done = buttons.find(button => button.dataset.focusKey === "done:1");
+  const pending = done.events.click();
+  await settle();
+  assert.equal(done.textContent, "");
+  assert.equal(done.attributes["aria-busy"], "true");
+  assert.equal(done.querySelectorAll("svg").length, 1);
+  assert.equal(done.parentNode.dataset.tooltipDismissed, "true");
+  const read = buttons.find(button => button.dataset.focusKey === "read:1");
+  assert.equal(read.attributes["aria-busy"], "false");
+  assert.equal(read.querySelectorAll("svg").length, 1);
+  assert.equal(ui.document.querySelectorAll("article").length, 1);
+  for (const button of buttons.filter(button => !button.dataset.disclosure)) {
+    assert.equal(button.disabled, true);
+    await button.events.click();
+  }
+  assert.deepEqual(ui.deletions, ["/notifications/threads/1"]);
+  assert.deepEqual(ui.patches, []);
+  finish();
+  await pending;
+  assert.equal(ui.document.querySelectorAll("article").length, 0);
+});
+
+test("failed Done actions remain visible, restore focus and only retry on another explicit click", async t => {
+  const ui = await renderer({
+    onWrite: (_path, count) => count === 1 ? http({}, {}, 500) : "HTTP/2 204 No Content\r\n\r\n",
+  });
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  const done = ui.ids.get("groups").querySelectorAll("button").find(button => button.dataset.focusKey === "done:1");
+  done.focus();
+  await done.events.click();
+  assert.equal(done.disabled, false);
+  assert.equal(done.textContent, "");
+  assert.equal(done.attributes["aria-busy"], "false");
+  assert.equal(done.querySelectorAll("svg").length, 1);
+  assert.equal(ui.document.activeElement, done);
+  assert.match(ui.ids.get("notice").textContent, /Could not mark the notification as done.*HTTP 500/);
+  assert.equal(ui.document.querySelectorAll("article").length, 1);
+  await ui.fireTimer();
+  assert.equal(ui.deletions.length, 1);
+  ui.advance();
+  await done.events.click();
+  assert.equal(ui.deletions.length, 2);
+  assert.equal(ui.document.querySelectorAll("article").length, 0);
+  assert.equal(ui.ids.get("notice").hidden, true);
+});
+
+test("Done preserves focus across changed polls and never overrides a newer search edit", async t => {
+  for (const retainDisabledFocus of [false, true]) {
+    for (const editSearch of [false, true]) {
+      let finish;
+      const ui = await renderer({
+        retainDisabledFocus,
+        initialRows: [thread("1"), thread("2")],
+        onState: () => new Promise(resolve => { finish = resolve; }),
+      });
+      t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+      const buttons = () => ui.ids.get("groups").querySelectorAll("button");
+      const done = buttons().find(button => button.dataset.focusKey === "done:1");
+      done.focus();
+      ui.inbox.pages[0].items[0].title = "Changed during polling";
+      const poll = ui.fireTimer();
+      await settle();
+      const pending = done.events.click();
+      if (editSearch) {
+        const search = ui.ids.get("search");
+        search.focus();
+        search.value = "notification 2";
+        search.events.input();
+      }
+      assert.deepEqual(ui.deletions, []);
+      finish();
+      await poll;
+      await pending;
+      await settle();
+      assert.deepEqual(ui.deletions, ["/notifications/threads/1"]);
+      assert.equal(ui.document.activeElement, editSearch ? ui.ids.get("search")
+        : buttons().find(button => button.dataset.focusKey === "done:2"));
+      assert.equal(ui.inbox.filters.query, editSearch ? "notification 2" : "");
+    }
+  }
+});
+
 test("mark-read requires a click and removes only on confirmation", async () => {
   const ui = await renderer();
   assert.equal(ui.calls.some(call => call.path === "/api/read"), false);
@@ -102,27 +268,33 @@ test("mark-read failure retains the row with a usable retry control", async () =
   assert.match(ui.ids.get("notice").textContent, /Could not mark/);
 });
 
-test("single-item repository groups show a simple count and only the row read action", async () => {
+test("single-item repository groups retain their split control alongside row actions", async () => {
   const ui = await renderer({ initialRows: [thread("1"), thread("2")] });
   const buttons = () => ui.ids.get("groups").querySelectorAll("button");
-  const bulk = () => buttons().filter(button => button.dataset.repository);
+  const bulk = () => buttons().filter(button => button.dataset.batchAction === "read");
   const count = () => buttons().find(button => button.dataset.disclosure).children[1].textContent;
   assert.equal(bulk().length, 1);
   assert.equal(count(), "2 unread");
   await runInContext('update("filters", { query: "notification 1" })', ui.context);
-  assert.equal(bulk().length, 0);
+  assert.equal(bulk().length, 1);
+  assert.equal(bulk()[0].textContent, "Mark 1 as read");
+  assert.equal(buttons().find(button => button.dataset.batchAction === "done").textContent, "Mark 1 as done");
   assert.equal(count(), "1 unread");
   assert.equal(buttons().find(button => button.dataset.threadId === "1").disabled, false);
+  await runInContext('update("filters", { query: "no match" })', ui.context);
+  assert.equal(bulk().length, 0);
   await runInContext('update("filters", { query: "" })', ui.context);
   assert.equal(bulk().length, 1);
   const row = buttons().find(button => button.dataset.threadId === "1");
   row.focus();
   await row.events.click();
-  assert.equal(bulk().length, 0);
+  assert.equal(bulk().length, 1);
+  assert.equal(bulk()[0].textContent, "Mark 1 as read");
   assert.equal(count(), "1 unread");
   assert.equal(ui.document.activeElement, buttons().find(button => button.dataset.threadId === "2"));
   await ui.document.activeElement.events.click();
   assert.equal(ui.document.querySelectorAll("article").length, 0);
+  assert.equal(bulk().length, 0);
   assert.deepEqual(ui.patches, ["/notifications/threads/1", "/notifications/threads/2"]);
   assert.equal(ui.calls.some(call => call.path.startsWith("/api/batch/")), false);
   ui.window.events.pagehide();
@@ -135,8 +307,9 @@ test("repository header shares its hover background across the toggle and read a
   const groupRead = buttons.find(node => node.dataset.focusKey === "bulk:example/widgets");
   assert.equal(disclosure.className, "repo-toggle");
   assert.equal(disclosure.parentNode.className, "repo-header");
-  assert.equal(groupRead.parentNode, disclosure.parentNode);
-  assert.match(styles, /button:hover:not\(:disabled, \[aria-disabled="true"\], \.repo-toggle\),\s+summary:hover,\s+\.icon-button:hover,\s+\.repo-header:hover,\s+\.row:hover \{\s*background: color-mix\(in srgb, var\(--canvas-text\) 4%, transparent\);/);
+  assert.equal(groupRead.parentNode.className, "repo-actions");
+  assert.equal(groupRead.parentNode.parentNode, disclosure.parentNode);
+  assert.match(styles, /button:hover:not\(:disabled, \[aria-disabled="true"\], \.repo-toggle\),\s+summary:hover,\s+\.icon-button:hover:not\(:disabled\),\s+\.repo-header:hover,\s+\.row:hover \{\s*background: color-mix\(in srgb, var\(--canvas-text\) 4%, transparent\);/);
   assert.match(styles, /@media \(prefers-reduced-motion: no-preference\) \{\s*button,\s+a,\s+\.repo-header \{\s+transition: background-color 0?\.12s ease;\s+\}/);
   ui.window.events.pagehide();
 });
@@ -144,7 +317,7 @@ test("repository header shares its hover background across the toggle and read a
 test("repository toggle focus is inset inside the clipped card", () => {
   assert.match(styles, /:focus-visible \{\s+outline: 2px solid var\(--focus\);\s+outline-offset: 3px;\s+\}/);
   assert.match(styles, /\.repo-group \{[^}]*overflow: clip;/);
-  assert.match(styles, /\.repo-toggle:focus-visible \{\s+outline-offset: -5px;\s+\}/);
+  assert.match(styles, /\.repo-toggle:focus-visible \{\s+outline-offset: -3px;\s+\}/);
 });
 
 test("compact toolbar keeps a shrinkable search beside matching inbox, refresh and settings icons", () => {
@@ -156,8 +329,8 @@ test("compact toolbar keeps a shrinkable search beside matching inbox, refresh a
   assert.doesNotMatch(styles, /\.search \{[^}]*flex-basis: 100%/);
 });
 
-test("notification metadata, counts and read actions use 12px text", () => {
-  for (const selector of ["\\.metadata", "time", "\\.repo-count", "\\.repo-read", "\\.mark-read"]) {
+test("notification metadata, counts and repository read actions use 12px text", () => {
+  for (const selector of ["\\.metadata", "time", "\\.repo-count", "\\.repo-read"]) {
     const rule = styles.match(new RegExp(`(?:^|\\n)${selector} \\{[^}]*\\}`))?.[0] ?? "";
     assert.match(rule, /font-size: 12px;/, selector);
   }
@@ -295,7 +468,7 @@ test("a group changed before the click is accepted reloads its count instead of 
   ui.inbox.pages[0].items.push({ ...ui.inbox.pages[0].items[0], id: "3", title: "Synthetic newcomer" });
   await oldButton.events.click();
   assert.deepEqual(ui.patches, []);
-  assert.match(ui.ids.get("notice").textContent, /shown group changed/);
+  assert.match(ui.ids.get("notice").textContent, /shown selection changed/);
   const currentButton = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.repository);
   assert.equal(currentButton.textContent, "Mark 3 as read");
   assert.equal(currentButton.disabled, false);

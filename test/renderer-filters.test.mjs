@@ -8,7 +8,7 @@ const rows = ["review_requested", "mention", "team_mention", "assign", "author",
   .map((reason, index) => thread(String(index + 1), { reason }));
 const tab = (ui, value) => ui.document.getElementById(`attention-${value}`);
 const shown = ui => ui.ids.get("groups").querySelectorAll("button")
-  .filter(button => button.dataset.threadId).map(button => button.dataset.threadId);
+  .filter(button => button.dataset.action === "read").map(button => button.dataset.threadId);
 
 test("attention tabs default to All, combine with search in every grouping, and distinguish no matches from caught up", async () => {
   for (const groupBy of ["repo", "date", "none"]) {
@@ -18,9 +18,9 @@ test("attention tabs default to All, combine with search in every grouping, and 
     assert.deepEqual(ui.ids.get("attention-tabs").children.map(button => button.textContent),
       ["All (7)", "Review requested (1)", "Mentioned (2)", "Assigned (1)", "Participating (2)"]);
     const metadata = ui.ids.get("groups").querySelectorAll("div").filter(node => node.className === "metadata");
-    assert.deepEqual(metadata[0].children.map(node => node.textContent),
+    assert.deepEqual(metadata[0].children.map(node => node.children[0]).filter(node => node.tag !== "time").map(node => node.textContent),
       [...(groupBy === "repo" ? [] : ["example/widgets"]), "Pull Request #42", "review requested"]);
-    assert.equal(metadata.some(node => node.children.some(child => child.textContent === "Unread")), false);
+    assert.equal(metadata.some(node => node.querySelectorAll("span").some(child => child.textContent === "Unread")), false);
     for (const [value, ids] of [
       ["review_requested", ["1"]], ["mentioned", ["2", "3"]], ["assigned", ["4"]],
       ["participating", ["5", "6"]], ["all", ["1", "2", "3", "4", "5", "6", "7"]],
@@ -29,8 +29,10 @@ test("attention tabs default to All, combine with search in every grouping, and 
       button.focus();
       await button.events.click();
       assert.deepEqual(shown(ui), ids);
-      const bulk = ui.ids.get("groups").querySelectorAll("button").filter(button => button.dataset.repository);
-      assert.equal(bulk.length, groupBy === "repo" && ids.length > 1 ? 1 : 0);
+      const bulk = ui.ids.get("groups").querySelectorAll("button").filter(button => button.dataset.batchAction === "read");
+      assert.equal(bulk.length, ids.length > 0 ? 1 : 0);
+      const scope = groupBy === "repo" ? "repository" : groupBy === "date" ? "date" : "shown";
+      assert.equal(bulk.every(button => button.dataset.batchScope === scope), true);
       assert.equal(button.attributes["aria-selected"], "true");
       assert.equal(button.tabIndex, 0);
       assert.equal(ui.document.activeElement, button);
@@ -95,7 +97,7 @@ test("passive count updates reveal focused tabs horizontally without scrolling a
     const focused = tab(ui, "all");
     focused.bounds = bounds;
     focused.focus();
-    ui.inbox.onRead("7");
+    ui.inbox.onThreadUpdated("7");
     await runInContext("update()", ui.context);
     assert.equal(focused.textContent, "All (6)");
     assert.equal(strip.scrollLeft, expected);
@@ -169,15 +171,17 @@ test("a failed attention request retains both failed and newer fields for a late
   assert.equal(tab(ui, "mentioned").textContent, "Mentioned (2)");
 });
 
-test("queued tab changes survive a row read, a local poll, and hiding the panel", async () => {
-  for (const operation of ["read", "poll"]) {
+test("queued tab changes survive row read/done actions, a local poll, and hiding the panel", async () => {
+  for (const operation of ["read", "done", "poll"]) {
     let release;
     const ui = await renderer({ initialRows: rows,
-      onWrite: operation === "read" ? () => new Promise(resolve => { release = () => resolve("HTTP/2 205 Reset Content\r\n\r\n"); }) : undefined,
+      onWrite: operation !== "poll" ? () => new Promise(resolve => {
+        release = () => resolve(`HTTP/2 ${operation === "done" ? 204 : 205} Synthetic\r\n\r\n`);
+      }) : undefined,
       onState: operation === "poll" ? () => new Promise(resolve => { release = resolve; }) : undefined,
     });
-    const pending = operation === "read" ?
-      ui.ids.get("groups").querySelectorAll("button").find(button => button.dataset.threadId === "1").events.click() :
+    const pending = operation !== "poll" ?
+      ui.ids.get("groups").querySelectorAll("button").find(button => button.dataset.focusKey === `${operation}:1`).events.click() :
       ui.fireTimer();
     await settle();
     const filtering = tab(ui, "mentioned").events.click();

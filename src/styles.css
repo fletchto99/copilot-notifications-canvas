@@ -119,13 +119,19 @@ button {
 
 button:hover:not(:disabled, [aria-disabled="true"], .repo-toggle),
 summary:hover,
-.icon-button:hover,
+.icon-button:hover:not(:disabled),
 .repo-header:hover,
 .row:hover {
   background: color-mix(in srgb, var(--canvas-text) 4%, transparent);
 }
 
 button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+#force-refresh[aria-disabled="true"],
+#empty-refresh[aria-disabled="true"] {
   opacity: 0.55;
   cursor: default;
 }
@@ -435,10 +441,21 @@ input::placeholder {
 
 .status-line {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   gap: 8px;
   margin: 18px 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.status-line > #count {
+  flex: 1 1 auto;
+}
+
+.retry-status {
+  margin-bottom: 12px;
   color: var(--muted);
   font-size: 12px;
 }
@@ -505,28 +522,36 @@ input::placeholder {
   overflow: clip;
 }
 
+.repo-group:has(.repo-menu:not([hidden])) {
+  position: relative;
+  z-index: 1;
+  overflow: visible;
+}
+
 .repo-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding-right: 12px;
+  gap: 0 8px;
+  padding: 0 12px;
 }
 
 .repo-toggle {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
+  max-width: 100%;
   border: 0;
   border-radius: 0;
   text-align: left;
   white-space: normal;
   overflow-wrap: anywhere;
-  padding: 12px 16px;
+  padding: 12px 16px 12px 4px;
   font-weight: var(--font-weight-semibold, 600);
 }
 
 .repo-toggle:focus-visible {
-  outline-offset: -5px;
+  outline-offset: -3px;
 }
 
 .repo-toggle::before {
@@ -538,10 +563,50 @@ input::placeholder {
   content: "-";
 }
 
+.repo-actions {
+  position: relative;
+  display: flex;
+  flex-shrink: 0;
+  margin: 6px 0;
+}
+
 .repo-read {
   flex-shrink: 0;
   font-size: 12px;
   padding: 5px 8px;
+  border-radius: 7px 0 0 7px;
+}
+
+.repo-more {
+  width: 28px;
+  height: 32px;
+  padding: 6px 4px;
+  border-left: 0;
+  border-radius: 0 7px 7px 0;
+}
+
+.repo-menu {
+  position: absolute;
+  z-index: 3;
+  top: calc(100% + 4px);
+  right: 0;
+  width: max-content;
+  min-width: 100%;
+  max-width: calc(100vw - 56px);
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--canvas-background);
+  box-shadow: 0 4px 12px #0002;
+}
+
+.repo-done {
+  width: 100%;
+  min-height: 28px;
+  border: 0;
+  padding: 4px 8px;
+  text-align: left;
+  font-size: 12px;
 }
 
 .batch-progress {
@@ -615,15 +680,11 @@ summary::marker {
 
 .row {
   display: grid;
-  grid-template-columns: 10px minmax(0, 1fr) auto auto;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
   gap: 10px;
   padding: 13px 16px;
   border-top: 1px solid var(--border);
   align-items: start;
-}
-
-.notification-list {
-  border-bottom: 1px solid var(--border);
 }
 
 .metadata .repository {
@@ -631,9 +692,41 @@ summary::marker {
   min-width: 0;
 }
 
-.mark-read {
-  font-size: 12px;
-  padding: 3px 7px;
+.row-actions {
+  display: flex;
+  align-self: center;
+  gap: 4px;
+}
+
+.row-actions .icon-button {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  padding: 6px;
+}
+
+.row-actions button[aria-busy="true"] {
+  color: var(--accent);
+}
+
+.row-actions button[aria-busy="true"] svg {
+  visibility: hidden;
+}
+
+.row-actions button[aria-busy="true"]::after {
+  content: "";
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid currentcolor;
+  border-right-color: transparent;
+  border-radius: 50%;
+}
+
+.row-actions .tooltip {
+  top: auto;
+  bottom: 100%;
+  padding: 0 0 6px;
 }
 
 .dot {
@@ -666,10 +759,27 @@ a:hover {
 .metadata {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px 10px;
+  gap: 5px 0;
   margin-top: 4px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.metadata-item {
+  display: inline-flex;
+  align-items: baseline;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.metadata-item > :not(.metadata-separator) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.metadata-separator {
+  flex-shrink: 0;
+  margin: 0 8px;
 }
 
 .destination {
@@ -680,7 +790,6 @@ time {
   color: var(--muted);
   font-size: 12px;
   white-space: nowrap;
-  padding-top: 1px;
 }
 
 .empty {
@@ -708,6 +817,10 @@ time {
   margin-top: 9px;
   max-width: 340px;
   margin-inline: auto;
+}
+
+#empty-refresh {
+  margin-top: 16px;
 }
 
 .pagination {
@@ -759,37 +872,8 @@ footer:has(#development-build[hidden]) {
     gap: 8px;
   }
 
-  .row-content {
-    grid-column: 2 / -1;
-  }
-
-  .row time {
-    grid-column: 2;
-    align-self: center;
-    padding: 0;
-  }
-
-  .mark-read {
-    grid-column: 3;
-    justify-self: end;
-  }
-
   summary {
     padding: 12px;
-  }
-
-  .repo-header {
-    flex-wrap: wrap;
-    padding: 0;
-    gap: 0;
-  }
-
-  .repo-toggle {
-    flex-basis: 100%;
-  }
-
-  .repo-read {
-    margin: 0 12px 10px;
   }
 }
 
@@ -809,6 +893,10 @@ footer:has(#development-build[hidden]) {
   }
 
   #force-refresh[aria-busy="true"] svg {
+    animation: refresh-spin 0.8s linear infinite;
+  }
+
+  .row-actions button[aria-busy="true"]::after {
     animation: refresh-spin 0.8s linear infinite;
   }
 

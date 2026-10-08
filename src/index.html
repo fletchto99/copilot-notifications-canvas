@@ -96,9 +96,9 @@
             <div class="select-setting">
               <label for="group-by">Group By</label>
               <select id="group-by" disabled>
-                <option value="none">none</option>
-                <option value="repo" selected>repo</option>
-                <option value="date">date</option>
+                <option value="none">All notifications</option>
+                <option value="repo" selected>Repository</option>
+                <option value="date">Date</option>
               </select>
             </div>
             <button id="check-updates" type="button">Check for updates</button>
@@ -110,11 +110,12 @@
         <span id="count" role="status" aria-live="polite" title="Counts include loaded notifications only.">Waiting for inbox...</span>
         <button id="collapse" class="text-button" type="button">Collapse all</button>
       </div>
+      <p id="retry-status" class="retry-status" role="status" hidden></p>
     </header>
     <div id="attention-panel" role="tabpanel" aria-labelledby="attention-all" tabindex="0">
       <div id="settings-error" class="notice" role="alert" hidden></div>
       <div id="notice" class="notice" role="alert" hidden></div>
-      <section id="batch-progress" class="batch-progress" aria-label="Repository read operation" tabindex="-1" hidden>
+      <section id="batch-progress" class="batch-progress" aria-label="Notification operation" tabindex="-1" hidden>
         <h2 id="batch-title"></h2>
         <p id="batch-counts"></p>
         <p id="batch-error" role="alert" hidden></p>
@@ -128,6 +129,7 @@
         <div id="empty-symbol" class="empty-symbol" aria-hidden="true">/</div>
         <h2 id="empty-title">Connecting to GitHub</h2>
         <p id="empty-description">Using your existing GitHub CLI sign-in.</p>
+        <button id="empty-refresh" type="button" aria-describedby="retry-status" hidden>Refresh notifications</button>
       </section>
       <section id="groups" aria-label="Notifications by repository"></section>
       <div class="pagination">

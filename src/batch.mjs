@@ -3,16 +3,24 @@ import { InboxError } from "./model.mjs";
 
 export function selectionKey(group, filters) {
   return createHash("sha256").update(JSON.stringify([
-    group.repository, filters.query, filters.attention, group.items.map(item => [item.id, item.updatedAt]),
+    group.repository, filters.query, filters.attention,
+    group.items.map(item => [item.id, item.updatedAt, item.repository]),
   ])).digest("hex");
 }
 
-function fields(input, keys) {
+function fields(input, keys, optional = []) {
   return input && typeof input === "object" && !Array.isArray(input) &&
-    Object.keys(input).length === keys.length && keys.every(key => Object.hasOwn(input, key));
+    keys.every(key => Object.hasOwn(input, key)) &&
+    Object.keys(input).every(key => keys.includes(key) || optional.includes(key));
 }
 
-export class ReadBatch {
+function validDate(value) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const timestamp = Date.parse(`${value}T00:00:00Z`);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString().slice(0, 10) === value;
+}
+
+export class NotificationBatch {
   constructor(inbox) {
     this.inbox = inbox;
     this.operation = null;
@@ -26,7 +34,7 @@ export class ReadBatch {
 
   assertAvailable() {
     if (this.disposed) throw new InboxError("closed", "The canvas was closed.", 410);
-    if (this.locked || this.inbox.busy || this.inbox.reading.size) {
+    if (this.locked || this.inbox.busy || this.inbox.marking.size) {
       throw new InboxError("busy", "Finish or cancel the current inbox operation first.", 409);
     }
   }
@@ -34,29 +42,37 @@ export class ReadBatch {
   identify(input) {
     if (!fields(input, ["token"]) || typeof input.token !== "string" ||
         !/^[a-f0-9-]{36}$/.test(input.token)) {
-      throw new InboxError("invalid_batch", "Use the current repository operation token.", 400);
+      throw new InboxError("invalid_batch", "Use the current notification operation token.", 400);
     }
     if (!this.operation || this.operation.token !== input.token) {
-      throw new InboxError("unknown_batch", "This repository operation is no longer available. Review the updated view and try again.", 409);
+      throw new InboxError("unknown_batch", "This notification operation is no longer available. Review the updated view and try again.", 409);
     }
     return this.operation;
   }
 
   start(input) {
     this.assertAvailable();
-    if (!fields(input, ["repository", "selectionKey"]) || typeof input.repository !== "string" ||
-        input.repository.length > 256 || typeof input.selectionKey !== "string" ||
+    const shown = input?.scope === "shown";
+    const dated = input?.scope === "date";
+    const required = dated ? ["scope", "date", "timeZone", "selectionKey"] :
+      shown ? ["scope", "selectionKey"] : ["repository", "selectionKey"];
+    if (!fields(input, required, ["action"]) ||
+        (Object.hasOwn(input, "action") && !["read", "done"].includes(input.action)) ||
+        (!shown && !dated && (typeof input.repository !== "string" || input.repository.length > 256)) ||
+        (dated && (!validDate(input.date) || typeof input.timeZone !== "string" || !input.timeZone || input.timeZone.length > 128)) ||
+        typeof input.selectionKey !== "string" ||
         !/^[a-f0-9]{64}$/.test(input.selectionKey)) {
-      throw new InboxError("invalid_selection", "Choose a currently shown repository group.", 400);
+      throw new InboxError("invalid_selection", "Choose currently shown notifications and a read or done action.", 400);
     }
-    const group = this.inbox.groups().find(item => item.repository === input.repository);
-    if (!group || group.selectionKey !== input.selectionKey) {
-      throw new InboxError("selection_changed", "The shown group changed. Review its updated count and try again.", 409);
+    const selection = dated ? this.inbox.dateSelection(input.date, input.timeZone) : shown ? this.inbox.shownSelection() :
+      this.inbox.groups().find(item => item.repository === input.repository);
+    if (!selection || selection.selectionKey !== input.selectionKey) {
+      throw new InboxError("selection_changed", "The shown selection changed. Review its updated count and try again.", 409);
     }
-    this.launch(group.repository, group.items);
+    this.launch(selection.repository, selection.items, input.action ?? "read", dated ? "date" : shown ? "shown" : "repository", input);
   }
 
-  launch(repository, items) {
+  launch(repository, items, action = "read", scope = "repository", { date, timeZone } = {}) {
     if (!items.length || items.some(item => !/^[1-9]\d{0,63}$/.test(item.id)) ||
         new Set(items.map(item => item.id)).size !== items.length) {
       throw new InboxError("invalid_selection", "The selected group contains no eligible notifications or invalid thread IDs.", 400);
@@ -65,11 +81,12 @@ export class ReadBatch {
       throw this.inbox.client.lastError ??
         new InboxError("rate_limited", "GitHub requests are paused until the rate limit resets.", 429);
     }
-    const owner = this.inbox.client.reserveReads(items.map(item => item.id));
+    const owner = this.inbox.client.reserveThreads(items.map(item => item.id));
     const operation = {
-      token: randomUUID(), repository, status: "running",
+      token: randomUUID(), repository, scope, action, status: "running",
+      ...(scope === "date" ? { date, timeZone } : {}),
       searchActive: Boolean(this.inbox.filters.query.trim()),
-      items: items.map(({ id, updatedAt }) => ({ id, updatedAt, result: "pending" })),
+      items: items.map(({ id, updatedAt, repository }) => ({ id, updatedAt, repository, result: "pending" })),
       inFlight: false, cancelled: false, error: null, owner, controller: new AbortController(),
     };
     this.operation = operation;
@@ -78,11 +95,12 @@ export class ReadBatch {
 
   eligible(operation, item) {
     const current = this.inbox.loadedItems().find(row => row.id === item.id);
-    if (!current || current.repository !== operation.repository || current.updatedAt !== item.updatedAt) return false;
+    if (!current || current.repository !== item.repository || current.updatedAt !== item.updatedAt ||
+        (operation.scope === "repository" && current.repository !== operation.repository)) return false;
     // A different panel may have fetched a newer version since this selection was clicked.
     for (const page of this.inbox.client.cache.values()) {
       if (page.items.some(row => row.id === item.id &&
-          (!row.unread || row.repository !== operation.repository || row.updatedAt > item.updatedAt))) return false;
+          (!row.unread || row.repository !== item.repository || row.updatedAt > item.updatedAt))) return false;
     }
     return true;
   }
@@ -97,7 +115,8 @@ export class ReadBatch {
             item.result = "skipped";
             continue;
           }
-          await this.inbox.client.markRead(item.id, signal, {
+          const method = operation.action === "done" ? "markDone" : "markRead";
+          await this.inbox.client[method](item.id, signal, {
             owner: operation.owner,
             beforeWrite: () => {
               if (operation.cancelled || signal.aborted) throw new InboxError("batch_cancelled", "Remaining work was cancelled.", 409);
@@ -127,7 +146,7 @@ export class ReadBatch {
       operation.status = operation.items.every(item => item.result === "succeeded") ? "completed" :
         operation.cancelled || signal.aborted ? "cancelled" : "partial";
     } finally {
-      this.inbox.client.releaseReads(operation.owner);
+      this.inbox.client.releaseThreads(operation.owner);
       if (this.disposed || operation.status === "completed") this.operation = null;
     }
   }
@@ -145,13 +164,16 @@ export class ReadBatch {
   retry(input) {
     this.assertAvailable();
     const operation = this.identify(input);
-    const shown = new Set(this.inbox.groups().find(group => group.repository === operation.repository)?.items.map(item => item.id));
+    const selection = operation.scope === "date" ? this.inbox.dateSelection(operation.date, operation.timeZone) :
+      operation.scope === "shown" ? this.inbox.shownSelection() :
+      this.inbox.groups().find(group => group.repository === operation.repository);
+    const shown = new Set(selection?.items.map(item => item.id));
     const remaining = operation.items.filter(item => ["pending", "failed"].includes(item.result) &&
       shown.has(item.id) && this.eligible(operation, item));
     if (!remaining.length) {
-      throw new InboxError("no_remaining", "No unchanged, shown notifications remain from this batch. Wait for the next automatic refresh, then choose a repository group instead.", 409);
+      throw new InboxError("no_remaining", "No unchanged, shown notifications remain from this batch. Wait for the next automatic refresh, then review the current selection.", 409);
     }
-    this.launch(operation.repository, remaining);
+    this.launch(operation.repository, remaining, operation.action, operation.scope, operation);
   }
 
   dismiss(input) {
@@ -165,7 +187,8 @@ export class ReadBatch {
     if (!operation) return null;
     const count = result => operation.items.filter(item => item.result === result).length;
     return {
-      token: operation.token, repository: operation.repository, status: operation.status,
+      token: operation.token, repository: operation.repository, scope: operation.scope, action: operation.action, status: operation.status,
+      ...(operation.scope === "date" ? { date: operation.date, timeZone: operation.timeZone } : {}),
       total: operation.items.length, succeeded: count("succeeded"), failed: count("failed"),
       skipped: count("skipped"), notAttempted: count("pending") - Number(operation.inFlight),
       inFlight: operation.inFlight, searchActive: operation.searchActive,

@@ -22,9 +22,12 @@ export const test = base.extend({
     const root = await mkdtemp(join(tmpdir(), "notification-browser-"));
     const directory = join(root, "home", "extensions", "github-notifications", "artifacts");
     const writes = [];
+    const doneWrites = [];
     const deliveries = [];
     const requests = [];
     const errors = [];
+    const consoleErrors = [];
+    const expectedConsoleErrors = [];
     const warnings = [];
     let assetsUnavailable = assetFailure;
     let requestHook;
@@ -51,13 +54,14 @@ export const test = base.extend({
       if (endpoint.endsWith("/releases/latest")) {
         return http({ tag_name: `v${CURRENT_VERSION}`, draft: false, prerelease: false });
       }
-      if (args.includes("PATCH")) {
+      if (args.includes("PATCH") || args.includes("DELETE")) {
         const match = /^\/notifications\/threads\/(\d+)$/.exec(endpoint);
         const row = rows.find(item => item.id === match?.[1]);
         assertUnread(row, endpoint);
         row.unread = false;
         writes.push(row.id);
-        return "HTTP/2 205 Reset Content\r\n\r\n";
+        if (args.includes("DELETE")) doneWrites.push(row.id);
+        return `HTTP/2 ${args.includes("DELETE") ? 204 : 205} Synthetic\r\n\r\n`;
       }
       const url = new URL(endpoint, "https://api.github.com");
       if (!args.includes("GET") || url.pathname !== "/notifications") throw new Error(`Unexpected request: ${endpoint}`);
@@ -103,14 +107,16 @@ export const test = base.extend({
       });
       page.on("pageerror", error => errors.push(error.message));
       page.on("console", message => {
-        if (message.type() === "error") errors.push(message.text());
+        if (message.type() === "error") consoleErrors.push({ text: message.text(), url: message.location().url });
       });
-      await use({ url: server.url, rows, writes, requests, preferences, deliveries,
+      await use({ url: server.url, rows, writes, doneWrites, requests, preferences, deliveries,
         desktop,
+        expectConsoleError: (path, text) => expectedConsoleErrors.push({ text, url: new URL(path, origin).href }),
         setRequestHook: hook => { requestHook = hook; },
         advance: ms => { offset += ms; return Date.now() + offset; },
         recoverAssets: () => { assetsUnavailable = false; } });
       expect(errors, "Browser execution, CSP, and external-network errors").toEqual([]);
+      expect(consoleErrors, "Exact expected browser console errors").toEqual(expectedConsoleErrors);
       expect(warnings).toEqual(assetFailure
         ? ["Could not load the notifications canvas assets (ENOENT). Retrying in the background."] : []);
     } finally {

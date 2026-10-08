@@ -41,34 +41,90 @@ test("a delayed refresh survives hiding and showing the document without losing 
   }
 });
 
-test("changed local polls do not steal focus from pending row reads", async ({ page, canvas }) => {
+for (const action of ["read", "done"]) {
+  test(`changed local polls do not steal focus from pending ${action} actions`, async ({ page, canvas }) => {
+    canvas.rows.splice(2);
+    await page.clock.install();
+    await page.goto(canvas.url);
+    await expect(page.locator(".row")).toHaveCount(2);
+    await expect(page.locator("#group-by")).toBeEnabled();
+    const held = gate();
+    const entered = gate();
+    await page.route("**/api/state", async route => {
+      const response = await route.fetch();
+      const state = await response.json();
+      state.groups[0].items[0].title = "Changed during status polling";
+      entered.release();
+      await held.promise;
+      await route.fulfill({ response, json: state });
+    }, { times: 1 });
+    try {
+      await page.clock.fastForward(5000);
+      await entered.promise;
+      const button = page.locator(`[data-focus-key="${action}:1"]`);
+      await button.focus();
+      await button.press("Enter");
+      await expect(button).toBeDisabled();
+      expect(canvas.writes).toEqual([]);
+      held.release();
+      await expect(page.locator(".row")).toHaveCount(1);
+      await expect(page.locator(`[data-focus-key="${action}:2"]`)).toBeFocused();
+      expect(canvas.writes).toEqual(["1"]);
+      expect(canvas.doneWrites).toEqual(action === "done" ? ["1"] : []);
+    } finally {
+      held.release();
+    }
+  });
+}
+
+test("Done waits for confirmation, reports failures, and never retries automatically", async ({ page, canvas }) => {
   canvas.rows.splice(2);
   await page.clock.install();
   await page.goto(canvas.url);
-  await expect(page.locator(".row")).toHaveCount(2);
-  await expect(page.locator("#group-by")).toBeEnabled();
+  const done = page.locator('[data-focus-key="done:1"]');
+  await expect(done).toBeEnabled();
   const held = gate();
   const entered = gate();
-  await page.route("**/api/state", async route => {
-    const response = await route.fetch();
-    const state = await response.json();
-    state.groups[0].items[0].title = "Changed during status polling";
+  let attempts = 0;
+  canvas.expectConsoleError("/api/done", "Failed to load resource: the server responded with a status of 502 (Bad Gateway)");
+  canvas.setRequestHook(async args => {
+    if (!args.includes("DELETE")) return;
+    attempts++;
     entered.release();
     await held.promise;
-    await route.fulfill({ response, json: state });
-  }, { times: 1 });
+    return http({}, {}, 500);
+  });
   try {
-    await page.clock.fastForward(5000);
+    await done.focus();
+    await done.press("Enter");
     await entered.promise;
-    const button = page.locator('[data-thread-id="1"]');
-    await button.focus();
-    await button.press("Enter");
-    await expect(button).toBeDisabled();
-    expect(canvas.writes).toEqual([]);
+    await expect(done).toBeDisabled();
+    await expect(done).toHaveText("");
+    await expect(done).toHaveAttribute("aria-busy", "true");
+    await expect(done.locator("svg")).toHaveCount(1);
+    await expect(done.locator("svg")).toBeHidden();
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    expect(await done.evaluate(node => getComputedStyle(node, "::after").animationName)).toBe("none");
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    expect(await done.evaluate(node => getComputedStyle(node, "::after").animationName)).toBe("refresh-spin");
+    await expect(page.locator('[data-focus-key="read:1"]')).toBeDisabled();
+    await expect(page.locator(".repo-read")).toBeDisabled();
+    await expect(page.locator(".row")).toHaveCount(2);
     held.release();
+    await expect(page.locator("#notice")).toContainText("Could not mark the notification as done");
+    await expect(done).toBeEnabled();
+    await expect(done).toHaveAttribute("aria-busy", "false");
+    await expect(done.locator("svg")).toBeVisible();
+    await expect(done).toBeFocused();
+    expect(canvas.writes).toEqual([]);
+    await page.clock.fastForward(5000);
+    expect(attempts).toBe(1);
+    canvas.advance(120_000);
+    canvas.setRequestHook(undefined);
+    await done.press("Enter");
     await expect(page.locator(".row")).toHaveCount(1);
-    await expect(page.locator('[data-thread-id="2"]')).toBeFocused();
-    expect(canvas.writes).toEqual(["1"]);
+    await expect(page.locator("#notice")).toBeHidden();
+    expect(canvas.doneWrites).toEqual(["1"]);
   } finally {
     held.release();
   }
@@ -90,9 +146,9 @@ test("batch cancellation waits for the in-flight write and retry writes only rem
     await expect(page.locator("#batch-title")).toContainText("Stopping");
     canvas.setRequestHook(undefined);
     held.release();
-    await expect(page.getByRole("button", { name: "Retry remaining (1)", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Continue remaining (1)", exact: true })).toBeVisible();
     expect(canvas.writes).toEqual(["1"]);
-    await page.getByRole("button", { name: "Retry remaining (1)", exact: true }).click();
+    await page.getByRole("button", { name: "Continue remaining (1)", exact: true }).click();
     await expect(page.locator(".row")).toHaveCount(0);
     expect(canvas.writes).toEqual(["1", "2"]);
   } finally {

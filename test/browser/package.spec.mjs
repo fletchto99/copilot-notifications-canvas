@@ -12,7 +12,7 @@ test("installed bundle supports search, saved settings and exact row writes in a
   await expect(page.locator(".eyebrow")).toBeVisible();
   await expect(page.locator("#subtitle")).toBeVisible();
   await expect(page.getByRole("searchbox")).toHaveAttribute("placeholder", "Search...");
-  await expect(page.getByRole("button", { name: "Mark 1 shown, loaded notifications as read in example/tools", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Mark 1 shown, loaded notifications as read in example/tools", exact: true })).toBeVisible();
   const next = page.getByRole("button", { name: "Scroll attention tabs right", exact: true });
   await expect(next).toBeVisible();
   await next.click();
@@ -32,8 +32,10 @@ test("installed bundle supports search, saved settings and exact row writes in a
   await page.getByRole("combobox", { name: "Theme", exact: true }).selectOption("dark");
   await expect(page.locator("html")).toHaveAttribute("data-notification-theme", "dark");
   await page.getByRole("combobox", { name: "Group By", exact: true }).selectOption("none");
-  await expect(page.locator(".repo-group")).toHaveCount(0);
+  await expect(page.locator(".repo-group")).toHaveCount(1);
+  await expect(page.locator(".repo-name")).toHaveText("All notifications");
   await page.keyboard.press("Escape");
+  await expect(page.getByRole("button", { name: "Mark as read: Needle widget 2", exact: true })).toHaveAccessibleDescription("Mark as read");
   await page.getByRole("button", { name: "Mark as read: Needle widget 2", exact: true }).click();
   await expect(page.locator(".row")).toHaveCount(0);
   await expect(page.locator("#empty-title")).toHaveText("No matches in loaded notifications");
@@ -44,8 +46,34 @@ test("installed bundle supports search, saved settings and exact row writes in a
   await page.getByRole("tab", { name: "All (49)", exact: true }).click();
   await expect(page.locator(".row")).toHaveCount(49);
   expect(canvas.writes).toEqual(["2"]);
+  const done = page.getByRole("button", { name: "Mark as done: Needle tool", exact: true });
+  await expect(done).toHaveText("");
+  await expect(done.locator("svg")).toBeVisible();
+  await done.hover();
+  await expect(page.locator("#row-done-3-tooltip")).toBeVisible();
+  await expect(page.locator("#row-done-3-tooltip")).toHaveText("Mark as done");
+  await done.click();
+  await expect(page.locator(".row")).toHaveCount(48);
+  await expect(page.getByRole("tab", { name: "All (48)", exact: true })).toHaveAttribute("aria-selected", "true");
+  expect(canvas.writes).toEqual(["2", "3"]);
+  expect(canvas.doneWrites).toEqual(["3"]);
   await page.reload();
   await expect(page.locator("html")).toHaveAttribute("data-notification-theme", "dark");
-  await expect(page.locator(".repo-group")).toHaveCount(0);
+  await expect(page.locator(".repo-group")).toHaveCount(1);
+  await expect(page.locator(".repo-name")).toHaveText("All notifications");
+  await expect(page.locator('[data-focus-key="done:3"]')).toHaveCount(0);
   expect((await canvas.preferences.read()).groupBy).toBe("none");
+});
+
+test("installed bundle sends single-notification Done actions through the split control", async ({ page, canvas }) => {
+  canvas.rows.splice(1);
+  await page.goto(canvas.url);
+  await page.getByRole("button", { name: "More actions for example/widgets", exact: true }).click();
+  const done = page.getByRole("button", { name: "Mark 1 shown, loaded notifications as done in example/widgets", exact: true });
+  await expect(done).toBeFocused();
+  expect(canvas.doneWrites).toEqual([]);
+  await done.press("Enter");
+  await expect(page.locator(".row")).toHaveCount(0);
+  expect(canvas.doneWrites).toEqual(["1"]);
+  expect(canvas.writes).toEqual(["1"]);
 });

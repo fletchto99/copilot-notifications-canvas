@@ -173,7 +173,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         res.end(file.body);
         return;
       }
-      if (!["/api/ready", "/api/state", "/api/refresh", "/api/more", "/api/filters", "/api/settings", "/api/read", "/api/updates"].includes(path) &&
+      if (!["/api/ready", "/api/state", "/api/refresh", "/api/more", "/api/filters", "/api/settings", "/api/read", "/api/done", "/api/updates"].includes(path) &&
           !batchRoutes.has(path)) {
         throw new InboxError("not_found", "Route not found.", 404);
       }
@@ -197,7 +197,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         if (req.method !== "POST") throw new InboxError("method", "Only POST is supported.", 405);
         if (req.headers.origin !== origin) throw new InboxError("origin", "A same-origin request is required.", 403);
         const input = await readBody(req);
-        if (!["/api/refresh", "/api/filters", "/api/settings", "/api/read"].includes(path) && !batchRoutes.has(path) && Object.keys(input).length) {
+        if (!["/api/refresh", "/api/filters", "/api/settings", "/api/read", "/api/done"].includes(path) && !batchRoutes.has(path) && Object.keys(input).length) {
           throw new InboxError("invalid_input", "This action takes an empty object.", 400);
         }
         if (path === "/api/updates") {
@@ -223,6 +223,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
           return json(200, settingsSnapshot(settings));
         }
         if (path === "/api/read") await inbox.markRead(input);
+        if (path === "/api/done") await inbox.markDone(input);
         if (batchRoutes.has(path)) {
           inbox.batch[batchRoutes.get(path)](input);
           return json(["/api/batch/start", "/api/batch/retry"].includes(path) ? 202 : 200, snapshot());
