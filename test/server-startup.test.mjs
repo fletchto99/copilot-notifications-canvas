@@ -48,7 +48,7 @@ test("missing assets open a protected recovery page and recover on the same URL"
   }
   assert.equal((await fetch(`${origin}/api/ready`, { method: "POST", headers })).status, 405);
   assert.deepEqual(await (await fetch(`${origin}/api/ready`, { headers })).json(), { ready: false });
-  for (const path of ["/app.mjs", "/styles.css", "/api/state", "/api/settings", "/api/refresh", "/api/read"]) {
+  for (const path of ["/app.mjs", "/styles.css", "/api/state", "/api/settings", "/api/refresh", "/api/read", "/api/done"]) {
     const response = await fetch(`${origin}${path}`, { headers });
     assert.equal(response.status, 503, path);
     assert.equal((await response.json()).error.code, "server_initializing");

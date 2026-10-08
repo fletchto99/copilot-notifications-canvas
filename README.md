@@ -2,9 +2,9 @@
 
 Unread GitHub notifications in the GitHub Copilot app, grouped by repository or
 date, or shown as a single newest-first list. Search, mark rows or repositories
-as read, and opt into desktop notifications or auto-open.
+as read or done, and opt into desktop notifications or auto-open.
 
-![Unread Notifications canvas showing attention tabs with counts, search, settings, and a notification with a mark-as-read action](docs/images/unread-notifications.png)
+![Unread Notifications canvas showing attention tabs, two demo notifications, and row and repository read/done controls](docs/images/unread-notifications.png)
 
 ## Prerequisites
 
@@ -39,51 +39,16 @@ full procedure, verification requirements, and troubleshooting.
 
 ## Usage
 
-- **Browse and search:** loads up to 50 notifications at a time; **Load more**
-  continues while GitHub has more pages. Issue and PR numbers appear beside the
-  type below each title (for example, `Issue #42` or `Pull Request #42`).
-  Search matches titles, numbers and repositories;
-  search and counts cover loaded items only. Numbers are omitted when GitHub
-  does not provide a valid issue or PR link.
-- **Attention tabs:** new panels start on **All** (all loaded unread items).
-  **Review requested** shows review requests, **Mentioned** includes personal
-  and team mentions, **Assigned** shows assignments, and **Participating**
-  shows threads you authored or commented on. These use GitHub's notification
-  reason, not a full history of your involvement; a thread's reason can change.
-  Tabs combine with search in every grouping mode and stay selected during
-  refresh and pagination. Each tab's count, such as **Review requested (3)**,
-  includes all loaded unread items in that category, independent of search.
-  The status line reports matches for the selected tab and search.
-  Use Left/Right Arrow or Home/End to switch tabs.
-  When tabs do not all fit, edge arrows scroll the strip without changing your
-  selected filter. The scrollbar stays hidden; touch and trackpad scrolling
-  still work. Passive count updates only scroll the tab strip, not the page.
-  Clearing the search leaves the selected attention tab unchanged.
-- **Mark as read:** mark individual rows in any view. In **repo** mode, groups
-  with multiple matching notifications also offer **Mark N as read**. This
-  marks only that repository's loaded items matching your attention tab and
-  search, not hidden or older unloaded notifications.
-- **Responsive layout:** panel padding and header spacing stay consistent while
-  resizing. In narrow panels, timestamps share a line with row read actions.
-  Header text, notification titles, and metadata remain visible.
-- **Refresh:** automatic checks run about every 60 seconds while the canvas is
-  visible and pause while hidden. Returning to the foreground refreshes immediately.
-  Longer GitHub polling intervals apply to automatic checks. Foreground returns
-  and the **Force refresh** icon immediately left of **Settings** check loaded
-  pages without waiting for the polling interval, but cannot bypass rate limits
-  or error retry waits. Its theme-matched tooltip appears immediately on hover
-  or keyboard focus and reports seconds since the last successful update.
-  Its elapsed time updates every 15 seconds while visible. Inbox and Settings
-  use the same immediate tooltips; press Escape to dismiss them.
-  When desktop alerts are enabled, foreground checks feed the same results to
-  the desktop watcher. It continues checking about every minute while
-  the canvas is hidden; the OS controls when alerts appear.
-- **Open GitHub:** the inbox icon beside **Settings** opens your
-  [GitHub inbox](https://github.com/notifications).
+- Filter with the attention tabs or search by title, issue/PR number, or repository.
+- Choose **All notifications**, **Repository**, or **Date** in **Settings**.
+- Use the envelope to mark a row **read**, or the checkmark to mark it **done**.
+  Each group header offers the same bulk actions.
+- Use **Load more** for older notifications. Search, counts, and bulk actions
+  cover **loaded items only**, not your entire GitHub inbox.
 
-Open **Settings** for grouping, theme, auto-open, desktop notifications, and sound.
-Preferences persist across sessions; auto-open and desktop alerts are off by
-default. See the [settings guide](docs/settings.md) for details and platform support.
+See the [usage guide](docs/usage.md) for filtering, bulk actions, keyboard
+controls, and refresh behavior. [Settings](docs/settings.md) covers saved
+preferences and opt-in desktop alerts.
 
 ## Privacy
 
@@ -100,11 +65,12 @@ errors. GitHub CLI handles credentials; they never enter the canvas renderer.
 
 GitHub CLI fetches notifications and public release metadata. Update checks do
 not send notification content or download or execute release code. Only explicit
-**Mark as read** actions send read updates; visiting a linked GitHub page may
-also mark a notification read on GitHub.
+**Mark as read** or **Mark as done** actions send notification updates; visiting a
+linked GitHub page may also mark a notification read on GitHub.
 
 ## Documentation
 
+- [Usage](docs/usage.md): browsing, filtering, Read/Done actions, and keyboard controls.
 - [Installation](docs/installation.md): setup, updates, and verification.
 - [Settings](docs/settings.md): preferences, desktop alerts, and troubleshooting.
 - [Development](docs/development.md): local development, tests, packaging, and releases.

@@ -1,6 +1,6 @@
 # Development
 
-[README](../README.md) | [Installation](installation.md) | [Settings](settings.md)
+[README](../README.md) | [Usage](usage.md) | [Installation](installation.md) | [Settings](settings.md)
 
 Coding agents should follow [AGENTS.md](../AGENTS.md). Copilot also loads
 [`.github/copilot-instructions.md`](../.github/copilot-instructions.md), which
