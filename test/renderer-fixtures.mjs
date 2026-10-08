@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { Inbox } from "../src/inbox.mjs";
 import { GitHubClient } from "../src/github.mjs";
 import { desktopCapabilities } from "../src/notifier.mjs";
-import { attentionFilters, notificationTitle, orderedThreads } from "../src/model.mjs";
+import { attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads } from "../src/model.mjs";
 import { http, thread } from "./fixtures.mjs";
 
 export const script = await readFile(process.env.NOTIFICATIONS_TEST_SCRIPT ??
@@ -44,6 +44,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
   };
   const copied = [];
   const patches = [];
+  const deletions = [];
   const githubCalls = [];
   class Node {
     constructor(tag) {
@@ -106,7 +107,8 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     querySelectorAll(selector) {
       const result = [];
       for (const child of this.children) {
-        if (child.tag === selector || (selector === "[data-focus-key]" && child.dataset.focusKey)) result.push(child);
+        if (child.tag === selector || (selector === "[data-focus-key]" && child.dataset.focusKey) ||
+            (selector.startsWith(".") && child.className?.split(" ").includes(selector.slice(1)))) result.push(child);
         result.push(...child.querySelectorAll(selector));
       }
       return result;
@@ -135,6 +137,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       return ids.get(id) ?? document.querySelectorAll("button").find(node => node.id === id) ?? null;
     },
     createElement: tag => new Node(tag),
+    createElementNS: (namespace, tag) => Object.assign(new Node(tag), { namespaceURI: namespace }),
     createDocumentFragment: () => new Node("fragment"),
     querySelectorAll: selector => [...ids.values()].flatMap(node => node.querySelectorAll(selector)),
     addEventListener(name, handler) { this.events[name] = handler; },
@@ -149,15 +152,17 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
   window.matchMedia = () => media;
   const inbox = new Inbox(new GitHubClient({ now: () => now, sleep: async delay => { now += delay; }, run: async args => {
     githubCalls.push(args);
-    if (args.includes("PATCH")) {
-      patches.push(args.at(-1));
-      if (onWrite) return onWrite(args.at(-1), patches.length);
-      return readFailure ? http({}, {}, 403) : "HTTP/2 205 Reset Content\r\n\r\n";
+    if (args.includes("PATCH") || args.includes("DELETE")) {
+      const done = args.includes("DELETE");
+      (done ? deletions : patches).push(args.at(-1));
+      if (onWrite) return onWrite(args.at(-1), patches.length + deletions.length, done ? "DELETE" : "PATCH");
+      return readFailure && !done ? http({}, {}, 403) : `HTTP/2 ${done ? 204 : 205} Synthetic\r\n\r\n`;
     }
     return onFetch ? onFetch(args) : http(rows);
   } }));
   const context = createContext({
-    document, window, location: { hash: `#${token}` }, Intl, AbortController, attentionFilters, notificationTitle, orderedThreads,
+    document, window, location: { hash: `#${token}` }, Intl, AbortController,
+    attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads,
     navigator: { clipboard: { writeText: async text => {
       if (clipboardFailure) throw new Error("Clipboard denied");
       copied.push(text);
@@ -210,18 +215,19 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
         await inbox.setFilters(input);
       }
       if (path === "/api/read") await inbox.markRead(JSON.parse(options.body));
+      if (path === "/api/done") await inbox.markDone(JSON.parse(options.body));
       if (path.startsWith("/api/batch/")) inbox.batch[path.slice("/api/batch/".length)](JSON.parse(options.body));
       return { ok: true, json: async () => ({ ...inbox.snapshot(), updates: releaseMetadata, development }) };
     },
   });
-  if (!process.env.NOTIFICATIONS_TEST_SCRIPT) assert.match(script, /^import \{ attentionFilters, notificationTitle, orderedThreads \} from "\.\/model\.mjs";/);
+  if (!process.env.NOTIFICATIONS_TEST_SCRIPT) assert.match(script, /^import \{ attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads \} from "\.\/model\.mjs";/);
   // Preserve source offsets for the coverage report when removing the injected import.
-  runInContext(script.replace(/^import \{ attentionFilters, notificationTitle, orderedThreads \} from "\.\/model\.mjs";/, match => " ".repeat(match.length)), context, {
+  runInContext(script.replace(/^import \{ attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads \} from "\.\/model\.mjs";/, match => " ".repeat(match.length)), context, {
     filename: process.env.NOTIFICATIONS_TEST_SCRIPT ?? fileURLToPath(new URL("../src/app.mjs", import.meta.url)),
   });
   await settle();
   return {
-    calls, document, window, ids, timers, context, inbox, patches, githubCalls, copied, media,
+    calls, document, window, ids, timers, context, inbox, patches, deletions, githubCalls, copied, media,
     get themeDisconnected() { return themeDisconnected; },
     attentionObserved,
     resizeAttention: () => attentionResized(),

@@ -124,6 +124,41 @@ export function orderedThreads(threads) {
     b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id));
 }
 
+export function dateLabel(date) {
+  return new Date(`${date}T00:00:00Z`).toLocaleDateString(undefined, {
+    timeZone: "UTC", year: "numeric", month: "long", day: "numeric",
+  });
+}
+
+export function groupThreadsByDate(threads, timeZone) {
+  if (typeof timeZone !== "string" || !timeZone || timeZone.length > 128) {
+    throw new InboxError("invalid_time_zone", "Choose a supported calendar time zone.", 400);
+  }
+  let formatter;
+  try {
+    formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone, calendar: "gregory", numberingSystem: "latn", year: "numeric", month: "2-digit", day: "2-digit",
+    });
+  } catch (error) {
+    if (error instanceof RangeError) throw new InboxError("invalid_time_zone", "Choose a supported calendar time zone.", 400);
+    throw error;
+  }
+  const groups = new Map();
+  for (const item of orderedThreads(threads)) {
+    if (!item.unread) continue;
+    const parts = Object.fromEntries(formatter.formatToParts(new Date(item.updatedAt)).map(({ type, value }) => [type, value]));
+    const date = `${parts.year.padStart(4, "0")}-${parts.month}-${parts.day}`;
+    let group = groups.get(date);
+    if (!group) {
+      group = { key: `date:${parts.year}-${Number(parts.month)}-${Number(parts.day)}`, date, timeZone, label: dateLabel(date), unread: 0, items: [] };
+      groups.set(date, group);
+    }
+    group.items.push(item);
+    group.unread++;
+  }
+  return [...groups.values()];
+}
+
 function searchThreads(threads, query) {
   const search = query.trim().toLocaleLowerCase();
   return orderedThreads(threads).filter(thread => thread.unread &&

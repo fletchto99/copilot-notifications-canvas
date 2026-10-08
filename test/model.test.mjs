@@ -1,7 +1,34 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { attentionCounts, attentionFilters, filterSchema, groupThreads, normalizeThreads, notificationLink, notificationTitle, orderedThreads, validateFilters } from "../src/model.mjs";
+import { attentionCounts, attentionFilters, dateLabel, filterSchema, groupThreads, groupThreadsByDate, normalizeThreads, notificationLink, notificationTitle, orderedThreads, validateFilters } from "../src/model.mjs";
 import { thread } from "./fixtures.mjs";
+
+test("calendar grouping uses the requested zone rather than the provider's local date", () => {
+  const items = normalizeThreads([
+    thread("1", { updated_at: "2026-01-01T00:30:00Z" }),
+    thread("2", { updated_at: "2026-01-01T08:30:00Z" }),
+    thread("3", { updated_at: "2026-01-02T08:30:00Z", unread: false }),
+  ]);
+  const west = groupThreadsByDate(items, "America/Los_Angeles");
+  assert.deepEqual(west.map(group => [group.date, group.items.map(item => item.id)]), [
+    ["2026-01-01", ["2"]], ["2025-12-31", ["1"]],
+  ]);
+  assert.equal(west[0].key, "date:2026-1-1");
+  assert.equal(west[0].timeZone, "America/Los_Angeles");
+  assert.equal(west[0].label, dateLabel("2026-01-01"));
+  const east = groupThreadsByDate(items, "Asia/Tokyo");
+  assert.deepEqual(east.map(group => [group.date, group.items.map(item => item.id)]), [["2026-01-01", ["2", "1"]]]);
+  assert.equal(east[0].unread, 2);
+});
+
+test("calendar grouping rejects unsupported zones and surfaces unexpected formatter failures", t => {
+  for (const zone of [undefined, null, 1, "", "x".repeat(129), "Invalid/Zone"]) {
+    assert.throws(() => groupThreadsByDate([], zone), { code: "invalid_time_zone", status: 400 });
+  }
+  const failure = new Error("Synthetic formatter failure");
+  t.mock.method(Intl, "DateTimeFormat", function () { throw failure; });
+  assert.throws(() => groupThreadsByDate([], "UTC"), error => error === failure);
+});
 
 test("groups alphabetically while deduplicating and ordering notifications newest first, then by ID", () => {
   const items = normalizeThreads([
