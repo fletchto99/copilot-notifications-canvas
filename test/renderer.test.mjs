@@ -452,9 +452,9 @@ test("Force refresh is an accessible, always-enabled icon immediately before Set
   assert.match(button[2], /^\s*<svg\b[^>]*>\s*<path\b[^>]*\/>\s*<\/svg>\s*$/);
   assert.match(html, /<div id="refresh-control" class="tooltip-anchor">[\s\S]*?<\/div>\s*<details id="settings"/);
   assert.match(html, /id="refresh-tooltip"[^>]*role="tooltip"/);
-  assert.match(styles, /\.tooltip-anchor:not\(\[data-tooltip-dismissed\]\):is\(:hover, :focus-within\) > \.tooltip \{ visibility: visible; \}/);
+  assert.match(styles, /\.tooltip-anchor:not\(\[data-tooltip-dismissed\]\):is\(:hover, :focus-within\)\s+> \.tooltip \{\s+visibility: visible;\s+\}/);
   assert.doesNotMatch(script, /\$\("force-refresh"\)\.(?:disabled|textContent)\s*=/);
-  assert.match(styles, /@media \(prefers-reduced-motion: no-preference\) \{[\s\S]*#force-refresh\[aria-busy="true"\] svg \{ animation: refresh-spin/);
+  assert.match(styles, /@media \(prefers-reduced-motion: no-preference\) \{[\s\S]*#force-refresh\[aria-busy="true"\] svg \{\s+animation: refresh-spin/);
   const extension = await readFile(new URL("../src/extension.mjs", import.meta.url), "utf8");
   assert.match(extension, /name: "refresh"/);
   const ui = await renderer();
@@ -594,7 +594,7 @@ test("the footer retains only development metadata, with no refresh line or cont
   assert.ok(footer);
   assert.match(footer, /^\s*<p id="development-build" hidden><\/p>\s*$/);
   assert.doesNotMatch(html + script + styles, /id="updated"|\$\("updated"\)|refresh-link|refresh-status|refresh-actions/);
-  assert.match(styles, /footer:has\(#development-build\[hidden\]\) \{ display: none; \}/);
+  assert.match(styles, /footer:has\(#development-build\[hidden\]\) \{\s+display: none;\s+\}/);
   assert.doesNotMatch(html + script + styles, /read-help|footer-links|Mark-as-read help|Mark as read applies/);
 });
 
@@ -879,7 +879,7 @@ test("an empty inbox ends the caught-up heading with a party popper and hides th
   assert.equal(ui.ids.get("empty-symbol").hidden, true);
   assert.equal(ui.ids.get("count").hidden, true);
   assert.match(styles, /\.empty \{[^}]*border: 1px dashed var\(--border\);[^}]*border-radius: 10px;/);
-  assert.match(styles, /\[hidden\]\s*\{\s*display:\s*none !important;/);
+  assert.match(styles, /\[hidden\]\s*\{[^}]*display:\s*none !important;/);
   assert.match(html, /<div id="empty-symbol" class="empty-symbol" aria-hidden="true">\/<\/div>/);
 });
 

@@ -14,7 +14,7 @@ const manifest = JSON.parse(await readFile(packageUrl, "utf8"));
 
 function tools(overrides = {}) {
   return {
-    nodeVersion: "22.23.1",
+    nodeVersion: "24.0.0",
     read: async url => {
       if (url.href === packageUrl.href) return JSON.stringify(manifest);
       const name = url.pathname.split("/node_modules/")[1].replace(/\/package\.json$/, "");
@@ -40,13 +40,13 @@ function tools(overrides = {}) {
 }
 
 test("doctor checks supported Node versions, pinned dependencies, actionlint and both browser paths", async () => {
-  for (const nodeVersion of ["22.23.1", "24.0.0"]) {
+  for (const nodeVersion of ["24.0.0", "26.0.0"]) {
     const checks = await inspectEnvironment(tools({ nodeVersion }));
     assert.equal(checks.length, Object.keys(manifest.devDependencies).length + 4);
     assert.ok(checks.every(check => check.ok));
     assert.deepEqual(checks.slice(-2).map(check => check.name), ["chromium executable", "webkit executable"]);
   }
-  for (const nodeVersion of ["20.19.0", "invalid"]) {
+  for (const nodeVersion of ["20.19.0", "22.23.1", "invalid"]) {
     const [node] = await inspectEnvironment(tools({ nodeVersion }));
     assert.equal(node.ok, false);
     assert.match(node.remedy, /\.node-version/);
@@ -72,7 +72,7 @@ test("doctor reports missing, unreadable, malformed and mismatched packages with
     });
     const packages = checks.slice(1, -3);
     assert.equal(packages.length, Object.keys(manifest.devDependencies).length);
-    assert.ok(packages.every(check => !check.ok && check.remedy === "npm ci --ignore-scripts"));
+    assert.ok(packages.every(check => !check.ok && check.remedy === "npm ci --ignore-scripts --engine-strict"));
     assert.ok(checks.slice(-3).every(check => check.ok));
   }
 });
@@ -97,7 +97,7 @@ test("doctor distinguishes unavailable Playwright inspection from missing or non
     const checks = await inspectEnvironment(tools({ loadBrowsers: async () => { throw error; } }));
     assert.equal(checks.at(-1).name, "Playwright browsers");
     assert.equal(checks.at(-1).ok, false);
-    assert.match(checks.at(-1).remedy, /npm ci --ignore-scripts, then npx playwright install/);
+    assert.match(checks.at(-1).remedy, /npm ci --ignore-scripts --engine-strict, then npx playwright install/);
   }
   for (const error of [
     Object.assign(new Error("missing"), { code: "ENOENT" }),

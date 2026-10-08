@@ -53,12 +53,12 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "24"
+          node-version-file: .node-version
           package-manager-cache: false
       - name: Test Windows installation, settings, locks and notification arguments
         run: node --test test/platform.test.mjs test/lock.test.mjs test/settings.test.mjs test/notifier.test.mjs
   lint:
-    name: lint
+    name: Lint
     runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:
@@ -67,12 +67,18 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version-file: .node-version
           package-manager-cache: false
       - name: Install development dependencies
-        run: npm ci --ignore-scripts --no-fund --no-audit
+        run: npm ci --ignore-scripts --no-fund --no-audit --engine-strict
       - name: Lint JavaScript
-        run: npm run lint
+        run: npm run lint:js
+      - name: Lint CSS with Stylelint
+        run: npm run lint:css
+      - name: Check CSS formatting with Prettier
+        run: npm run format:css:check
+      - name: Lint embedded recovery JavaScript and CSS
+        run: npm run lint:recovery
   actionlint:
     name: actionlint
     permissions:
@@ -108,10 +114,10 @@ jobs:
           git rev-parse --verify HEAD
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
+          node-version-file: .node-version
           package-manager-cache: false
       - name: Install development dependencies
-        run: npm ci --ignore-scripts --no-fund --no-audit
+        run: npm ci --ignore-scripts --no-fund --no-audit --engine-strict
       - name: Validate release packaging
         run: |
           npm run build

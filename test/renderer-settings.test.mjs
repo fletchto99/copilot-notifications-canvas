@@ -24,16 +24,16 @@ test("Sound is a single settings row with a labeled native select and matching f
   assert.match(css, /\.select-setting select \{[^}]*border: 0;[^}]*text-align-last: right;[^}]*appearance: none;/);
   assert.match(css, /\.select-setting::after \{[^}]*pointer-events: none;/);
   assert.match(css, /\.select-setting:focus-within \{[^}]*outline: 2px solid var\(--focus\)/);
-  assert.match(css, /\.select-setting:has\(select:disabled\) \{[^}]*opacity: \.55/);
+  assert.match(css, /\.select-setting:has\(select:disabled\) \{[^}]*opacity: 0?\.55/);
 });
 
 test("enabled toggle rows keep neutral text and borders while the switch indicates their state", () => {
-  assert.match(styles, /button, input, select, textarea \{ font: inherit; color: inherit; \}/);
+  assert.match(styles, /button,\s+input,\s+select,\s+textarea \{\s+font: inherit;\s+color: inherit;\s+\}/);
   assert.match(styles, /(?:^|\n)button \{[^}]*border: 1px solid var\(--border\);/);
   assert.doesNotMatch(styles, /\.settings-panel button\[aria-checked="true"\]/);
-  assert.match(styles, /\.switch-toggle\[aria-checked="true"\] \.switch-track \{ background: var\(--accent\); \}/);
-  assert.match(styles, /\.switch-toggle\[aria-checked="true"\] \.switch-thumb \{ transform: translateX\(14px\); \}/);
-  assert.match(styles, /:focus-visible \{ outline: 2px solid var\(--focus\); outline-offset: 3px; \}/);
+  assert.match(styles, /\.switch-toggle\[aria-checked="true"\] \.switch-track \{\s+background: var\(--accent\);\s+\}/);
+  assert.match(styles, /\.switch-toggle\[aria-checked="true"\] \.switch-thumb \{\s+transform: translateX\(14px\);\s+\}/);
+  assert.match(styles, /:focus-visible \{\s+outline: 2px solid var\(--focus\);\s+outline-offset: 3px;\s+\}/);
 });
 
 test("GitHub inbox is an accessible icon link before Refresh and Settings in the toolbar", () => {
@@ -66,7 +66,7 @@ test("Settings uses an icon-only toggle with an accessible name and tooltip", ()
   assert.match(attributes, /aria-expanded="false"/);
   assert.match(content, /<svg\b[^>]*aria-hidden="true"[^>]*focusable="false"/);
   assert.match(content, /^\s*<svg\b[^>]*>\s*<path\b[^>]*\/>\s*<circle\b[^>]*\/>\s*<\/svg>\s*<span id="settings-tooltip" class="tooltip" role="tooltip"><span class="tooltip-content">Settings<\/span><\/span>\s*$/);
-  assert.match(styles, /\.settings\[open\] \.tooltip \{ display: none; \}/);
+  assert.match(styles, /\.settings\[open\] \.tooltip \{\s+display: none;\s+\}/);
 });
 
 test("Inbox and Settings tooltips share the refresh hover, focus and Escape behavior", async () => {

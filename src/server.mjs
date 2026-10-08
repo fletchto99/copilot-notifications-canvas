@@ -19,12 +19,25 @@ const recoveryHtml = `<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Unread Notifications</title>
   <style>
-    body { margin: 0; padding: 24px; color: var(--text-color-default, #1f2328);
+    body {
+      margin: 0;
+      padding: 24px;
+      color: var(--text-color-default, #1f2328);
       background: var(--background-color-default, #fff);
-      font: var(--text-body-medium, 14px)/1.5 var(--font-sans, system-ui, sans-serif); }
-    h1 { font-size: 20px; }
-    p { max-width: 48em; }
-    a { color: var(--text-color-default, #1f2328); }
+      font: var(--text-body-medium, 14px)/1.5 var(--font-sans, system-ui, sans-serif);
+    }
+
+    h1 {
+      font-size: 20px;
+    }
+
+    p {
+      max-width: 48em;
+    }
+
+    a {
+      color: var(--text-color-default, #1f2328);
+    }
   </style>
   <script type="module" src="/startup.mjs"></script>
 </head>

@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
-const installDependencies = "npm ci --ignore-scripts";
+const installDependencies = "npm ci --ignore-scripts --engine-strict";
 const installBrowsers = "npx playwright install --with-deps chromium webkit";
 const installActionlint = "go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 (requires Go and its bin directory on PATH); see docs/development.md#environment-check for alternatives.";
 

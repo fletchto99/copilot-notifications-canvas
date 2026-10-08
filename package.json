@@ -3,14 +3,19 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=24"
   },
   "scripts": {
     "dev:fixture": "node scripts/dev-fixture.mjs",
     "doctor": "node scripts/doctor.mjs",
     "check:full": "npm run doctor && npm run lint && npm run lint:workflows && npm run test:coverage && npm run build && npm run test:package && npm run test:browser -- --project=chromium --project=webkit",
-    "lint": "eslint . --max-warnings=0",
+    "lint": "npm run lint:js && npm run lint:css && npm run format:css:check && npm run lint:recovery",
+    "lint:js": "eslint . --max-warnings=0",
+    "lint:css": "stylelint \"src/**/*.css\" --max-warnings=0",
+    "lint:recovery": "node --test test/recovery-lint.integration.mjs",
     "lint:workflows": "actionlint",
+    "format:css": "prettier --write \"src/**/*.css\"",
+    "format:css:check": "prettier --check \"src/**/*.css\"",
     "test": "node --test test/*.test.mjs",
     "test:coverage": "node --test --experimental-test-coverage --test-coverage-include='src/*.mjs' --test-coverage-include='.github/extensions/github-notifications/extension.mjs' --test-coverage-include='scripts/*.mjs' --test-coverage-exclude='scripts/coverage-reporter.mjs' --test-coverage-exclude='scripts/build-release.mjs' --test-coverage-lines=95 --test-coverage-branches=95 --test-coverage-functions=95 --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./scripts/coverage-reporter.mjs --test-reporter-destination=stdout test/*.test.mjs",
     "test:browser": "playwright test",
@@ -24,6 +29,9 @@
     "esbuild": "0.28.2",
     "eslint": "10.12.0",
     "globals": "17.13.0",
+    "prettier": "3.9.9",
+    "stylelint": "17.16.0",
+    "stylelint-config-standard": "40.0.0",
     "tar": "7.5.22"
   }
 }
