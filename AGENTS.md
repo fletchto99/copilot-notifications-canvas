@@ -198,7 +198,7 @@ by version and verified digest in `.github/actions/actionlint/Dockerfile`.
 The local action passes `-color -verbose`; Dependabot's Docker entry manages the
 same Dockerfile consumed by CI. Keep its version aligned with Copilot setup's
 checksum-verified binary and the installation guidance; the dedicated alignment
-test must stay enforced. The Docker action runs on `ubuntu-24.04`, not the
+test must stay enforced. The Docker action runs on `ubuntu-latest`, not the
 unprivileged `ubuntu-slim` runner; source lint remains on `ubuntu-slim`.
 Preserve the image's ShellCheck and Pyflakes integrations and read-only permissions.
 

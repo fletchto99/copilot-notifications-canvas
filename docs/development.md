@@ -189,7 +189,7 @@ installs missing prerequisites, skips unavailable checks, or publishes a release
 Build output and test reports remain in their ignored directories.
 
 CI separates source linting (`Lint`, on `ubuntu-slim`) from workflow linting
-(`Actionlint`, on `ubuntu-24.04`). Workflow lint uses the repository-owned
+(`Actionlint`, on `ubuntu-latest`). Workflow lint uses the repository-owned
 [Docker action](../.github/actions/actionlint/action.yml). Its
 [Dockerfile](../.github/actions/actionlint/Dockerfile) contains only the
 [official actionlint Docker image](https://github.com/rhysd/actionlint/blob/main/docs/usage.md#docker),
@@ -199,6 +199,9 @@ final error count even on successful runs. It needs no Node setup or npm
 installation. The Docker action needs a full Linux
 VM: [`ubuntu-slim`](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#single-cpu-runners)
 is an unprivileged container and does not support Docker-in-Docker.
+Docker-based jobs and Copilot setup use `ubuntu-latest`; lightweight Linux tests,
+source lint, and release jobs use `ubuntu-slim`. The container digests pin the
+tool environments independently of the host Ubuntu release.
 
 The weekly `docker` entry in [Dependabot configuration](../.github/dependabot.yml)
 tracks the Dockerfile actually used by CI. It takes effect on the default branch;
@@ -229,7 +232,7 @@ specific Copilot build; reload and inspect the real extension after SDK changes.
 ## Copilot cloud agent and code review
 
 [Copilot setup steps](../.github/workflows/copilot-setup-steps.yml) prepare an
-Ubuntu 24.04 environment with Node.js 24, locked development dependencies,
+full Ubuntu runner (`ubuntu-latest`) with Node.js 24, locked development dependencies,
 and checksum-verified `actionlint`. Cloud-agent sessions and code reviews share
 this lightweight setup, without a separate review workflow. It checks tool
 availability without running the test suite, installing the extension, or

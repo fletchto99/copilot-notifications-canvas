@@ -27,6 +27,7 @@ test("browser CI pins the locked Playwright version without installing browsers 
   ]);
   assert.ok(workflow.includes("\n  browser:"));
   const browser = workflow.slice(workflow.indexOf("\n  browser:"));
+  assert.match(browser, /runs-on: ubuntu-latest/);
   const image = browser.match(/^\s+image: mcr\.microsoft\.com\/playwright:v(\d+\.\d+\.\d+)-noble@sha256:[a-f0-9]{64}$/m);
   assert.ok(image, "Browser CI must use a version- and digest-pinned Playwright image");
   assert.equal(image[1], lock.packages["node_modules/@playwright/test"].version);
@@ -80,6 +81,7 @@ test("CI uses the preferred Node version for tooling while preserving Node 22 ru
 test("Copilot cloud sessions and reviews share lightweight setup without browser provisioning", async () => {
   const setup = await readFile(new URL("../.github/workflows/copilot-setup-steps.yml", import.meta.url), "utf8");
   assert.match(setup, /\njobs:\n {2}copilot-setup-steps:/);
+  assert.match(setup, /runs-on: ubuntu-latest/);
   assert.match(setup, /npm ci --ignore-scripts --no-fund --no-audit --engine-strict/);
   assert.match(setup, /actionlint --version/);
   assert.doesNotMatch(setup, /playwright install|apt-get|npm run (?:test|build)/);
@@ -106,7 +108,7 @@ test("workflow lint uses a verbose Dependabot-managed local Docker action on a D
   const actionlint = job("actionlint");
   assert.match(actionlint, /name: Actionlint\n/);
   assert.match(actionlint, /permissions:\n {6}contents: read/);
-  assert.match(actionlint, /runs-on: ubuntu-24\.04/);
+  assert.match(actionlint, /runs-on: ubuntu-latest/);
   assert.match(actionlint, /timeout-minutes: 5/);
   assert.match(actionlint, /uses: actions\/checkout@[a-f0-9]{40}/);
   assert.match(actionlint, /persist-credentials: false/);
