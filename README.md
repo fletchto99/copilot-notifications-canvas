@@ -65,6 +65,9 @@ control this, not the extension.
 The local `artifacts/` directory stores settings and desktop coordination data:
 timestamps, hashed activity/thread IDs, watcher/process markers and sanitized
 errors. GitHub CLI handles credentials; they never enter the canvas renderer.
+On macOS, this directory also holds a static notification helper app and its
+integrity receipt. Neither stores notification content. Its alerts open Copilot
+when clicked, falling back to the GitHub inbox if Copilot cannot be opened.
 
 GitHub CLI fetches notifications and public release metadata. Update checks do
 not send notification content or download or execute release code. Only explicit

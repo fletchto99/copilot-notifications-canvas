@@ -106,7 +106,8 @@ function notificationMessages(arrivals) {
 }
 
 export class DesktopNotifications {
-  constructor({ preferences, client = new GitHubClient(), notify = notifyDesktop, log = () => {},
+  constructor({ preferences, client = new GitHubClient(),
+    notify = options => notifyDesktop({ ...options, directory: preferences.directory }), log = () => {},
     platform = process.platform, now = Date.now, alive = processAlive,
     schedule = setTimeout, cancel = clearTimeout } = {}) {
     this.preferences = preferences;

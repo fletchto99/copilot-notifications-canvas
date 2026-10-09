@@ -1,9 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { notifyDesktop, notificationScript, windowsScript, desktopCapabilities, validSound } from "../src/notifier.mjs";
+import { notifyDesktop, windowsScript, desktopCapabilities, validSound } from "../src/notifier.mjs";
 
 const title = "example/widgets";
 const body = 'Fix <widget> & "quotes"; $(do-not-run)\nUnicode: caf\u00e9';
+const helper = "/synthetic/Unread Notifications.app";
 
 // Model notify-send's GLib g_strcompress layer, including octal and unknown escapes.
 function decodeNotifySendBody(value) {
@@ -14,7 +15,7 @@ function decodeNotifySendBody(value) {
 
 async function command(platform, sound = "none", overrides = {}) {
   let call;
-  await notifyDesktop({ title, body, platform, sound, execute: (...args) => {
+  await notifyDesktop({ title, body, platform, sound, prepareMacOS: async () => helper, execute: (...args) => {
     call = args.slice(0, 3);
     args[3](null);
   }, ...overrides });
@@ -23,13 +24,22 @@ async function command(platform, sound = "none", overrides = {}) {
   return call;
 }
 
-test("macOS passes repository, untrusted title and selected sound as data, never script source", async () => {
+test("macOS uses an app-owned sender and passes repository, untrusted title and selected sound as data", async () => {
   for (const sound of ["none", "Glass", "Ping", "Submarine", "default"]) {
     const [program, args] = await command("darwin", sound);
-    assert.equal(program, "/usr/bin/osascript");
-    assert.deepEqual(args, ["-e", notificationScript, title, body, sound === "default" ? "DefaultSoundName" : sound]);
-    assert.equal(notificationScript.includes(body), false);
+    assert.equal(program, "/usr/bin/open");
+    assert.deepEqual(args, ["-g", "-W", "-a", helper, "--args", "--github-notifications-alert",
+      title, body, sound === "default" ? "DefaultSoundName" : sound]);
   }
+});
+
+test("macOS preparation failures surface without using the Script Editor sender", async () => {
+  let delivered = false;
+  await assert.rejects(notifyDesktop({ title, body, platform: "darwin", sound: "none",
+    prepareMacOS: async () => { throw new Error("Synthetic helper preparation failed"); },
+    execute: (...args) => { delivered = true; args[3](null); },
+  }), /Synthetic helper preparation failed/);
+  assert.equal(delivered, false);
 });
 
 test("Windows uses built-in PowerShell, text nodes and environment data without module installs or policy bypasses", async () => {
@@ -88,11 +98,11 @@ test("Linux preserves literal backslashes and XML escaping through native decodi
   }
 });
 
-test("Linux body escaping does not change AppleScript arguments or PowerShell environment text", async () => {
+test("Linux body escaping does not change macOS app arguments or PowerShell environment text", async () => {
   const payload = String.raw`\074a href="https://example.invalid/"\076literal\074/a\076`;
   const [, macArgs] = await command("darwin", "none", { body: payload });
   const [, winArgs, winOptions] = await command("win32", "none", { body: payload });
-  assert.deepEqual(macArgs, ["-e", notificationScript, title, payload, "none"]);
+  assert.deepEqual(macArgs, ["-g", "-W", "-a", helper, "--args", "--github-notifications-alert", title, payload, "none"]);
   assert.equal(winArgs.at(-1), windowsScript);
   assert.equal(winOptions.env.COPILOT_TOAST_BODY, payload);
 });
@@ -118,10 +128,10 @@ test("unsupported platforms, sound names, invalid content and missing commands f
 
 test("system payload limits truncate long Unicode titles safely and remove XML control characters", async () => {
   const [, args] = await command("darwin", "none", { body: "\u0000" + "\u{1f600}".repeat(600) });
-  assert.equal(Array.from(args[3]).length, 500);
-  assert.ok(args[3].endsWith("..."));
-  assert.equal(args[3].includes("\u0000"), false);
-  assert.equal(args[3].includes("\ufffd"), false);
+  assert.equal(Array.from(args.at(-2)).length, 500);
+  assert.ok(args.at(-2).endsWith("..."));
+  assert.equal(args.at(-2).includes("\u0000"), false);
+  assert.equal(args.at(-2).includes("\ufffd"), false);
 });
 
 test("the sound catalog is platform-specific and exposes silence without assuming theme support", () => {

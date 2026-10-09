@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { win32 } from "node:path";
 import { InboxError } from "./model.mjs";
+import { prepareMacOSHelper } from "./macos.mjs";
 
 const platformSounds = {
   darwin: ["Basso", "Blow", "Bottle", "Frog", "Funk", "Glass", "Hero", "Morse", "Ping", "Pop", "Purr", "Sosumi", "Submarine", "Tink"],
@@ -19,20 +20,12 @@ export function desktopCapabilities(platform = process.platform) {
     sounds: ["none", "default", ...(platformSounds[platform] ?? [])].map(value => ({
       value, label: value === "none" ? "None" : value === "default" ? "System default" : value,
     })),
-    help: platform === "darwin" ? "Uses macOS notifications. System notification and Focus settings control delivery." :
+    help: platform === "darwin" ? "Allow notifications for Unread Notifications. Clicking an alert opens Copilot, or the GitHub inbox if Copilot cannot be opened. System notification and Focus settings control delivery." :
       platform === "win32" ? "Uses Windows PowerShell and Windows 10/11 toasts. Windows notification settings control delivery." :
       platform === "linux" ? "Requires notify-send and a graphical desktop session. Sound choices and silence are hints; your desktop may ignore them." :
         "Desktop notifications are supported on macOS, Windows and Linux.",
   };
 }
-
-export const notificationScript = `on run argv
-  if item 3 of argv is "none" then
-    display notification (item 2 of argv) with title (item 1 of argv)
-  else
-    display notification (item 2 of argv) with title (item 1 of argv) sound name (item 3 of argv)
-  end if
-end run`;
 
 export const windowsScript = `
 $ErrorActionPreference = 'Stop'
@@ -68,21 +61,25 @@ function displayText(value) {
 const escapeLinuxBody = text => text.replace(/\\/g, "\\\\").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 export async function notifyDesktop({ title, body, sound = "default", signal, platform = process.platform,
-  execute = execFile, env = process.env } = {}) {
+  execute = execFile, env = process.env, directory, prepareMacOS = prepareMacOSHelper } = {}) {
   if (!desktopCapabilities(platform).supported) {
     throw new InboxError("desktop_unsupported", "Desktop notifications are supported on macOS, Windows and Linux.", 400);
   }
   if (!validSound(sound, platform)) throw new InboxError("desktop_sound", "Choose a notification sound supported by this operating system.", 400);
   if (typeof title !== "string" || typeof body !== "string") throw new InboxError("desktop_content", "Desktop notifications require a title and body.", 400);
+  if (signal?.aborted) throw new InboxError("closed", "Desktop notification watching stopped.", 410);
   const heading = displayText(title);
   const text = displayText(body);
   const options = { signal, timeout: 10_000, maxBuffer: 16_384, encoding: "utf8", windowsHide: true };
   let command;
   let args;
   if (platform === "darwin") {
-    command = "/usr/bin/osascript";
+    const app = await prepareMacOS({ directory, execute, signal });
+    if (signal?.aborted) throw new InboxError("closed", "Desktop notification watching stopped.", 410);
+    command = "/usr/bin/open";
     // Foundation's NSUserNotificationDefaultSoundName uses this identifier.
-    args = ["-e", notificationScript, heading, text, sound === "default" ? "DefaultSoundName" : sound];
+    args = ["-g", "-W", "-a", app, "--args", "--github-notifications-alert",
+      heading, text, sound === "default" ? "DefaultSoundName" : sound];
   } else if (platform === "win32") {
     command = win32.join(env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
     args = ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", windowsScript];
@@ -103,7 +100,7 @@ export async function notifyDesktop({ title, body, sound = "default", signal, pl
             (error.code === "ENOENT" ? "notify-send is missing. Install your distribution's libnotify tools to use desktop notifications; nothing was installed automatically." :
               "Linux could not send a desktop notification. Check your graphical session, D-Bus connection and notification service.") :
             platform === "win32" ? "Windows could not send a desktop notification. Check Windows PowerShell, its Start menu registration, and Windows notification settings." :
-              "macOS could not send a desktop notification. Check notification permissions for the script sender in System Settings.";
+              "macOS could not send a desktop notification. Check notification permissions for Unread Notifications in System Settings.";
           return reject(new InboxError("desktop_delivery", `${message} This alert will not be retried.`, 503));
         }
         resolve();

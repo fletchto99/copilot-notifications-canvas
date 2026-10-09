@@ -28,12 +28,36 @@ stops them. No extra software is installed automatically.
 
 | Platform | Requirements | Sounds |
 | --- | --- | --- |
-| macOS | Built-in `osascript`; allow notifications for the script sender. | System default or named sounds such as Glass, Ping and Submarine. |
+| macOS | Built-in `osacompile`, `plutil`, `codesign` and `open`; allow notifications for **Unread Notifications**. | System default or named sounds such as Glass, Ping and Submarine. |
 | Windows 10/11 | Built-in Windows PowerShell/WinRT, PowerShell's existing Start menu registration, and an interactive desktop. | Default, IM, Mail, Reminder and SMS. |
 | Linux | `notify-send` (libnotify) and a graphical D-Bus notification service. | Default or themed sound hints; desktops may ignore sound or silence hints. |
 
 Windows and Linux support is experimental. Alerts run on the **extension host**;
 remote sessions do not automatically notify your local computer.
+
+On macOS, the extension builds a small, locally ad-hoc-signed **Unread
+Notifications** helper app using the built-in tools. It has its own notification
+sender identity, so clicking an alert does not launch Script Editor. Clicking
+tries to open the GitHub Copilot app; if macOS cannot open it, the helper opens
+`https://github.com/notifications` in the default browser. This brings up the app,
+not a specific session or canvas. Delivering an alert does not activate either
+destination.
+
+The extension launches the helper with argument data rather than automating
+another application through AppleEvents; no new Automation permission is needed.
+
+The helper and its integrity receipt live in a versioned `macos-notifier-*`
+directory under the extension's shared `artifacts/` directory. They contain only
+static code, bundle metadata and integrity hashes, never notification titles,
+repository names or per-notification destinations. Existing helper versions and
+unrelated artifacts are preserved. Helper generation occurs only when an
+opted-in watcher has an alert to send; opening a canvas does not create one.
+The helper quits after handling an event and is reopened by macOS on a click.
+No third-party notifier or developer tools are downloaded.
+
+Previously delivered Script Editor alerts keep their original sender. Allow
+notifications for **Unread Notifications** in System Settings for new alerts;
+prior permissions for the script sender do not necessarily carry over.
 
 ### Polling and delivery
 
@@ -96,7 +120,14 @@ See [Privacy](../README.md#privacy).
   location. Leave settings and other artifacts intact. Reopen the canvas to
   establish a fresh silent baseline; activity received before that baseline
   will not produce alerts.
-- **Sender icon and clicks:** the OS controls the sender icon; clicking an alert
-  cannot focus the canvas.
+- **macOS helper error:** creation, compilation, signing or integrity failures
+  stop delivery explicitly, without falling back to Script Editor. Preserve the
+  affected `macos-notifier-*` entry and inspect permissions or modified files
+  with all watchers stopped. Unrecognized or modified helpers are not replaced
+  automatically. Failed alerts are not replayed.
+- **Sender icon and clicks:** the OS controls the sender icon. New macOS alerts
+  open Copilot, or the GitHub inbox when Copilot cannot be opened; they do not
+  focus a particular canvas. Windows and Linux alerts do not have this click
+  routing.
 - **The canvas will not load:** see
   [installation troubleshooting](installation.md#upgrades-and-troubleshooting).

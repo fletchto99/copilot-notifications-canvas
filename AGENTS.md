@@ -24,7 +24,7 @@ framework or separately installed runtime SDK.
 | `src/server.mjs`, `src/assets.mjs` | Protected per-panel loopback HTTP server, asset snapshots, and startup recovery. |
 | `src/index.html`, `src/app.mjs`, `src/styles.css` | Renderer, controls, accessibility, and themes. |
 | `src/settings.mjs`, `src/lock.mjs`, `src/startup.mjs` | User-wide preferences, cross-process locking, and session auto-open. |
-| `src/desktop.mjs`, `src/notifier.mjs` | Shared desktop activity checkpoints and platform-specific native delivery. |
+| `src/desktop.mjs`, `src/notifier.mjs`, `src/macos.mjs` | Shared desktop activity checkpoints, platform-specific delivery and the static macOS sender helper. |
 | `src/updates.mjs`, `src/version.mjs`, `version.json` | Release discovery and version handling. |
 | `scripts/` | Release build, package verification, installation, publication, and coverage reporting. |
 | `test/`, `test/browser/` | Node unit/integration tests and Playwright browser/accessibility tests. |
@@ -115,6 +115,13 @@ output. Development loads source without a build; release builds bundle
   batches. Keep the first successful baseline silent and retain watcher
   continuity across overlapping sessions. Registration must remain independent
   of the polling/delivery lock.
+- macOS uses an extension-owned, locally compiled helper app, not bare
+  `display notification` in the script sender. Its artifacts contain only static
+  code and integrity metadata. Never persist notification text or destinations
+  there, overwrite a modified helper, or silently fall back to Script Editor.
+  Native transport tests may compile and launch isolated synthetic applets with
+  notification delivery and destination activation replaced by inert results;
+  they must never send real alerts or open the user's applications.
 - Panel open/close must tolerate races and repeated calls. Clean up servers,
   timers, listeners, watchers, reservations, and outstanding work. Running
   servers keep their loaded asset snapshot; do not mix old provider code with
