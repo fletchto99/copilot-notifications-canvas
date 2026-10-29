@@ -45,7 +45,7 @@ test.describe("All notifications group", () => {
         await page.getByRole("button", { name: "More actions for shown notifications", exact: true }).focus();
         await page.keyboard.press("Enter");
       }
-      const button = page.getByRole("button", { name: `Mark 3 shown, loaded notifications as ${action}`, exact: true });
+      const button = page.getByRole("button", { name: `Mark 3 as ${action}; 3 shown, loaded notifications`, exact: true });
       await button.focus();
       await button.press("Enter");
       await expect(page.locator(".row")).toHaveCount(0);
@@ -82,7 +82,7 @@ test.describe("All notifications group", () => {
       await page.keyboard.press("Tab");
       await expect(more).toBeFocused();
       await more.press("Enter");
-      const done = page.getByRole("button", { name: "Mark 3 shown, loaded notifications as done", exact: true });
+      const done = page.getByRole("button", { name: "Mark 3 as done; 3 shown, loaded notifications", exact: true });
       await expect(done).toBeFocused();
       const controls = await root.locator(".repo-actions").boundingBox();
       const menu = await root.locator(".repo-menu").boundingBox();
@@ -157,7 +157,7 @@ test("shown batches stop and retry their original scope after switching to repos
   });
   try {
     await page.getByRole("button", { name: "More actions for shown notifications", exact: true }).click();
-    await page.getByRole("button", { name: "Mark 3 shown, loaded notifications as done", exact: true }).click();
+    await page.getByRole("button", { name: "Mark 3 as done; 3 shown, loaded notifications", exact: true }).click();
     await started;
     await expect(page.locator("#batch-title")).toContainText("Shown notifications: Marking as done");
     await expect(page.getByRole("searchbox")).toBeDisabled();
@@ -187,7 +187,7 @@ test("failed shown batches retry only their unchanged selection after backoff", 
   await page.goto(canvas.url);
   canvas.setRequestHook(args => args.includes("DELETE") ? http({}, {}, 500) : undefined);
   await page.getByRole("button", { name: "More actions for shown notifications", exact: true }).click();
-  await page.getByRole("button", { name: "Mark 2 shown, loaded notifications as done", exact: true }).click();
+  await page.getByRole("button", { name: "Mark 2 as done; 2 shown, loaded notifications", exact: true }).click();
   await expect(page.locator("#batch-error")).toContainText("GitHub returned HTTP 500");
   const retry = page.getByRole("button", { name: "Retry remaining (2)", exact: true });
   await expect(retry).toBeDisabled();
@@ -218,7 +218,7 @@ test.describe("packaged list-wide controls", () => {
     const more = page.getByRole("button", { name: "More actions for shown notifications", exact: true });
     await expect(more).toBeVisible();
     await more.click();
-    await page.getByRole("button", { name: "Mark 2 shown, loaded notifications as done", exact: true }).click();
+    await page.getByRole("button", { name: "Mark 2 as done; 2 shown, loaded notifications", exact: true }).click();
     await expect(page.locator(".row")).toHaveCount(0);
     await expect(page.locator(shownGroup)).toHaveCount(0);
     expect(canvas.doneWrites).toEqual(["1", "2"]);

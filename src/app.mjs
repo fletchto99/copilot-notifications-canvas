@@ -621,7 +621,7 @@ function renderControls() {
         button.dataset.repository ? ` in ${button.dataset.repository}` : "";
       button.textContent = progress ?? `Mark ${button.dataset.count} as ${button.dataset.batchAction}`;
       button.setAttribute("aria-label", progress ? `${progress} as ${batch.action}${destination}` :
-        `Mark ${button.dataset.count} shown, loaded notifications as ${button.dataset.batchAction}${destination}`);
+        `Mark ${button.dataset.count} as ${button.dataset.batchAction}${destination}; ${button.dataset.count} shown, loaded notifications`);
       button.setAttribute("aria-busy", String(Boolean(batch)));
     }
   }
@@ -684,7 +684,7 @@ function createBatchControls({ repository, date, timeZone, selectionKey, count, 
     button.dataset.count = String(count);
     button.dataset.batchScope = scope;
     button.dataset.batchAction = action;
-    button.setAttribute("aria-label", `Mark ${count} shown, loaded notifications as ${action}${destination}`);
+    button.setAttribute("aria-label", `Mark ${count} as ${action}${destination}; ${count} shown, loaded notifications`);
     button.disabled = busy || marking.size > 0 || batchBusy || batchLocked();
     button.addEventListener("click", () => {
       if (busy || batchBusy || batchLocked() || marking.size || (action === "done" && menu.hidden)) return;

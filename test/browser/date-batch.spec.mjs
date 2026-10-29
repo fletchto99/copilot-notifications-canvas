@@ -6,7 +6,7 @@ const timeZone = "America/Los_Angeles";
 const date = "2026-01-12";
 const label = "January 12, 2026";
 const moreName = `More actions for ${label}`;
-const actionName = action => `Mark 2 shown, loaded notifications as ${action} on ${label}`;
+const actionName = action => `Mark 2 as ${action} on ${label}; 2 shown, loaded notifications`;
 
 function prepareRows(canvas) {
   for (const row of canvas.rows) row.reason = "subscribed";

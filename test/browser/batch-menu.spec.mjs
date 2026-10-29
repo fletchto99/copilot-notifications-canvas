@@ -2,8 +2,8 @@ import AxeBuilder from "@axe-core/playwright";
 import { test, expect } from "./fixtures.mjs";
 import { http, thread } from "../fixtures.mjs";
 
-const readName = "Mark 2 shown, loaded notifications as read in example/widgets";
-const doneName = "Mark 2 shown, loaded notifications as done in example/widgets";
+const readName = "Mark 2 as read in example/widgets; 2 shown, loaded notifications";
+const doneName = "Mark 2 as done in example/widgets; 2 shown, loaded notifications";
 const moreName = "More actions for example/widgets";
 
 for (const repository of ["example/ui", "example/notifications-and-workflow-tools", `example/${"long-".repeat(30)}repository`]) {
