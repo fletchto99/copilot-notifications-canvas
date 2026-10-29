@@ -2,8 +2,15 @@ import { createServer } from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { setTimeout as wait } from "node:timers/promises";
 import { assetPaths, loadAssets, loadDevelopmentInfo } from "./assets.mjs";
-import { InboxError } from "./model.mjs";
+import { InboxError, TRIAGE_CONSENT_VERSION } from "./model.mjs";
 import { validSound } from "./notifier.mjs";
+import { NotificationTriage } from "./triage.mjs";
+
+const triageRoutes = new Map([
+  ["/api/triage/start", "start"],
+  ["/api/triage/cancel", "cancel"],
+  ["/api/triage/dismiss", "dismiss"],
+]);
 
 const batchRoutes = new Map([
   ["/api/batch/start", "start"],
@@ -114,9 +121,10 @@ async function readBody(req) {
   return input;
 }
 
-export async function startServer(inbox, { log = () => {}, preferences, desktop, updates, read, development } = {}) {
+export async function startServer(inbox, { log = () => {}, preferences, desktop, updates, read, development, triageRun } = {}) {
   const secret = randomBytes(32).toString("hex");
-  const snapshot = () => ({ ...inbox.snapshot(), development, ...(updates ? { updates: updates.snapshot() } : {}) });
+  const triage = new NotificationTriage(inbox, { run: triageRun, log });
+  const snapshot = () => ({ ...inbox.snapshot(), triage: triage.snapshot(), development, ...(updates ? { updates: updates.snapshot() } : {}) });
   const settingsSnapshot = settings => ({
     ...settings, desktopStatus: desktop?.snapshot() ?? { supported: false, state: "off", message: "Desktop notifications are unavailable." },
   });
@@ -187,7 +195,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         return;
       }
       if (!["/api/ready", "/api/state", "/api/refresh", "/api/more", "/api/filters", "/api/settings", "/api/read", "/api/done", "/api/updates"].includes(path) &&
-          !batchRoutes.has(path)) {
+          !batchRoutes.has(path) && !triageRoutes.has(path)) {
         throw new InboxError("not_found", "Route not found.", 404);
       }
       if (!authorized(req.headers.authorization, secret) ||
@@ -210,7 +218,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         if (req.method !== "POST") throw new InboxError("method", "Only POST is supported.", 405);
         if (req.headers.origin !== origin) throw new InboxError("origin", "A same-origin request is required.", 403);
         const input = await readBody(req);
-        if (!["/api/refresh", "/api/filters", "/api/settings", "/api/read", "/api/done"].includes(path) && !batchRoutes.has(path) && Object.keys(input).length) {
+        if (!["/api/refresh", "/api/filters", "/api/settings", "/api/read", "/api/done"].includes(path) && !batchRoutes.has(path) && !triageRoutes.has(path) && Object.keys(input).length) {
           throw new InboxError("invalid_input", "This action takes an empty object.", 400);
         }
         if (path === "/api/updates") {
@@ -225,6 +233,9 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         if (path === "/api/more") await inbox.more();
         if (path === "/api/filters") await inbox.setFilters(input);
         if (path === "/api/settings") {
+          if (Object.hasOwn(input, "triageConsentVersion") && input.triageConsentVersion !== 0) {
+            throw new InboxError("invalid_settings", "Acknowledge Copilot data sharing through the triage disclosure. Settings can only reset the warning.", 400);
+          }
           if (input.desktopNotifications === true && !desktop?.supported) {
             throw new InboxError("desktop_unsupported", "Desktop notifications are supported on macOS, Windows and Linux.", 400);
           }
@@ -237,6 +248,20 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         }
         if (path === "/api/read") await inbox.markRead(input);
         if (path === "/api/done") await inbox.markDone(input);
+        if (triageRoutes.has(path)) {
+          if (path === "/api/triage/start") {
+            if (!preferences) throw new InboxError("settings_unavailable", "Notification settings are required to remember the Copilot disclosure.", 503);
+            triage.validateStart(input, true);
+            let settings = await preferences.read();
+            if (input.consent === true && settings.triageConsentVersion !== TRIAGE_CONSENT_VERSION) {
+              settings = await preferences.update({ triageConsentVersion: TRIAGE_CONSENT_VERSION });
+            }
+            triage.start(input, settings.triageConsentVersion === TRIAGE_CONSENT_VERSION);
+            return json(202, { ...snapshot(), settings: settingsSnapshot(settings) });
+          }
+          triage[triageRoutes.get(path)](input);
+          return json(200, snapshot());
+        }
         if (batchRoutes.has(path)) {
           inbox.batch[batchRoutes.get(path)](input);
           return json(["/api/batch/start", "/api/batch/retry"].includes(path) ? 202 : 200, snapshot());
@@ -318,7 +343,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         server.close(resolve);
         server.closeAllConnections();
       });
-      await inbox.batch.done;
+      await Promise.all([inbox.batch.done, triage.close()]);
     },
   };
 }

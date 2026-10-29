@@ -32,6 +32,27 @@ checkout while a session uses it. A project-local checkout shadows a user-wide
 installation. If both providers are registered, pass
 `extensionId: project:github-notifications` when opening the local canvas.
 
+### Copilot triage integration
+
+`triage.mjs` owns the confirmed shown snapshot, bounded read-only tools and
+validated recommendations. `triage-session.mjs` lazily imports the host-provided
+`@github/copilot-sdk` and starts a fresh CLI in `mode: "empty"` with an isolated
+temporary home. It verifies the effective tool list before sending a prompt.
+The normal canvas remains usable without Copilot CLI; no AI process starts
+until an explicit panel click and disclosure acknowledgment. The first
+acknowledgment is saved through `Preferences` as `triageConsentVersion`;
+subsequent clicks use it after a provider-side check. Settings can reset it,
+but only the disclosure's confirmation can save the current version. Increment
+`TRIAGE_CONSENT_VERSION` when the disclosed data-sharing scope expands.
+
+Node tests inject the session runner or SDK. Browser fixtures simulate AI,
+including the packaged SDK boundary, and never start a real CLI or send real
+notification content. Run `node --test test/triage*.test.mjs test/renderer-triage.test.mjs`
+for the focused provider/HTTP/renderer checks, then both browser engines and
+packaged checks. SDK mocks do not establish host compatibility: validate the
+actual SDK with synthetic tools/data only, including its effective tool list
+and cancellation. Never use the user's live notifications for validation.
+
 ### Synthetic preview
 
 ```sh

@@ -10,7 +10,7 @@ import { startServer } from "../src/server.mjs";
 import { Inbox } from "../src/inbox.mjs";
 import { GitHubClient } from "../src/github.mjs";
 
-const defaults = { autoOpen: false, darkMode: null, desktopNotifications: false, desktopSound: "default", groupBy: "repo" };
+const defaults = { autoOpen: false, darkMode: null, desktopNotifications: false, desktopSound: "default", groupBy: "repo", triageConsentVersion: 0 };
 
 async function setup(t, io) {
   const directory = await fs.mkdtemp(join(tmpdir(), "notification-settings-test-"));
@@ -75,6 +75,26 @@ test("malformed stored settings and invalid updates fail explicitly without over
     { groupBy: false }, { groupBy: [] }, { groupBy: { value: "date" } }]) {
     await assert.rejects(preferences.update(input), { code: "invalid_settings" });
   }
+});
+
+test("triage acknowledgment stores only a version across instances and can be reset without losing settings", async t => {
+  const preferences = await setup(t);
+  await fs.writeFile(preferences.path, '{"future":{"keep":true},"autoOpen":true}');
+  await preferences.update({ triageConsentVersion: 1 });
+  const other = new Preferences({ directory: preferences.directory });
+  assert.equal((await other.read()).triageConsentVersion, 1);
+  await other.update({ darkMode: true });
+  assert.equal((await preferences.read()).triageConsentVersion, 1);
+  await preferences.update({ triageConsentVersion: 0 });
+  assert.equal((await other.read()).triageConsentVersion, 0);
+  assert.deepEqual(await other.document(), { future: { keep: true }, autoOpen: true, darkMode: true, triageConsentVersion: 0 });
+  for (const value of [null, true, "1", -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    await assert.rejects(preferences.update({ triageConsentVersion: value }), { code: "invalid_settings" });
+    await fs.writeFile(preferences.path, JSON.stringify({ triageConsentVersion: value }));
+    await assert.rejects(preferences.read(), { code: "settings_read" });
+  }
+  await fs.writeFile(preferences.path, '{"triageConsentVersion":2,"future":true}');
+  assert.equal((await other.read()).triageConsentVersion, 2, "Future versions are preserved, not treated as the current acknowledgment");
 });
 
 test("missing settings use defaults but explicit undefined and unknown patches are rejected", async t => {

@@ -21,6 +21,7 @@ framework or separately installed runtime SDK.
 | `src/extension.mjs` | SDK registration, agent-facing actions, panel lifecycle, and shared services. |
 | `src/github.mjs`, `src/model.mjs` | GitHub CLI requests, caching, rate limits, validation, normalization, and grouping. |
 | `src/inbox.mjs`, `src/batch.mjs` | Loaded-page state, aggregate summaries, and row, repository, date, and shown-list read/done actions. |
+| `src/triage.mjs`, `src/triage-session.mjs` | Explicitly started, shown-snapshot AI tools, validated recommendations, and isolated Copilot CLI sessions. |
 | `src/server.mjs`, `src/assets.mjs` | Protected per-panel loopback HTTP server, asset snapshots, and startup recovery. |
 | `src/index.html`, `src/app.mjs`, `src/styles.css` | Renderer, controls, accessibility, and themes. |
 | `src/settings.mjs`, `src/lock.mjs`, `src/startup.mjs` | User-wide preferences, cross-process locking, and session auto-open. |
@@ -64,13 +65,23 @@ output. Development loads source without a build; release builds bundle
 ### Privacy and request boundaries
 
 - Notification titles and repository names stay out of logs, persisted state,
-  and agent-facing results. Use `Inbox.summary()` for agent actions; detailed
+  and normal conversation-facing results. Use `Inbox.summary()` for agent actions; detailed
   snapshots belong only in the protected renderer. Do not log raw GitHub
   responses, subprocess stderr, credentials, or loopback capability URLs.
+- Copilot triage is an explicitly started, panel-only exception: only the separate
+  restricted session may read the approved shown snapshot and bounded GitHub
+  context. Keep its tool allowlist enforced and verified, not merely prompted.
+  Never use the current conversation, expose write tools, or analyze on refresh.
+  Require first-run disclosure acknowledgment, saved user-wide as a version only.
+  Recheck it on every start, support reset in Settings, and bump
+  `TRIAGE_CONSENT_VERSION` when the disclosed data-sharing scope expands.
+  The CLI may create isolated temporary session data; clean it up on completion
+  and cancellation and disclose possible leftovers after crashes. Keep
+  recommendations in memory and invalidate them when their shown snapshot changes.
 - GitHub CLI owns authentication. Keep API traffic in the provider and pinned
   to supported github.com endpoints; never pass credentials into the renderer.
   Do not introduce telemetry or remote renderer assets.
-- Native alerts are the explicit opt-in exception: they send titles and
+- Native alerts are also an explicit opt-in exception: they send titles and
   repository names to the OS. Do not enable desktop alerts or change preferences
   as a side effect of opening, updating, or testing the extension.
 - Bind each panel server to `127.0.0.1` on an ephemeral port. Preserve capability

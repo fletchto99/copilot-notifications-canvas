@@ -1,4 +1,7 @@
 export function resolve(specifier, context, nextResolve) {
+  if (specifier === "@github/copilot-sdk") {
+    return { url: new URL("./triage-sdk.mjs", import.meta.url).href, shortCircuit: true };
+  }
   if (specifier === "@github/copilot-sdk/extension") {
     return { url: new URL("./sdk.mjs", import.meta.url).href, shortCircuit: true };
   }

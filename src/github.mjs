@@ -134,6 +134,44 @@ export class GitHubClient {
     });
   }
 
+  async triageContext(item, signal) {
+    if (!item?.direct || !["Issue", "PullRequest"].includes(item.type)) {
+      return { available: false, limitation: "Only issue and pull request context is supported. Use notification metadata and state this limitation." };
+    }
+    const route = item.type === "Issue" ? "issues" : "pull";
+    if (typeof item.repository !== "string" || !/^[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/.test(item.repository) ||
+        [".", ".."].includes(item.repository.split("/")[1]) || !/^[1-9]\d{0,15}$/.test(item.number ?? "") ||
+        item.url !== `https://github.com/${item.repository}/${route}/${item.number}`) {
+      throw new InboxError("triage_scope", "This notification has no safe supported GitHub context link.", 400);
+    }
+    const read = endpoint => {
+      const pending = this.queue.then(() => this.request(endpoint, signal, "GET", { context: true }));
+      this.queue = pending.catch(() => {});
+      return pending;
+    };
+    const prefix = `/repos/${item.repository}`;
+    const subject = await read(`${prefix}/${item.type === "Issue" ? "issues" : "pulls"}/${item.number}`);
+    if (!subject || typeof subject.title !== "string" || !["open", "closed"].includes(subject.state) ||
+        (subject.body !== null && typeof subject.body !== "string") ||
+        !Number.isSafeInteger(subject.comments) || subject.comments < 0) {
+      throw new InboxError("triage_context", "GitHub returned malformed issue or pull request context.", 502);
+    }
+    const comments = subject.comments
+      ? await read(`${prefix}/issues/${item.number}/comments?per_page=10&page=${Math.ceil(subject.comments / 10)}`)
+      : [];
+    if (!Array.isArray(comments) || comments.length > 10 ||
+        comments.some(comment => !comment || typeof comment.body !== "string" || typeof comment.updated_at !== "string")) {
+      throw new InboxError("triage_context", "GitHub returned malformed comment context.", 502);
+    }
+    return {
+      available: true, title: subject.title.slice(0, 512), state: subject.state,
+      body: (subject.body ?? "").slice(0, 6000),
+      ...(item.type === "PullRequest" ? { draft: subject.draft === true, merged: subject.merged === true } : {}),
+      comments: comments.map(comment => ({ body: comment.body.slice(0, 1500), updatedAt: comment.updated_at })),
+      limitation: "Bodies may be truncated. Only the last page of up to 10 issue comments is included; no PR diff, review threads or linked resources.",
+    };
+  }
+
   reserveThreads(ids) {
     if (ids.some(id => this.pendingThreads.has(id) || this.threadReservations.has(id))) {
       throw new InboxError("busy", "A selected notification is already being updated in another operation.", 409);
@@ -196,10 +234,10 @@ export class GitHubClient {
     return pending;
   }
 
-  async request(endpoint, signal, method = "GET", { force = false, minSequence = 0, allowCachedDuringBackoff = false } = {}) {
+  async request(endpoint, signal, method = "GET", { force = false, minSequence = 0, allowCachedDuringBackoff = false, context = false } = {}) {
     if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
     const now = this.now();
-    const cached = method === "GET" ? this.cache.get(endpoint) : undefined;
+    const cached = method === "GET" && !context ? this.cache.get(endpoint) : undefined;
     if (allowCachedDuringBackoff && !force && cached &&
         cached.sequence >= minSequence && now < cached.nextRefreshAt) return cached;
     if (now < this.blockedUntil) throw this.lastError ??
@@ -240,7 +278,8 @@ export class GitHubClient {
       if (status === 401) throw new InboxError("authentication",
         "GitHub sign-in expired. Run gh auth login --hostname github.com. This view retries automatically while visible.", 401);
       if (status === 403 || status === 404) throw new InboxError("permission",
-        "GitHub denied notifications access. Check gh auth status; grant notifications scope with gh auth refresh --hostname github.com --scopes notifications. Check organization SSO if applicable. Fine-grained tokens are unsupported.", 403);
+        context ? "GitHub denied access to this notification's context. Check repository access and organization SSO." :
+          "GitHub denied notifications access. Check gh auth status; grant notifications scope with gh auth refresh --hostname github.com --scopes notifications. Check organization SSO if applicable. Fine-grained tokens are unsupported.", 403);
       if (!(method === "DELETE" ? [204] : method === "PATCH" ? [205, 304] : [200, 304]).includes(status)) throw new InboxError("github_http",
         `GitHub returned HTTP ${status}. Check GitHub status and try again.`, 502);
       if (method !== "GET") {
@@ -256,6 +295,10 @@ export class GitHubClient {
           body = JSON.parse(response.text);
         } catch {
           throw new InboxError("invalid_response", "GitHub returned invalid JSON; the previous inbox was kept.");
+        }
+        if (context) {
+          clearFailure();
+          return body;
         }
         items = normalizeThreads(body);
         next = nextPage(headers.link, endpoint);

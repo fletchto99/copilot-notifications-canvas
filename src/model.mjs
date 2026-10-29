@@ -1,3 +1,5 @@
+export const TRIAGE_CONSENT_VERSION = 1;
+
 export class InboxError extends Error {
   constructor(code, message, status = 502) {
     super(message);

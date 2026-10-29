@@ -48,6 +48,10 @@ full procedure, verification requirements, and troubleshooting.
   Each group header offers the same bulk actions.
 - Use **Load more** for older notifications. Search, counts, and bulk actions
   cover **loaded items only**, not your entire GitHub inbox.
+- The **Copilot** button beside the inbox link offers opt-in, read-only triage
+  of the shown notifications in a separate AI session. It requires an installed
+  Copilot CLI and Copilot access. See [Copilot triage](docs/usage.md#copilot-triage)
+  for scope, prerequisites, and data-sharing details.
 
 See the [usage guide](docs/usage.md) for filtering, bulk actions, keyboard
 controls, and refresh behavior. [Settings](docs/settings.md) covers saved
@@ -55,8 +59,22 @@ preferences and opt-in desktop alerts.
 
 ## Privacy
 
-The extension does not log notification titles or repository names, save them to
-disk, or send them to the agent. There is no telemetry or remote asset loading.
+Normal inbox browsing does not log notification titles or repository names, save
+them to disk, or send them to the conversation's agent. There is no extension
+telemetry or remote asset loading.
+
+**Copilot triage is an explicit opt-in exception.** The first run shows a
+data-sharing disclosure. Its acknowledgment is saved across sessions; subsequent
+clicks on Copilot start triage directly. Review the disclosure or choose
+**Show warning next time** under **Settings > Copilot data sharing**.
+A separate Copilot session can read shown notification metadata and
+fetch bounded issue/PR context. That content goes to Copilot for AI processing
+and may be retained by the service. The CLI may write temporary session data in
+an isolated system temporary directory; normal completion and cancellation
+remove it, but a crash or cleanup failure may leave it behind. The session has
+no shell, filesystem, MCP, or GitHub write tools. Recommendations remain in
+panel memory, never in a local completion ledger. Nothing is marked read or
+done automatically.
 
 **Desktop alerts send repository names and titles to your OS**, which may retain
 them in notification history or show them on the lock screen. System settings

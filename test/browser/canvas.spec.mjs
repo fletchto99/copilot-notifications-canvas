@@ -886,7 +886,7 @@ test("Settings supports keyboard dismissal and persists theme and auto-open acro
   await expect(page.getByRole("switch", { name: "Desktop notifications", exact: true })).toHaveAttribute("aria-checked", "false");
   await expect(page.getByRole("combobox", { name: "Sound", exact: true })).toHaveValue("default");
   expect(await canvas.preferences.read()).toEqual({
-    autoOpen: true, darkMode: true, desktopNotifications: false, desktopSound: "default", groupBy: "repo",
+    autoOpen: true, darkMode: true, desktopNotifications: false, desktopSound: "default", groupBy: "repo", triageConsentVersion: 0,
   });
   await theme.selectOption("system");
   await expect.poll(async () => (await canvas.preferences.read()).darkMode).toBeNull();
