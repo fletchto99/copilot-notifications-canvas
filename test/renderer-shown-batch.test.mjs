@@ -33,7 +33,7 @@ test("the All notifications header offers bounded read and Done actions across r
     const { read, more, done } = controls(ui);
     assert.equal(read.textContent, "Mark 2 as read");
     assert.equal(done.textContent, "Mark 2 as done");
-    assert.equal(read.attributes["aria-label"], "Mark 2 shown, loaded notifications as read");
+    assert.equal(read.attributes["aria-label"], "Mark 2 as read; 2 shown, loaded notifications");
     if (action === "done") more.events.click();
     await (action === "done" ? done : read).events.click();
     const request = ui.calls.find(call => call.path === "/api/batch/start");

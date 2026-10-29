@@ -35,7 +35,7 @@ test("each date header has independent read and Done controls without an overall
     first.querySelectorAll("button").find(button => button.dataset.disclosure).events.click();
     assert.equal(first.children[1].hidden, true);
     const { read, done, more } = controls(ui);
-    assert.equal(done.attributes["aria-label"], `Mark 2 shown, loaded notifications as done on ${dateLabel(selectedDate)}`);
+    assert.equal(done.attributes["aria-label"], `Mark 2 as done on ${dateLabel(selectedDate)}; 2 shown, loaded notifications`);
     if (action === "done") more.events.click();
     await (action === "done" ? done : read).events.click();
     await ui.inbox.batch.done;

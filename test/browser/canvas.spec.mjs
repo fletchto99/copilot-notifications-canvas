@@ -196,7 +196,7 @@ test("attention tabs combine with search and constrain repository reads to match
   await expect(page.locator("#count")).toHaveText("50 unread \u00b7 3 matching");
   await expect(page.getByRole("tab", { name: "All (50)", exact: true })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Review requested (3)", exact: true })).toHaveAttribute("aria-selected", "true");
-  await page.getByRole("button", { name: "Mark 2 shown, loaded notifications as read in example/widgets", exact: true }).click();
+  await page.getByRole("button", { name: "Mark 2 as read in example/widgets; 2 shown, loaded notifications", exact: true }).click();
   await expect(page.locator(".row")).toHaveCount(1);
   expect(canvas.writes).toEqual(["1", "4"]);
   expect(canvas.rows.find(row => row.id === "2").unread).toBe(true);
@@ -463,7 +463,7 @@ test("repository split controls remain usable for a single matching notification
   await expect(page.locator('[data-focus-key="read:2"]')).toBeVisible();
   await expect(page.locator('[data-focus-key="done:2"]')).toBeVisible();
   await page.getByRole("button", { name: "More actions for example/widgets", exact: true }).click();
-  await page.getByRole("button", { name: "Mark 1 shown, loaded notifications as done in example/widgets", exact: true }).click();
+  await page.getByRole("button", { name: "Mark 1 as done in example/widgets; 1 shown, loaded notifications", exact: true }).click();
   await expect(page.locator(".row")).toHaveCount(0);
   await expect(page.locator(".repo-actions")).toHaveCount(0);
   expect(canvas.writes).toEqual(["1", "2"]);
@@ -524,7 +524,7 @@ test("repository actions affect only shown loaded matches, not another repositor
   await page.goto(canvas.url);
   await expect(page.locator(".row")).toHaveCount(50);
   await page.getByRole("searchbox", { name: searchName }).fill("Needle");
-  const group = page.getByRole("button", { name: "Mark 2 shown, loaded notifications as read in example/widgets", exact: true });
+  const group = page.getByRole("button", { name: "Mark 2 as read in example/widgets; 2 shown, loaded notifications", exact: true });
   await expect(group).toBeVisible();
   await group.click();
   await expect(page.locator(".row")).toHaveCount(1);
@@ -973,8 +973,8 @@ for (const width of [320, 480, 960]) {
         return context.measureText(node.placeholder).width <= node.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
       })).toBe(true);
       await expect(page.locator(".repo-count")).toHaveText(["1 unread", "3 unread"]);
-      await expect(page.getByRole("button", { name: "Mark 1 shown, loaded notifications as read in example/tools", exact: true })).toBeVisible();
-      await expect(page.getByRole("button", { name: "Mark 3 shown, loaded notifications as read in example/widgets", exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Mark 1 as read in example/tools; 1 shown, loaded notifications", exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Mark 3 as read in example/widgets; 3 shown, loaded notifications", exact: true })).toBeVisible();
       await expect(page.locator(".eyebrow")).toBeVisible();
       await expect(page.locator("#subtitle")).toBeVisible();
       await expect(page.locator(".attention-navigation")).toHaveCSS("margin-top", "20px");

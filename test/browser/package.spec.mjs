@@ -12,7 +12,7 @@ test("installed bundle supports search, saved settings and exact row writes in a
   await expect(page.locator(".eyebrow")).toBeVisible();
   await expect(page.locator("#subtitle")).toBeVisible();
   await expect(page.getByRole("searchbox")).toHaveAttribute("placeholder", "Search...");
-  await expect(page.getByRole("button", { name: "Mark 1 shown, loaded notifications as read in example/tools", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Mark 1 as read in example/tools; 1 shown, loaded notifications", exact: true })).toBeVisible();
   const next = page.getByRole("button", { name: "Scroll attention tabs right", exact: true });
   await expect(next).toBeVisible();
   await next.click();
@@ -69,7 +69,7 @@ test("installed bundle sends single-notification Done actions through the split 
   canvas.rows.splice(1);
   await page.goto(canvas.url);
   await page.getByRole("button", { name: "More actions for example/widgets", exact: true }).click();
-  const done = page.getByRole("button", { name: "Mark 1 shown, loaded notifications as done in example/widgets", exact: true });
+  const done = page.getByRole("button", { name: "Mark 1 as done in example/widgets; 1 shown, loaded notifications", exact: true });
   await expect(done).toBeFocused();
   expect(canvas.doneWrites).toEqual([]);
   await done.press("Enter");

@@ -140,7 +140,7 @@ test("batch cancellation waits for the in-flight write and retry writes only rem
     if (args.includes("PATCH")) { entered.release(); await held.promise; }
   });
   try {
-    await page.getByRole("button", { name: "Mark 2 shown, loaded notifications as read in example/widgets", exact: true }).click();
+    await page.getByRole("button", { name: "Mark 2 as read in example/widgets; 2 shown, loaded notifications", exact: true }).click();
     await entered.promise;
     await page.getByRole("button", { name: "Stop remaining", exact: true }).click();
     await expect(page.locator("#batch-title")).toContainText("Stopping");
@@ -161,7 +161,7 @@ test("failed batches keep rows and recover after the retry deadline without wide
   await page.goto(canvas.url);
   await expect(page.locator(".row")).toHaveCount(2);
   canvas.setRequestHook(args => args.includes("PATCH") ? http({}, {}, 500) : undefined);
-  await page.getByRole("button", { name: "Mark 2 shown, loaded notifications as read in example/widgets", exact: true }).click();
+  await page.getByRole("button", { name: "Mark 2 as read in example/widgets; 2 shown, loaded notifications", exact: true }).click();
   await expect(page.locator("#batch-error")).toContainText("GitHub returned HTTP 500");
   await expect(page.locator(".row")).toHaveCount(2);
   expect(canvas.writes).toEqual([]);
