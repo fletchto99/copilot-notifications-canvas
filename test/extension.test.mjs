@@ -82,8 +82,10 @@ test("the extension entry point wires an isolated session through its complete l
     on: () => () => {},
     getEvents: async () => [
       { type: "session.start", data: {} },
+      { type: "user.message", data: {} },
+      { type: "assistant.message", data: {} },
       { type: "session.shutdown", data: { shutdownType: "routine" } },
-      { type: "session.resume", data: { sessionWasActive: false } },
+      { type: "session.resume", data: {} },
     ],
     rpc: { canvas: {
       list: async () => ({ canvases: ["user:github-notifications", "project:github-notifications"].map(extensionId => ({

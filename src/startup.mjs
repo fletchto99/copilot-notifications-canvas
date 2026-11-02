@@ -1,89 +1,105 @@
-import { mkdir, open } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { acquireLock } from "./lock.mjs";
 
 export const STARTUP_INSTANCE = "unread-notifications-startup";
+const MAX_ATTEMPTS = 3;
+const RETRY_DELAY_MS = 1_000;
 
-export async function claimStartup(workspacePath) {
+export async function acquireStartupLock(workspacePath) {
   if (!workspacePath) throw new Error("Session workspace unavailable");
   const directory = join(workspacePath, "files");
-  await mkdir(directory, { recursive: true });
-  let file;
-  try {
-    file = await open(join(directory, "github-notifications-startup.json"), "wx", 0o600);
-    await file.writeFile('{"checked":true}\n');
-    return true;
-  } catch (error) {
-    if (error.code === "EEXIST") return false;
-    throw error;
-  } finally {
-    await file?.close();
-  }
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  return acquireLock(join(directory, ".github-notifications-startup.lock"), { label: "auto-open" });
 }
 
 function isNotificationsCanvas(canvas) {
-  return canvas.canvasId === "github-notifications";
+  return canvas?.canvasId === "github-notifications";
 }
 
-function isNotificationsActivity(event) {
-  return ["session.canvas.opened", "session.canvas.closed",
-    "session.canvas.recorded", "session.canvas.removed"].includes(event.type) &&
+function isDismissal(event) {
+  return ["session.canvas.closed", "session.canvas.removed"].includes(event.type) &&
     isNotificationsCanvas(event.data);
 }
 
-function isSessionActivity(event) {
-  // Repository activation can resume an unused session before its first turn.
-  return ["user.message", "assistant.turn_start", "assistant.message"].includes(event.type) ||
-    (event.type === "session.resume" &&
-      (event.data?.sessionWasActive !== false || event.data?.continuePendingWork === true));
-}
-
-function freshSession(events) {
-  return events.some(event => event.type === "session.start") &&
-    !events.some(event => isSessionActivity(event) || isNotificationsActivity(event));
-}
-
 export class Startup {
-  constructor(session, preferences, { claim = claimStartup } = {}) {
+  constructor(session, preferences, { lock = acquireStartupLock, schedule = setTimeout, cancel = clearTimeout } = {}) {
     this.session = session;
     this.preferences = preferences;
-    this.claim = claim;
+    this.lock = lock;
+    this.schedule = schedule;
+    this.cancel = cancel;
     this.status = "initializing";
     this.stopped = false;
-    this.attempted = false;
+    this.started = false;
+    this.failures = 0;
+    this.opening = false;
   }
 
   async start() {
-    if (this.status !== "initializing") return;
+    if (this.started || this.stopped) return;
+    this.started = true;
     try {
-      if (!await this.claim(this.session.workspacePath)) return this.finish("already-checked");
-      if (!(await this.preferences.read()).autoOpen) return this.finish("disabled");
+      const { autoOpen } = await this.preferences.read();
+      if (this.stopped) return;
+      if (!autoOpen) return this.finish("disabled");
       this.unsubscribe = this.session.on(event => {
-        if (event.type === "capabilities.changed" && this.status === "waiting-for-renderer") void this.attempt();
-        if (isSessionActivity(event) ||
-            (isNotificationsActivity(event) &&
-             !(["session.canvas.opened", "session.canvas.recorded"].includes(event.type) &&
-               event.data.instanceId === STARTUP_INSTANCE))) {
+        if (isDismissal(event)) {
+          this.finish("dismissed");
+        } else if (["session.canvas.opened", "session.canvas.recorded"].includes(event.type) &&
+            isNotificationsCanvas(event.data) &&
+            !(this.opening && event.data.instanceId === STARTUP_INSTANCE)) {
+          this.finish("panel-already-open");
+        } else if (["user.message", "assistant.turn_start", "assistant.message"].includes(event.type)) {
           this.finish("session-already-active");
+        } else if (event.type === "session.shutdown") {
+          this.finish("stopped");
+        } else if (event.type === "capabilities.changed" && this.status === "waiting-for-renderer") {
+          void this.attempt();
         }
       });
-      if (!freshSession(await this.session.getEvents())) return this.finish("existing-session");
-      if (this.stopped) return;
       await this.attempt();
     } catch {
-      await this.fail();
+      this.finish("error");
+      await this.warn(false);
     }
   }
 
-  async attempt() {
-    if (this.stopped || this.attempted) return;
-    if (this.session.capabilities.ui?.canvases !== true) {
-      this.status = "waiting-for-renderer";
-      return;
-    }
-    this.attempted = true;
+  attempt() {
+    if (this.stopped || this.timer || this.pending) return this.pending;
+    this.pending = this.check().finally(() => { this.pending = undefined; });
+    return this.pending;
+  }
+
+  async check() {
     try {
-      if (!(await this.preferences.read()).autoOpen) return this.finish("disabled");
-      if (!freshSession(await this.session.getEvents())) return this.finish("existing-session");
+      const { autoOpen } = await this.preferences.read();
+      if (this.stopped) return;
+      if (!autoOpen) return this.finish("disabled");
+      if (this.session.capabilities.ui?.canvases !== true) {
+        this.status = "waiting-for-renderer";
+        return;
+      }
+      this.status = "opening";
+      const status = await this.openOnce();
+      if (this.stopped) return;
+      if (status === "busy") await this.retry(false);
+      else this.finish(status);
+    } catch {
+      await this.retry(true);
+    }
+  }
+
+  async openOnce() {
+    const release = await this.lock(this.session.workspacePath);
+    if (!release) return "busy";
+    try {
+      if (this.stopped) return;
+      // The runtime's durable canvas journal, not conversation activity, owns dismissal.
+      if ((await this.session.getEvents()).some(isDismissal)) return "dismissed";
+      if (this.stopped) return;
+      const { openCanvases } = await this.session.rpc.canvas.listOpen();
+      if (openCanvases.some(isNotificationsCanvas)) return "panel-already-open";
       if (this.stopped) return;
       const { canvases } = await this.session.rpc.canvas.list();
       const candidates = canvases.filter(isNotificationsCanvas);
@@ -91,33 +107,59 @@ export class Startup {
         (candidates.length === 1 ? candidates[0] : undefined);
       if (this.stopped) return;
       if (!provider) throw new Error("Notifications canvas provider unavailable or ambiguous");
-      const { openCanvases } = await this.session.rpc.canvas.listOpen();
-      if (openCanvases.some(isNotificationsCanvas)) return this.finish("panel-already-open");
+      const { openCanvases: currentPanels } = await this.session.rpc.canvas.listOpen();
+      if (currentPanels.some(isNotificationsCanvas)) return "panel-already-open";
       if (this.stopped) return;
+      this.opening = true;
       await this.session.rpc.canvas.open({
         extensionId: provider.extensionId,
         canvasId: "github-notifications",
         instanceId: STARTUP_INSTANCE,
         input: {},
       });
-      this.finish("opened");
-    } catch {
-      await this.fail();
+      return "opened";
+    } finally {
+      this.opening = false;
+      await release();
     }
+  }
+
+  async retry(failed) {
+    if (this.stopped) {
+      if (failed) await this.warn(false);
+      return;
+    }
+    if (++this.failures >= MAX_ATTEMPTS) {
+      this.finish("error");
+      await this.warn(false);
+      return;
+    }
+    this.status = "retrying";
+    this.timer = this.schedule(() => {
+      this.timer = undefined;
+      void this.attempt();
+    }, RETRY_DELAY_MS * this.failures);
+    this.timer.unref?.();
+    if (failed) await this.warn(true);
   }
 
   finish(status) {
     this.status = status;
     this.stopped = true;
+    if (this.timer) this.cancel(this.timer);
+    this.timer = undefined;
     this.unsubscribe?.();
   }
 
-  async fail() {
-    this.finish("error");
-    await this.session.log("Unread Notifications could not check or apply auto-open. Check notification settings, the session workspace, and canvas availability.", { level: "warning" });
+  async warn(retrying) {
+    await this.session.log(retrying
+      ? "Unread Notifications could not auto-open. Retrying shortly."
+      : "Unread Notifications could not complete auto-open. Check notification settings, the session workspace, and canvas availability; re-enter or reload the session to try again.",
+    { level: "warning" });
   }
 
-  close() {
+  async close() {
     this.finish("stopped");
+    await this.pending;
   }
 }

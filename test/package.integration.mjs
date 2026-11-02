@@ -233,24 +233,27 @@ try {
   await mkdir(preferences, { recursive: true });
   await writeFile(join(preferences, "settings.json"), '{"autoOpen":true}');
   const opens = [];
+  const livePanels = [];
+  const startupEvents = [
+    { type: "session.start" }, { type: "user.message" }, { type: "assistant.message" },
+    { type: "session.shutdown" }, { type: "session.resume" },
+  ];
   globalThis.testSession = {
     workspacePath: join(root, "auto-open-session"),
     capabilities: { ui: { canvases: true } },
     log(message) { throw new Error(message); },
     on: () => () => {},
-    getEvents: async () => [
-      { type: "session.start" }, { type: "session.shutdown" },
-      { type: "session.resume", data: { sessionWasActive: false } },
-    ],
+    getEvents: async () => startupEvents,
     rpc: { canvas: {
       list: async () => ({ canvases: [{
         extensionId: "user:github-notifications", canvasId: "github-notifications",
       }] }),
-      listOpen: async () => ({ openCanvases: [] }),
+      listOpen: async () => ({ openCanvases: livePanels }),
       open: async input => {
         opens.push(input);
         const canvas = globalThis.testCanvases.at(-1);
         const result = await canvas.open(input);
+        livePanels.push(input);
         panels.push([canvas, input.instanceId]);
         return result;
       },
@@ -266,9 +269,20 @@ try {
     .handler({ instanceId: "unread-notifications-startup" });
   assert.equal(startupSettings.startupStatus, "opened");
   assert.equal(startupSettings.desktopNotifications, false);
-  await startup.onClose({ instanceId: "unread-notifications-startup" });
   await import(pathToFileURL(entry).href + "?startup-reload");
-  assert.equal(opens.length, 1, "Reloading a checked session must not reopen the panel");
+  assert.equal(opens.length, 1, "Reloading must leave an existing panel alone");
+  await startup.onClose({ instanceId: "unread-notifications-startup" });
+  livePanels.length = 0;
+  startupEvents.push({ type: "session.canvas.removed", data: opens[0] });
+  await import(pathToFileURL(entry).href + "?startup-dismissed");
+  assert.equal(opens.length, 1, "Explicit dismissal must survive provider reload");
+  globalThis.testSession = {
+    ...globalThis.testSession,
+    workspacePath: join(root, "another-auto-open-session"),
+    getEvents: async () => [{ type: "session.resume" }],
+  };
+  await import(pathToFileURL(entry).href + "?another-session");
+  assert.equal(opens.length, 2, "Dismissal must not suppress a different session");
 } finally {
   for (const [canvas, instanceId] of panels) await canvas.onClose({ instanceId });
 }

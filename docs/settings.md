@@ -9,7 +9,7 @@ across sessions and preserved during packaged upgrades.
 | --- | --- | --- |
 | Group By | Repository | **Repository**: alphabetical repositories, newest items first. **All notifications**: one collapsible, newest-first group. **Date**: newest local calendar day first. All use last-updated times. |
 | Theme | System | **System** follows Copilot, falling back to the OS theme. **Dark** and **Light** override it. |
-| Auto-open | Off | Opens once per new session, including general chats and initial setup restarts before conversation activity; does not reopen checked sessions or interrupt existing conversations. |
+| Auto-open | Off | Opens a missing Notifications panel when its provider attaches to a new or resumed session, unless you previously closed it in that session. Existing panels are left alone. |
 | Desktop notifications | Off | Enables native alerts while a Notifications canvas is open and its extension process is running. |
 | Sound | System default | System-specific sounds for desktop alerts; see the platform table below. |
 
@@ -17,13 +17,26 @@ The saved grouping values remain `repo`, `none`, and `date`; the display labels
 do not change existing preferences. Press Escape, click outside Settings, or move
 keyboard focus outside it to close the panel.
 
-Copilot may internally resume a new session while activating repository content.
-Auto-open allows this only when the resume explicitly reports no live work, does
-not continue pending work, and the session has no user messages, assistant turns,
-or prior Notifications panel activity. The once-per-session check still prevents
-reopening after a reload, a later resume, or closing the panel, including when
-auto-open was disabled at the first check. If both project and user providers
-are registered, auto-open selects the project provider when it is available.
+Auto-open is a user-wide preference, but dismissal belongs to each session.
+Closing Notifications in one conversation does not affect other conversations.
+Copilot's recorded canvas-close events preserve that dismissal across provider
+reloads and session resumes. A missing panel with no recorded dismissal can open
+again, even if the session has earlier conversation activity or Copilot internally
+restarts it during setup. Existing panels are never focused by auto-open.
+
+This is not a continuous keep-open loop. Changing the setting does not open
+panels in other running sessions; it applies when a provider next attaches.
+Temporary opening failures and same-session lock contention allow three attempts,
+with retries after one and two seconds. Closing or manually opening Notifications,
+starting new conversation activity, or shutting down cancels deferred attempts.
+Exhausted attempts can try again on a later attachment; errors do not permanently
+suppress auto-open. If both project and user providers are registered, a
+per-session lock prevents duplicate opens and the project provider is preferred
+when available.
+
+Older `files/github-notifications-startup.json` checked markers are no longer
+consulted or written. They are left untouched; recorded canvas dismissal, not a
+previous disabled or failed startup check, determines whether to stay closed.
 
 ## Desktop notifications
 
