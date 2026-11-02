@@ -109,7 +109,9 @@ output. Development loads source without a build; release builds bundle
   and atomic-write patterns; retain symlink, ownership, and malformed-data
   checks. Report invalid data rather than resetting or silently migrating it.
 - Auto-open and desktop notifications default to off. Auto-open is once per new
-  session, not on resume, reload, or panel closure.
+  session, including initial setup resumes explicitly reporting no live or
+  pending work before any conversation activity. Never reopen a checked session,
+  interrupt an existing conversation, or reopen after panel closure.
 - Desktop delivery is **at most once across sessions sharing a home**. Persist
   hashed activity before native delivery; never replay failed or interrupted
   batches. Keep the first successful baseline silent and retain watcher

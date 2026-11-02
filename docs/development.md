@@ -28,9 +28,11 @@ if Git is unavailable, the footer shows `branch unavailable` and the provider
 logs a warning. Packaged releases do not show this development label.
 
 Each session uses its own checkout and loaded asset snapshot; do not delete a
-checkout while a session uses it. A project-local checkout shadows a user-wide
-installation. If both providers are registered, pass
-`extensionId: project:github-notifications` when opening the local canvas.
+checkout while a session uses it. Some Copilot versions register both the
+project-local checkout and the user-wide installation instead of shadowing the
+installed copy. Auto-open selects the project provider when it is available and
+uses the shared session marker to avoid duplicate opens. For manual opens, pass
+`extensionId: project:github-notifications` to select the local canvas.
 
 ### Synthetic preview
 

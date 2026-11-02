@@ -13,8 +13,11 @@ const otherPanel = {
   canvasId: "agentcorp-observer", extensionId: "user:agentcorp-extension", instanceId: "office-startup",
 };
 const canvasEvents = ["session.canvas.opened", "session.canvas.closed", "session.canvas.recorded", "session.canvas.removed"];
+const setupResume = { type: "session.resume", data: { sessionWasActive: false } };
+const setupHistory = [{ type: "session.start" }, { type: "session.shutdown" }, setupResume];
 
-function fixture({ enabled = true, renderer = true, events = [{ type: "session.start" }], panels = [], failOpen = false } = {}) {
+function fixture({ enabled = true, renderer = true, events = [{ type: "session.start" }],
+  canvases = [notificationPanel], panels = [], failOpen = false } = {}) {
   let handler;
   const opened = [];
   const logs = [];
@@ -26,6 +29,7 @@ function fixture({ enabled = true, renderer = true, events = [{ type: "session.s
     on: callback => { handler = callback; return () => { handler = undefined; }; },
     log: async (...args) => logs.push(args),
     rpc: { canvas: {
+      list: async () => ({ canvases }),
       listOpen: async () => ({ openCanvases: panels }),
       open: async input => { if (failOpen) throw new Error("sensitive synthetic failure"); opened.push(input); },
     } },
@@ -41,10 +45,99 @@ test("startup is opt-in and uses the supported RPC with one stable instance", as
   assert.equal(off.opened.length, 0);
   const on = fixture();
   await on.startup.start();
-  assert.deepEqual(on.opened, [{ canvasId: "github-notifications", instanceId: STARTUP_INSTANCE, input: {} }]);
+  assert.deepEqual(on.opened, [{
+    extensionId: notificationPanel.extensionId, canvasId: "github-notifications", instanceId: STARTUP_INSTANCE, input: {},
+  }]);
   await on.startup.attempt();
   await on.startup.start();
   assert.equal(on.opened.length, 1);
+});
+
+test("configuration resumes before the first conversation activity still auto-open", async () => {
+  const item = fixture({ events: setupHistory });
+  await item.startup.start();
+  assert.equal(item.startup.status, "opened");
+  assert.equal(item.opened.length, 1);
+  assert.deepEqual(item.logs, []);
+});
+
+test("setup resumes during history, provider or panel inspection do not cancel startup", async t => {
+  for (const stage of ["history", "providers", "panels"]) {
+    await t.test(stage, async () => {
+      const item = fixture();
+      const resume = result => async () => {
+        item.emit(setupResume);
+        return result;
+      };
+      if (stage === "history") item.session.getEvents = resume(setupHistory);
+      else if (stage === "providers") item.session.rpc.canvas.list = resume({ canvases: [notificationPanel] });
+      else item.session.rpc.canvas.listOpen = resume({ openCanvases: [] });
+      await item.startup.start();
+      assert.equal(item.startup.status, "opened");
+      assert.equal(item.opened.length, 1);
+    });
+  }
+});
+
+test("setup resumes while waiting for the renderer can open once the renderer arrives", async () => {
+  const item = fixture({ renderer: false });
+  await item.startup.start();
+  item.emit(setupResume);
+  assert.equal(item.startup.status, "waiting-for-renderer");
+  item.session.capabilities.ui.canvases = true;
+  item.emit({ type: "capabilities.changed" });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(item.startup.status, "opened");
+  assert.equal(item.opened.length, 1);
+});
+
+test("resumes with conversation history, live work, pending work or unknown activity never auto-open", async () => {
+  for (const type of ["user.message", "assistant.turn_start", "assistant.message", ...canvasEvents]) {
+    for (const activity of [false, true, undefined]) {
+      const item = fixture({ events: [
+        { type: "session.start" }, { type, data: notificationPanel },
+        { type: "session.resume", data: { sessionWasActive: activity } },
+      ] });
+      await item.startup.start();
+      assert.equal(item.startup.status, "existing-session", `${type}: ${activity}`);
+      assert.deepEqual(item.opened, []);
+    }
+  }
+  for (const data of [{}, { sessionWasActive: true }, { sessionWasActive: false, continuePendingWork: true }]) {
+    const item = fixture({ events: [{ type: "session.start" }, { type: "session.resume", data }] });
+    await item.startup.start();
+    assert.equal(item.startup.status, "existing-session");
+    assert.deepEqual(item.opened, []);
+  }
+  const missingStart = fixture({ events: [setupResume] });
+  await missingStart.startup.start();
+  assert.equal(missingStart.startup.status, "existing-session");
+  assert.deepEqual(missingStart.opened, []);
+});
+
+test("auto-open explicitly selects the project provider when both copies are registered", async () => {
+  const project = { ...notificationPanel, extensionId: "project:github-notifications" };
+  for (const canvases of [[notificationPanel, project], [project, notificationPanel], [project]]) {
+    const item = fixture({ canvases: [otherPanel, ...canvases] });
+    await item.startup.start();
+    assert.equal(item.startup.status, "opened");
+    assert.deepEqual(item.opened, [{
+      extensionId: project.extensionId, canvasId: "github-notifications", instanceId: STARTUP_INSTANCE, input: {},
+    }]);
+  }
+});
+
+test("missing or ambiguous providers report a sanitized error instead of guessing", async () => {
+  const renamed = { ...notificationPanel, extensionId: "user:another-copy" };
+  for (const canvases of [[otherPanel], [notificationPanel, renamed]]) {
+    const item = fixture({ canvases });
+    await item.startup.start();
+    assert.equal(item.startup.status, "error");
+    assert.deepEqual(item.opened, []);
+    assert.equal(item.logs.length, 1);
+    assert.equal(item.logs[0][1].level, "warning");
+    assert.equal(JSON.stringify(item.logs).includes(renamed.extensionId), false);
+  }
 });
 
 test("startup's own open events do not cancel its in-flight attempt", async () => {
@@ -113,28 +206,26 @@ test("another canvas opening during the final panel check does not cancel startu
   assert.equal(item.opened.length, 1);
 });
 
-test("starting work during history or panel inspection cancels auto-open even when the snapshot is still fresh", async t => {
-  for (const stage of ["history", "panels"]) {
-    await t.test(stage, async () => {
-      const item = fixture();
-      if (stage === "history") {
-        item.session.getEvents = async () => {
-          item.emit({ type: "assistant.turn_start" });
-          return [{ type: "session.start" }];
+test("starting work during inspection cancels auto-open even when the snapshot is still fresh", async t => {
+  for (const stage of ["history", "providers", "panels"]) {
+    for (const type of ["user.message", "assistant.turn_start", "assistant.message"]) {
+      await t.test(`${stage}: ${type}`, async () => {
+        const item = fixture();
+        const activate = result => async () => {
+          item.emit({ type });
+          return result;
         };
-      } else {
-        item.session.rpc.canvas.listOpen = async () => {
-          item.emit({ type: "assistant.turn_start" });
-          return { openCanvases: [] };
-        };
-      }
-      await item.startup.start();
-      assert.equal(item.startup.status, "session-already-active");
-      item.emit({ type: "capabilities.changed" });
-      await item.startup.attempt();
-      assert.deepEqual(item.opened, []);
-      assert.deepEqual(item.logs, []);
-    });
+        if (stage === "history") item.session.getEvents = activate([{ type: "session.start" }]);
+        else if (stage === "providers") item.session.rpc.canvas.list = activate({ canvases: [notificationPanel] });
+        else item.session.rpc.canvas.listOpen = activate({ openCanvases: [] });
+        await item.startup.start();
+        assert.equal(item.startup.status, "session-already-active");
+        item.emit({ type: "capabilities.changed" });
+        await item.startup.attempt();
+        assert.deepEqual(item.opened, []);
+        assert.deepEqual(item.logs, []);
+      });
+    }
   }
 });
 
@@ -173,7 +264,8 @@ test("a late renderer capability can open once, but disabling or starting work w
   item.emit({ type: "capabilities.changed" });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(item.opened.length, 1);
-  for (const cancel of ["disable", "session.resume", "session.canvas.closed", "session.canvas.removed", "assistant.turn_start"]) {
+  for (const cancel of ["disable", "session.resume", "session.canvas.closed", "session.canvas.removed",
+    "user.message", "assistant.turn_start", "assistant.message"]) {
     const waiting = fixture({ renderer: false });
     await waiting.startup.start();
     if (cancel === "disable") waiting.preference.autoOpen = false;
@@ -194,13 +286,32 @@ test("the session marker prevents reopening after close or provider reload, incl
     initial.startup.claim = claimStartup;
     await initial.startup.start();
     assert.equal(initial.opened.length, enabled ? 1 : 0);
-    const reload = fixture();
+    const reload = fixture({ events: setupHistory });
     reload.session.workspacePath = initial.session.workspacePath;
     reload.startup.claim = claimStartup;
     await reload.startup.start();
     assert.equal(reload.startup.status, "already-checked");
     assert.equal(reload.opened.length, 0);
   }
+});
+
+test("concurrent providers share the startup claim across setup resumes and later reloads", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "notification-startup-test-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const items = Array.from({ length: 2 }, () => fixture({ events: setupHistory }));
+  for (const item of items) {
+    item.session.workspacePath = directory;
+    item.startup.claim = claimStartup;
+  }
+  await Promise.all(items.map(item => item.startup.start()));
+  assert.deepEqual(items.map(item => item.startup.status).sort(), ["already-checked", "opened"]);
+  assert.equal(items.flatMap(item => item.opened).length, 1);
+  const reload = fixture({ events: setupHistory });
+  reload.session.workspacePath = directory;
+  reload.startup.claim = claimStartup;
+  await reload.startup.start();
+  assert.equal(reload.startup.status, "already-checked");
+  assert.deepEqual(reload.opened, []);
 });
 
 test("a missing session workspace reports one startup failure without opening or retrying", async () => {

@@ -30,10 +30,16 @@ function isNotificationsActivity(event) {
     isNotificationsCanvas(event.data);
 }
 
+function isSessionActivity(event) {
+  // Repository activation can resume an unused session before its first turn.
+  return ["user.message", "assistant.turn_start", "assistant.message"].includes(event.type) ||
+    (event.type === "session.resume" &&
+      (event.data?.sessionWasActive !== false || event.data?.continuePendingWork === true));
+}
+
 function freshSession(events) {
   return events.some(event => event.type === "session.start") &&
-    !events.some(event => ["session.resume", "assistant.turn_start", "assistant.message"].includes(event.type) ||
-      isNotificationsActivity(event));
+    !events.some(event => isSessionActivity(event) || isNotificationsActivity(event));
 }
 
 export class Startup {
@@ -53,7 +59,7 @@ export class Startup {
       if (!(await this.preferences.read()).autoOpen) return this.finish("disabled");
       this.unsubscribe = this.session.on(event => {
         if (event.type === "capabilities.changed" && this.status === "waiting-for-renderer") void this.attempt();
-        if (["session.resume", "assistant.turn_start"].includes(event.type) ||
+        if (isSessionActivity(event) ||
             (isNotificationsActivity(event) &&
              !(["session.canvas.opened", "session.canvas.recorded"].includes(event.type) &&
                event.data.instanceId === STARTUP_INSTANCE))) {
@@ -78,10 +84,18 @@ export class Startup {
     try {
       if (!(await this.preferences.read()).autoOpen) return this.finish("disabled");
       if (!freshSession(await this.session.getEvents())) return this.finish("existing-session");
+      if (this.stopped) return;
+      const { canvases } = await this.session.rpc.canvas.list();
+      const candidates = canvases.filter(isNotificationsCanvas);
+      const provider = candidates.find(canvas => canvas.extensionId === "project:github-notifications") ??
+        (candidates.length === 1 ? candidates[0] : undefined);
+      if (this.stopped) return;
+      if (!provider) throw new Error("Notifications canvas provider unavailable or ambiguous");
       const { openCanvases } = await this.session.rpc.canvas.listOpen();
       if (openCanvases.some(isNotificationsCanvas)) return this.finish("panel-already-open");
       if (this.stopped) return;
       await this.session.rpc.canvas.open({
+        extensionId: provider.extensionId,
         canvasId: "github-notifications",
         instanceId: STARTUP_INSTANCE,
         input: {},

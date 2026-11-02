@@ -157,7 +157,7 @@ export class CanvasError extends Error {}
 export async function joinSession(options) {
   globalThis.testCanvases ??= [];
   globalThis.testCanvases.push(options.canvases[0]);
-  return { workspacePath: process.argv[1],
+  return globalThis.testSession ?? { workspacePath: process.argv[1],
     log(message) { throw new Error(message); } };
 }\`;
 const hook = \`export async function resolve(specifier, context, next) {
@@ -228,6 +228,47 @@ try {
   });
   assert.match(result.stdout, /# fail 0/);
   assert.match(result.stdout, /# pass 1/);
+
+  const preferences = join(process.env.COPILOT_HOME, "extensions", "github-notifications", "artifacts");
+  await mkdir(preferences, { recursive: true });
+  await writeFile(join(preferences, "settings.json"), '{"autoOpen":true}');
+  const opens = [];
+  globalThis.testSession = {
+    workspacePath: join(root, "auto-open-session"),
+    capabilities: { ui: { canvases: true } },
+    log(message) { throw new Error(message); },
+    on: () => () => {},
+    getEvents: async () => [
+      { type: "session.start" }, { type: "session.shutdown" },
+      { type: "session.resume", data: { sessionWasActive: false } },
+    ],
+    rpc: { canvas: {
+      list: async () => ({ canvases: [{
+        extensionId: "user:github-notifications", canvasId: "github-notifications",
+      }] }),
+      listOpen: async () => ({ openCanvases: [] }),
+      open: async input => {
+        opens.push(input);
+        const canvas = globalThis.testCanvases.at(-1);
+        const result = await canvas.open(input);
+        panels.push([canvas, input.instanceId]);
+        return result;
+      },
+    } },
+  };
+  await import(pathToFileURL(entry).href + "?startup");
+  assert.deepEqual(opens, [{
+    extensionId: "user:github-notifications", canvasId: "github-notifications",
+    instanceId: "unread-notifications-startup", input: {},
+  }]);
+  const startup = globalThis.testCanvases.at(-1);
+  const startupSettings = await startup.actions.find(action => action.name === "get_settings")
+    .handler({ instanceId: "unread-notifications-startup" });
+  assert.equal(startupSettings.startupStatus, "opened");
+  assert.equal(startupSettings.desktopNotifications, false);
+  await startup.onClose({ instanceId: "unread-notifications-startup" });
+  await import(pathToFileURL(entry).href + "?startup-reload");
+  assert.equal(opens.length, 1, "Reloading a checked session must not reopen the panel");
 } finally {
   for (const [canvas, instanceId] of panels) await canvas.onClose({ instanceId });
 }

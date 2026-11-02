@@ -9,13 +9,21 @@ across sessions and preserved during packaged upgrades.
 | --- | --- | --- |
 | Group By | Repository | **Repository**: alphabetical repositories, newest items first. **All notifications**: one collapsible, newest-first group. **Date**: newest local calendar day first. All use last-updated times. |
 | Theme | System | **System** follows Copilot, falling back to the OS theme. **Dark** and **Light** override it. |
-| Auto-open | Off | Opens once per new session, including general chats; not on resume, reload, or after closing the panel. |
+| Auto-open | Off | Opens once per new session, including general chats and initial setup restarts before conversation activity; does not reopen checked sessions or interrupt existing conversations. |
 | Desktop notifications | Off | Enables native alerts while a Notifications canvas is open and its extension process is running. |
 | Sound | System default | System-specific sounds for desktop alerts; see the platform table below. |
 
 The saved grouping values remain `repo`, `none`, and `date`; the display labels
 do not change existing preferences. Press Escape, click outside Settings, or move
 keyboard focus outside it to close the panel.
+
+Copilot may internally resume a new session while activating repository content.
+Auto-open allows this only when the resume explicitly reports no live work, does
+not continue pending work, and the session has no user messages, assistant turns,
+or prior Notifications panel activity. The once-per-session check still prevents
+reopening after a reload, a later resume, or closing the panel, including when
+auto-open was disabled at the first check. If both project and user providers
+are registered, auto-open selects the project provider when it is available.
 
 ## Desktop notifications
 
