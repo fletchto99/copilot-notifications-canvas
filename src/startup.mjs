@@ -40,9 +40,6 @@ export class Startup {
     if (this.started || this.stopped) return;
     this.started = true;
     try {
-      const { autoOpen } = await this.preferences.read();
-      if (this.stopped) return;
-      if (!autoOpen) return this.finish("disabled");
       this.unsubscribe = this.session.on(event => {
         if (isDismissal(event)) {
           this.finish("dismissed");
@@ -58,6 +55,9 @@ export class Startup {
           void this.attempt();
         }
       });
+      const { autoOpen } = await this.preferences.read();
+      if (this.stopped) return;
+      if (!autoOpen) return this.finish("disabled");
       await this.attempt();
     } catch {
       this.finish("error");
@@ -67,7 +67,15 @@ export class Startup {
 
   attempt() {
     if (this.stopped || this.timer || this.pending) return this.pending;
-    this.pending = this.check().finally(() => { this.pending = undefined; });
+    this.pending = this.check().finally(() => {
+      this.pending = undefined;
+      if (this.stopped || this.status !== "retrying") return;
+      this.timer = this.schedule(() => {
+        this.timer = undefined;
+        void this.attempt();
+      }, RETRY_DELAY_MS * this.failures);
+      this.timer.unref?.();
+    });
     return this.pending;
   }
 
@@ -135,11 +143,6 @@ export class Startup {
       return;
     }
     this.status = "retrying";
-    this.timer = this.schedule(() => {
-      this.timer = undefined;
-      void this.attempt();
-    }, RETRY_DELAY_MS * this.failures);
-    this.timer.unref?.();
     if (failed) await this.warn(true);
   }
 

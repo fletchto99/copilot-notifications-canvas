@@ -277,6 +277,45 @@ test("temporary provider failures retry after one and two seconds, then stop wit
   assert.equal(reload.status, "opened", "A later attachment can retry an exhausted startup");
 });
 
+test("a retry is not lost when the warning RPC takes longer than its delay", async t => {
+  const item = fixture({ failOpen: true });
+  t.after(() => item.startup.close());
+  let completeWarning;
+  item.session.log = () => new Promise(resolve => { completeWarning = resolve; });
+  const starting = item.startup.start();
+  await new Promise(resolve => setImmediate(resolve));
+  for (const timer of item.timers) {
+    timer.fired = true;
+    timer.callback();
+  }
+  completeWarning();
+  await starting;
+  item.session.rpc.canvas.open = async input => { item.opened.push(input); };
+  await item.retry();
+  assert.equal(item.startup.status, "opened");
+  assert.equal(item.opened.length, 1);
+});
+
+test("cancellation during a slow warning prevents scheduling a retry afterward", async () => {
+  for (const type of ["session.canvas.removed", "session.canvas.recorded", "user.message", "session.shutdown"]) {
+    const item = fixture({ failOpen: true });
+    let completeWarning;
+    item.session.log = () => new Promise(resolve => { completeWarning = resolve; });
+    const starting = item.startup.start();
+    await new Promise(resolve => setImmediate(resolve));
+    item.emit({ type, data: notificationPanel });
+    const status = item.startup.status;
+    assert.equal(item.startup.stopped, true);
+    completeWarning();
+    await starting;
+    assert.equal(item.startup.status, status);
+    assert.equal(item.startup.timer, undefined);
+    assert.ok(item.timers.every(timer => timer.cancelled));
+    assert.equal(item.handlers.size, 0);
+    assert.deepEqual(item.opened, []);
+  }
+});
+
 test("missing and ambiguous providers can recover during the bounded retry window", async () => {
   for (const canvases of [[], [notificationPanel, { ...notificationPanel, extensionId: "user:other-copy" }]]) {
     const item = fixture({ canvases });
@@ -432,11 +471,36 @@ test("shutdown cancels timers and awaits in-flight lock cleanup without opening"
   assert.deepEqual(item.opened, []);
 });
 
-test("shutdown during the initial settings read prevents subscriptions and opening", async () => {
+test("activity during the initial settings read is observed before any opening work", async () => {
+  for (const type of ["user.message", "assistant.turn_start", "assistant.message",
+    "session.canvas.removed", "session.canvas.recorded", "session.shutdown"]) {
+    const item = fixture();
+    let complete;
+    let reads = 0;
+    let locks = 0;
+    item.preferences.read = () => ++reads === 1
+      ? new Promise(resolve => { complete = resolve; })
+      : Promise.resolve({ autoOpen: true });
+    item.startup.lock = async () => { locks++; return async () => {}; };
+    const starting = item.startup.start();
+    const subscriptions = item.handlers.size;
+    item.emit({ type, data: notificationPanel });
+    complete({ autoOpen: true });
+    await starting;
+    assert.equal(subscriptions, 1, type);
+    assert.equal(locks, 0, type);
+    assert.deepEqual(item.opened, [], type);
+    assert.equal(item.handlers.size, 0, type);
+    assert.equal(item.timers.length, 0, type);
+  }
+});
+
+test("shutdown during the initial settings read removes subscriptions and prevents opening", async () => {
   const item = fixture();
   let complete;
   item.preferences.read = () => new Promise(resolve => { complete = resolve; });
   const starting = item.startup.start();
+  assert.equal(item.handlers.size, 1);
   await item.startup.close();
   complete({ autoOpen: true });
   await starting;

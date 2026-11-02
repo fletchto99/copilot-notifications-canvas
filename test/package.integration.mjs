@@ -158,6 +158,7 @@ export async function joinSession(options) {
   globalThis.testCanvases ??= [];
   globalThis.testCanvases.push(options.canvases[0]);
   return globalThis.testSession ?? { workspacePath: process.argv[1],
+    on: () => () => {},
     log(message) { throw new Error(message); } };
 }\`;
 const hook = \`export async function resolve(specifier, context, next) {
