@@ -80,8 +80,17 @@ test("the extension entry point wires an isolated session through its complete l
     capabilities: { ui: { canvases: true } },
     log: (message, options) => logs.push({ message, options }),
     on: () => () => {},
-    getEvents: async () => [{ type: "session.start", data: {} }],
+    getEvents: async () => [
+      { type: "session.start", data: {} },
+      { type: "user.message", data: {} },
+      { type: "assistant.message", data: {} },
+      { type: "session.shutdown", data: { shutdownType: "routine" } },
+      { type: "session.resume", data: {} },
+    ],
     rpc: { canvas: {
+      list: async () => ({ canvases: ["user:github-notifications", "project:github-notifications"].map(extensionId => ({
+        canvasId: "github-notifications", extensionId,
+      })) }),
       listOpen: async () => ({ openCanvases: [] }),
       open: async input => {
         opens.push(input);
@@ -106,7 +115,10 @@ test("the extension entry point wires an isolated session through its complete l
       assert.equal(typeof action.handler, "function");
       assert.equal(action.inputSchema, action.name === "set_filters" ? filterSchema : emptySchema);
     }
-    assert.deepEqual(opens, [{ canvasId: "github-notifications", instanceId: "unread-notifications-startup", input: {} }]);
+    assert.deepEqual(opens, [{
+      extensionId: "project:github-notifications", canvasId: "github-notifications",
+      instanceId: "unread-notifications-startup", input: {},
+    }]);
     const { desktopStatus, ...settings } = await invoke("get_settings", "unread-notifications-startup");
     assert.deepEqual(settings,
       { autoOpen: true, darkMode: false, desktopNotifications: false, desktopSound: "default", groupBy: "repo", startupStatus: "opened" });

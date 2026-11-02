@@ -108,8 +108,13 @@ output. Development loads source without a build; release builds bundle
 - Preserve unknown stored settings and existing artifacts. Reuse `acquireLock`
   and atomic-write patterns; retain symlink, ownership, and malformed-data
   checks. Report invalid data rather than resetting or silently migrating it.
-- Auto-open and desktop notifications default to off. Auto-open is once per new
-  session, not on resume, reload, or panel closure.
+- Auto-open and desktop notifications default to off. Auto-open runs on provider
+  attachment, including resumed sessions, not as a keep-open loop. Use the
+  runtime's durable canvas-close events for per-session dismissal and a
+  per-session lock for duplicate providers. Never refocus an existing panel or
+  reopen a dismissed one; one session's dismissal must not suppress another.
+  Bound transient retries and cancel deferred attempts on new conversation
+  activity. Global preference changes must not open panels in running sessions.
 - Desktop delivery is **at most once across sessions sharing a home**. Persist
   hashed activity before native delivery; never replay failed or interrupted
   batches. Keep the first successful baseline silent and retain watcher

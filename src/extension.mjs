@@ -122,10 +122,9 @@ session = await joinSession({
   })],
 });
 startup = new Startup(session, preferences);
-await startup.start();
 
 async function shutdown() {
-  startup?.close();
+  await startup?.close();
   await desktop.close();
   updates.close();
   await Promise.allSettled([...instances.keys()].map(close));
@@ -134,3 +133,4 @@ async function shutdown() {
 process.once("SIGTERM", shutdown);
 process.once("SIGINT", shutdown);
 process.once("disconnect", shutdown);
+await startup.start();

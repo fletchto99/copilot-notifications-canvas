@@ -23,6 +23,7 @@ childProcess.execFile = (command, args, options, callback) => {
 syncBuiltinESMExports();
 host.session = {
   workspacePath: process.env.COPILOT_HOME,
+  on: () => () => {},
   log: (message, options) => process.send({ type: "log", message, options }),
 };
 register(new URL("./sdk-loader.mjs", import.meta.url));

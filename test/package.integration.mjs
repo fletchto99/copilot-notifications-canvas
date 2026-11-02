@@ -157,7 +157,8 @@ export class CanvasError extends Error {}
 export async function joinSession(options) {
   globalThis.testCanvases ??= [];
   globalThis.testCanvases.push(options.canvases[0]);
-  return { workspacePath: process.argv[1],
+  return globalThis.testSession ?? { workspacePath: process.argv[1],
+    on: () => () => {},
     log(message) { throw new Error(message); } };
 }\`;
 const hook = \`export async function resolve(specifier, context, next) {
@@ -228,6 +229,61 @@ try {
   });
   assert.match(result.stdout, /# fail 0/);
   assert.match(result.stdout, /# pass 1/);
+
+  const preferences = join(process.env.COPILOT_HOME, "extensions", "github-notifications", "artifacts");
+  await mkdir(preferences, { recursive: true });
+  await writeFile(join(preferences, "settings.json"), '{"autoOpen":true}');
+  const opens = [];
+  const livePanels = [];
+  const startupEvents = [
+    { type: "session.start" }, { type: "user.message" }, { type: "assistant.message" },
+    { type: "session.shutdown" }, { type: "session.resume" },
+  ];
+  globalThis.testSession = {
+    workspacePath: join(root, "auto-open-session"),
+    capabilities: { ui: { canvases: true } },
+    log(message) { throw new Error(message); },
+    on: () => () => {},
+    getEvents: async () => startupEvents,
+    rpc: { canvas: {
+      list: async () => ({ canvases: [{
+        extensionId: "user:github-notifications", canvasId: "github-notifications",
+      }] }),
+      listOpen: async () => ({ openCanvases: livePanels }),
+      open: async input => {
+        opens.push(input);
+        const canvas = globalThis.testCanvases.at(-1);
+        const result = await canvas.open(input);
+        livePanels.push(input);
+        panels.push([canvas, input.instanceId]);
+        return result;
+      },
+    } },
+  };
+  await import(pathToFileURL(entry).href + "?startup");
+  assert.deepEqual(opens, [{
+    extensionId: "user:github-notifications", canvasId: "github-notifications",
+    instanceId: "unread-notifications-startup", input: {},
+  }]);
+  const startup = globalThis.testCanvases.at(-1);
+  const startupSettings = await startup.actions.find(action => action.name === "get_settings")
+    .handler({ instanceId: "unread-notifications-startup" });
+  assert.equal(startupSettings.startupStatus, "opened");
+  assert.equal(startupSettings.desktopNotifications, false);
+  await import(pathToFileURL(entry).href + "?startup-reload");
+  assert.equal(opens.length, 1, "Reloading must leave an existing panel alone");
+  await startup.onClose({ instanceId: "unread-notifications-startup" });
+  livePanels.length = 0;
+  startupEvents.push({ type: "session.canvas.removed", data: opens[0] });
+  await import(pathToFileURL(entry).href + "?startup-dismissed");
+  assert.equal(opens.length, 1, "Explicit dismissal must survive provider reload");
+  globalThis.testSession = {
+    ...globalThis.testSession,
+    workspacePath: join(root, "another-auto-open-session"),
+    getEvents: async () => [{ type: "session.resume" }],
+  };
+  await import(pathToFileURL(entry).href + "?another-session");
+  assert.equal(opens.length, 2, "Dismissal must not suppress a different session");
 } finally {
   for (const [canvas, instanceId] of panels) await canvas.onClose({ instanceId });
 }
