@@ -156,8 +156,8 @@ export class Startup {
 
   async warn(retrying) {
     await this.session.log(retrying
-      ? "Unread Notifications could not auto-open. Retrying shortly."
-      : "Unread Notifications could not complete auto-open. Check notification settings, the session workspace, and canvas availability; re-enter or reload the session to try again.",
+      ? "GitHub Notifications could not auto-open. Retrying shortly."
+      : "GitHub Notifications could not complete auto-open. Check notification settings, the session workspace, and canvas availability; re-enter or reload the session to try again.",
     { level: "warning" });
   }
 

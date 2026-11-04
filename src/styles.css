@@ -1,5 +1,4 @@
 :root {
-  color-scheme: light dark;
   font-family: var(
     --font-sans,
     -apple-system,
@@ -61,7 +60,7 @@ body {
 main {
   max-width: 1080px;
   margin: 0 auto;
-  padding: 18px 14px;
+  padding: 12px;
 }
 
 h1,
@@ -120,7 +119,6 @@ button {
 button:hover:not(:disabled, [aria-disabled="true"], .repo-toggle),
 summary:hover,
 .icon-button:hover:not(:disabled),
-.repo-header:hover,
 .row:hover {
   background: color-mix(in srgb, var(--canvas-text) 4%, transparent);
 }
@@ -145,7 +143,7 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 4px;
-  margin-top: 20px;
+  margin-top: 16px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -189,7 +187,7 @@ button:disabled {
   border: 0;
   border-bottom: 2px solid transparent;
   border-radius: 5px 5px 0 0;
-  padding: 9px 12px;
+  padding: 9px 8px;
   color: var(--muted);
   font-size: 13px;
 }
@@ -206,8 +204,8 @@ button:disabled {
 
 .toolbar {
   display: flex;
-  gap: 12px;
-  margin-top: 16px;
+  gap: 8px;
+  margin-top: 12px;
 }
 
 .icon-button {
@@ -231,12 +229,18 @@ button:disabled {
 .tooltip {
   position: absolute;
   z-index: 3;
-  top: 100%;
+  bottom: 100%;
   right: 0;
   width: max-content;
   max-width: min(260px, calc(100vw - 80px));
-  padding-top: 8px;
+  padding-bottom: 8px;
   visibility: hidden;
+}
+
+.tooltip-anchor[data-tooltip-placement="below"] > .tooltip {
+  top: 100%;
+  bottom: auto;
+  padding: 8px 0 0;
 }
 
 .tooltip-anchor:not([data-tooltip-dismissed]):is(:hover, :focus-within)
@@ -258,7 +262,7 @@ button:disabled {
   box-shadow: 0 4px 12px #0002;
 }
 
-.settings[open] .tooltip {
+.settings[open] > summary > .tooltip {
   display: none;
 }
 
@@ -291,11 +295,17 @@ button:disabled {
   width: min(290px, calc(100vw - 36px));
   max-height: 60vh;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 14px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--canvas-background);
   box-shadow: 0 8px 24px #0002;
+}
+
+.settings-panel[data-placement="above"] {
+  top: auto;
+  bottom: calc(100% + 8px);
 }
 
 .settings-panel button {
@@ -307,23 +317,32 @@ button:disabled {
 .select-setting {
   position: relative;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 4px 12px;
   flex-shrink: 0;
   min-height: 38px;
   border: 1px solid var(--border);
   border-radius: 7px;
   padding: 7px 12px;
+  line-height: 22px;
 }
 
 .select-setting label {
   flex-shrink: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.select-setting:has(#show-notifications) {
+  column-gap: 8px;
 }
 
 .select-setting select {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
-  width: 0;
+  width: auto;
+  max-width: 100%;
   margin: 0;
   border: 0;
   border-radius: 0;
@@ -343,12 +362,14 @@ button:disabled {
   content: "";
   position: absolute;
   right: 14px;
-  top: 50%;
+
+  /* Follow the select's last line when the label wraps above it. */
+  bottom: calc(8px + (1lh - 6px) / 2);
   width: 6px;
   height: 6px;
   border-right: 1.5px solid currentcolor;
   border-bottom: 1.5px solid currentcolor;
-  transform: translateY(-4px) rotate(45deg);
+  transform: rotate(45deg);
   pointer-events: none;
 }
 
@@ -458,7 +479,7 @@ input::placeholder {
   justify-content: space-between;
   align-items: center;
   gap: 8px;
-  margin: 18px 0 10px;
+  margin: 12px 0 8px;
   color: var(--muted);
   font-size: 12px;
 }
@@ -481,19 +502,19 @@ input::placeholder {
 }
 
 .notice {
-  margin: 14px 0;
+  margin: 10px 0;
   border: 1px solid var(--danger);
   border-radius: 8px;
-  padding: 12px 14px;
+  padding: 10px 12px;
   overflow-wrap: anywhere;
 }
 
 .update-banner {
-  margin: 14px 0;
+  margin: 10px 0;
   border: 1px solid var(--border);
   border-left: 3px solid var(--accent);
   border-radius: 8px;
-  padding: 12px 14px;
+  padding: 10px 12px;
   overflow-wrap: anywhere;
 }
 
@@ -593,11 +614,13 @@ input::placeholder {
 .repo-group {
   border: 1px solid var(--border);
   border-radius: 10px;
-  margin-bottom: 14px;
+  margin-bottom: 10px;
   overflow: clip;
 }
 
-.repo-group:has(.repo-menu:not([hidden])) {
+.repo-group:has(
+  .tooltip-anchor:not([data-tooltip-dismissed]):is(:hover, :focus-within)
+) {
   position: relative;
   z-index: 1;
   overflow: visible;
@@ -610,6 +633,12 @@ input::placeholder {
   justify-content: space-between;
   gap: 0 8px;
   padding: 0 12px;
+  border-radius: 9px 9px 0 0;
+  background: color-mix(in srgb, var(--canvas-text) 4%, transparent);
+}
+
+.repo-header:has(+ .repo-items[hidden]) {
+  border-radius: 9px;
 }
 
 .repo-toggle {
@@ -621,7 +650,7 @@ input::placeholder {
   text-align: left;
   white-space: normal;
   overflow-wrap: anywhere;
-  padding: 12px 16px 12px 4px;
+  padding: 12px 12px 12px 2px;
   font-weight: var(--font-weight-semibold, 600);
 }
 
@@ -639,56 +668,27 @@ input::placeholder {
 }
 
 .repo-actions {
-  position: relative;
   display: flex;
   flex-shrink: 0;
-  margin: 6px 0;
+  justify-content: flex-end;
+  gap: 4px;
+  margin: 6px 0 6px auto;
 }
 
-.repo-read {
-  flex-shrink: 0;
-  font-size: 12px;
-  padding: 5px 8px;
-  border-radius: 7px 0 0 7px;
-}
-
-.repo-more {
-  width: 28px;
-  height: 32px;
-  padding: 6px 4px;
-  border-left: 0;
-  border-radius: 0 7px 7px 0;
-}
-
-.repo-menu {
-  position: absolute;
-  z-index: 3;
-  top: calc(100% + 4px);
-  right: 0;
-  width: max-content;
-  min-width: 100%;
-  max-width: calc(100vw - 56px);
-  padding: 4px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--canvas-background);
-  box-shadow: 0 4px 12px #0002;
-}
-
-.repo-done {
-  width: 100%;
-  min-height: 28px;
-  border: 0;
-  padding: 4px 8px;
-  text-align: left;
-  font-size: 12px;
+.repo-actions
+  .tooltip-anchor:has(.repo-read[data-count="0"]:not([aria-busy="true"])),
+.repo-actions
+  .tooltip-anchor:has(.repo-read[data-count="0"]:not([aria-busy="true"]))
+  > .tooltip {
+  /* Keep Done in place instead of moving it under the previous Read target. */
+  visibility: hidden;
 }
 
 .batch-progress {
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 16px;
-  margin-bottom: 16px;
+  padding: 12px;
+  margin-bottom: 12px;
   overflow-wrap: anywhere;
 }
 
@@ -755,11 +755,28 @@ summary::marker {
 
 .row {
   display: grid;
-  grid-template-columns: 10px minmax(0, 1fr) auto;
-  gap: 10px;
-  padding: 13px 16px;
+  grid-template-columns: minmax(0, 1fr) auto;
   border-top: 1px solid var(--border);
+
+  --row-actions-width: 68px;
+}
+
+.row-link {
+  grid-area: 1 / 1 / 2 / -1;
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) var(--row-actions-width);
+  gap: 8px;
+  padding: 8px 12px;
+  min-width: 0;
   align-items: start;
+}
+
+.row-link:hover {
+  text-decoration: none;
+}
+
+.row-link:focus-visible {
+  outline-offset: -3px;
 }
 
 .metadata .repository {
@@ -768,11 +785,17 @@ summary::marker {
 }
 
 .row-actions {
+  grid-area: 1 / 2;
   display: flex;
-  align-self: center;
+  align-self: stretch;
+  align-items: center;
+  justify-content: flex-end;
   gap: 4px;
+  margin-right: 12px;
+  min-width: var(--row-actions-width);
 }
 
+.repo-actions .icon-button,
 .row-actions .icon-button {
   position: relative;
   width: 32px;
@@ -780,14 +803,17 @@ summary::marker {
   padding: 6px;
 }
 
+.repo-actions button[aria-busy="true"],
 .row-actions button[aria-busy="true"] {
   color: var(--accent);
 }
 
+.repo-actions button[aria-busy="true"] svg,
 .row-actions button[aria-busy="true"] svg {
   visibility: hidden;
 }
 
+.repo-actions button[aria-busy="true"]::after,
 .row-actions button[aria-busy="true"]::after {
   content: "";
   position: absolute;
@@ -796,12 +822,6 @@ summary::marker {
   border: 1.5px solid currentcolor;
   border-right-color: transparent;
   border-radius: 50%;
-}
-
-.row-actions .tooltip {
-  top: auto;
-  bottom: 100%;
-  padding: 0 0 6px;
 }
 
 .dot {
@@ -831,11 +851,19 @@ a:hover {
   font-weight: var(--font-weight-semibold, 600);
 }
 
+.row.read .title {
+  color: color-mix(in srgb, var(--canvas-text) 50%, var(--muted));
+}
+
+.row.read .dot {
+  visibility: hidden;
+}
+
 .metadata {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px 0;
-  margin-top: 4px;
+  gap: 4px 0;
+  margin-top: 2px;
   color: var(--muted);
   font-size: 12px;
 }
@@ -854,7 +882,7 @@ a:hover {
 
 .metadata-separator {
   flex-shrink: 0;
-  margin: 0 8px;
+  margin: 0 6px;
 }
 
 .destination {
@@ -907,7 +935,7 @@ time {
 footer {
   color: var(--muted);
   font-size: 11px;
-  margin-top: 24px;
+  margin-top: 18px;
 }
 
 footer:has(#development-build[hidden]) {
@@ -941,10 +969,18 @@ footer:has(#development-build[hidden]) {
     height: 38px;
   }
 
-  .row {
-    padding: 12px;
-    grid-template-columns: 8px minmax(0, 1fr) auto;
-    gap: 8px;
+  .repo-header {
+    padding: 0 10px;
+  }
+
+  .row-link {
+    padding: 8px 10px;
+    grid-template-columns: 8px minmax(0, 1fr) var(--row-actions-width);
+    gap: 6px;
+  }
+
+  .row-actions {
+    margin-right: 10px;
   }
 
   summary {
@@ -971,6 +1007,7 @@ footer:has(#development-build[hidden]) {
     animation: refresh-spin 0.8s linear infinite;
   }
 
+  .repo-actions button[aria-busy="true"]::after,
   .row-actions button[aria-busy="true"]::after {
     animation: refresh-spin 0.8s linear infinite;
   }

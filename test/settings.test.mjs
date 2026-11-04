@@ -10,7 +10,7 @@ import { startServer } from "../src/server.mjs";
 import { Inbox } from "../src/inbox.mjs";
 import { GitHubClient } from "../src/github.mjs";
 
-const defaults = { autoOpen: false, darkMode: null, desktopNotifications: false, desktopSound: "default", groupBy: "repo" };
+const defaults = { matchGitHubInbox: true, autoOpen: false, darkMode: null, desktopNotifications: false, desktopSound: "default", groupBy: "repo" };
 
 async function setup(t, io) {
   const directory = await fs.mkdtemp(join(tmpdir(), "notification-settings-test-"));
@@ -45,6 +45,19 @@ test("dark mode persists across instances without replacing auto-open or unknown
   assert.deepEqual(await other.read(), { ...defaults, autoOpen: true });
 });
 
+test("inbox matching defaults on, preserves the former local setting, and saves only the new boolean", async t => {
+  const preferences = await setup(t);
+  await fs.writeFile(preferences.path, '{"showDone":true,"future":42}');
+  assert.equal((await preferences.read()).matchGitHubInbox, true);
+  assert.equal(Object.hasOwn(await preferences.read(), "showDone"), false);
+  await assert.rejects(preferences.update({ showDone: false }), { code: "invalid_settings" });
+  await preferences.update({ matchGitHubInbox: false });
+  assert.deepEqual(await preferences.document(), { showDone: true, future: 42, matchGitHubInbox: false });
+  assert.equal((await new Preferences({ directory: preferences.directory }).read()).matchGitHubInbox, false);
+  await preferences.update({ matchGitHubInbox: true });
+  assert.equal((await preferences.read()).matchGitHubInbox, true);
+});
+
 test("all grouping choices persist across instances and survive unrelated settings updates", async t => {
   const preferences = await setup(t);
   await fs.writeFile(preferences.path, '{"autoOpen":true,"darkMode":false,"future":42}');
@@ -62,6 +75,7 @@ test("all grouping choices persist across instances and survive unrelated settin
 test("malformed stored settings and invalid updates fail explicitly without overwriting data", async t => {
   const preferences = await setup(t);
   for (const data of ["{", "[]", "null", '{"autoOpen":"yes"}', '{"desktopNotifications":1}',
+    '{"matchGitHubInbox":null}', '{"matchGitHubInbox":"true"}', '{"matchGitHubInbox":0}',
     '{"desktopSound":null}', '{"desktopGeneration":false}', '{"darkMode":"dark"}', '{"darkMode":0}',
     '{"groupBy":null}', '{"groupBy":"unknown"}', '{"groupBy":false}', '{"groupBy":[]}', " ".repeat(17000)]) {
     await fs.writeFile(preferences.path, data);
@@ -70,6 +84,7 @@ test("malformed stored settings and invalid updates fail explicitly without over
     assert.equal(await fs.readFile(preferences.path, "utf8"), data);
   }
   for (const input of [null, [], {}, { autoOpen: "yes" }, { darkMode: "dark" }, { darkMode: 0 },
+    { matchGitHubInbox: null }, { matchGitHubInbox: "true" }, { matchGitHubInbox: 0 },
     { darkMode: undefined }, { autoOpen: null }, { autoOpen: true, token: "not accepted" },
     { groupBy: undefined }, { groupBy: null }, { groupBy: "unknown" }, { groupBy: "Repo" },
     { groupBy: false }, { groupBy: [] }, { groupBy: { value: "date" } }]) {

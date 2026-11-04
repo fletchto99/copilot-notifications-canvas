@@ -92,7 +92,7 @@ test("release checks use a fixed read-only GitHub endpoint and locally construct
   assert.equal(state.latestVersion, "1.2.3");
   assert.equal(state.releaseUrl, `https://github.com/${REPOSITORY}/releases/tag/v1.2.3`);
   assert.match(state.instructionsUrl, /#installation-and-updating$/);
-  assert.match(state.prompt, /Update my user-wide Unread Notifications canvas to v1\.2\.3/);
+  assert.match(state.prompt, /Update my user-wide GitHub Notifications canvas to v1\.2\.3/);
   assert.ok(state.prompt.includes(`https://github.com/${REPOSITORY}`));
   assert.match(state.prompt, /Follow "Manual installation and updates" in docs\/installation\.md with\s+tag=v1\.2\.3/);
   assert.match(state.prompt, /Use only that published stable release package/);
@@ -103,7 +103,7 @@ test("release checks use a fixed read-only GitHub endpoint and locally construct
   assert.match(state.prompt, /Use my existing COPILOT_HOME and GitHub CLI sign-in/);
   assert.match(state.prompt, /Preserve all settings and\s+artifacts in place/);
   assert.match(state.prompt, /Do not bypass installer safeguards, enable auto-update,\s+or change preferences/);
-  assert.match(state.prompt, /After installation succeeds, reload extensions and reopen Unread Notifications/);
+  assert.match(state.prompt, /After installation succeeds, reload extensions and reopen GitHub Notifications/);
   assert.match(state.prompt, /Report the installed version and remind me\s+to reload extensions in other already-open sessions/);
   assert.doesNotMatch(JSON.stringify(state), /evil\.test|DO NOT TRUST/);
   assert.deepEqual(calls[0].slice(0, 7), ["api", "--hostname", "github.com", "--include", "--method", "GET", "-H"]);

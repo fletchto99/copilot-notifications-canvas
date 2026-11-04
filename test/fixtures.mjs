@@ -15,3 +15,4 @@ export function http(body = [], headers = {}, status = 200) {
 }
 
 export const next = '<https://api.github.com/notifications?all=false&per_page=50&page=2>; rel="next"';
+export const inboxNext = next.replace("all=false", "all=true&is_done=false");

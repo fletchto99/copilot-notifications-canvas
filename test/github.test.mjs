@@ -465,9 +465,9 @@ test("aborted requests never repopulate cache even if a transport resolves after
   assert.equal(client.cache.size, 0);
 });
 
-test("the API client rejects direct All requests before invoking gh", () => {
-  const client = new GitHubClient({ run: async () => assert.fail("Must not invoke gh for All") });
-  assert.throws(() => client.page("/notifications?all=true&per_page=50&page=1"), { code: "invalid_pagination" });
+test("the API client rejects unsupported done-only requests before invoking gh", () => {
+  const client = new GitHubClient({ run: async () => assert.fail("Must not invoke gh for an unsupported query") });
+  assert.throws(() => client.page("/notifications?all=true&is_done=true&per_page=50&page=1"), { code: "invalid_pagination" });
 });
 
 test("later-page failures back off exponentially despite earlier-page successes, then reset on recovery", async () => {
@@ -477,7 +477,7 @@ test("later-page failures back off exponentially despite earlier-page successes,
     if (args.at(-1).includes("page=1")) return http([thread("1")], { link: next });
     return fail ? http({ message: "secondary rate limit" }, {}, 403) : http([thread("2")]);
   } });
-  const inbox = new Inbox(client);
+  const inbox = new Inbox(client, { mode: "unread" });
   await inbox.refresh();
   await inbox.more();
   fail = true;

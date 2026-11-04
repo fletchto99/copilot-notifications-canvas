@@ -163,10 +163,10 @@ test("synthetic preview uses the protected server, temporary preferences and in-
   assert.ok(Object.values(initial.attentionCounts).every(count => count > 0));
   assert.equal((await post("/api/more")).loaded, 53);
   assert.equal((await post("/api/filters", { query: "Needle" })).matching, 4);
-  assert.equal((await post("/api/read", { id: "3" })).loaded, 52);
+  assert.equal((await post("/api/read", { id: "3" })).loaded, 53);
   assert.deepEqual(preview.writes, ["3"]);
   assert.equal(preview.rows[2].unread, false);
-  assert.equal((await post("/api/done", { id: "2" })).loaded, 51);
+  assert.equal((await post("/api/done", { id: "2" })).loaded, 52);
   assert.deepEqual(preview.writes, ["3", "2"]);
   assert.deepEqual(preview.doneWrites, ["2"]);
   assert.equal(preview.rows[1].unread, false);

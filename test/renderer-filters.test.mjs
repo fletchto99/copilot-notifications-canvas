@@ -10,20 +10,121 @@ const tab = (ui, value) => ui.document.getElementById(`attention-${value}`);
 const shown = ui => ui.ids.get("groups").querySelectorAll("button")
   .filter(button => button.dataset.action === "read").map(button => button.dataset.threadId);
 
+test("arrivals move focused empty panels to the first group without stealing other focus", async t => {
+  for (const groupBy of ["repo", "date", "none"]) {
+    for (const focusedId of ["attention-panel", "search", "settings-toggle"]) {
+      const ui = await renderer({ initialRows: [], storedSettings: { groupBy } });
+      t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+      const panel = ui.ids.get("attention-panel");
+      const previous = ui.ids.get(focusedId);
+      assert.equal(panel.tabIndex, 0);
+      previous.focus();
+      ui.setRows([thread("1")]);
+      await ui.ids.get("force-refresh").events.click();
+      assert.equal(panel.tabIndex, -1);
+      const firstGroup = ui.ids.get("groups").querySelectorAll(".repo-toggle")[0];
+      const expected = focusedId === "attention-panel" ? firstGroup : previous;
+      assert.equal(ui.document.activeElement === expected, true, `${groupBy}/${focusedId} arrival focus`);
+      await runInContext("update()", ui.context);
+      assert.equal(ui.document.activeElement === expected, true, `${groupBy}/${focusedId} poll focus`);
+      assert.deepEqual(ui.patches, []);
+      assert.deepEqual(ui.deletions, []);
+    }
+  }
+});
+
+test("pending search edits block row and group writes until the displayed selection catches up", async t => {
+  for (const groupBy of ["repo", "date", "none"]) {
+    const ui = await renderer({ initialRows: rows, storedSettings: { groupBy } });
+    t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+    const actions = () => ui.ids.get("groups").querySelectorAll("button")
+      .filter(button => button.dataset.action || button.dataset.batchAction);
+    const original = actions();
+    const search = ui.ids.get("search");
+    search.value = "notification 2";
+    search.events.input();
+    assert.equal(search.disabled, false);
+    assert.equal(original.every(button => button.disabled), true);
+    for (const button of original) await button.events.click();
+    assert.deepEqual(ui.patches, []);
+    assert.deepEqual(ui.deletions, []);
+    assert.equal(ui.calls.some(call => call.path === "/api/batch/start"), false);
+    await runInContext("render()", ui.context);
+    assert.equal(actions().every(button => button.disabled), true);
+    await ui.fireTimer(250);
+    assert.deepEqual(shown(ui), ["2"]);
+    assert.equal(actions().every(button => !button.disabled), true);
+    await actions().find(button => button.dataset.batchAction === "done").events.click();
+    await ui.inbox.batch.done;
+    assert.deepEqual(ui.deletions, ["/notifications/threads/2"]);
+  }
+});
+
+test("a pointer-focused populated panel does not override the row action's focus restoration", async t => {
+  const ui = await renderer({ initialRows: [thread("1")] });
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  const panel = ui.ids.get("attention-panel");
+  assert.equal(panel.tabIndex, -1);
+  // WebKit may focus the containing panel instead of a pointer-clicked button.
+  panel.focus();
+  const read = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.focusKey === "read:1");
+  await read.events.click();
+  assert.equal(ui.document.activeElement.dataset.focusKey, "done:1");
+  assert.deepEqual(ui.patches, ["/notifications/threads/1"]);
+});
+
+test("reverting a pending search re-enables actions without requesting an unchanged filter", async t => {
+  const ui = await renderer({ initialRows: rows });
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  const search = ui.ids.get("search");
+  const done = ui.ids.get("groups").querySelectorAll("button").find(button => button.dataset.batchAction === "done");
+  for (const value of ["notification 2", ""]) {
+    search.value = value;
+    search.events.input();
+    assert.equal(done.disabled, true);
+  }
+  await ui.fireTimer(250);
+  assert.equal(done.disabled, false);
+  assert.equal(ui.calls.some(call => call.path === "/api/filters"), false);
+  assert.deepEqual(ui.deletions, []);
+});
+
+test("failed filters keep mutation controls blocked until the pending search succeeds", async t => {
+  let fail = true;
+  const ui = await renderer({ initialRows: rows, onFilters: () => {
+    if (fail) throw new Error("Synthetic filter failure");
+  } });
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  const search = ui.ids.get("search");
+  search.value = "notification 2";
+  search.events.input();
+  await ui.fireTimer(250);
+  const done = ui.ids.get("groups").querySelectorAll("button").find(button => button.dataset.batchAction === "done");
+  assert.equal(done.disabled, true);
+  assert.match(ui.ids.get("notice").textContent, /Synthetic filter failure/);
+  await done.events.click();
+  assert.deepEqual(ui.deletions, []);
+  fail = false;
+  await ui.fireTimer();
+  assert.deepEqual(shown(ui), ["2"]);
+  assert.equal(ui.ids.get("groups").querySelectorAll("button").find(button => button.dataset.batchAction === "done").disabled, false);
+});
+
 test("attention tabs default to All, combine with search in every grouping, and distinguish no matches from caught up", async () => {
   for (const groupBy of ["repo", "date", "none"]) {
     const ui = await renderer({ initialRows: rows, storedSettings: { groupBy } });
     assert.equal(tab(ui, "all").attributes["aria-selected"], "true");
     assert.equal(tab(ui, "all").tabIndex, 0);
+    assert.equal(ui.ids.get("attention-panel").tabIndex, -1);
     assert.deepEqual(ui.ids.get("attention-tabs").children.map(button => button.textContent),
-      ["All (7)", "Review requested (1)", "Mentioned (2)", "Assigned (1)", "Participating (2)"]);
+      ["All (7)", "Assigned (1)", "Participating (6)", "Mentioned (1)", "Team Mentioned (1)", "Review Requested (1)"]);
     const metadata = ui.ids.get("groups").querySelectorAll("div").filter(node => node.className === "metadata");
     assert.deepEqual(metadata[0].children.map(node => node.children[0]).filter(node => node.tag !== "time").map(node => node.textContent),
       [...(groupBy === "repo" ? [] : ["example/widgets"]), "Pull Request #42", "review requested"]);
     assert.equal(metadata.some(node => node.querySelectorAll("span").some(child => child.textContent === "Unread")), false);
     for (const [value, ids] of [
-      ["review_requested", ["1"]], ["mentioned", ["2", "3"]], ["assigned", ["4"]],
-      ["participating", ["5", "6"]], ["all", ["1", "2", "3", "4", "5", "6", "7"]],
+      ["review_requested", ["1"]], ["mentioned", ["2"]], ["team_mentioned", ["3"]], ["assigned", ["4"]],
+      ["participating", ["1", "2", "3", "4", "5", "6"]], ["all", ["1", "2", "3", "4", "5", "6", "7"]],
     ]) {
       const button = tab(ui, value);
       button.focus();
@@ -40,20 +141,22 @@ test("attention tabs default to All, combine with search in every grouping, and 
     }
     await tab(ui, "mentioned").events.click();
     const search = ui.ids.get("search");
-    search.value = "notification 3";
+    search.value = "notification 2";
     search.events.input();
     await ui.fireTimer(250);
-    assert.deepEqual(shown(ui), ["3"]);
-    assert.equal(ui.ids.get("count").textContent, "7 unread \u00b7 1 matching");
+    assert.deepEqual(shown(ui), ["2"]);
+    assert.equal(ui.ids.get("count").textContent, "7 total \u00b7 7 unread \u00b7 1 matching");
     assert.equal(tab(ui, "all").textContent, "All (7)");
-    assert.equal(tab(ui, "mentioned").textContent, "Mentioned (2)");
+    assert.equal(tab(ui, "mentioned").textContent, "Mentioned (1)");
+    assert.equal(tab(ui, "team_mentioned").textContent, "Team Mentioned (1)");
     assert.equal(tab(ui, "assigned").textContent, "Assigned (1)");
     await tab(ui, "assigned").events.click();
     assert.deepEqual(shown(ui), []);
-    assert.equal(search.value, "notification 3");
-    assert.equal(tab(ui, "mentioned").textContent, "Mentioned (2)");
+    assert.equal(search.value, "notification 2");
+    assert.equal(tab(ui, "mentioned").textContent, "Mentioned (1)");
     assert.equal(tab(ui, "all").textContent, "All (7)");
     assert.equal(ui.ids.get("empty-title").textContent, "No matches in loaded notifications");
+    assert.equal(ui.ids.get("attention-panel").tabIndex, 0);
     assert.equal(ui.ids.get("count").hidden, false);
     assert.match(ui.ids.get("empty-description").textContent, /another attention filter/);
     assert.equal(ui.githubCalls.length, 1);
@@ -64,8 +167,8 @@ test("keyboard tabs wrap and support Home and End without changing focus on poll
   const ui = await renderer({ initialRows: rows });
   let current = "all";
   for (const [key, expected] of [
-    ["ArrowLeft", "participating"], ["ArrowRight", "all"], ["ArrowRight", "review_requested"],
-    ["End", "participating"], ["Home", "all"],
+    ["ArrowLeft", "review_requested"], ["ArrowRight", "all"], ["ArrowRight", "assigned"],
+    ["End", "review_requested"], ["Home", "all"],
   ]) {
     let prevented = false;
     await tab(ui, current).events.keydown({ key, preventDefault: () => { prevented = true; } });
@@ -115,7 +218,7 @@ test("latest tab and search edits are merged while a filter request is in flight
   const filtering = tab(ui, "review_requested").events.click();
   await settle();
   const search = ui.ids.get("search");
-  search.value = "notification 3";
+  search.value = "notification 2";
   search.events.input();
   await tab(ui, "assigned").events.click();
   tab(ui, "mentioned").focus();
@@ -123,11 +226,11 @@ test("latest tab and search edits are merged while a filter request is in flight
   release();
   await filtering;
   await settle();
-  assert.deepEqual(ui.inbox.filters, { mode: "unread", query: "notification 3", attention: "mentioned" });
-  assert.deepEqual(shown(ui), ["3"]);
+  assert.deepEqual(ui.inbox.filters, { mode: "inbox", query: "notification 2", attention: "mentioned" });
+  assert.deepEqual(shown(ui), ["2"]);
   assert.equal(ui.document.activeElement, tab(ui, "mentioned"));
   assert.deepEqual(ui.calls.filter(call => call.path === "/api/filters").map(call => JSON.parse(call.options.body)), [
-    { attention: "review_requested" }, { query: "notification 3", attention: "mentioned" },
+    { attention: "review_requested" }, { query: "notification 2", attention: "mentioned" },
   ]);
 });
 
@@ -137,15 +240,15 @@ test("keyboard navigation moves the tab stop immediately, before filtering compl
   const filtering = tab(ui, "all").events.keydown({ key: "End", preventDefault() {} });
   await settle();
   assert.equal(tab(ui, "all").tabIndex, -1);
-  assert.equal(tab(ui, "participating").tabIndex, 0);
+  assert.equal(tab(ui, "review_requested").tabIndex, 0);
   await runInContext("render()", ui.context);
   assert.equal(tab(ui, "all").tabIndex, -1);
-  assert.equal(tab(ui, "participating").tabIndex, 0);
+  assert.equal(tab(ui, "review_requested").tabIndex, 0);
   ui.ids.get("search").focus();
   release();
   await filtering;
   assert.equal(ui.document.activeElement, ui.ids.get("search"));
-  assert.equal(tab(ui, "participating").tabIndex, 0);
+  assert.equal(tab(ui, "review_requested").tabIndex, 0);
 });
 
 test("a failed attention request retains both failed and newer fields for a later retry", async () => {
@@ -156,19 +259,19 @@ test("a failed attention request retains both failed and newer fields for a late
   const filtering = tab(ui, "mentioned").events.click();
   await settle();
   const search = ui.ids.get("search");
-  search.value = "notification 3";
+  search.value = "notification 2";
   search.events.input();
   reject(new Error("Synthetic filter failure"));
   await filtering;
   assert.equal(ui.ids.get("notice").hidden, false);
   assert.equal(tab(ui, "all").attributes["aria-selected"], "true");
-  assert.equal(search.value, "notification 3");
-  assert.equal(tab(ui, "mentioned").textContent, "Mentioned (2)");
+  assert.equal(search.value, "notification 2");
+  assert.equal(tab(ui, "mentioned").textContent, "Mentioned (1)");
   fail = false;
   await ui.fireTimer();
-  assert.deepEqual(shown(ui), ["3"]);
+  assert.deepEqual(shown(ui), ["2"]);
   assert.equal(tab(ui, "mentioned").attributes["aria-selected"], "true");
-  assert.equal(tab(ui, "mentioned").textContent, "Mentioned (2)");
+  assert.equal(tab(ui, "mentioned").textContent, "Mentioned (1)");
 });
 
 test("queued tab changes survive row read/done actions, a local poll, and hiding the panel", async () => {
@@ -215,11 +318,12 @@ test("tabs cannot change the selection during a repository batch or without a ca
   await ui.inbox.batch.done;
   await runInContext("update()", ui.context);
   assert.equal(tab(ui, "mentioned").disabled, false);
-  assert.equal(ui.ids.get("empty-title").textContent, "No matches in loaded notifications");
-  assert.equal(ui.ids.get("count").textContent, "6 unread \u00b7 0 matching");
-  assert.equal(tab(ui, "review_requested").textContent, "Review requested (0)");
-  assert.equal(tab(ui, "mentioned").textContent, "Mentioned (2)");
-  assert.equal(tab(ui, "all").textContent, "All (6)");
+  assert.equal(ui.ids.get("empty").hidden, true);
+  assert.equal(ui.ids.get("count").textContent, "8 total \u00b7 6 unread \u00b7 2 matching");
+  assert.equal(tab(ui, "review_requested").textContent, "Review Requested (2)");
+  assert.equal(tab(ui, "mentioned").textContent, "Mentioned (1)");
+  assert.equal(tab(ui, "team_mentioned").textContent, "Team Mentioned (1)");
+  assert.equal(tab(ui, "all").textContent, "All (8)");
   assert.deepEqual(ui.patches, ["/notifications/threads/1", "/notifications/threads/8"]);
 
   const missing = await renderer({ token: "" });
@@ -231,7 +335,8 @@ test("tabs cannot change the selection during a repository batch or without a ca
 
 test("clearing search preserves the selected attention tab and focus without fetching or writing", async () => {
   for (const [attention, ids] of [
-    ["review_requested", ["1"]], ["mentioned", ["2", "3"]], ["assigned", ["4"]], ["participating", ["5", "6"]],
+    ["review_requested", ["1"]], ["mentioned", ["2"]], ["team_mentioned", ["3"]], ["assigned", ["4"]],
+    ["participating", ["1", "2", "3", "4", "5", "6"]],
   ]) {
     const ui = await renderer({ initialRows: rows });
     assert.equal(ui.ids.has("clear-filters"), false);
@@ -245,7 +350,7 @@ test("clearing search preserves the selected attention tab and focus without fet
     search.value = "";
     search.events.input();
     await ui.fireTimer(250);
-    assert.deepEqual(ui.inbox.filters, { mode: "unread", query: "", attention });
+    assert.deepEqual(ui.inbox.filters, { mode: "inbox", query: "", attention });
     assert.equal(search.value, "");
     assert.equal(tab(ui, attention).attributes["aria-selected"], "true");
     assert.equal(ui.document.activeElement, search);
@@ -274,8 +379,8 @@ test("a failed search clear retries without changing the attention tab", async (
   assert.equal(search.value, "");
   fail = false;
   await ui.fireTimer();
-  assert.deepEqual(ui.inbox.filters, { mode: "unread", query: "", attention: "mentioned" });
-  assert.deepEqual(shown(ui), ["2", "3"]);
+  assert.deepEqual(ui.inbox.filters, { mode: "inbox", query: "", attention: "mentioned" });
+  assert.deepEqual(shown(ui), ["2"]);
   assert.equal(ui.document.activeElement, search);
   assert.deepEqual(ui.patches, []);
 });
@@ -343,9 +448,11 @@ test("arrows disappear when tabs fit the full strip, respond to count widths, an
   navigation.clientWidth = 700;
   ui.resizeAttention();
   assert.equal(next.hidden, true);
-  assert.equal(ui.attentionObserved.length, 6);
+  assert.equal(ui.attentionObserved.length, 9);
   assert.equal(ui.attentionObserved[0], navigation);
   assert.equal(ui.attentionObserved.includes(tab(ui, "participating")), true);
+  assert.equal(ui.attentionObserved.includes(ui.ids.get("inbox-header")), true);
+  assert.equal(ui.attentionObserved.includes(ui.ids.get("settings-panel")), true);
   ui.window.events.pagehide();
   assert.equal(ui.attentionDisconnected, true);
   assert.equal(strip.events.scroll, undefined);

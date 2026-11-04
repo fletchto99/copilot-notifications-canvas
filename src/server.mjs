@@ -17,7 +17,7 @@ const recoveryHtml = `<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Unread Notifications</title>
+  <title>GitHub Notifications</title>
   <style>
     body {
       margin: 0;
@@ -42,7 +42,7 @@ const recoveryHtml = `<!doctype html>
   <script type="module" src="/startup.mjs"></script>
 </head>
 <body><main>
-  <h1>Unread Notifications</h1>
+  <h1>GitHub Notifications</h1>
   <p role="status">The canvas could not load its local files. Retrying in the background...</p>
   <p>Your notifications will appear here when loading succeeds. If this continues, reload
     extensions or reinstall the canvas without deleting its settings.</p>
@@ -220,6 +220,9 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
       if (path === "/api/settings" && !preferences) {
         throw new InboxError("settings_unavailable", "Notification settings are unavailable.", 503);
       }
+      if (preferences && ["/api/state", "/api/refresh", "/api/more"].includes(path)) {
+        inbox.setMatchGitHubInbox((await preferences.read()).matchGitHubInbox);
+      }
       if (path === "/api/state" || (path === "/api/settings" && req.method === "GET")) {
         if (req.method !== "GET") throw new InboxError("method", "Only GET is supported.", 405);
         if (path === "/api/settings") return json(200, await settingsSnapshot(await preferences.read()));
@@ -253,6 +256,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
             throw new InboxError("desktop_sound", "Choose a notification sound supported by this operating system.", 400);
           }
           const settings = await preferences.update(input);
+          inbox.setMatchGitHubInbox(settings.matchGitHubInbox);
           desktop?.wake(settings);
           return json(200, await settingsSnapshot(settings));
         }

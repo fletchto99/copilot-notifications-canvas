@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { host, CanvasError } from "./fixtures/sdk.mjs";
-import { http, next, thread } from "./fixtures.mjs";
+import { http, thread } from "./fixtures.mjs";
 import { apiTarget, filterSchema, emptySchema, InboxError } from "../src/model.mjs";
 import { Inbox } from "../src/inbox.mjs";
 import { DesktopNotifications } from "../src/desktop.mjs";
@@ -63,7 +63,9 @@ test("the extension entry point wires an isolated session through its complete l
       response = http({ tag_name: `v${CURRENT_VERSION}`, draft: false, prerelease: false });
     } else if (new URL(endpoint, "https://api.github.com").pathname === "/notifications" &&
         new URL(endpoint, "https://api.github.com").searchParams.get("page") === "1") {
-      response = http([thread("1")], { link: next });
+      const next = new URL(endpoint, "https://api.github.com");
+      next.searchParams.set("page", "2");
+      response = http([thread("1")], { link: `<${next.href}>; rel="next"` });
     } else if (endpoint.includes("page=2")) {
       response = http([thread("2")]);
     } else {
@@ -121,7 +123,7 @@ test("the extension entry point wires an isolated session through its complete l
     }]);
     const { desktopStatus, ...settings } = await invoke("get_settings", "unread-notifications-startup");
     assert.deepEqual(settings,
-      { autoOpen: true, darkMode: false, desktopNotifications: false, desktopSound: "default", groupBy: "repo", startupStatus: "opened" });
+      { matchGitHubInbox: true, autoOpen: true, darkMode: false, desktopNotifications: false, desktopSound: "default", groupBy: "repo", startupStatus: "opened" });
     assert.equal(desktopStatus.state, "off");
     assert.equal(desktopStatus.platform, process.platform);
     assert.equal(desktopStatus.supported, true);
@@ -225,6 +227,10 @@ test("the extension entry point wires an isolated session through its complete l
     assert.equal(attention.matching, 0);
     assert.equal(attention.loaded, 2);
     assert.doesNotMatch(JSON.stringify(attention), /Synthetic|example\/widgets|notification 2/);
+    const teams = await invoke("set_filters", "one", { attention: "team_mentioned" });
+    assert.equal(teams.attention, "team_mentioned");
+    assert.equal(teams.matching, 0);
+    assert.equal(teams.attentionCounts.team_mentioned, 0);
     await invoke("set_filters", "one", { attention: "all" });
     assert.equal((await invoke("check_for_updates", "one")).status, "current");
     await assert.rejects(invoke("get_state", "missing"), error => error instanceof CanvasError && error.code === "not_open");

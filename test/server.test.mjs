@@ -26,7 +26,7 @@ test("HTTP integration serves a protected inbox, rejects cross-origin access and
   const { origin, headers } = await setup(t);
   const html = await fetch(origin);
   assert.equal(html.status, 200);
-  assert.match(await html.text(), /Unread Notifications/);
+  assert.match(await html.text(), /GitHub Notifications/);
   assert.equal(html.headers.get("cache-control"), "no-store");
   assert.match(html.headers.get("content-security-policy"), /default-src 'none'/);
   const sound = await fetch(`${origin}/sound.mjs`);
@@ -112,7 +112,7 @@ test("HTTP filters combine attention and search without fetching or writing GitH
   });
   assert.equal(response.status, 200);
   const state = await response.json();
-  assert.deepEqual(state.filters, { mode: "unread", query: "widgets", attention: "review_requested" });
+  assert.deepEqual(state.filters, { mode: "inbox", query: "widgets", attention: "review_requested" });
   assert.equal(state.loaded, 2);
   assert.equal(state.matching, 1);
   assert.deepEqual(state.groups[0].items.map(item => item.id), ["1"]);
@@ -221,7 +221,7 @@ test("activation during an in-flight foreground request establishes a fresh gene
         };
         desktop.add("activation-http");
         await desktop.check();
-        const server = await startServer(new Inbox(client), { preferences, desktop, development: null });
+        const server = await startServer(new Inbox(client, { mode: "unread" }), { preferences, desktop, development: null });
         t.after(async () => {
           release();
           await server.close();

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { runInContext } from "node:vm";
-import { http, next, thread } from "./fixtures.mjs";
+import { http, inboxNext as next, thread } from "./fixtures.mjs";
 import { renderer, script, html, styles, settle } from "./renderer-fixtures.mjs";
 
 test("the per-panel Web Audio option is replaced by the native notification sound picker", () => {
@@ -69,10 +69,10 @@ test("Settings uses an icon-only toggle with an accessible name and tooltip", ()
   assert.match(attributes, /aria-expanded="false"/);
   assert.match(content, /<svg\b[^>]*aria-hidden="true"[^>]*focusable="false"/);
   assert.match(content, /^\s*<svg\b[^>]*>\s*<path\b[^>]*\/>\s*<circle\b[^>]*\/>\s*<\/svg>\s*<span id="settings-tooltip" class="tooltip" role="tooltip"><span class="tooltip-content">Settings<\/span><\/span>\s*$/);
-  assert.match(styles, /\.settings\[open\] \.tooltip \{\s+display: none;\s+\}/);
+  assert.match(styles, /\.settings\[open\] > summary > \.tooltip \{\s+display: none;\s+\}/);
 });
 
-test("Inbox and Settings tooltips share the refresh hover, focus and Escape behavior", async () => {
+test("inbox and Settings tooltips share hover, focus and Escape behavior", async () => {
   const ui = await renderer();
   for (const [control, anchor] of [["open-inbox", "inbox-control"], ["settings-toggle", "settings-toggle"]]) {
     ui.ids.get(control).events.pointerenter();
@@ -83,6 +83,99 @@ test("Inbox and Settings tooltips share the refresh hover, focus and Escape beha
     assert.equal(ui.ids.get(anchor).dataset.tooltipDismissed, undefined);
   }
   ui.window.events.pagehide();
+});
+
+test("notification view uses a labeled native select without help text or a tooltip", () => {
+  assert.match(html, /<label for="show-notifications">Show notifications<\/label>\s*<select id="show-notifications" disabled>/);
+  assert.match(html, /<option value="all" selected>All<\/option>\s*<option value="unread">Unread only<\/option>/);
+  assert.doesNotMatch(html, /id="match-github-inbox|id="show-notifications-(?:tooltip|help)"/);
+});
+
+test("Settings fits the available viewport and moves above only when that provides more space", async t => {
+  const ui = await renderer();
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  const panel = ui.ids.get("settings-panel");
+  const settings = ui.ids.get("settings");
+  const toggle = ui.ids.get("settings-toggle");
+  ui.window.innerHeight = 480;
+  settings.open = true;
+  settings.events.toggle();
+  await settle();
+  assert.equal(panel.dataset.placement, "below");
+  assert.equal(panel.style.maxHeight, "251px");
+  toggle.bounds = { top: 207, bottom: 245 };
+  ui.resizeAttention();
+  assert.equal(panel.style.maxHeight, "219px");
+  toggle.bounds = { top: 175, bottom: 213 };
+  ui.window.innerHeight = 320;
+  ui.window.events.resize();
+  assert.equal(panel.dataset.placement, "above");
+  assert.equal(panel.style.maxHeight, "159px");
+  toggle.bounds = { top: 10, bottom: 48 };
+  ui.window.events.scroll();
+  assert.equal(panel.dataset.placement, "below");
+  assert.equal(panel.style.maxHeight, "192px");
+  toggle.bounds = { top: -50, bottom: -12 };
+  ui.window.events.scroll();
+  assert.equal(settings.open, false);
+  assert.equal(toggle.getAttribute("aria-expanded"), "false");
+  assert.equal(toggle.dataset.tooltipDismissed, "true");
+  settings.open = true;
+  toggle.bounds = { top: 330, bottom: 368 };
+  ui.window.events.resize();
+  assert.equal(settings.open, false);
+});
+
+test("Settings activation dismisses its tooltip without preventing pointer or keyboard toggles", async t => {
+  const ui = await renderer();
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  const toggle = ui.ids.get("settings-toggle");
+  for (const open of [true, false]) {
+    toggle.events.pointerenter();
+    assert.equal(toggle.dataset.tooltipDismissed, undefined);
+    toggle.events.click({ preventDefault: () => assert.fail("Preserve native details activation") });
+    ui.ids.get("settings").open = open;
+    ui.ids.get("settings").events.toggle();
+    await settle();
+    assert.equal(toggle.dataset.tooltipDismissed, "true");
+    assert.equal(toggle.getAttribute("aria-expanded"), String(open));
+    toggle.events.focus();
+    assert.equal(toggle.dataset.tooltipDismissed, undefined);
+  }
+});
+
+test("tooltips prefer above, flip near the top edge and follow viewport changes without undoing dismissal", async t => {
+  const ui = await renderer();
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  const anchor = ui.ids.get("refresh-control");
+  const tooltip = ui.ids.get("refresh-tooltip");
+  tooltip.bounds = { height: 40 };
+  for (const [top, expected] of [[100, "above"], [48, "above"], [47, "below"], [200, "above"]]) {
+    anchor.bounds = { top };
+    ui.ids.get("force-refresh").events.pointerenter();
+    assert.equal(anchor.dataset.tooltipPlacement, expected);
+  }
+  for (const event of ["scroll", "resize"]) {
+    anchor.bounds = { top: 20 };
+    anchor.hovered = true;
+    ui.window.events[event]();
+    assert.equal(anchor.dataset.tooltipPlacement, "below");
+    assert.equal(anchor.dataset.tooltipDismissed, undefined);
+    anchor.hovered = false;
+    ui.ids.get("force-refresh").focus();
+    anchor.bounds = { top: 100 };
+    ui.window.events[event]();
+    assert.equal(anchor.dataset.tooltipPlacement, "above");
+    ui.document.events.keydown({ key: "Escape" });
+    anchor.bounds = { top: 20 };
+    ui.window.events[event]();
+    assert.equal(anchor.dataset.tooltipPlacement, "above");
+    assert.equal(anchor.dataset.tooltipDismissed, "true");
+    ui.ids.get("force-refresh").events.focus();
+  }
+  ui.window.events.pagehide();
+  assert.equal(ui.window.events.scroll, undefined);
+  assert.equal(ui.window.events.resize, undefined);
 });
 
 test("opening the inbox dismisses tooltips without cancelling navigation or making local requests", async () => {
@@ -384,7 +477,7 @@ test("Group By is a labeled select above development settings and defaults to re
   assert.equal(ui.ids.get("settings").open, true);
 });
 
-test("none lists notifications globally newest first in one group with repository metadata", async () => {
+test("none restores cross-repository API order in one group with repository metadata", async () => {
   const ui = await renderer({ storedSettings: { groupBy: "none" }, initialRows: [
     thread("1", { repository: { full_name: "example/alpha" }, updated_at: "2026-01-01T00:00:00Z" }),
     thread("4", { repository: { full_name: "example/zulu" }, updated_at: "2026-01-03T00:00:00Z" }),
@@ -400,13 +493,13 @@ test("none lists notifications globally newest first in one group with repositor
   assert.equal(list.querySelectorAll(".repo-name")[0].textContent, "All notifications");
   for (const action of ["read", "done"]) {
     assert.deepEqual(list.querySelectorAll("button").filter(node => node.dataset.action === action)
-      .map(node => node.dataset.threadId), ["2", "4", "3", "1"]);
+      .map(node => node.dataset.threadId), action === "read" ? ["1", "4", "2", "3"] : ["1", "4", "2", "3", "5"]);
   }
   assert.deepEqual(list.querySelectorAll("span").filter(node => node.className === "repository").map(node => node.textContent),
-    ["example/zulu", "example/zulu", "example/alpha", "example/alpha"]);
+    ["example/alpha", "example/zulu", "example/zulu", "example/alpha", "example/widgets"]);
   assert.equal(ui.ids.get("collapse").hidden, false);
-  assert.equal(list.attributes["aria-label"], "Notifications, newest first");
-  assert.match(ui.ids.get("subtitle").textContent, /Newest notifications first/);
+  assert.equal(list.attributes["aria-label"], "Notifications in GitHub order");
+  assert.match(ui.ids.get("subtitle").textContent, /GitHub inbox order/);
   const first = list.querySelectorAll("a")[0];
   first.focus();
   await runInContext("update()", ui.context);
@@ -428,10 +521,10 @@ test("date groups by local calendar day across repositories, newest first, with 
   const disclosures = () => list.querySelectorAll("button").filter(node => node.dataset.disclosure);
   assert.deepEqual(disclosures().map(node => node.dataset.focusKey), ["date:2026-2-1", "date:2026-1-31", "date:2025-12-31"]);
   assert.deepEqual(list.children.map(section => section.querySelectorAll("a").map(node => node.dataset.focusKey)),
-    [["thread:3", "thread:2"], ["thread:1", "thread:4"], ["thread:5"]]);
+    [["thread:2", "thread:3"], ["thread:1", "thread:4"], ["thread:5"]]);
   assert.equal(disclosures()[0].children[0].textContent,
     new Date(2026, 1, 1).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" }));
-  assert.equal(disclosures()[0].children[1].textContent, "2 unread");
+  assert.equal(disclosures()[0].children[1].textContent, "2 total \u00b7 2 unread");
   assert.equal(list.querySelectorAll("button").some(node => node.dataset.repository), false);
   assert.equal(list.querySelectorAll("span").filter(node => node.className === "repository").length, 5);
   assert.equal(list.attributes["aria-label"], "Notifications by date");
@@ -475,7 +568,7 @@ test("grouping changes apply immediately, persist across panels and restore repo
     reopened.window.events.pagehide();
   }
   assert.deepEqual(list.querySelectorAll("button").filter(node => node.dataset.batchAction === "read").map(node => node.dataset.repository),
-    ["example/alpha", "example/zulu"]);
+    ["example/zulu", "example/alpha"]);
   assert.equal(list.querySelectorAll("button").find(node => node.dataset.focusKey === "repo:example/alpha").attributes["aria-expanded"], "false");
   const posts = ui.calls.filter(call => call.path === "/api/settings" && call.options.body);
   assert.deepEqual(posts.map(call => JSON.parse(call.options.body)), [{ groupBy: "none" }, { groupBy: "date" }, { groupBy: "repo" }]);
@@ -571,12 +664,12 @@ test("grouping refreshes when a panel becomes visible and empty copy matches the
     assert.equal(ui.ids.get("collapse").hidden, true);
     assert.equal(ui.ids.get("empty").hidden, false);
     assert.equal(ui.ids.get("empty-description").textContent, groupBy === "none" ?
-      "New notifications will appear here, newest first." :
+      "New notifications will appear here in GitHub inbox order." :
       `New notifications will appear here, grouped by ${groupBy === "repo" ? "repository" : "date"}.`);
   }
 });
 
-test("none and date regroup loaded pages and filtered results without including unloaded or read items", async () => {
+test("none and date regroup loaded read and unread results without including unloaded items", async () => {
   for (const groupBy of ["none", "date"]) {
     const ui = await renderer({ storedSettings: { groupBy }, onFetch: args => args.at(-1).includes("page=2") ?
       http([
@@ -587,25 +680,25 @@ test("none and date regroup loaded pages and filtered results without including 
         thread("2", { repository: { full_name: "example/zulu" }, updated_at: "2026-01-02T12:00:00Z" }),
       ], { link: next }) });
     const order = () => ui.ids.get("groups").querySelectorAll("a").map(node => node.dataset.focusKey);
-    assert.deepEqual(order(), ["thread:2", "thread:1"]);
+    assert.deepEqual(order(), groupBy === "none" ? ["thread:1", "thread:2"] : ["thread:2", "thread:1"]);
     await ui.ids.get("more").events.click();
-    assert.deepEqual(order(), ["thread:3", "thread:2", "thread:1"]);
-    assert.equal(ui.ids.get("count").textContent, "3 unread");
+    assert.deepEqual(order(), groupBy === "none" ? ["thread:1", "thread:2", "thread:3", "thread:4"] : ["thread:4", "thread:3", "thread:2", "thread:1"]);
+    assert.equal(ui.ids.get("count").textContent, "4 total \u00b7 3 unread");
     await runInContext('update("filters", { query: "alpha" })', ui.context);
-    assert.deepEqual(order(), ["thread:3", "thread:1"]);
+    assert.deepEqual(order(), groupBy === "none" ? ["thread:1", "thread:3"] : ["thread:3", "thread:1"]);
     assert.match(ui.ids.get("count").textContent, /3 unread.*2 matching/);
     await runInContext('update("filters", { query: "no match" })', ui.context);
     assert.deepEqual(order(), []);
     assert.equal(ui.ids.get("collapse").hidden, true);
     assert.equal(ui.ids.get("empty-title").textContent, "No matches in loaded notifications");
     await runInContext('update("filters", { query: "" })', ui.context);
-    assert.deepEqual(order(), ["thread:3", "thread:2", "thread:1"]);
+    assert.deepEqual(order(), groupBy === "none" ? ["thread:1", "thread:2", "thread:3", "thread:4"] : ["thread:4", "thread:3", "thread:2", "thread:1"]);
     assert.equal(ui.githubCalls.length, 2);
     ui.window.events.pagehide();
   }
 });
 
-test("row reads in none and date modes follow the displayed order for focus", async () => {
+test("row reads in none and date modes retain rows and focus their Done action", async () => {
   for (const groupBy of ["none", "date"]) {
     const ui = await renderer({ storedSettings: { groupBy }, initialRows: [
       thread("1", { repository: { full_name: "example/alpha" }, updated_at: "2026-01-01T12:00:00Z" }),
@@ -613,26 +706,29 @@ test("row reads in none and date modes follow the displayed order for focus", as
       thread("3", { repository: { full_name: "example/alpha" }, updated_at: "2026-01-02T12:00:00Z" }),
     ] });
     const readButtons = () => ui.ids.get("groups").querySelectorAll("button").filter(node => node.dataset.action === "read");
+    const ids = groupBy === "none" ? ["1", "2", "3"] : ["2", "3", "1"];
     const first = readButtons()[0];
     first.focus();
     await first.events.click();
-    assert.deepEqual(ui.patches, ["/notifications/threads/2"]);
-    assert.deepEqual(readButtons().map(node => node.dataset.threadId), ["3", "1"]);
-    assert.equal(ui.document.activeElement.dataset.focusKey, "read:3");
-    const last = readButtons()[1];
+    assert.deepEqual(ui.patches, [`/notifications/threads/${ids[0]}`]);
+    assert.deepEqual(readButtons().map(node => node.dataset.threadId), ids.slice(1));
+    assert.equal(ui.document.activeElement.dataset.focusKey, `done:${ids[0]}`);
+    const last = readButtons().find(node => node.dataset.threadId === ids[2]);
     last.focus();
     await last.events.click();
-    assert.equal(ui.document.activeElement.dataset.focusKey, "read:3");
+    assert.equal(ui.document.activeElement.dataset.focusKey, `done:${ids[2]}`);
+    readButtons()[0].focus();
     await readButtons()[0].events.click();
-    assert.equal(ui.document.activeElement, ui.ids.get("search"));
-    assert.equal(ui.ids.get("empty").hidden, false);
+    assert.equal(ui.document.activeElement.dataset.focusKey, `done:${ids[1]}`);
+    assert.equal(ui.ids.get("empty").hidden, true);
+    assert.equal(readButtons().length, 0);
     ui.window.events.pagehide();
   }
 });
 
-test("Theme is a labeled System, Dark and Light select immediately above Group By", async () => {
+test("Theme offers Match Copilot, Dark and Light while preserving saved values", async () => {
   assert.match(html, /<div class="select-setting">\s*<label for="theme">Theme<\/label>\s*<select id="theme" disabled>/);
-  assert.match(html, /<option value="system" selected>System<\/option>\s*<option value="dark">Dark<\/option>\s*<option value="light">Light<\/option>/);
+  assert.match(html, /<option value="system" selected>Match Copilot<\/option>\s*<option value="dark">Dark<\/option>\s*<option value="light">Light<\/option>/);
   assert.match(html, /<select id="theme"[^>]*>[\s\S]*?<\/select>\s*<\/div>\s*<div class="select-setting">\s*<label for="group-by">/);
   assert.doesNotMatch(html, /id="dark-mode"/);
   for (const [darkMode, theme] of [[undefined, "system"], [null, "system"], [true, "dark"], [false, "light"]]) {
@@ -649,7 +745,7 @@ test("Theme is a labeled System, Dark and Light select immediately above Group B
   }
 });
 
-test("System follows the app theme and falls back to OS changes only when no app theme is provided", async () => {
+test("Match Copilot follows the app theme and falls back to OS changes only when no app theme is provided", async () => {
   const ui = await renderer({ appColorMode: "dark", systemDark: false });
   assert.equal(ui.ids.get("theme").value, "system");
   assert.equal(ui.document.documentElement.dataset.notificationTheme, undefined);
@@ -669,7 +765,36 @@ test("System follows the app theme and falls back to OS changes only when no app
   ui.window.events.pagehide();
 });
 
-test("Dark, Light and System choices persist across panels without changing other preferences", async () => {
+test("custom app theme tones retain host colors and explicit overrides still win", async t => {
+  for (const target of ["documentElement", "body"]) {
+    const ui = await renderer({ appColorMode: null, systemDark: false });
+    t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+    const host = ui.document[target];
+    for (const tone of ["dark", "light"]) {
+      host.setAttribute("data-theme-tone", tone);
+      ui.setSystemTheme(tone !== "dark");
+      assert.equal(ui.document.documentElement.dataset.notificationTheme, undefined);
+      const theme = ui.ids.get("theme");
+      theme.value = "dark";
+      theme.events.change();
+      await settle();
+      assert.equal(ui.document.documentElement.dataset.notificationTheme, "dark");
+      theme.value = "system";
+      theme.events.change();
+      await settle();
+      assert.equal(ui.document.documentElement.dataset.notificationTheme, undefined);
+    }
+    host.removeAttribute("data-theme-tone");
+    ui.setSystemTheme(true);
+    assert.equal(ui.document.documentElement.dataset.notificationTheme, "dark");
+    host.setAttribute("data-theme-tone", "auto");
+    host.setAttribute("data-color-mode", "light");
+    ui.setSystemTheme(true);
+    assert.equal(ui.document.documentElement.dataset.notificationTheme, undefined);
+  }
+});
+
+test("Dark, Light and Match Copilot choices persist across panels without changing other preferences", async () => {
   const storedSettings = { autoOpen: true, darkMode: null, groupBy: "date", desktopNotifications: true, desktopSound: "Ping" };
   const ui = await renderer({ storedSettings });
   const select = ui.ids.get("theme");

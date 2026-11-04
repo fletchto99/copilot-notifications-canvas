@@ -4,7 +4,6 @@ import { http, thread } from "../fixtures.mjs";
 
 const readName = "Mark 2 as read in example/widgets; 2 shown, loaded notifications";
 const doneName = "Mark 2 as done in example/widgets; 2 shown, loaded notifications";
-const moreName = "More actions for example/widgets";
 
 for (const repository of ["example/ui", "example/notifications-and-workflow-tools", `example/${"long-".repeat(30)}repository`]) {
   test(`repository header wraps by content width for ${repository}`, async ({ page, canvas }, testInfo) => {
@@ -40,21 +39,19 @@ for (const repository of ["example/ui", "example/notifications-and-workflow-tool
         };
       });
       expect(layout.wrapped).toBe(intrinsicWidth + layout.actionsWidth + layout.gap > layout.available + 0.5);
-      if (layout.wrapped) expect(layout.actionsLeft).toBeCloseTo(layout.headerLeft);
-      else expect(layout.actionsRight).toBeCloseTo(layout.headerRight);
+      expect(layout.actionsRight).toBeCloseTo(layout.headerRight);
       expect(layout.toggleWidth).toBeLessThanOrEqual(layout.available + 0.5);
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
-      await expect(header.locator(".repo-count")).toHaveText("2 unread");
+      await expect(header.locator(".repo-count")).toHaveText("2 total \u00b7 2 unread");
       if (repository === "example/ui" && width >= 400) expect(layout.wrapped).toBe(false);
       if (width === 480 || width === 320) {
         await page.screenshot({ path: testInfo.outputPath(`header-wrap-${width}.png`), fullPage: true });
       }
     }
     await toggle.click();
-    await page.getByRole("button", { name: `More actions for ${repository}`, exact: true }).click();
-    const menu = header.locator(".repo-menu");
-    await expect(menu).toBeVisible();
-    const bounds = await menu.boundingBox();
+    const done = header.locator(".repo-done");
+    await expect(done).toBeVisible();
+    const bounds = await done.boundingBox();
     expect(bounds.x).toBeGreaterThanOrEqual(0);
     expect(bounds.x + bounds.width).toBeLessThanOrEqual(320);
     expect(canvas.writes).toEqual([]);
@@ -64,7 +61,7 @@ for (const repository of ["example/ui", "example/notifications-and-workflow-tool
 test("repository Done honors attention and search filters without changing the selected tab", async ({ page, canvas }) => {
   for (const row of canvas.rows) row.reason = "subscribed";
   canvas.rows[0].reason = "mention";
-  canvas.rows[1].reason = "team_mention";
+  canvas.rows[1].reason = "mention";
   canvas.rows[2].reason = "mention";
   canvas.rows[3].reason = "mention";
   canvas.rows[50].reason = "mention";
@@ -73,8 +70,7 @@ test("repository Done honors attention and search filters without changing the s
   const mentioned = page.getByRole("tab", { name: /^Mentioned \(\d+\)$/ });
   await mentioned.click();
   await expect(page.locator(".row")).toHaveCount(3);
-  await expect(page.locator("#count")).toHaveText("50 unread \u00b7 3 matching");
-  await page.getByRole("button", { name: moreName, exact: true }).click();
+  await expect(page.locator("#count")).toHaveText("50 total \u00b7 50 unread \u00b7 3 matching");
   await page.getByRole("button", { name: doneName, exact: true }).click();
   await expect(page.locator(".row")).toHaveCount(1);
   await expect(mentioned).toHaveAttribute("aria-selected", "true");
@@ -87,48 +83,69 @@ test("repository Done honors attention and search filters without changing the s
 
 for (const width of [320, 960]) {
   for (const collapsed of [false, true]) {
-    test(`repository dropdown works at ${width}px with ${collapsed ? "collapsed" : "expanded"} rows`, async ({ page, canvas }, testInfo) => {
+    test(`direct repository actions work at ${width}px with ${collapsed ? "collapsed" : "expanded"} rows`, async ({ page, canvas }, testInfo) => {
       await page.setViewportSize({ width, height: 900 });
       await page.goto(canvas.url);
       await page.getByRole("searchbox").fill("Needle");
       await expect(page.locator(".row")).toHaveCount(3);
       const read = page.getByRole("button", { name: readName, exact: true });
-      const more = page.getByRole("button", { name: moreName, exact: true });
-      const group = page.locator(".repo-group").filter({ has: more });
+      const done = page.getByRole("button", { name: doneName, exact: true });
+      const group = page.locator(".repo-group").filter({ has: page.locator('[data-focus-key="repo:example/widgets"]') });
       if (collapsed) await group.locator(".repo-toggle").click();
       await read.focus();
       await page.keyboard.press("Tab");
-      await expect(more).toBeFocused();
-      await more.press("Enter");
-      const done = page.getByRole("button", { name: doneName, exact: true });
       await expect(done).toBeFocused();
-      await expect(more).toHaveAttribute("aria-expanded", "true");
-      await expect(done).toHaveText("Mark 2 as done");
-      await expect(read).toHaveText("Mark 2 as read");
+      await expect(done).toHaveAccessibleDescription("Mark 2 as done");
+      await expect(read).toHaveAccessibleDescription("Mark 2 as read");
       expect(canvas.writes).toEqual([]);
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
       const controlBounds = await group.locator(".repo-actions").boundingBox();
-      const menuBounds = await group.locator(".repo-menu").boundingBox();
-      expect(menuBounds.width).toBeCloseTo(controlBounds.width);
-      expect(menuBounds.x).toBeCloseTo(controlBounds.x);
-      expect(menuBounds.y - controlBounds.y - controlBounds.height).toBeCloseTo(4);
-      expect(menuBounds.height).toBeLessThanOrEqual(40);
+      await expect(group.locator(".repo-menu, .repo-more")).toHaveCount(0);
+      const readBounds = await read.boundingBox();
       const bounds = await done.boundingBox();
-      expect(bounds.height).toBeGreaterThanOrEqual(28);
+      expect(bounds.height).toBe(32);
+      expect(bounds.width).toBe(32);
+      expect(bounds.y).toBeCloseTo(readBounds.y);
+      expect(bounds.x - readBounds.x - readBounds.width).toBeCloseTo(4);
+      expect(bounds.x + bounds.width).toBeCloseTo(controlBounds.x + controlBounds.width);
       expect(bounds.x).toBeGreaterThanOrEqual(0);
       expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
       expect(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest("button")?.dataset.batchAction,
         { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 })).toBe("done");
+      const heading = page.getByRole("heading", { name: "GitHub Notifications", exact: true });
+      for (const [button, action] of [[read, "read"], [done, "done"]]) {
+        await expect(button).toHaveText("");
+        await expect(button.locator("svg")).toBeVisible();
+        const tooltip = page.locator(`#${await button.getAttribute("aria-describedby")}`);
+        await heading.hover();
+        await group.locator(".repo-toggle").focus();
+        await expect(tooltip).toBeHidden();
+        await button.hover();
+        await expect(tooltip).toBeVisible();
+        await expect(tooltip).toHaveText(`Mark 2 as ${action}`);
+        const tooltipBounds = await tooltip.boundingBox();
+        expect(tooltipBounds.x).toBeGreaterThanOrEqual(0);
+        expect(tooltipBounds.x + tooltipBounds.width).toBeLessThanOrEqual(width);
+        await tooltip.hover();
+        await expect(tooltip).toBeVisible();
+        await page.keyboard.press("Escape");
+        await expect(tooltip).toBeHidden();
+        await heading.hover();
+        await button.focus();
+        await expect(tooltip).toBeVisible();
+        await button.press("Escape");
+        await expect(tooltip).toBeHidden();
+        await expect(button).toBeFocused();
+      }
+      expect(canvas.writes).toEqual([]);
       const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
       expect(results.violations).toEqual([]);
-      await page.screenshot({ path: testInfo.outputPath(`batch-menu-${width}-${collapsed}.png`), fullPage: true });
+      await page.screenshot({ path: testInfo.outputPath(`group-actions-${width}-${collapsed}.png`), fullPage: true });
       await done.press("Escape");
-      await expect(more).toHaveAttribute("aria-expanded", "false");
-      await expect(more).toBeFocused();
-      await more.press("Enter");
-      await page.getByRole("heading", { name: "Unread Notifications", exact: true }).click();
-      await expect(more).toHaveAttribute("aria-expanded", "false");
-      await more.click();
+      await expect(done).toBeFocused();
+      await expect(done).toBeVisible();
+      await page.getByRole("heading", { name: "GitHub Notifications", exact: true }).click();
+      await expect(done).toBeVisible();
       await done.click();
       await expect(group).toHaveCount(0);
       expect(canvas.doneWrites).toEqual(["1", "2"]);
@@ -153,11 +170,10 @@ test("a Done batch stops after the in-flight request and retries the original re
     }
   });
   try {
-    await page.getByRole("button", { name: moreName, exact: true }).click();
     await page.getByRole("button", { name: doneName, exact: true }).click();
     await started;
     await expect(page.locator("#batch-title")).toContainText("Marking as done");
-    await expect(page.getByRole("button", { name: moreName, exact: true })).toBeDisabled();
+    await expect(page.locator(".repo-done")).toBeDisabled();
     await expect(page.getByRole("button", { name: "Stop remaining", exact: true })).toBeFocused();
     await page.getByRole("button", { name: "Stop remaining", exact: true }).click();
     await expect(page.locator("#batch-title")).toContainText("Stopping");
@@ -168,8 +184,8 @@ test("a Done batch stops after the in-flight request and retries the original re
     await expect(page.locator("#batch-title")).toContainText("Stopped");
     await expect(page.locator("#batch-counts")).toHaveText("1 marked done, 1 remaining");
     expect(canvas.doneWrites).toEqual(["1"]);
-    await expect(page.locator(".repo-read")).toHaveText("Mark 1 as read");
-    await expect(page.locator(".repo-more")).toBeVisible();
+    await expect(page.locator(".repo-read")).toHaveAccessibleDescription("Mark 1 as read");
+    await expect(page.locator(".repo-done")).toBeVisible();
     await expect(page.locator('[data-focus-key="read:2"]')).toBeVisible();
     await expect(page.locator('[data-focus-key="done:2"]')).toBeVisible();
     canvas.rows.push(thread("3"));
@@ -186,7 +202,6 @@ test("failed Done batches keep their action after backoff and do not widen retri
   canvas.rows.splice(2);
   await page.goto(canvas.url);
   canvas.setRequestHook(args => args.includes("DELETE") ? http({}, {}, 500) : undefined);
-  await page.getByRole("button", { name: moreName, exact: true }).click();
   await page.getByRole("button", { name: doneName, exact: true }).click();
   await expect(page.locator("#batch-error")).toContainText("GitHub returned HTTP 500");
   await expect(page.locator("#batch-title")).toContainText("remain to mark as done");
@@ -202,8 +217,8 @@ test("failed Done batches keep their action after backoff and do not widen retri
   await retry.click();
   await expect(page.locator(".row")).toHaveCount(1);
   expect(canvas.doneWrites).toEqual(["1", "2"]);
-  await expect(page.locator(".repo-read")).toHaveText("Mark 1 as read");
-  await expect(page.locator(".repo-more")).toBeVisible();
+  await expect(page.locator(".repo-read")).toHaveAccessibleDescription("Mark 1 as read");
+  await expect(page.locator(".repo-done")).toBeVisible();
   await expect(page.locator('[data-focus-key="read:3"]')).toBeVisible();
   await expect(page.locator('[data-focus-key="done:3"]')).toBeVisible();
 });

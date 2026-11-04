@@ -3,11 +3,11 @@ import assert from "node:assert/strict";
 import { GitHubClient, POLL_MS } from "../src/github.mjs";
 import { Inbox } from "../src/inbox.mjs";
 import { startServer } from "../src/server.mjs";
-import { http, next, thread } from "./fixtures.mjs";
+import { http, inboxNext as next, thread } from "./fixtures.mjs";
 
 const empty = status => `HTTP/2 ${status} Synthetic\r\n\r\n`;
 
-test("205 and documented 304 confirmation remove the known row and synchronize shared panels", async () => {
+test("205 and documented 304 confirmation retain the read row and synchronize shared panels", async () => {
   for (const status of [205, 304]) {
     const calls = [];
     const client = new GitHubClient({ run: async args => {
@@ -20,7 +20,8 @@ test("205 and documented 304 confirmation remove the known row and synchronize s
     await two.refresh();
     await one.markRead({ id: "1" });
     for (const inbox of [one, two]) {
-      assert.equal(inbox.summary().loaded, 0);
+      assert.equal(inbox.summary().loaded, 1);
+      assert.equal(inbox.summary().unread, 0);
       assert.equal(inbox.summary().needsRefresh, true);
     }
     const write = calls.find(args => args.includes("PATCH"));
@@ -82,7 +83,8 @@ test("writes share the request queue and use a one-second spacing, not the GET p
   await inbox.refresh();
   await Promise.all([inbox.markRead({ id: "1" }), inbox.markRead({ id: "2" })]);
   assert.deepEqual(waits, [1000]);
-  assert.equal(inbox.summary().loaded, 0);
+  assert.equal(inbox.summary().loaded, 2);
+  assert.equal(inbox.summary().unread, 0);
 });
 
 test("cached/304 pages cannot resurrect reads; later real activity can reappear, and pagination requires reconciliation", async () => {
@@ -99,12 +101,14 @@ test("cached/304 pages cannot resurrect reads; later real activity can reappear,
   await inbox.refresh();
   await inbox.markRead({ id: "1" });
   await inbox.refresh();
-  assert.equal(inbox.summary().loaded, 0);
+  assert.equal(inbox.summary().loaded, 1);
+  assert.equal(inbox.summary().unread, 0);
   await assert.rejects(inbox.more(), { code: "refresh_required" });
   phase = "unchanged";
   now += POLL_MS;
   await inbox.refresh();
-  assert.equal(inbox.summary().loaded, 0);
+  assert.equal(inbox.summary().loaded, 1);
+  assert.equal(inbox.summary().unread, 0);
   assert.equal(calls.at(-1).some(arg => arg.startsWith("If-")), false);
   phase = "new";
   now += POLL_MS;
@@ -159,7 +163,7 @@ test("a mark in another panel during a multi-page refresh cannot resurrect a rea
   release();
   await read;
   await assert.rejects(refresh, { code: "inbox_changed" });
-  assert.equal(one.snapshot().groups.flatMap(group => group.items).some(item => item.id === "1"), false);
+  assert.equal(one.loadedItems().find(item => item.id === "1").unread, false);
 });
 
 test("rate-limited writes block subsequent writes until GitHub's retry time", async () => {
@@ -202,7 +206,8 @@ test("a read in another panel invalidates queued pagination without losing the r
   finish();
   await marking;
   await loading;
-  assert.deepEqual(one.loadedItems().map(item => item.id), ["2"]);
+  assert.deepEqual(one.loadedItems().map(item => item.id), ["1", "2"]);
+  assert.equal(one.loadedItems()[0].unread, false);
   assert.equal(one.summary().status, "stale");
   assert.equal(one.summary().needsRefresh, true);
   await one.refresh({ force: true });

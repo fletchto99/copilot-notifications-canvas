@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { runInContext } from "node:vm";
-import { http, next, thread } from "./fixtures.mjs";
+import { http, inboxNext as next, thread } from "./fixtures.mjs";
 import { renderer, script, html, styles, settle } from "./renderer-fixtures.mjs";
 
 test("renderer public controls survive bundling and minification", async () => {
@@ -12,7 +12,7 @@ test("renderer public controls survive bundling and minification", async () => {
   });
   try {
     assert.equal(ui.document.querySelectorAll("article").length, 2);
-    assert.deepEqual(ui.ids.get("groups").querySelectorAll("a").map(link => link.textContent),
+    assert.deepEqual(ui.ids.get("groups").querySelectorAll(".title").map(title => title.textContent),
       ["Synthetic notification 1", "Synthetic notification 2"]);
     assert.deepEqual(ui.ids.get("groups").querySelectorAll(".notification-type")
       .map(node => node.textContent), ["Pull Request #42", "Pull Request #42"]);
@@ -43,14 +43,14 @@ test("renderer public controls survive bundling and minification", async () => {
     search.events.input();
     await ui.fireTimer(250);
     assert.equal(ui.document.querySelectorAll("article").length, 1);
-    assert.equal(ui.ids.get("count").textContent, "2 unread \u00b7 1 matching");
+    assert.equal(ui.ids.get("count").textContent, "2 total \u00b7 2 unread \u00b7 1 matching");
     await ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "2").events.click();
     assert.deepEqual(ui.patches, ["/notifications/threads/2"]);
     search.value = "";
     search.events.input();
     await ui.fireTimer(250);
-    assert.equal(ui.ids.get("count").textContent, "1 unread");
-    assert.equal(ui.document.querySelectorAll("article").length, 1);
+    assert.equal(ui.ids.get("count").textContent, "2 total \u00b7 1 unread");
+    assert.equal(ui.document.querySelectorAll("article").length, 2);
   } finally {
     ui.window.events.pagehide();
   }
@@ -435,9 +435,13 @@ test("renderer fetches with a capability, renders untrusted titles as text and e
   assert.equal(refresh.options.headers.Authorization, `Bearer ${"a".repeat(64)}`);
   assert.equal(refresh.options.credentials, "omit");
   const links = ui.document.querySelectorAll("a");
-  assert.equal(links[0].textContent, "<img src=x onerror=alert(1)>");
+  const title = links[0].querySelectorAll(".title")[0];
+  assert.equal(title.textContent, "<img src=x onerror=alert(1)>");
+  assert.equal(links[0].getAttribute("aria-labelledby"), null);
+  assert.equal(links[0].querySelectorAll("button").length, 0);
   assert.equal(links[0].href, "https://github.com/notifications");
   assert.equal(links[0].rel, "noopener noreferrer");
+  assert.equal(links[0].tabIndex, 0);
   assert.equal(ui.ids.has("unread"), false);
   assert.equal(ui.ids.has("all"), false);
   assert.equal(ui.ids.has("refresh"), false);
@@ -537,7 +541,7 @@ test("issue and PR numbers appear in metadata in every grouping and search witho
     ] });
     try {
       const groups = ui.ids.get("groups");
-      assert.deepEqual(groups.querySelectorAll("a").map(link => link.textContent),
+      assert.deepEqual(groups.querySelectorAll(".title").map(title => title.textContent),
         ["<img src=x onerror=alert(1)> Fix login", "(Untitled notification)", "New release"]);
       assert.deepEqual(groups.querySelectorAll(".notification-type").map(node => node.textContent),
       ["Issue #7", "Pull Request #8", "Release"]);
@@ -556,7 +560,7 @@ test("issue and PR numbers appear in metadata in every grouping and search witho
       search.events.input();
       await ui.fireTimer(250);
       assert.equal(groups.querySelectorAll("article").length, 1);
-      assert.equal(ui.ids.get("count").textContent, "3 unread \u00b7 1 matching");
+      assert.equal(ui.ids.get("count").textContent, "3 total \u00b7 3 unread \u00b7 1 matching");
       await groups.querySelectorAll("button").find(button => button.dataset.threadId === "101").events.click();
       assert.deepEqual(ui.patches, ["/notifications/threads/101"]);
     } finally {
@@ -565,29 +569,45 @@ test("issue and PR numbers appear in metadata in every grouping and search witho
   }
 });
 
-test("canvas is titled Unread Notifications without mode tabs or the old All notice", () => {
-  assert.match(html, /<title>Unread Notifications<\/title>/);
-  assert.match(html, /<h1>Unread Notifications<\/h1>/);
+test("canvas is titled GitHub Notifications without mode tabs or the old All notice", () => {
+  assert.match(html, /<title>GitHub Notifications<\/title>/);
+  assert.match(html, /<h1>GitHub Notifications<\/h1>/);
   assert.doesNotMatch(html, /id="(?:all|unread|api-limit)"/);
 });
 
-test("inbox status leads with unread counts and adds matching counts only while searching", async () => {
+test("inbox status always shows total and unread counts and adds matching counts only while searching", async () => {
   const ui = await renderer({ initialRows: [thread("1"), thread("2")] });
-  assert.equal(ui.ids.get("count").textContent, "2 unread");
+  assert.equal(ui.ids.get("count").textContent, "2 total \u00b7 2 unread");
   assert.equal(ui.ids.get("count").hidden, false);
   assert.equal(ui.ids.has("coverage"), false);
   assert.doesNotMatch(script, /End of the available inbox|notifications loaded\./);
   assert.doesNotMatch(styles, /(?:^|\n)footer \{[^}]*border-top:/);
   await runInContext('update("filters", { query: "notification 1" })', ui.context);
-  assert.equal(ui.ids.get("count").textContent, "2 unread \u00b7 1 matching");
+  assert.equal(ui.ids.get("count").textContent, "2 total \u00b7 2 unread \u00b7 1 matching");
   await runInContext('update("filters", { query: "no match" })', ui.context);
-  assert.equal(ui.ids.get("count").textContent, "2 unread \u00b7 0 matching");
+  assert.equal(ui.ids.get("count").textContent, "2 total \u00b7 2 unread \u00b7 0 matching");
   assert.equal(ui.ids.get("count").hidden, false);
   await runInContext('update("filters", { query: "" })', ui.context);
-  assert.equal(ui.ids.get("count").textContent, "2 unread");
+  assert.equal(ui.ids.get("count").textContent, "2 total \u00b7 2 unread");
   assert.match(html, /id="count"[^>]*title="Counts include loaded notifications only\."/);
   assert.match(html, /Search loaded notification titles, issue or PR numbers, and repositories/);
   ui.window.events.pagehide();
+});
+
+test("every grouping keeps the total and unread format for all-unread, mixed and all-read rows", async t => {
+  for (const groupBy of ["repo", "none", "date"]) {
+    for (const unread of [0, 1, 2]) {
+      const ui = await renderer({
+        storedSettings: { groupBy },
+        initialRows: [thread("1", { unread: unread > 0 }), thread("2", { unread: unread > 1 })],
+      });
+      t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+      const expected = `2 total \u00b7 ${unread} unread`;
+      assert.equal(ui.ids.get("count").textContent, expected);
+      assert.equal(ui.ids.get("count").hidden, false);
+      assert.deepEqual(ui.ids.get("groups").querySelectorAll(".repo-count").map(node => node.textContent), [expected]);
+    }
+  }
 });
 
 test("counts return on arrivals and stay visible until an empty inbox is reconciled", async () => {
@@ -601,9 +621,10 @@ test("counts return on arrivals and stay visible until an empty inbox is reconci
   ui.setRows([thread("1")]);
   await ui.ids.get("force-refresh").events.click();
   assert.equal(ui.ids.get("count").hidden, false);
-  assert.equal(ui.ids.get("count").textContent, "1 unread");
-  await ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "1").events.click();
+  assert.equal(ui.ids.get("count").textContent, "1 total \u00b7 1 unread");
+  await ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.focusKey === "done:1").events.click();
   assert.equal(ui.ids.get("count").hidden, false);
+  assert.equal(ui.ids.get("count").textContent, "0 total \u00b7 0 unread");
   assert.equal(ui.ids.get("empty-title").textContent, "Loaded notifications cleared");
   ui.setRows([]);
   await ui.ids.get("empty-refresh").events.click();
@@ -863,7 +884,7 @@ test("Force refresh waits for a local poll instead of losing the click or accept
   await polling;
   await refreshing;
   assert.equal(ui.githubCalls.length, 2);
-  assert.equal(ui.document.querySelectorAll("a")[0].textContent, "Synthetic notification 2");
+  assert.equal(ui.document.querySelectorAll(".title")[0].textContent, "Synthetic notification 2");
 });
 
 test("manual and foreground refreshes queue behind row and repository writes without interrupting them", async () => {
@@ -928,7 +949,7 @@ test("queued Force refresh preserves the latest search edit during a filter requ
   assert.equal(ui.githubCalls.length, 2);
   assert.equal(ui.inbox.filters.query, "notification 2");
   assert.equal(search.value, "notification 2");
-  assert.equal(ui.document.querySelectorAll("a")[0].textContent, "Synthetic notification 2");
+  assert.equal(ui.document.querySelectorAll(".title")[0].textContent, "Synthetic notification 2");
 });
 
 test("Force refresh remains focusable during GitHub backoff and explains why activation is paused", async () => {
@@ -1150,7 +1171,7 @@ test("search typed during automatic loading is applied after the fetch finishes"
   await polling;
   assert.equal(ui.calls.at(-1).path, "/api/filters");
   assert.equal(ui.document.querySelectorAll("article").length, 1);
-  assert.equal(ui.document.querySelectorAll("a")[0].textContent, "Synthetic notification 3");
+  assert.equal(ui.document.querySelectorAll(".title")[0].textContent, "Synthetic notification 3");
 });
 
 test("renderer preserves focus and collapsed groups across unchanged data and updates", async () => {

@@ -7,15 +7,36 @@ across sessions and preserved during packaged upgrades.
 
 | Setting | Default | Options and behavior |
 | --- | --- | --- |
-| Group By | Repository | **Repository**: alphabetical repositories, newest items first. **All notifications**: one collapsible, newest-first group. **Date**: newest local calendar day first. All use last-updated times. |
-| Theme | System | **System** follows Copilot, falling back to the OS theme. **Dark** and **Light** override it. |
+| Show notifications | All | **All** shows read and unread inbox items, excluding Done. **Unread only** shows unread items. Switching reloads the first page. No per-notification state is saved locally. |
+| Group By | Repository | **Repository**: preserve GitHub's API order, grouping repositories by first appearance. **All notifications**: one collapsible group in API order. **Date**: newest local calendar day first, using REST update times for buckets and API order for rows. |
+| Theme | Match Copilot | **Match Copilot** uses Copilot's theme colors, falling back to the OS theme when opened outside Copilot. **Dark** and **Light** use fixed palettes. |
 | Auto-open | Off | Opens a missing Notifications panel when its provider attaches to a new or resumed session, unless you previously closed it in that session. Existing panels are left alone. |
 | Desktop notifications | Off | Enables native alerts while a Notifications canvas is open and its extension process is running. |
 | Sound | System default | System-specific sounds for desktop alerts; see the platform table below. |
 
+With **Match Copilot** selected, the canvas inherits Copilot's theme colors and
+typography, including custom palettes such as Fox, and follows theme changes
+without a reload. This is the renamed
+**System** option; existing saved choices are unchanged. Explicit
+**Dark** and **Light** use the extension's fixed palettes, so their borders and
+accents can differ from Copilot in the same color mode. Theme selection does not
+change layout or spacing.
+
 The saved grouping values remain `repo`, `none`, and `date`; the display labels
 do not change existing preferences. Press Escape, click outside Settings, or move
 keyboard focus outside it to close the panel.
+Settings stays within the canvas viewport, scrolling internally when needed.
+It opens above its button when that offers more space and closes if the button
+scrolls out of view. Labels and dropdowns stack when needed to accommodate wider
+text, and the panel adjusts when typography or header content changes.
+
+The dropdown retains the existing `matchGitHubInbox` boolean in the user-wide
+settings file: `true` means **All** and `false` means **Unread only**. Existing
+choices are preserved without migration. Other open panels apply changes on
+their next poll, without interrupting an active batch.
+Desktop alerts still poll unread notifications only; this setting does not change
+their baseline, enable alerts, or replay read or completed activity.
+The earlier local `showDone` key is ignored and preserved, not migrated.
 
 Auto-open is a user-wide preference, but dismissal belongs to each session.
 Closing Notifications in one conversation does not affect other conversations.
@@ -58,10 +79,13 @@ remote sessions do not automatically notify your local computer.
 
 ### Polling and delivery
 
-While the canvas is visible, its checks feed the same results to desktop alerts,
-normally every 60 seconds and immediately on returning to the foreground. The
-watcher uses the same request cache and follows any additional pages needed for
-new activity, independent of search or how many pages the canvas has loaded.
+Desktop alerts poll the unread-only feed, normally every 60 seconds. With
+**All** selected, the canvas uses a separate cache entry and cannot supply
+a desktop baseline or include read/completed items in alert scans. Selecting
+**Unread only**, or explicitly selecting the agent's unread view, lets the canvas
+share unread results with the watcher.
+The watcher follows any additional unread pages needed for new activity,
+independent of search or how many pages the canvas has loaded.
 Reusing cached results does not postpone the next background polling deadline.
 The first successful baseline uses a response started after the current desktop
 notification activation and remains silent, even if alerts are enabled during an

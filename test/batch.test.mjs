@@ -5,7 +5,7 @@ import { GitHubClient, POLL_MS } from "../src/github.mjs";
 import { Inbox } from "../src/inbox.mjs";
 import { InboxError, normalizeThreads } from "../src/model.mjs";
 import { startServer } from "../src/server.mjs";
-import { http, next, thread } from "./fixtures.mjs";
+import { http, inboxNext as next, thread } from "./fixtures.mjs";
 
 const ok = "HTTP/2 205 Reset Content\r\n\r\n";
 const settle = () => new Promise(resolve => setImmediate(resolve));
@@ -69,9 +69,9 @@ test("date batches select one local calendar day across repositories, including 
       assert.equal(inbox.batch.snapshot().total, 2);
       assert.doesNotMatch(JSON.stringify(inbox.summary()), /"date":|"timeZone":|America\/|example\/|selectionKey|"token"|"items"/);
       await inbox.batch.done;
-      assert.deepEqual(writes, ["/notifications/threads/3", "/notifications/threads/2"]);
+      assert.deepEqual(writes, ["/notifications/threads/2", "/notifications/threads/3"]);
       assert.deepEqual(methods, [action === "done" ? "DELETE" : "PATCH", action === "done" ? "DELETE" : "PATCH"]);
-      assert.deepEqual(inbox.loadedItems().map(item => item.id), ["4", "1"]);
+      assert.deepEqual(inbox.loadedItems().filter(item => action === "done" || item.unread).map(item => item.id), ["1", "4"]);
       assert.equal(client.threadReservations.size, 0);
     }
   }
@@ -129,7 +129,7 @@ test("date retries preserve the original day and zone and cannot reach changed d
   assert.equal(inbox.batch.snapshot().action, "done");
   assert.equal(inbox.batch.snapshot().total, 1);
   await inbox.batch.done;
-  assert.deepEqual(writes, ["/notifications/threads/3", "/notifications/threads/2", "/notifications/threads/1"]);
+  assert.deepEqual(writes, ["/notifications/threads/1", "/notifications/threads/2", "/notifications/threads/3"]);
   assert.deepEqual(methods, ["DELETE", "DELETE", "DELETE"]);
   assert.deepEqual(inbox.loadedItems().map(item => item.id).sort(), ["2", "4", "9"]);
 });
@@ -158,7 +158,7 @@ test("the protected date batch HTTP path dispatches only the selected day's thre
 
 test("Done batches issue spaced DELETEs for only loaded attention and search matches and synchronize other panels", async t => {
   const rows = [
-    thread("1", { reason: "mention" }), thread("2", { reason: "team_mention" }),
+    thread("1", { reason: "mention" }), thread("2", { reason: "mention" }),
     thread("3", { reason: "review_requested" }),
     thread("4", { reason: "mention", repository: { full_name: "example/other" } }),
     thread("5", { reason: "mention", subject: { title: "Excluded", type: "Issue", url: null } }),
@@ -355,7 +355,7 @@ test("strict bounded selection requests reject unknown, forged, stale, cross-rep
 test("repository reads respect attention and search, and filter changes invalidate even identical selections", async () => {
   const { inbox, writes } = await fixture({
     rows: [thread("1", { reason: "mention" }), thread("2", { reason: "review_requested" }),
-      thread("3", { reason: "team_mention" }), thread("4", { reason: "mention", repository: { full_name: "example/other" } })],
+      thread("3", { reason: "mention" }), thread("4", { reason: "mention", repository: { full_name: "example/other" } })],
   });
   await inbox.setFilters({ query: "notification 1" });
   const before = selection(inbox);
@@ -366,7 +366,26 @@ test("repository reads respect attention and search, and filter changes invalida
   await assert.rejects(inbox.setFilters({ attention: "all" }), { code: "busy" });
   await inbox.batch.done;
   assert.deepEqual(writes, ["/notifications/threads/1"]);
-  assert.deepEqual(inbox.loadedItems().map(item => item.id), ["2", "3", "4"]);
+  assert.deepEqual(inbox.loadedItems().filter(item => item.unread).map(item => item.id), ["2", "3", "4"]);
+});
+
+test("team-mention batches exclude personal mentions and other participation reasons", async t => {
+  for (const action of ["read", "done"]) {
+    const { inbox, writes } = await fixture({ rows: [
+      thread("1", { reason: "mention" }), thread("2", { reason: "team_mention" }),
+      thread("3", { reason: "review_requested" }), thread("4", { reason: "author" }),
+      thread("5", { reason: "subscribed" }), thread("6", { reason: "team_mention", unread: false }),
+    ] });
+    t.after(() => inbox.close());
+    await inbox.setFilters({ attention: "team_mentioned" });
+    assert.equal(inbox.summary().matching, 2);
+    start(inbox, "example/widgets", action);
+    assert.equal(inbox.batch.snapshot().total, action === "read" ? 1 : 2);
+    await inbox.batch.done;
+    assert.deepEqual(writes, action === "read"
+      ? ["/notifications/threads/2"] : ["/notifications/threads/2", "/notifications/threads/6"]);
+    assert.ok(inbox.loadedItems().some(item => item.id === "1" && item.unread));
+  }
 });
 
 test("retry excludes original batch items hidden by a new attention filter", async () => {
@@ -450,7 +469,8 @@ test("one-click batches make spaced PATCH calls, update shared panels, and quiet
   assert.deepEqual(writes, ["/notifications/threads/1", "/notifications/threads/2", "/notifications/threads/3"]);
   assert.deepEqual(waits, [1000, 1000]);
   for (const panel of [inbox, other]) {
-    assert.equal(panel.summary().loaded, 0);
+    assert.equal(panel.summary().loaded, 3);
+    assert.equal(panel.summary().unread, 0);
     assert.equal(panel.summary().needsRefresh, true);
   }
   assert.throws(() => inbox.batch.start(input), { code: "selection_changed" });
@@ -459,7 +479,8 @@ test("one-click batches make spaced PATCH calls, update shared panels, and quiet
   client.run = async () => "HTTP/2 304 Not modified\r\n\r\n";
   advance();
   await inbox.refresh();
-  assert.equal(inbox.summary().loaded, 0);
+  assert.equal(inbox.summary().loaded, 3);
+  assert.equal(inbox.summary().unread, 0);
   client.run = async () => http([laterThread("1")]);
   advance();
   await inbox.refresh();
@@ -474,7 +495,7 @@ test("a clicked selection excludes new arrivals and skips changed or no-longer-l
   assert.deepEqual(writes, ["/notifications/threads/1"]);
   assert.equal(inbox.batch.snapshot().succeeded, 1);
   assert.equal(inbox.batch.snapshot().skipped, 2);
-  assert.deepEqual(inbox.loadedItems().map(item => item.id).sort(), ["2", "4"]);
+  assert.deepEqual(inbox.loadedItems().filter(item => item.unread).map(item => item.id).sort(), ["2", "4"]);
 });
 
 test("newer cache activity is rechecked after queued write spacing, before a PATCH is dispatched", async () => {
@@ -548,7 +569,8 @@ test("auth/rate/network failures stop the batch with exact partial counts and re
       (({ succeeded, failed, skipped, notAttempted }) => ({ succeeded, failed, skipped, notAttempted }))(inbox.batch.snapshot()),
       { succeeded: 1, failed: 1, skipped: 0, notAttempted: 1 });
     assert.equal(writes.length, 2);
-    assert.equal(inbox.summary().loaded, 2);
+    assert.equal(inbox.summary().loaded, 3);
+    assert.equal(inbox.summary().unread, 2);
     failing = false;
     client.blockedUntil = 0;
     inbox.batch.retry(token);
@@ -557,7 +579,8 @@ test("auth/rate/network failures stop the batch with exact partial counts and re
     assert.throws(() => inbox.batch.retry(token), { code: "busy" });
     await inbox.batch.done;
     assert.deepEqual(writes, ["/notifications/threads/1", "/notifications/threads/2", "/notifications/threads/2", "/notifications/threads/3"]);
-    assert.equal(inbox.summary().loaded, 0);
+    assert.equal(inbox.summary().loaded, 3);
+    assert.equal(inbox.summary().unread, 0);
   }
 });
 
@@ -574,8 +597,9 @@ test("retry keeps the old selection and respects a newly narrowed search", async
   inbox.batch.retry(token);
   assert.equal(inbox.batch.snapshot().total, 1);
   await inbox.batch.done;
-  assert.equal(inbox.loadedItems().some(item => item.id === "2"), false);
-  assert.equal(inbox.summary().loaded, 2);
+  assert.equal(inbox.loadedItems().find(item => item.id === "2").unread, false);
+  assert.equal(inbox.summary().loaded, 3);
+  assert.equal(inbox.summary().unread, 2);
 });
 
 test("retry rejects an entirely hidden or changed selection without writing or replacing its partial result", async t => {

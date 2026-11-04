@@ -5,13 +5,12 @@ import { http, thread } from "../fixtures.mjs";
 const timeZone = "America/Los_Angeles";
 const date = "2026-01-12";
 const label = "January 12, 2026";
-const moreName = `More actions for ${label}`;
 const actionName = action => `Mark 2 as ${action} on ${label}; 2 shown, loaded notifications`;
 
 function prepareRows(canvas) {
   for (const row of canvas.rows) row.reason = "subscribed";
   Object.assign(canvas.rows[0], { reason: "mention", updated_at: "2026-01-13T07:59:00Z" });
-  Object.assign(canvas.rows[1], { reason: "team_mention", updated_at: "2026-01-12T08:00:00Z" });
+  Object.assign(canvas.rows[1], { reason: "mention", updated_at: "2026-01-12T08:00:00Z" });
   canvas.rows[1].repository.full_name = "example/other";
   Object.assign(canvas.rows[2], { reason: "mention", updated_at: "2026-01-13T08:00:00Z" });
   canvas.rows[3].updated_at = "2026-01-12T12:00:00Z";
@@ -37,28 +36,27 @@ test.describe("date-scoped actions", () => {
       await expect(page.locator('[data-batch-scope="shown"]')).toHaveCount(0);
       await expect(page.locator(".repo-name")).toHaveText(["January 13, 2026", label]);
       await expect(page.getByRole("button", { name: "Collapse all", exact: true })).toBeVisible();
-      const group = page.locator(".repo-group").filter({ has: page.getByRole("button", { name: moreName, exact: true }) });
-      await expect(group.locator(".repo-read")).toHaveText("Mark 2 as read");
+      const group = page.locator(".repo-group").filter({ has: page.getByRole("button", { name: actionName("done"), exact: true }) });
+      await expect(group.locator(".repo-read")).toHaveAccessibleDescription("Mark 2 as read");
       await expect(group.locator(".row")).toHaveCount(2);
       await group.locator(".repo-toggle").click();
       await expect(group.locator(".row:visible")).toHaveCount(0);
       expect(canvas.writes).toEqual([]);
-      if (action === "done") {
-        await group.locator(".repo-more").focus();
-        await page.keyboard.press("Enter");
-      }
       const button = page.getByRole("button", { name: actionName(action), exact: true });
       const request = page.waitForRequest(request => request.url().endsWith("/api/batch/start"));
       await button.focus();
       await button.press("Enter");
       expect((await request).postDataJSON()).toMatchObject({ scope: "date", date, timeZone, action });
-      await expect(page.locator(".row")).toHaveCount(1);
-      await expect(page.locator(".repo-name")).toHaveText("January 13, 2026");
+      await expect(page.locator(".row")).toHaveCount(action === "read" ? 3 : 1);
+      if (action === "read") {
+        await expect(group.locator(".repo-read")).toBeDisabled();
+        await expect(group.locator(".repo-read")).toHaveAccessibleDescription("Mark 0 as read");
+      } else await expect(page.locator(".repo-name")).toHaveText("January 13, 2026");
       expect(canvas.writes).toEqual(["1", "2"]);
       expect(canvas.doneWrites).toEqual(action === "done" ? ["1", "2"] : []);
       for (const id of ["3", "4", "5", "51"]) expect(canvas.rows.find(row => row.id === id).unread).toBe(true);
       expect(canvas.requests.some(endpoint => endpoint.includes("page=2"))).toBe(false);
-      await expect(page.getByRole("tab", { name: "Mentioned (2)", exact: true })).toHaveAttribute("aria-selected", "true");
+      await expect(page.getByRole("tab", { name: `Mentioned (${action === "read" ? 4 : 2})`, exact: true })).toHaveAttribute("aria-selected", "true");
       await expect(page.locator('[data-batch-scope="shown"]')).toHaveCount(0);
       await expect(page.locator("#batch-progress")).toBeHidden();
     });
@@ -73,20 +71,16 @@ test.describe("date-scoped actions", () => {
       await filterInbox(page);
       await expect(page.locator(".status-line .repo-read")).toHaveCount(0);
       await expect(page.locator("#collapse")).toBeVisible();
-      const group = page.locator(".repo-group").filter({ has: page.getByRole("button", { name: moreName, exact: true }) });
+      const group = page.locator(".repo-group").filter({ has: page.getByRole("button", { name: actionName("done"), exact: true }) });
       const read = page.getByRole("button", { name: actionName("read"), exact: true });
-      const more = page.getByRole("button", { name: moreName, exact: true });
       await read.focus();
       await page.keyboard.press("Tab");
-      await expect(more).toBeFocused();
-      await more.press("Enter");
       const done = page.getByRole("button", { name: actionName("done"), exact: true });
       await expect(done).toBeFocused();
       const controlBounds = await group.locator(".repo-actions").boundingBox();
-      const menuBounds = await group.locator(".repo-menu").boundingBox();
-      expect(menuBounds.width).toBeCloseTo(controlBounds.width);
-      expect(menuBounds.x).toBeGreaterThanOrEqual(0);
-      expect(menuBounds.x + menuBounds.width).toBeLessThanOrEqual(width);
+      expect(controlBounds.x).toBeGreaterThanOrEqual(0);
+      expect(controlBounds.x + controlBounds.width).toBeLessThanOrEqual(width);
+      await expect(group.locator(".repo-menu")).toHaveCount(0);
       const buttonBounds = await done.boundingBox();
       expect(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest("button")?.dataset.batchDate,
         { x: buttonBounds.x + buttonBounds.width / 2, y: buttonBounds.y + buttonBounds.height / 2 })).toBe(date);
@@ -95,8 +89,8 @@ test.describe("date-scoped actions", () => {
       expect(results.violations).toEqual([]);
       await page.screenshot({ path: testInfo.outputPath(`date-actions-${width}.png`), fullPage: true });
       await done.press("Escape");
-      await expect(more).toBeFocused();
-      await expect(group.locator(".repo-menu")).toBeHidden();
+      await expect(done).toBeFocused();
+      await expect(done).toBeVisible();
       await page.getByRole("searchbox").fill("No matching notification");
       await expect(page.locator(".repo-group")).toHaveCount(0);
       await expect(page.locator('[data-batch-scope="shown"]')).toHaveCount(0);
@@ -117,18 +111,17 @@ test.describe("date-scoped actions", () => {
       if (args.includes("DELETE")) { entered(); await held; }
     });
     try {
-      await page.getByRole("button", { name: moreName, exact: true }).click();
       await page.getByRole("button", { name: actionName("done"), exact: true }).click();
       await started;
       await expect(page.locator("#batch-title")).toContainText(`${label}: Marking as done`);
-      await expect(page.locator(`[data-focus-key="bulk:date:${date}"]`)).toHaveText("Marking 0/2...");
-      await expect(page.locator('[data-focus-key="bulk:date:2026-01-13"]')).toHaveText("Mark 1 as read");
+      await expect(page.locator(`[data-focus-key="bulk-done:date:${date}"]`)).toHaveAccessibleDescription("Marking 0/2...");
+      await expect(page.locator('[data-focus-key="bulk:date:2026-01-13"]')).toHaveAccessibleDescription("Mark 1 as read");
       await expect(page.locator('[data-focus-key="bulk:date:2026-01-13"]')).toHaveAttribute("aria-busy", "false");
       await page.getByLabel("Settings", { exact: true }).click();
       await page.getByRole("combobox", { name: "Group By", exact: true }).selectOption("none");
       await page.keyboard.press("Escape");
       await expect(page.locator('[data-focus-key="bulk:shown"]')).toBeDisabled();
-      await expect(page.locator('[data-focus-key="bulk:shown"]')).toHaveText("Mark 3 as read");
+      await expect(page.locator('[data-focus-key="bulk:shown"]')).toHaveAccessibleDescription("Mark 3 as read");
       await page.getByRole("button", { name: "Stop remaining", exact: true }).click();
       canvas.setRequestHook(undefined);
       release();
@@ -140,7 +133,7 @@ test.describe("date-scoped actions", () => {
       await expect(page.locator(".row")).toHaveCount(1);
       expect(canvas.doneWrites).toEqual(["1", "2"]);
       expect(canvas.rows.find(row => row.id === "3").unread).toBe(true);
-      await expect(page.locator('[data-focus-key="bulk:shown"]')).toHaveText("Mark 1 as read");
+      await expect(page.locator('[data-focus-key="bulk:shown"]')).toHaveAccessibleDescription("Mark 1 as read");
     } finally {
       release();
     }
@@ -152,7 +145,6 @@ test.describe("date-scoped actions", () => {
     await canvas.preferences.update({ groupBy: "date" });
     await page.goto(canvas.url);
     canvas.setRequestHook(args => args.includes("DELETE") ? http({}, {}, 500) : undefined);
-    await page.getByRole("button", { name: moreName, exact: true }).click();
     await page.getByRole("button", { name: actionName("done"), exact: true }).click();
     await expect(page.locator("#batch-error")).toContainText("GitHub returned HTTP 500");
     const retry = page.getByRole("button", { name: "Retry remaining (2)", exact: true });
@@ -160,7 +152,7 @@ test.describe("date-scoped actions", () => {
     canvas.rows.push(thread("4", { updated_at: "2026-01-12T14:00:00Z", reason: "mention" }));
     canvas.setRequestHook(undefined);
     await page.clock.setFixedTime(new Date(canvas.advance(121_000)));
-    await expect(page.locator(`[data-focus-key="bulk:date:${date}"]`)).toHaveText("Mark 3 as read", { timeout: 10_000 });
+    await expect(page.locator(`[data-focus-key="bulk:date:${date}"]`)).toHaveAccessibleDescription("Mark 3 as read", { timeout: 10_000 });
     await expect(retry).toBeEnabled();
     await retry.click();
     await expect(page.locator(".row")).toHaveCount(2);
@@ -181,7 +173,6 @@ test.describe("packaged date-specific controls", () => {
     await page.getByRole("combobox", { name: "Group By", exact: true }).selectOption("date");
     await page.keyboard.press("Escape");
     await expect(page.locator('[data-batch-scope="shown"]')).toHaveCount(0);
-    await page.getByRole("button", { name: moreName, exact: true }).click();
     await page.getByRole("button", { name: actionName("done"), exact: true }).click();
     await expect(page.locator(".row")).toHaveCount(1);
     await expect(page.locator(".repo-name")).toHaveText("January 13, 2026");

@@ -1,4 +1,4 @@
-import { apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads } from "./model.mjs";
+import { apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle } from "./model.mjs";
 
 const $ = id => document.getElementById(id);
 const token = location.hash.slice(1);
@@ -32,15 +32,14 @@ let updateError = "";
 let copyFeedbackTimer;
 let copyAttempt = 0;
 const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
+const themeAttributes = ["data-theme-tone", "data-color-mode"];
 const marking = new Map();
 let actionError = "";
 let batchBusy = false;
 let batchFocusKey;
-let batchMenu;
 const iconPaths = {
   read: "M3 9 12 3l9 6v11H3V9Zm0 0 9 6 9-6M3 20l6-7m12 7-6-7",
   done: "m5 12 4 4L19 6",
-  more: "m7 10 5 5 5-5",
 };
 const tooltipControls = [
   ["open-inbox", "inbox-control"],
@@ -101,7 +100,9 @@ async function api(path, input) {
 
 function renderTheme() {
   const theme = preferences?.darkMode === true ? "dark" : preferences?.darkMode === false ? "light" : "system";
-  const mode = document.documentElement.getAttribute("data-color-mode") ?? document.body.getAttribute("data-color-mode");
+  const mode = [document.documentElement, document.body]
+    .flatMap(node => themeAttributes.map(attribute => node.getAttribute(attribute)))
+    .find(value => value === "dark" || value === "light");
   if (theme !== "system") {
     document.documentElement.dataset.notificationTheme = theme;
   } else if (mode === "dark" || mode === "light") {
@@ -112,7 +113,15 @@ function renderTheme() {
   $("theme").value = theme;
 }
 
+function renderNotificationView() {
+  const unreadOnly = state?.filters.mode === "unread";
+  $("show-notifications").value = unreadOnly || preferences?.matchGitHubInbox === false ? "unread" : "all";
+  $("show-notifications").disabled = settingsBusy || !preferences || unreadOnly ||
+    busy || state?.status === "loading" || batchBusy || batchLocked() || marking.size > 0;
+}
+
 function renderSettings() {
+  renderNotificationView();
   $("theme").disabled = settingsBusy || !preferences;
   renderTheme();
   $("group-by").disabled = settingsBusy || !preferences;
@@ -125,7 +134,7 @@ function renderSettings() {
       $(id).setAttribute("aria-checked", String(Boolean(preferences[key])));
     }
     $(id).disabled = settingsBusy || !preferences ||
-      (id !== "auto-open" && !preferences.desktopStatus?.supported);
+      (id === "desktop-notifications" && !preferences.desktopStatus?.supported);
   }
   const select = $("desktop-sound");
   select.disabled = settingsBusy || !preferences?.desktopNotifications || !preferences?.desktopStatus?.supported;
@@ -167,6 +176,7 @@ function renderSettings() {
     $("development-api-active").textContent = `Active API: ${api.baseUrl}`;
     $("development-api-reload").hidden = !api.requiresReload;
   }
+  positionSettings();
 }
 
 async function settingsRequest(input, quiet = false, path = "settings") {
@@ -179,6 +189,7 @@ async function settingsRequest(input, quiet = false, path = "settings") {
     return;
   }
   const previousFocus = document.activeElement;
+  let refreshInbox = false;
   settingsBusy = true;
   if (!quiet) {
     renderSettings();
@@ -189,6 +200,7 @@ async function settingsRequest(input, quiet = false, path = "settings") {
   try {
     preferences = await api(path, input);
     render();
+    refreshInbox = input && Object.hasOwn(input, "matchGitHubInbox");
     $("settings-status").textContent = "";
     $("settings-error").hidden = true;
   } catch (error) {
@@ -206,6 +218,7 @@ async function settingsRequest(input, quiet = false, path = "settings") {
       restoreFocus(next.focus);
       void settingsRequest(next.input, false, next.path);
     }
+    if (refreshInbox) void update("refresh", {});
   }
 }
 
@@ -309,6 +322,21 @@ async function copyUpdatePrompt() {
   }
 }
 
+function positionSettings() {
+  if (!$("settings").open) return;
+  const panel = $("settings-panel");
+  const { top, bottom } = $("settings-toggle").getBoundingClientRect();
+  const height = window.innerHeight;
+  if (bottom <= 0 || top >= height) return closeSettings();
+  // Reserve an 8px button gap and an 8px viewport margin.
+  const below = Math.max(0, height - bottom - 16);
+  const above = Math.max(0, top - 16);
+  const preferred = Math.min(height * 0.6, panel.scrollHeight + 2);
+  const useAbove = below < preferred && above > below;
+  panel.dataset.placement = useAbove ? "above" : "below";
+  panel.style.maxHeight = `${Math.min(height * 0.6, useAbove ? above : below)}px`;
+}
+
 function closeSettings(focus = false) {
   $("settings").open = false;
   $("settings-toggle").setAttribute("aria-expanded", "false");
@@ -317,7 +345,7 @@ function closeSettings(focus = false) {
 }
 
 async function markThread(id, action) {
-  if (!visible() || busy || batchBusy || batchLocked() || marking.size) return;
+  if (!visible() || busy || batchBusy || batchLocked() || marking.size || pendingFilters) return;
   const key = `${action}:${id}`;
   const index = displayGroups().flatMap(group => group.items).findIndex(item => item.id === id);
   const previousFocus = document.activeElement;
@@ -332,7 +360,7 @@ async function markThread(id, action) {
     state = await api(action, { id });
     const remaining = displayGroups().flatMap(group => group.items);
     const next = remaining[Math.min(index, remaining.length - 1)];
-    nextFocusKey = next ? `${action}:${next.id}` : null;
+    nextFocusKey = remaining.some(item => item.id === id) ? `done:${id}` : next ? `${action}:${next.id}` : null;
   } catch (error) {
     actionError = `Could not mark the notification as ${action}. ${error.message || "Try again."}`;
     try {
@@ -373,6 +401,7 @@ function restoreFocus(previous, preferred) {
   if (current && current !== previous && current !== document.body && current !== document.documentElement &&
       !(key && current.dataset?.focusKey === key)) return;
   let target = preferred ?? (key ? focusKey(key) : $(previous.id));
+  if (!target && key?.startsWith("read:")) target = focusKey(`done:${key.slice(5)}`);
   for (let node = target; node; node = node.parentNode) {
     if (node.hidden) {
       target = null;
@@ -382,36 +411,12 @@ function restoreFocus(previous, preferred) {
   (target && !target.disabled ? target : $("search")).focus({ preventScroll: true });
 }
 
-function closeBatchMenu(focus = false) {
-  if (!batchMenu) return;
-  const { trigger, panel } = batchMenu;
-  batchMenu = undefined;
-  panel.hidden = true;
-  trigger.setAttribute("aria-expanded", "false");
-  if (focus && visible()) trigger.focus();
-}
-
-function toggleBatchMenu(container, trigger, panel, option) {
-  if (!visible() || busy || batchBusy || batchLocked() || marking.size) return;
-  trigger.focus();
-  const closing = batchMenu?.trigger === trigger;
-  closeBatchMenu();
-  dismissTooltips();
-  if (closing) return;
-  closeSettings();
-  batchMenu = { container, trigger, panel };
-  panel.hidden = false;
-  trigger.setAttribute("aria-expanded", "true");
-  option.focus();
-}
-
 async function batchRequest(action, input) {
   if (!visible() || batchBusy || busy) return;
-  if (["start", "retry"].includes(action) && (marking.size || batchLocked())) return;
+  if (["start", "retry"].includes(action) && (marking.size || batchLocked() || pendingFilters)) return;
   batchBusy = true;
   let failed = false;
   const previousFocus = document.activeElement;
-  closeBatchMenu();
   dismissTooltips();
   renderControls();
   try {
@@ -465,14 +470,14 @@ function renderBatch() {
     ? `${batch.succeeded} marked ${batch.action}, ${remaining} remaining${batch.skipped ? `, ${batch.skipped} skipped` : ""}`
     : `${batch.succeeded} succeeded / ${batch.failed} failed / ${batch.skipped} skipped / ${batch.notAttempted} not attempted (${batch.total} selected)`;
   const retryTime = batch.retryAt > Date.now() ? ` Retry after ${new Date(batch.retryAt).toLocaleTimeString()}.` : "";
-  const detail = batch.error?.message ?? (batch.skipped ? "Skipped notifications were changed or no longer unread in the loaded inbox. Review their current state separately." : "");
+  const detail = batch.error?.message ?? (batch.skipped ? "Skipped notifications changed or are no longer eligible in the loaded inbox. Review their current state separately." : "");
   $("batch-error").hidden = !detail;
   $("batch-error").textContent = detail + retryTime;
   $("batch-stop").hidden = !running;
   $("batch-stop").disabled = batchBusy || busy || batch.status === "stopping";
   $("batch-retry").hidden = running || remaining === 0;
   $("batch-retry").textContent = `${cancelled ? "Continue" : "Retry"} remaining (${remaining})`;
-  $("batch-retry").disabled = batchBusy || busy || batch.retryAt > Date.now();
+  $("batch-retry").disabled = batchBusy || busy || Boolean(pendingFilters) || batch.retryAt > Date.now();
   $("batch-dismiss").hidden = running;
   $("batch-dismiss").disabled = batchBusy || busy;
   if (controls.includes(previousFocus) && previousFocus.hidden) restoreFocus(previousFocus, $("batch-progress"));
@@ -561,6 +566,8 @@ async function flushPendingUpdates() {
   clearTimeout(searchTimer);
   if (Object.entries(input).some(([key, value]) => value !== state?.filters[key])) {
     await blockingUpdate("filters", input);
+  } else {
+    renderControls();
   }
 }
 
@@ -596,18 +603,37 @@ function renderRefreshStatus(updateAge = false) {
   $("refresh-tooltip-text").textContent = (paused ? `${pause} ` : progress) + updated;
 }
 
+function positionTooltip(anchor) {
+  const tooltip = anchor.querySelectorAll(".tooltip")[0];
+  anchor.dataset.tooltipPlacement = anchor.getBoundingClientRect().top < tooltip.getBoundingClientRect().height + 8
+    ? "below" : "above";
+}
+
+function tooltipAnchors() {
+  return [...tooltipControls.map(([, id]) => $(id)), ...$("groups").querySelectorAll(".tooltip-anchor")];
+}
+
+function positionOverlays() {
+  positionSettings();
+  for (const anchor of tooltipAnchors()) {
+    if (!anchor.dataset.tooltipDismissed && (anchor.contains(document.activeElement) || anchor.matches(":hover"))) {
+      positionTooltip(anchor);
+    }
+  }
+}
+
 function bindTooltip(control, anchor) {
   const show = () => {
     delete anchor.dataset.tooltipDismissed;
     if (anchor.id === "refresh-control") renderRefreshStatus(true);
+    positionTooltip(anchor);
   };
   control.addEventListener("pointerenter", show);
   control.addEventListener("focus", show);
 }
 
 function dismissTooltips() {
-  const anchors = [...tooltipControls.map(([, id]) => $(id)), ...$("groups").querySelectorAll(".tooltip-anchor")];
-  for (const anchor of anchors) anchor.dataset.tooltipDismissed = "true";
+  for (const anchor of tooltipAnchors()) anchor.dataset.tooltipDismissed = "true";
 }
 
 function tickTooltip() {
@@ -619,34 +645,38 @@ function tickTooltip() {
 
 function renderControls() {
   const loading = busy || state?.status === "loading" || marking.size > 0 || batchBusy || batchLocked();
+  const actionsBlocked = loading || Boolean(pendingFilters);
   const waiting = state && Date.now() < state.nextRefreshAt;
   renderRefreshStatus();
   $("more").disabled = loading || state?.needsRefresh || Boolean(state?.error && waiting);
   for (const button of $("groups").querySelectorAll("button")) {
-    if (!button.dataset.disclosure) button.disabled = loading || marking.has(button.dataset.threadId);
+    if (!button.dataset.disclosure) button.disabled = actionsBlocked || marking.has(button.dataset.threadId) ||
+      button.dataset.count === "0";
     if (button.dataset.threadId) {
       button.setAttribute("aria-busy", String(marking.get(button.dataset.threadId) === button.dataset.action));
     }
     if (button.dataset.batchAction) {
-      const batch = batchLocked() && state.batch.scope === button.dataset.batchScope &&
+      const batch = batchLocked() && state.batch.action === button.dataset.batchAction && state.batch.scope === button.dataset.batchScope &&
         (state.batch.scope === "date"
           ? state.batch.date === button.dataset.batchDate && state.batch.timeZone === button.dataset.batchTimeZone
           : state.batch.scope === "shown" || state.batch.repository === button.dataset.repository) ? state.batch : null;
       const progress = batch ? batch.status === "stopping" ? "Stopping..." : `Marking ${batch.succeeded}/${batch.total}...` : null;
       const destination = button.dataset.batchDate ? ` on ${dateLabel(button.dataset.batchDate)}` :
         button.dataset.repository ? ` in ${button.dataset.repository}` : "";
-      button.textContent = progress ?? `Mark ${button.dataset.count} as ${button.dataset.batchAction}`;
+      const label = `Mark ${button.dataset.count} as ${button.dataset.batchAction}`;
+      button.parentNode.querySelectorAll(".tooltip-content")[0].textContent = progress ?? label;
       button.setAttribute("aria-label", progress ? `${progress} as ${batch.action}${destination}` :
-        `Mark ${button.dataset.count} as ${button.dataset.batchAction}${destination}; ${button.dataset.count} shown, loaded notifications`);
+        `${label}${destination}; ${button.dataset.count} shown, loaded notifications`);
       button.setAttribute("aria-busy", String(Boolean(batch)));
     }
   }
   $("search").disabled = batchBusy || batchLocked();
   for (const tab of attentionTabs.values()) tab.disabled = !hasCapability || batchBusy || batchLocked();
   $("batch-stop").disabled = batchBusy || busy || state?.batch?.status === "stopping";
-  $("batch-retry").disabled = batchBusy || busy || (state?.batch?.retryAt ?? 0) > Date.now();
+  $("batch-retry").disabled = batchBusy || busy || Boolean(pendingFilters) || (state?.batch?.retryAt ?? 0) > Date.now();
   $("batch-dismiss").disabled = batchBusy || busy;
   $("groups").setAttribute("aria-busy", String(loading));
+  renderNotificationView();
 }
 
 function displayGroups() {
@@ -655,65 +685,56 @@ function displayGroups() {
   if (groupBy === "repo") {
     return groups.map(group => ({ ...group, key: `repo:${group.repository}`, label: group.repository }));
   }
-  const items = orderedThreads(groups.flatMap(group => group.items));
+  const items = groups.flatMap(group => group.items).sort((a, b) => a.apiPosition - b.apiPosition);
   if (groupBy === "none") return items.length ? [{
-    key: "shown", label: "All notifications", unread: items.length, items, selectionKey: state.selectionKey,
+    key: "shown", label: "All notifications", unread: items.filter(item => item.unread).length, items, selectionKey: state.selectionKey,
   }] : [];
   return groupThreadsByDate(items, Intl.DateTimeFormat().resolvedOptions().timeZone)
     .map(group => ({ ...group, selectionKey: state.selectionKey }));
 }
 
-function createBatchControls({ repository, date, timeZone, selectionKey, count, menuId }) {
+function createBatchControls({ repository, date, timeZone, selectionKey, count, unread, tooltipPrefix }) {
   const scope = date ? "date" : repository ? "repository" : "shown";
   const key = repository ?? (date ? `date:${date}` : "shown");
   const name = repository ?? (date ? dateLabel(date) : "shown notifications");
   const destination = date ? ` on ${name}` : repository ? ` in ${repository}` : "";
   const target = date ? { scope: "date", date, timeZone } : repository ? { repository } : { scope: "shown" };
   const controls = element("div", "repo-actions");
-  controls.addEventListener("mousedown", event => {
-    // Do not let WebKit focus the surrounding tabpanel and dismiss an open menu before click.
-    if (event.button === 0 && batchMenu?.container === controls) event.preventDefault();
-  });
-  const read = element("button", "repo-read", `Mark ${count} as read`);
-  const more = element("button", "icon-button repo-more");
-  more.type = "button";
-  more.dataset.focusKey = `bulk-menu:${key}`;
-  more.setAttribute("aria-label", `More actions for ${name}`);
-  more.setAttribute("aria-expanded", "false");
-  more.append(actionIcon("more"));
-  const menu = element("div", "repo-menu");
-  menu.id = menuId;
-  menu.hidden = true;
-  menu.setAttribute("role", "group");
-  menu.setAttribute("aria-label", `Actions for ${name}`);
-  more.setAttribute("aria-controls", menu.id);
-  const done = element("button", "repo-done", `Mark ${count} as done`);
+  const read = element("button", "icon-button repo-read");
+  const done = element("button", "icon-button repo-done");
   read.dataset.focusKey = `bulk:${key}`;
   done.dataset.focusKey = `bulk-done:${key}`;
   for (const [button, action] of [[read, "read"], [done, "done"]]) {
+    const selected = action === "read" ? unread : count;
+    const anchor = element("div", "tooltip-anchor");
+    const tooltip = element("span", "tooltip");
+    tooltip.id = `${tooltipPrefix}-${action}-tooltip`;
+    tooltip.setAttribute("role", "tooltip");
+    tooltip.append(element("span", "tooltip-content", `Mark ${selected} as ${action}`));
     button.type = "button";
     if (repository) button.dataset.repository = repository;
     if (date) {
       button.dataset.batchDate = date;
       button.dataset.batchTimeZone = timeZone;
     }
-    button.dataset.count = String(count);
+    button.dataset.count = String(selected);
     button.dataset.batchScope = scope;
     button.dataset.batchAction = action;
-    button.setAttribute("aria-label", `Mark ${count} as ${action}${destination}; ${count} shown, loaded notifications`);
-    button.disabled = busy || marking.size > 0 || batchBusy || batchLocked();
+    button.setAttribute("aria-label", `Mark ${selected} as ${action}${destination}; ${selected} shown, loaded notifications`);
+    button.setAttribute("aria-describedby", tooltip.id);
+    button.disabled = !selected || busy || marking.size > 0 || batchBusy || batchLocked() || Boolean(pendingFilters);
+    button.append(actionIcon(action));
+    bindTooltip(button, anchor);
     button.addEventListener("click", () => {
-      if (busy || batchBusy || batchLocked() || marking.size || (action === "done" && menu.hidden)) return;
+      if (!selected || busy || batchBusy || batchLocked() || marking.size || pendingFilters) return;
       // WebKit pointer clicks can blur the button before this handler.
       button.focus();
-      batchFocusKey = read.dataset.focusKey;
+      batchFocusKey = button.dataset.focusKey;
       return batchRequest("start", { ...target, selectionKey, action });
     });
+    anchor.append(button, tooltip);
+    controls.append(anchor);
   }
-  more.disabled = read.disabled;
-  more.addEventListener("click", () => toggleBatchMenu(controls, more, menu, done));
-  menu.append(done);
-  controls.append(read, more, menu);
   return controls;
 }
 
@@ -725,9 +746,7 @@ function renderGroups(groups, fallbackFocusKey) {
   if (key === listKey) return;
   listKey = key;
   const previousFocus = document.activeElement;
-  const ownMenu = batchMenu && $("groups").contains(batchMenu.container);
-  const focused = ownMenu && batchMenu.panel.contains(previousFocus) ? batchMenu.trigger.dataset.focusKey : previousFocus?.dataset.focusKey;
-  if (ownMenu) closeBatchMenu();
+  const focused = previousFocus?.dataset.focusKey;
   const fragment = document.createDocumentFragment();
   for (const [index, group] of groups.entries()) {
     const rows = element("div", "repo-items");
@@ -742,7 +761,7 @@ function renderGroups(groups, fallbackFocusKey) {
     disclosure.setAttribute("aria-controls", rows.id);
     disclosure.setAttribute("aria-expanded", String(!rows.hidden));
     disclosure.append(element("span", "repo-name", group.label),
-      element("span", "repo-count", `${group.unread} unread`));
+      element("span", "repo-count", `${group.items.length} total \u00b7 ${group.unread} unread`));
     disclosure.addEventListener("click", () => {
       rows.hidden = !rows.hidden;
       if (rows.hidden) collapsed.add(group.key);
@@ -752,22 +771,26 @@ function renderGroups(groups, fallbackFocusKey) {
     });
     header.append(disclosure, createBatchControls({
       repository: group.repository, date: group.date, timeZone: group.timeZone,
-      selectionKey: group.selectionKey, count: group.items.length, menuId: `repo-menu-${index}`,
+      selectionKey: group.selectionKey, count: group.items.length, unread: group.unread, tooltipPrefix: `group-${index}`,
     }));
     section.append(header, rows);
     fragment.append(section);
     for (const item of group.items) {
-      const row = element("article", "row unread");
+      const row = element("article", `row ${item.unread ? "unread" : "read"}`);
       const dot = element("span", "dot");
       dot.setAttribute("aria-hidden", "true");
       const content = element("div", "row-content");
-      const link = element("a", "title", item.title || "(Untitled notification)");
+      const title = element("span", "title", item.title || "(Untitled notification)");
+      const link = element("a", "row-link");
       link.href = item.url;
       link.target = "_blank";
       link.rel = "noopener noreferrer";
       link.title = item.label;
+      // WebKit's default Tab navigation can skip links without an explicit tab stop.
+      link.tabIndex = 0;
       link.dataset.focusKey = `thread:${item.id}`;
-      content.append(link);
+      content.append(title);
+      content.append(element("span", "sr-only", item.unread ? "Unread" : "Read"));
       const metadata = element("div", "metadata");
       const type = item.type.replace(/([a-z])([A-Z])/g, "$1 $2");
       const time = element("time", "", relativeTime(item.updatedAt));
@@ -793,7 +816,7 @@ function renderGroups(groups, fallbackFocusKey) {
       }
       content.append(metadata);
       const actions = element("div", "row-actions");
-      for (const action of ["read", "done"]) {
+      for (const action of item.unread ? ["read", "done"] : ["done"]) {
         const anchor = element("div", "tooltip-anchor");
         const button = element("button", `icon-button mark-${action}`);
         const tooltip = element("span", "tooltip");
@@ -804,7 +827,7 @@ function renderGroups(groups, fallbackFocusKey) {
         button.dataset.focusKey = `${action}:${item.id}`;
         button.dataset.threadId = item.id;
         button.dataset.action = action;
-        button.disabled = busy || marking.has(item.id) || batchBusy || batchLocked();
+        button.disabled = busy || marking.has(item.id) || batchBusy || batchLocked() || Boolean(pendingFilters);
         button.setAttribute("aria-label", `Mark as ${action}: ${notificationTitle(item, "Untitled notification")}`);
         button.setAttribute("aria-describedby", tooltip.id);
         button.setAttribute("aria-busy", String(marking.get(item.id) === action));
@@ -814,7 +837,8 @@ function renderGroups(groups, fallbackFocusKey) {
         anchor.append(button, tooltip);
         actions.append(anchor);
       }
-      row.append(dot, content, actions);
+      link.append(dot, content);
+      row.append(link, actions);
       rows.append(row);
     }
   }
@@ -861,7 +885,10 @@ function render(fallbackFocusKey) {
   }
   renderAttentionOverflow();
   if (focusedTab && tabsChanged) revealAttentionTab(focusedTab);
-  $("attention-panel").setAttribute("aria-labelledby", `attention-${attention}`);
+  const panel = $("attention-panel");
+  const movePanelFocus = panel.tabIndex === 0 && document.activeElement === panel;
+  panel.setAttribute("aria-labelledby", `attention-${attention}`);
+  panel.tabIndex = state?.groups.length ? -1 : 0;
   $("empty-symbol").hidden = caughtUp;
   $("count").hidden = caughtUp;
   $("notice").hidden = !error;
@@ -874,17 +901,20 @@ function render(fallbackFocusKey) {
     return;
   }
   if (document.activeElement !== $("search") && pendingFilters?.query === undefined) $("search").value = state.filters.query;
-  $("count").textContent = `${state.unread} unread${filtered ? ` \u00b7 ${state.matching} matching` : ""}`;
+  $("count").textContent = `${state.loaded} total \u00b7 ${state.unread} unread${filtered ? ` \u00b7 ${state.matching} matching` : ""}`;
   $("more").hidden = !state.hasMore;
   $("more").textContent = "Load more (up to 50)";
   $("more").title = state.needsRefresh ? "Refresh notifications before loading more." : "";
   const groupBy = preferences?.groupBy ?? "repo";
   $("groups").setAttribute("aria-label", groupBy === "repo" ? "Notifications by repository" :
-    groupBy === "date" ? "Notifications by date" : "Notifications, newest first");
+    groupBy === "date" ? "Notifications by date" : "Notifications in GitHub order");
   $("subtitle").textContent = groupBy === "repo" ? "A little less noise. One repository at a time." :
-    groupBy === "date" ? "A little less noise. One day at a time." : "A little less noise. Newest notifications first.";
+    groupBy === "date" ? "A little less noise. One day at a time." : "A little less noise. Your GitHub inbox order.";
   renderGroups(displayGroups(), fallbackFocusKey);
   renderControls();
+  if (state.groups.length && movePanelFocus) {
+    restoreFocus(panel, $("groups").querySelectorAll(".repo-toggle")[0]);
+  }
   for (const time of document.querySelectorAll("time")) time.textContent = relativeTime(time.dateTime);
   $("empty").hidden = Boolean(state.groups.length);
   $("empty-title").textContent = error ? "Your inbox is unavailable" :
@@ -897,12 +927,13 @@ function render(fallbackFocusKey) {
     loading ? "Using your existing GitHub CLI sign-in." :
     attention !== "all" ? `Try another attention filter or search.${moreHelp}` :
     state.filters.query ? `Try another title, number or repository.${moreHelp}` :
-    cleared ? state.needsRefresh ? "Refresh to check for remaining unread notifications." : "Load more to continue through your unread notifications." :
+    cleared ? state.needsRefresh ? "Refresh to check for remaining notifications." : "Load more to continue through your notifications." :
     groupBy === "repo" ? "New notifications will appear here, grouped by repository." :
     groupBy === "date" ? "New notifications will appear here, grouped by date." :
-    "New notifications will appear here, newest first.";
+    "New notifications will appear here in GitHub inbox order.";
   $("empty-refresh").hidden = !cleared || !state.needsRefresh || Boolean(error) || loading;
   renderBatch();
+  positionSettings();
 }
 
 function revealAttentionTab(tab) {
@@ -984,7 +1015,13 @@ for (const [id, action] of [["batch-stop", "cancel"],
 $("settings").addEventListener("toggle", () => {
   const open = $("settings").open;
   $("settings-toggle").setAttribute("aria-expanded", String(open));
-  if (open) void settingsRequest();
+  if (open) {
+    positionSettings();
+    void settingsRequest();
+  }
+});
+$("settings-toggle").addEventListener("click", () => {
+  $("settings-toggle").dataset.tooltipDismissed = "true";
 });
 $("development-api").addEventListener("change", renderSettings);
 $("development-api-save").addEventListener("click", () => {
@@ -995,6 +1032,12 @@ $("development-api-save").addEventListener("click", () => {
 });
 $("auto-open").addEventListener("click", () => {
   if (preferences) void settingsRequest({ autoOpen: !preferences.autoOpen });
+});
+$("show-notifications").addEventListener("change", () => {
+  if (preferences && !$("show-notifications").disabled) {
+    const views = { all: true, unread: false };
+    void settingsRequest({ matchGitHubInbox: views[$("show-notifications").value] });
+  }
 });
 $("desktop-notifications").addEventListener("click", () => {
   if (preferences && !$("desktop-notifications").disabled) {
@@ -1020,11 +1063,9 @@ $("group-by").addEventListener("change", () => {
 });
 document.addEventListener("click", event => {
   if ($("settings").open && !$("settings").contains(event.target)) closeSettings();
-  if (batchMenu && !batchMenu.container.contains(event.target)) closeBatchMenu();
 });
 document.addEventListener("focusin", event => {
   if ($("settings").open && !$("settings").contains(event.target)) closeSettings();
-  if (batchMenu && !batchMenu.container.contains(event.target)) closeBatchMenu();
 });
 document.addEventListener("keydown", event => {
   if (event.key !== "Escape") return;
@@ -1032,17 +1073,14 @@ document.addEventListener("keydown", event => {
     event.preventDefault();
     closeSettings(true);
   }
-  if (batchMenu) {
-    event.preventDefault();
-    closeBatchMenu(true);
-  }
   dismissTooltips();
 });
 $("open-inbox").addEventListener("click", dismissTooltips);
 window.addEventListener("blur", () => {
-  closeBatchMenu();
   dismissTooltips();
 });
+window.addEventListener("scroll", positionOverlays, { passive: true });
+window.addEventListener("resize", positionOverlays);
 $("more").addEventListener("click", () => update("more", {}));
 function requestRefresh() {
   if (!visible() || requestsPaused()) return;
@@ -1056,6 +1094,7 @@ for (const [control, anchor] of tooltipControls) {
 }
 $("search").addEventListener("input", () => {
   pendingFilters = { ...pendingFilters, query: $("search").value };
+  renderControls();
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => {
     void flushPendingUpdates();
@@ -1084,7 +1123,6 @@ function visibilityChanged() {
     void settingsRequest();
   } else {
     copyAttempt++;
-    closeBatchMenu();
     dismissTooltips();
     for (const controller of requestControllers) controller.abort();
     closeSettings();
@@ -1097,17 +1135,21 @@ const observer = new IntersectionObserver(entries => {
 });
 observer.observe(document.documentElement);
 const themeObserver = new MutationObserver(renderTheme);
-themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-color-mode"] });
-themeObserver.observe(document.body, { attributes: true, attributeFilter: ["data-color-mode"] });
-const attentionObserver = new ResizeObserver(renderAttentionOverflow);
-attentionObserver.observe($("attention-navigation"));
-for (const tab of attentionTabs.values()) attentionObserver.observe(tab);
+themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: themeAttributes });
+themeObserver.observe(document.body, { attributes: true, attributeFilter: themeAttributes });
+const layoutObserver = new ResizeObserver(() => {
+  renderAttentionOverflow();
+  positionOverlays();
+});
+layoutObserver.observe($("attention-navigation"));
+for (const tab of attentionTabs.values()) layoutObserver.observe(tab);
+layoutObserver.observe($("inbox-header"));
+layoutObserver.observe($("settings-panel"));
 systemTheme.addEventListener("change", renderTheme);
 renderTheme();
 window.addEventListener("pagehide", () => {
   stopped = true;
   copyAttempt++;
-  closeBatchMenu();
   dismissTooltips();
   clearTimeout(timer);
   clearTimeout(tooltipTimer);
@@ -1116,8 +1158,10 @@ window.addEventListener("pagehide", () => {
   for (const controller of requestControllers) controller.abort();
   observer.disconnect();
   themeObserver.disconnect();
-  attentionObserver.disconnect();
+  layoutObserver.disconnect();
   $("attention-tabs").removeEventListener("scroll", renderAttentionOverflow);
+  window.removeEventListener("scroll", positionOverlays);
+  window.removeEventListener("resize", positionOverlays);
   systemTheme.removeEventListener("change", renderTheme);
 });
 if (hasCapability) {

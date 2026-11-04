@@ -131,7 +131,7 @@ test("the published archive installs and upgrades a self-contained provider with
   // Model an already-running previous packaged release, not the unsupported legacy layout.
   const text = bundle.content.toString("utf8");
   const code = text.slice(text.indexOf("\n") + 1)
-    .replaceAll("Unread Notifications", "Previous Notifications")
+    .replaceAll("GitHub Notifications", "Previous Notifications")
     .replaceAll(JSON.stringify(CURRENT_VERSION), '"0.0.0"');
   assert.notEqual(code, text.slice(text.indexOf("\n") + 1));
   await writeFile(entry, encodeBundle(code, "0.0.0"));
@@ -209,7 +209,7 @@ try {
   assert.equal(current.id, "github-notifications");
   await rm(join(root, "package"), { recursive: true });
   const after = await open(current, "after");
-  assert.match(after.assets["index.html"], /<title>Unread Notifications<\\/title>/);
+  assert.match(after.assets["index.html"], /<title>GitHub Notifications<\\/title>/);
   assert.deepEqual((await open(old, "old-opened-after-upgrade")).assets, before.assets);
   assert.equal(await (await fetch(new URL("/", before.url))).text(), before.assets["index.html"]);
   const state = await current.actions.find(action => action.name === "check_for_updates").handler({ instanceId: "after" });

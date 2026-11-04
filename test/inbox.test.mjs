@@ -1,8 +1,66 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { GitHubClient, POLL_MS } from "../src/github.mjs";
+import { firstPage, GitHubClient, POLL_MS } from "../src/github.mjs";
 import { Inbox } from "../src/inbox.mjs";
-import { http, next, thread } from "./fixtures.mjs";
+import { http, inboxNext as next, thread } from "./fixtures.mjs";
+
+test("regrouping restores API positions across repositories without exposing positions in summaries", async t => {
+  const inbox = new Inbox(new GitHubClient({ run: async () => http([
+    thread("9", { updated_at: "2026-01-12T10:00:00Z" }),
+    thread("2", { repository: { full_name: "example/other" }, updated_at: "2026-01-12T14:00:00Z" }),
+    thread("1", { updated_at: "2026-01-12T18:00:00Z" }),
+  ]) }));
+  t.after(() => inbox.close());
+  await inbox.refresh();
+  assert.deepEqual(inbox.groups().flatMap(group => group.items.map(item => item.apiPosition)), [0, 2, 1]);
+  assert.deepEqual(inbox.shownSelection().items.map(item => item.id), ["9", "2", "1"]);
+  assert.deepEqual(inbox.dateSelection("2026-01-12", "UTC").items.map(item => item.id), ["9", "2", "1"]);
+  assert.doesNotMatch(JSON.stringify(inbox.summary()), /apiPosition|example\/|Synthetic notification/);
+});
+
+test("repository order follows the loaded API sequence in both inbox and unread-only views", async t => {
+  const rows = [
+    thread("1", { repository: { full_name: "example/zulu" }, unread: false, updated_at: "2026-01-30T00:00:00Z" }),
+    thread("2", { repository: { full_name: "example/alpha" }, updated_at: "2026-01-20T00:00:00Z" }),
+    thread("3", { repository: { full_name: "example/zulu" }, updated_at: "2026-01-10T00:00:00Z" }),
+  ];
+  for (const matchGitHubInbox of [true, false]) {
+    const inbox = new Inbox(new GitHubClient({ run: async args =>
+      http(args.at(-1).includes("all=false") ? rows.filter(row => row.unread) : rows) }));
+    t.after(() => inbox.close());
+    inbox.setMatchGitHubInbox(matchGitHubInbox);
+    await inbox.refresh();
+    assert.deepEqual(inbox.groups().map(group => group.repository), matchGitHubInbox
+      ? ["example/zulu", "example/alpha"] : ["example/alpha", "example/zulu"]);
+  }
+});
+
+test("pagination and refresh preserve API rank even when update timestamps and duplicate pages disagree", async t => {
+  for (const matchGitHubInbox of [true, false]) {
+    const inbox = new Inbox(new GitHubClient({ run: async args => {
+      const url = new URL(args.at(-1), "https://api.github.com");
+      if (url.searchParams.get("page") === "2") return http([
+        thread("9", { repository: { full_name: "example/zulu" }, updated_at: "2026-01-20T00:00:00Z" }),
+        thread("1", { repository: { full_name: "example/beta" }, updated_at: "2026-01-30T00:00:00Z" }),
+      ]);
+      url.searchParams.set("page", "2");
+      return http([
+        thread("9", { repository: { full_name: "example/zulu" }, updated_at: "2026-01-10T00:00:00Z" }),
+        thread("2", { repository: { full_name: "example/alpha" }, updated_at: "2026-01-30T00:00:00Z" }),
+      ], { link: `<${url.href}>; rel="next"` });
+    } }));
+    t.after(() => inbox.close());
+    inbox.setMatchGitHubInbox(matchGitHubInbox);
+    await inbox.refresh();
+    await inbox.more();
+    for (const force of [false, true]) {
+      await inbox.refresh({ force });
+      assert.deepEqual(inbox.loadedItems().map(item => item.id), ["9", "2", "1"]);
+      assert.deepEqual(inbox.groups().map(group => group.repository), ["example/zulu", "example/alpha", "example/beta"]);
+      assert.equal(inbox.loadedItems()[0].updatedAt, "2026-01-20T00:00:00.000Z");
+    }
+  }
+});
 
 test("load-more preserves visible coverage, deduplicates boundary shifts, and refresh reconciles loaded pages", async () => {
   let now = 0;
@@ -29,7 +87,63 @@ test("load-more preserves visible coverage, deduplicates boundary shifts, and re
   assert.equal(inbox.summary().status, "ready");
 });
 
-test("search is local, read items are excluded, and summaries never contain personal content", async () => {
+test("overlapping pages keep first API positions but take duplicate state from the newest response", async t => {
+  for (const freshPage of [1, 2]) {
+    for (const unread of [false, true]) {
+      let fresh = false;
+      const writes = [];
+      const client = new GitHubClient({ now: () => 1_000_000, run: async args => {
+        if (args.includes("PATCH") || args.includes("DELETE")) {
+          writes.push(args.at(-1));
+          return `HTTP/2 ${args.includes("PATCH") ? 205 : 204} Synthetic\r\n\r\n`;
+        }
+        const page = Number(new URL(args.at(-1), "https://api.github.com").searchParams.get("page"));
+        const duplicate = thread("9", {
+          unread: fresh ? unread : !unread,
+          subject: { title: fresh ? "Current duplicate" : "Older duplicate", type: "Issue", url: null },
+        });
+        return page === 1 ? http([duplicate, thread("2"), thread("1")], { link: next })
+          : http([duplicate, thread("3")]);
+      } });
+      const inbox = new Inbox(client);
+      t.after(() => inbox.close());
+      const first = firstPage({ mode: "inbox" });
+      await client.page(freshPage === 1 ? first.replace("page=1", "page=2") : first);
+      fresh = true;
+      await inbox.refresh();
+      await inbox.more();
+      assert.equal(inbox.pages[freshPage - 1].sequence, 2);
+      assert.deepEqual(inbox.loadedItems().map(item => item.id), ["9", "2", "1", "3"]);
+      const duplicate = inbox.loadedItems()[0];
+      assert.equal(duplicate.title, "Current duplicate");
+      assert.equal(duplicate.unread, unread);
+      assert.equal(Object.hasOwn(duplicate, "sequence"), false);
+      assert.equal(inbox.summary().unread, 3 + Number(unread));
+      await inbox.setFilters({ query: "Current duplicate" });
+      assert.equal(inbox.snapshot().matching, 1);
+      inbox.batch.start({ scope: "shown", selectionKey: inbox.snapshot().selectionKey, action: unread ? "read" : "done" });
+      await inbox.batch.done;
+      assert.equal(inbox.batch.snapshot(), null);
+      assert.deepEqual(writes, ["/notifications/threads/9"]);
+    }
+  }
+});
+
+test("duplicates within one response still use the newest notification timestamp", async t => {
+  const inbox = new Inbox(new GitHubClient({ run: async () => http([
+    thread("9", { updated_at: "2026-01-10T12:00:00Z", unread: true }),
+    thread("2"),
+    thread("9", { updated_at: "2026-01-10T13:00:00Z", unread: false }),
+    thread("9", { updated_at: "2026-01-10T12:30:00Z", unread: true }),
+  ]) }));
+  t.after(() => inbox.close());
+  await inbox.refresh();
+  assert.deepEqual(inbox.loadedItems().map(item => item.id), ["9", "2"]);
+  assert.equal(inbox.loadedItems()[0], inbox.pages[0].items[2]);
+  assert.equal(inbox.summary().unread, 1);
+});
+
+test("search is local, unread mode excludes read items, and summaries never contain personal content", async () => {
   let calls = 0;
   const client = new GitHubClient({ run: async () => {
     calls++;
@@ -37,11 +151,13 @@ test("search is local, read items are excluded, and summaries never contain pers
   } });
   const inbox = new Inbox(client);
   await inbox.refresh();
+  assert.equal(inbox.summary().loaded, 2);
+  assert.equal(inbox.summary().unread, 1);
   await inbox.setFilters({ query: "widgets" });
   assert.equal(calls, 1);
   assert.equal(inbox.summary().searchActive, true);
   await inbox.setFilters({ mode: "unread" });
-  assert.equal(calls, 1);
+  assert.equal(calls, 2);
   assert.equal(inbox.summary().loaded, 1);
   assert.equal(inbox.summary().unread, 1);
   const summary = JSON.stringify(inbox.summary());
@@ -92,7 +208,7 @@ test("attention is panel-local, survives pagination and refresh, and returns onl
   assert.equal(filtered.loaded, 2);
   assert.equal(filtered.matching, 1);
   assert.equal(filtered.attention, "review_requested");
-  assert.deepEqual(filtered.attentionCounts, { all: 2, review_requested: 1, mentioned: 1, assigned: 0, participating: 0 });
+  assert.deepEqual(filtered.attentionCounts, { all: 2, review_requested: 1, mentioned: 1, team_mentioned: 0, assigned: 0, participating: 2 });
   assert.doesNotMatch(JSON.stringify(filtered), /Synthetic|example\/|selectionKey|"groups"|"filters"/);
   assert.equal(other.filters.attention, "all");
   await inbox.more();
@@ -103,15 +219,15 @@ test("attention is panel-local, survives pagination and refresh, and returns onl
   await inbox.refresh({ force: true });
   assert.equal(inbox.summary().matching, 1);
   assert.equal(inbox.summary().loaded, 3);
-  assert.deepEqual(inbox.summary().attentionCounts, { all: 3, review_requested: 2, mentioned: 1, assigned: 0, participating: 0 });
-  assert.deepEqual(inbox.filters, { mode: "unread", query: "notification 3", attention: "review_requested" });
+  assert.deepEqual(inbox.summary().attentionCounts, { all: 3, review_requested: 2, mentioned: 1, team_mentioned: 0, assigned: 0, participating: 3 });
+  assert.deepEqual(inbox.filters, { mode: "inbox", query: "notification 3", attention: "review_requested" });
   await assert.rejects(inbox.setFilters({ attention: "bad" }), { code: "invalid_filters" });
   assert.equal(inbox.filters.attention, "review_requested");
   await inbox.setFilters({ attention: "all" });
   assert.equal(inbox.filters.query, "notification 3");
   await inbox.setFilters({ query: "no matching title" });
   assert.equal(inbox.summary().matching, 0);
-  assert.deepEqual(inbox.summary().attentionCounts, { all: 3, review_requested: 2, mentioned: 1, assigned: 0, participating: 0 });
+  assert.deepEqual(inbox.summary().attentionCounts, { all: 3, review_requested: 2, mentioned: 1, team_mentioned: 0, assigned: 0, participating: 3 });
   const prefiltered = new Inbox(client, { attention: "mentioned" });
   t.after(() => prefiltered.close());
   await prefiltered.refresh();
@@ -130,11 +246,12 @@ test("tab counts follow cross-panel reads and retain loaded data after a failed 
   await inbox.refresh();
   await other.refresh();
   await other.markRead({ id: "1" });
-  assert.deepEqual(inbox.snapshot().attentionCounts, { all: 1, review_requested: 0, mentioned: 0, assigned: 1, participating: 0 });
+  assert.deepEqual(inbox.snapshot().attentionCounts, { all: 2, review_requested: 0, mentioned: 1, team_mentioned: 0, assigned: 1, participating: 2 });
+  assert.equal(inbox.summary().unread, 1);
   fail = true;
   await assert.rejects(inbox.refresh({ force: true }), { code: "github_http" });
   assert.equal(inbox.summary().status, "stale");
-  assert.deepEqual(inbox.snapshot().attentionCounts, { all: 1, review_requested: 0, mentioned: 0, assigned: 1, participating: 0 });
+  assert.deepEqual(inbox.snapshot().attentionCounts, { all: 2, review_requested: 0, mentioned: 1, team_mentioned: 0, assigned: 1, participating: 2 });
 });
 
 test("forced refresh rechecks every loaded page before the next poll without losing search", async () => {

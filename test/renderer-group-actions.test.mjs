@@ -2,17 +2,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { runInContext } from "node:vm";
 import { http, thread } from "./fixtures.mjs";
-import { renderer, settle } from "./renderer-fixtures.mjs";
+import { groupActionText, renderer, settle } from "./renderer-fixtures.mjs";
 
 function controls(ui, repository = "example/widgets") {
   const buttons = ui.ids.get("groups").querySelectorAll("button");
   const read = buttons.find(node => node.dataset.focusKey === `bulk:${repository}`);
-  const trigger = buttons.find(node => node.dataset.focusKey === `bulk-menu:${repository}`);
   const done = buttons.find(node => node.dataset.focusKey === `bulk-done:${repository}`);
-  return { read, trigger, done, panel: done.parentNode };
+  return { read, done };
 }
 
-test("the split control opens Done without writing and starts only the counted search selection", async t => {
+test("direct Done starts only the counted search selection and disables both actions while running", async t => {
   let release;
   const ui = await renderer({ initialRows: [thread("1"), thread("10"), thread("2")],
     onWrite: (_path, count, method) => {
@@ -23,27 +22,24 @@ test("the split control opens Done without writing and starts only the counted s
   });
   t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
   await runInContext('update("filters", { query: "notification 1" })', ui.context);
-  const { read, trigger, done, panel } = controls(ui);
-  assert.equal(read.textContent, "Mark 2 as read");
-  assert.equal(done.textContent, "Mark 2 as done");
-  assert.equal(panel.hidden, true);
-  await done.events.click();
-  assert.deepEqual(ui.deletions, []);
-  trigger.events.click();
-  assert.equal(panel.hidden, false);
-  assert.equal(trigger.attributes["aria-expanded"], "true");
-  assert.equal(ui.document.activeElement, done);
+  const { read, done } = controls(ui);
+  assert.equal(groupActionText(read), "Mark 2 as read");
+  assert.equal(groupActionText(done), "Mark 2 as done");
+  assert.deepEqual(read.parentNode.parentNode.children.map(anchor => anchor.children[0]), [read, done]);
+  assert.equal(read.textContent, "");
+  assert.equal(done.textContent, "");
   assert.deepEqual(ui.deletions, []);
   ui.document.activeElement = ui.document.body;
+  const started = done.events.click();
   await done.events.click();
+  await started;
   await settle();
-  assert.equal(panel.hidden, true);
-  assert.equal(trigger.attributes["aria-expanded"], "false");
   assert.equal(ui.inbox.batch.snapshot().action, "done");
   assert.equal(ui.inbox.batch.snapshot().total, 2);
   assert.equal(ui.document.activeElement, ui.ids.get("batch-stop"));
   assert.match(ui.ids.get("batch-title").textContent, /Marking as done/);
-  assert.equal(trigger.disabled, true);
+  assert.equal(read.disabled, true);
+  assert.equal(done.disabled, true);
   assert.deepEqual(ui.deletions, ["/notifications/threads/1"]);
   assert.deepEqual(ui.patches, []);
   release();
@@ -55,88 +51,57 @@ test("the split control opens Done without writing and starts only the counted s
   assert.equal(ui.document.activeElement, ui.ids.get("search"));
 });
 
-test("repository dropdowns dismiss on Escape, focus leaving, outside clicks and window blur", async t => {
+test("focus, Escape and blur never start either group action", async t => {
   const ui = await renderer({ initialRows: [thread("1"), thread("2"),
     thread("3", { repository: { full_name: "example/other" } }), thread("4", { repository: { full_name: "example/other" } })] });
   t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
-  const { trigger, done, panel } = controls(ui);
-  for (const dismiss of [
+  const { read, done } = controls(ui);
+  for (const leave of [
     () => ui.document.events.keydown({ key: "Escape", preventDefault() {} }),
     () => ui.document.events.click({ target: ui.ids.get("search") }),
     () => ui.document.events.focusin({ target: ui.ids.get("search") }),
     () => ui.window.events.blur(),
-    () => trigger.events.click(),
   ]) {
-    trigger.events.click();
-    assert.equal(panel.hidden, false);
-    assert.equal(ui.document.activeElement, done);
-    dismiss();
-    assert.equal(panel.hidden, true);
-    assert.equal(trigger.attributes["aria-expanded"], "false");
+    read.focus();
+    done.focus();
+    leave();
+    assert.equal(done.disabled, false);
   }
-  trigger.events.click();
-  ui.document.events.keydown({ key: "Escape", preventDefault() {} });
-  assert.equal(ui.document.activeElement, trigger);
-  trigger.events.click();
-  controls(ui, "example/other").trigger.events.click();
-  assert.equal(panel.hidden, true);
-  assert.equal(controls(ui, "example/other").panel.hidden, false);
+  assert.equal(ui.ids.get("groups").querySelectorAll(".repo-menu").length, 0);
+  assert.equal(ui.ids.get("groups").querySelectorAll(".repo-more").length, 0);
   assert.deepEqual(ui.patches, []);
   assert.deepEqual(ui.deletions, []);
 });
 
-test("an open split control retains focus on primary pointer presses instead of focusing its tabpanel", async t => {
+test("unchanged and changed polls preserve focus on the same explicit action", async t => {
   const ui = await renderer({ initialRows: [thread("1"), thread("2")] });
   t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
-  const { read, trigger, panel } = controls(ui);
-  const press = button => {
-    let prevented = false;
-    read.parentNode.events.mousedown({ button, preventDefault: () => { prevented = true; } });
-    return prevented;
-  };
-  assert.equal(press(0), false);
-  trigger.events.click();
-  assert.equal(panel.hidden, false);
-  assert.equal(press(0), true);
-  assert.equal(press(2), false);
-  assert.deepEqual(ui.deletions, []);
-  assert.deepEqual(ui.patches, []);
-});
-
-test("unchanged polls preserve a dropdown, but changed groups close it and focus the updated trigger", async t => {
-  const ui = await renderer({ initialRows: [thread("1"), thread("2")] });
-  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
-  const { trigger, panel, done } = controls(ui);
-  trigger.events.click();
+  const { done } = controls(ui);
+  done.focus();
   await runInContext("update()", ui.context);
-  assert.equal(panel.hidden, false);
   assert.equal(ui.document.activeElement, done);
   ui.inbox.pages[0].items[0].title = "Changed while choosing an action";
   await runInContext("update()", ui.context);
   const updated = controls(ui);
-  assert.equal(updated.panel.hidden, true);
-  assert.equal(ui.document.activeElement, updated.trigger);
-  await done.events.click();
+  assert.equal(ui.document.activeElement, updated.done);
   assert.deepEqual(ui.deletions, []);
-  updated.trigger.events.click();
   ui.intersect(false);
-  assert.equal(updated.panel.hidden, true);
+  await updated.done.events.click();
+  assert.deepEqual(ui.deletions, []);
 });
 
 test("a stale Done selection refreshes the count without widening or writing the selection", async t => {
   const ui = await renderer({ initialRows: [thread("1"), thread("2")] });
   t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
-  const { trigger, done } = controls(ui);
-  trigger.events.click();
+  const { done } = controls(ui);
   ui.inbox.pages[0].items.push({ ...ui.inbox.pages[0].items[0], id: "3" });
   await done.events.click();
   assert.deepEqual(ui.deletions, []);
   assert.match(ui.ids.get("notice").textContent, /shown selection changed/);
   const updated = controls(ui);
-  assert.equal(updated.read.textContent, "Mark 3 as read");
-  assert.equal(updated.done.textContent, "Mark 3 as done");
-  assert.equal(updated.panel.hidden, true);
-  assert.equal(ui.document.activeElement, updated.read);
+  assert.equal(groupActionText(updated.read), "Mark 3 as read");
+  assert.equal(groupActionText(updated.done), "Mark 3 as done");
+  assert.equal(ui.document.activeElement, updated.done);
 });
 
 test("failed Done batches show their action and retry as Done without changing the primary read action", async t => {
@@ -145,12 +110,11 @@ test("failed Done batches show their action and retry as Done without changing t
     return count === 1 ? http({}, {}, 500) : "HTTP/2 204 No Content\r\n\r\n";
   } });
   t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
-  controls(ui).trigger.events.click();
   await controls(ui).done.events.click();
   await ui.inbox.batch.done;
   await runInContext("update()", ui.context);
   assert.match(ui.ids.get("batch-title").textContent, /remain to mark as done/);
-  assert.equal(controls(ui).read.textContent, "Mark 2 as read");
+  assert.equal(groupActionText(controls(ui).read), "Mark 2 as read");
   assert.equal(ui.ids.get("batch-retry").disabled, true);
   ui.advance();
   await runInContext("update()", ui.context);
@@ -180,4 +144,31 @@ test("metadata omits the redundant unread label and uses decorative middle-dot s
       assert.equal(separator.parentNode.children.at(-1), separator);
     }
   }
+});
+
+test("batch retry waits for pending search without expanding its original scope", async t => {
+  const ui = await renderer({ initialRows: [thread("1"), thread("2")],
+    onWrite: (_path, count) => count === 1 ? http({}, {}, 500) : "HTTP/2 204 No Content\r\n\r\n",
+  });
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  await controls(ui).done.events.click();
+  await ui.inbox.batch.done;
+  ui.advance();
+  await runInContext("update()", ui.context);
+  const retry = ui.ids.get("batch-retry");
+  assert.equal(retry.disabled, false);
+  const search = ui.ids.get("search");
+  search.value = "notification 2";
+  search.events.input();
+  assert.equal(retry.disabled, true);
+  await runInContext("render()", ui.context);
+  assert.equal(retry.disabled, true);
+  await retry.events.click();
+  assert.deepEqual(ui.deletions, ["/notifications/threads/1"]);
+  await ui.fireTimer(250);
+  assert.equal(retry.disabled, false);
+  await retry.events.click();
+  await ui.inbox.batch.done;
+  assert.deepEqual(ui.deletions, ["/notifications/threads/1", "/notifications/threads/2"]);
+  assert.deepEqual(ui.patches, []);
 });

@@ -31,7 +31,7 @@ test("a delayed refresh survives hiding and showing the document without losing 
     held.release();
     await page.evaluate(() => { document.documentElement.style.display = ""; });
     await expect(page.getByRole("searchbox")).toHaveValue("Needle");
-    await expect(page.getByRole("link", { name: "Needle after delayed refresh", exact: true })).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole("link", { name: "Needle after delayed refresh" })).toBeVisible({ timeout: 10_000 });
     await expect(page.locator(".row")).toHaveCount(3);
     await expect(page.locator("#force-refresh")).toHaveAttribute("aria-busy", "false");
     await expect(page.locator("#notice")).toBeHidden();
@@ -67,8 +67,8 @@ for (const action of ["read", "done"]) {
       await expect(button).toBeDisabled();
       expect(canvas.writes).toEqual([]);
       held.release();
-      await expect(page.locator(".row")).toHaveCount(1);
-      await expect(page.locator(`[data-focus-key="${action}:2"]`)).toBeFocused();
+      await expect(page.locator(".row")).toHaveCount(action === "read" ? 2 : 1);
+      await expect(page.locator(`[data-focus-key="${action === "read" ? "done:1" : "done:2"}"]`)).toBeFocused();
       expect(canvas.writes).toEqual(["1"]);
       expect(canvas.doneWrites).toEqual(action === "done" ? ["1"] : []);
     } finally {
@@ -149,7 +149,8 @@ test("batch cancellation waits for the in-flight write and retry writes only rem
     await expect(page.getByRole("button", { name: "Continue remaining (1)", exact: true })).toBeVisible();
     expect(canvas.writes).toEqual(["1"]);
     await page.getByRole("button", { name: "Continue remaining (1)", exact: true }).click();
-    await expect(page.locator(".row")).toHaveCount(0);
+    await expect(page.locator(".row.unread")).toHaveCount(0);
+    await expect(page.locator(".row")).toHaveCount(2);
     expect(canvas.writes).toEqual(["1", "2"]);
   } finally {
     held.release();
@@ -173,7 +174,8 @@ test("failed batches keep rows and recover after the retry deadline without wide
   await expect(page.locator(".row")).toHaveCount(3, { timeout: 10_000 });
   await expect(retry).toBeEnabled({ timeout: 10_000 });
   await retry.click();
-  await expect(page.locator(".row")).toHaveCount(1);
+  await expect(page.locator(".row.unread")).toHaveCount(1);
+  await expect(page.locator(".row")).toHaveCount(3);
   expect(canvas.writes).toEqual(["1", "2"]);
-  await expect(page.getByRole("link", { name: "Synthetic notification 3", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: /^Synthetic notification 3 / })).toBeVisible();
 });

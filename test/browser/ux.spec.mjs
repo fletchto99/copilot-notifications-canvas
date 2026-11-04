@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { test, expect } from "./fixtures.mjs";
-import { http, next } from "../fixtures.mjs";
+import { http, inboxNext as next } from "../fixtures.mjs";
 
 for (const packaged of [false, true]) {
   test.describe(packaged ? "packaged UX recovery" : "source UX recovery", () => {
@@ -17,7 +17,7 @@ for (const packaged of [false, true]) {
       });
       await page.goto(canvas.url);
       await expect(page.locator(".row")).toHaveCount(2);
-      await page.locator(".repo-read").click();
+      await page.locator(".repo-done").click();
       await expect(page.locator(".row")).toHaveCount(0);
       await expect(page.locator("#empty-title")).toHaveText("Loaded notifications cleared");
       await expect(page.locator("#more")).toBeDisabled();

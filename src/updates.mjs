@@ -11,7 +11,7 @@ export const REPOSITORY_URL = `https://github.com/${REPOSITORY}`;
 export const CHECK_INTERVAL = 15 * 60 * 1000;
 
 function updatePrompt(version) {
-  return `Update my user-wide Unread Notifications canvas to v${version} from:
+  return `Update my user-wide GitHub Notifications canvas to v${version} from:
 ${REPOSITORY_URL}
 
 Follow "Manual installation and updates" in docs/installation.md with
@@ -24,7 +24,7 @@ Use my existing COPILOT_HOME and GitHub CLI sign-in. Preserve all settings and
 artifacts in place. Do not bypass installer safeguards, enable auto-update,
 or change preferences.
 
-After installation succeeds, reload extensions and reopen Unread Notifications
+After installation succeeds, reload extensions and reopen GitHub Notifications
 (canvasId: github-notifications). Report the installed version and remind me
 to reload extensions in other already-open sessions.`;
 }
