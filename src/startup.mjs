@@ -2,7 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { acquireLock } from "./lock.mjs";
 
-export const STARTUP_INSTANCE = "unread-notifications-startup";
+export const STARTUP_INSTANCE = "github-notifications-startup";
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 1_000;
 

@@ -119,16 +119,16 @@ test("the extension entry point wires an isolated session through its complete l
     }
     assert.deepEqual(opens, [{
       extensionId: "project:github-notifications", canvasId: "github-notifications",
-      instanceId: "unread-notifications-startup", input: {},
+      instanceId: "github-notifications-startup", input: {},
     }]);
-    const { desktopStatus, ...settings } = await invoke("get_settings", "unread-notifications-startup");
+    const { desktopStatus, ...settings } = await invoke("get_settings", "github-notifications-startup");
     assert.deepEqual(settings,
       { matchGitHubInbox: true, autoOpen: true, darkMode: false, desktopNotifications: false, desktopSound: "default", groupBy: "repo", startupStatus: "opened" });
     assert.equal(desktopStatus.state, "off");
     assert.equal(desktopStatus.platform, process.platform);
     assert.equal(desktopStatus.supported, true);
     assert.equal(calls.length, 0);
-    await canvas.onClose({ instanceId: "unread-notifications-startup" });
+    await canvas.onClose({ instanceId: "github-notifications-startup" });
     for (const signal of signals) {
       assert.equal(process.listeners(signal).length, oldListeners.get(signal).length + 1);
       assert.ok(process.listeners(signal).includes(shutdown));

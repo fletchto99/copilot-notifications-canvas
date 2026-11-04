@@ -48,6 +48,8 @@ Copilot's recorded canvas-close events preserve that dismissal across provider
 reloads and session resumes. A missing panel with no recorded dismissal can open
 again, even if the session has earlier conversation activity or Copilot internally
 restarts it during setup. Existing panels are never focused by auto-open.
+Renaming the startup panel ID preserves existing panels and recorded dismissals;
+no settings or desktop-alert checkpoints need migration.
 
 This is not a continuous keep-open loop. Changing the setting does not open
 panels in other running sessions; it applies when a provider next attaches.

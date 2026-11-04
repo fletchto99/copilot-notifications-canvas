@@ -52,6 +52,7 @@ test("Linux sends sound or silence hints, escapes body markup and terminates opt
   for (const sound of ["none", "default", "message-new-instant", "message-new-email", "complete"]) {
     const [program, args] = await command("linux", sound);
     assert.equal(program, "notify-send");
+    assert.equal(args[0], "--app-name=GitHub Notifications");
     assert.ok(args.includes(`--hint=boolean:suppress-sound:${sound === "none"}`));
     if (!["none", "default"].includes(sound)) assert.ok(args.includes(`--hint=string:sound-name:${sound}`));
     assert.deepEqual(args.slice(-3), ["--", title, 'Fix &lt;widget&gt; &amp; "quotes"; $(do-not-run)\nUnicode: caf\u00e9']);

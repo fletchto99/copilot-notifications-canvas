@@ -260,19 +260,35 @@ try {
       },
     } },
   };
+  const legacy = {
+    extensionId: "user:github-notifications", canvasId: "github-notifications",
+    instanceId: "unread-notifications-startup", input: {},
+  };
+  assert.deepEqual((await open(current, legacy.instanceId)).assets, after.assets);
+  livePanels.push(legacy);
+  await import(pathToFileURL(entry).href + "?legacy-startup");
+  assert.equal(opens.length, 0, "A restored legacy panel must prevent duplicate auto-open");
+  await current.onClose({ instanceId: legacy.instanceId });
+  livePanels.length = 0;
+  for (const type of ["session.canvas.closed", "session.canvas.removed"]) {
+    startupEvents.push({ type, data: legacy });
+    await import(pathToFileURL(entry).href + "?legacy-" + type);
+    assert.equal(opens.length, 0, "Legacy dismissal must survive provider reload");
+    startupEvents.pop();
+  }
   await import(pathToFileURL(entry).href + "?startup");
   assert.deepEqual(opens, [{
     extensionId: "user:github-notifications", canvasId: "github-notifications",
-    instanceId: "unread-notifications-startup", input: {},
+    instanceId: "github-notifications-startup", input: {},
   }]);
   const startup = globalThis.testCanvases.at(-1);
   const startupSettings = await startup.actions.find(action => action.name === "get_settings")
-    .handler({ instanceId: "unread-notifications-startup" });
+    .handler({ instanceId: "github-notifications-startup" });
   assert.equal(startupSettings.startupStatus, "opened");
   assert.equal(startupSettings.desktopNotifications, false);
   await import(pathToFileURL(entry).href + "?startup-reload");
   assert.equal(opens.length, 1, "Reloading must leave an existing panel alone");
-  await startup.onClose({ instanceId: "unread-notifications-startup" });
+  await startup.onClose({ instanceId: "github-notifications-startup" });
   livePanels.length = 0;
   startupEvents.push({ type: "session.canvas.removed", data: opens[0] });
   await import(pathToFileURL(entry).href + "?startup-dismissed");
