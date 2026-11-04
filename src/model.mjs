@@ -14,7 +14,7 @@ export function apiTarget(value = DEFAULT_API_BASE_URL) {
     if (typeof value !== "string" || value.length > 2048 ||
         !/^https:\/\/[^\s\\%?#@{}]+$/.test(value) || /\/\.{1,2}(?:\/|$)/.test(value)) throw new Error();
     url = new URL(value);
-    if (!url.hostname || !/^\/(?:[A-Za-z0-9._~-]+\/?)*$/.test(url.pathname)) throw new Error();
+    if (!url.hostname || !/^\/(?:[A-Za-z0-9._~-]+\/)*[A-Za-z0-9._~-]*$/.test(url.pathname)) throw new Error();
   } catch {
     throw new InboxError("invalid_api", "Use an HTTPS REST API base URL without credentials, query parameters, fragments, or encoded paths.", 400);
   }

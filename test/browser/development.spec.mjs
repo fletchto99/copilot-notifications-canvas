@@ -19,7 +19,7 @@ test.describe("development API selection", () => {
     await expect(page.locator("#development-api-active")).toHaveText("Active API: https://api.github.com");
     await expect(page.getByRole("link", { name: "Open GitHub inbox", exact: true })).toHaveAttribute("href", "https://github.com/notifications");
     expect(await canvas.preferences.readDevelopmentAPI()).toBe(baseUrl);
-    expect(canvas.requests.every(endpoint => !endpoint.includes("git.example.com"))).toBe(true);
+    expect(canvas.requests.every(endpoint => new URL(endpoint, "https://api.github.com").origin === "https://api.github.com")).toBe(true);
     expect(canvas.writes).toEqual([]);
     expect(canvas.deliveries).toEqual([]);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
@@ -69,7 +69,7 @@ test.describe("packaged API boundary", () => {
     await page.getByLabel("Settings", { exact: true }).click();
     await expect(page.locator("#development-settings")).toBeHidden();
     await expect(page.locator("#development-api-notice")).toBeHidden();
-    expect(canvas.requests.every(endpoint => !endpoint.includes("git.example.com"))).toBe(true);
+    expect(canvas.requests.every(endpoint => new URL(endpoint, "https://api.github.com").origin === "https://api.github.com")).toBe(true);
     const url = new URL(canvas.url);
     const response = await page.request.post(new URL("/api/development", url).href, {
       headers: { Authorization: `Bearer ${url.hash.slice(1)}`, Origin: url.origin },

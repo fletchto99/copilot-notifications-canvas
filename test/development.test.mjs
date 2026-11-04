@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
+import { promisify } from "node:util";
 import { apiTarget, DEFAULT_API_BASE_URL, normalizeThreads } from "../src/model.mjs";
 import { firstPage, GitHubClient, nextPage, runGh } from "../src/github.mjs";
 import { Preferences } from "../src/settings.mjs";
@@ -38,6 +39,23 @@ test("API bases are HTTPS, canonical, credential-free and safe for gh arguments"
     `https://git.example.com/${"a".repeat(2048)}`]) {
     assert.throws(() => apiTarget(value), error => error.code === "invalid_api" && !error.message.includes("secret"));
   }
+});
+
+test("maximum-length malformed API paths are rejected without blocking", async () => {
+  const prefix = `${baseUrl}/`;
+  const invalidURL = `${prefix}${"a".repeat(2048 - prefix.length - 1)}!`;
+  assert.equal(invalidURL.length, 2048);
+  const script = `
+import assert from "node:assert/strict";
+const { apiTarget } = await import(process.argv[1]);
+const invalidURL = process.argv[2];
+const validURL = invalidURL.slice(0, -1) + "a";
+assert.equal(apiTarget(validURL).baseUrl, validURL);
+assert.throws(() => apiTarget(invalidURL), { code: "invalid_api" });
+`;
+  await promisify(childProcess.execFile)(process.execPath, [
+    "--input-type=module", "-e", script, new URL("../src/model.mjs", import.meta.url).href, invalidURL,
+  ], { timeout: 5000 });
 });
 
 test("custom notification reads, conditional pagination and both writes stay on the selected API", async () => {

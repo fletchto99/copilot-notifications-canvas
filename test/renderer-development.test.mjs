@@ -58,6 +58,44 @@ test("source settings save a custom URL without changing the active API, then al
   ui.window.events.pagehide();
 });
 
+test("API saves during background settings reads are queued exactly once", async t => {
+  const developmentApi = { baseUrl: defaultBase, savedBaseUrl: defaultBase, requiresReload: false };
+  let reads = 0;
+  let finish;
+  const ui = await renderer({ developmentApi, onSettings: input => {
+    if (!input && ++reads === 3) return new Promise(resolve => { finish = resolve; });
+  } });
+  t.after(() => {
+    finish?.();
+    ui.window.events.pagehide();
+  });
+  ui.ids.get("settings").open = true;
+  ui.ids.get("settings").events.toggle();
+  await settle();
+  ui.ids.get("development-api").value = "custom";
+  ui.ids.get("development-api").events.change();
+  ui.ids.get("development-api-url").value = baseUrl;
+  await ui.fireTimer();
+  assert.equal(typeof finish, "function");
+  const save = ui.ids.get("development-api-save");
+  assert.equal(save.disabled, false);
+  save.focus();
+  save.events.click();
+  save.events.click();
+  assert.equal(save.disabled, true);
+  assert.equal(developmentApi.savedBaseUrl, defaultBase);
+  assert.equal(ui.calls.filter(call => call.path === "/api/development").length, 0);
+  finish();
+  await settle();
+  const writes = ui.calls.filter(call => call.path === "/api/development");
+  assert.deepEqual(writes.map(call => JSON.parse(call.options.body)), [{ baseUrl }]);
+  assert.equal(developmentApi.savedBaseUrl, baseUrl);
+  assert.equal(developmentApi.baseUrl, defaultBase);
+  assert.equal(ui.ids.get("development-api-reload").hidden, false);
+  assert.equal(ui.ids.get("settings-error").hidden, true);
+  assert.equal(ui.document.activeElement, save);
+});
+
 test("custom active APIs show a warning and host-specific inbox link while drafts survive settings refresh", async () => {
   const developmentApi = { baseUrl, savedBaseUrl: baseUrl, requiresReload: false };
   const ui = await renderer({ developmentApi });

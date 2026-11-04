@@ -984,7 +984,7 @@ $("settings").addEventListener("toggle", () => {
 });
 $("development-api").addEventListener("change", renderSettings);
 $("development-api-save").addEventListener("click", () => {
-  if (preferences?.developmentApi && !settingsBusy) {
+  if (preferences?.developmentApi && !$("development-api-save").disabled) {
     const baseUrl = $("development-api").value === "github" ? "https://api.github.com" : $("development-api-url").value;
     void settingsRequest({ baseUrl }, false, "development");
   }
