@@ -14,6 +14,10 @@ export function embeddedAssetsPlugin(assets) {
   return {
     name: "embedded-assets",
     setup(builder) {
+      builder.onLoad({ filter: /[/\\]development\.mjs$/ }, args => args.path === join(source, "development.mjs") ? {
+        contents: "export async function loadDevelopmentAPI() { return null; }",
+        loader: "js",
+      } : undefined);
       builder.onLoad({ filter: /[/\\]assets\.mjs$/ }, args => args.path === join(source, "assets.mjs") ? {
         contents: `import assets from "notifications:assets";
 export const assetPaths = new Set(assets.map(([path]) => path));

@@ -1,25 +1,25 @@
 import { execFile } from "node:child_process";
 import { setTimeout as wait } from "node:timers/promises";
-import { InboxError, normalizeThreads } from "./model.mjs";
+import { apiTarget, DEFAULT_API_BASE_URL, InboxError, normalizeThreads } from "./model.mjs";
 
 export const POLL_MS = 60_000;
 export const RETRY_MS = 120_000;
-const API_ORIGIN = "https://api.github.com";
+const API_ORIGIN = DEFAULT_API_BASE_URL;
 
 export function firstPage() {
   return "/notifications?all=false&per_page=50&page=1";
 }
 
-function endpointURL(endpoint) {
+function endpointURL(endpoint, target = apiTarget()) {
   let url;
   try {
-    url = new URL(endpoint, API_ORIGIN);
+    url = new URL(endpoint, target.origin);
   } catch {
     throw new InboxError("invalid_pagination", "GitHub returned an invalid pagination link.");
   }
   const keys = [...url.searchParams.keys()];
-  if (url.origin !== API_ORIGIN || url.username || url.password || url.hash ||
-      url.pathname !== "/notifications" || keys.length !== 3 ||
+  if (url.origin !== target.origin || url.username || url.password || url.hash ||
+      url.pathname !== `${target.prefix}/notifications` || keys.length !== 3 ||
       !keys.every(key => ["all", "per_page", "page"].includes(key)) ||
       url.searchParams.get("all") !== "false" ||
       url.searchParams.get("per_page") !== "50" ||
@@ -31,7 +31,7 @@ function endpointURL(endpoint) {
   return url;
 }
 
-export function nextPage(header, currentEndpoint) {
+export function nextPage(header, currentEndpoint, target = apiTarget()) {
   if (!header) return null;
   const links = header.split(",");
   const next = links.filter(link => /;\s*rel="next"(?:\s*;|\s*$)/.test(link));
@@ -43,13 +43,13 @@ export function nextPage(header, currentEndpoint) {
   }
   const match = next.length === 1 && next[0].match(/^\s*<([^>]+)>;\s*rel="next"\s*$/);
   if (!match) throw new InboxError("invalid_pagination", "GitHub returned an unreadable next-page link.");
-  const url = endpointURL(match[1]);
+  const url = endpointURL(match[1], target);
   const current = endpointURL(currentEndpoint);
   if (url.searchParams.get("all") !== current.searchParams.get("all") ||
       Number(url.searchParams.get("page")) !== Number(current.searchParams.get("page")) + 1) {
     throw new InboxError("invalid_pagination", "GitHub returned an inconsistent next-page link.");
   }
-  return `${url.pathname}${url.search}`;
+  return `/notifications${url.search}`;
 }
 
 export function parseResponse(stdout) {
@@ -87,7 +87,10 @@ export function runGh(args, { signal } = {}) {
         // gh exits nonzero on HTTP errors, but --include still supplies status and headers.
         if (/^HTTP\/[\d.]+\s+\d{3}/.test(stdout)) return resolve(stdout);
         if (/gh auth login|not logged|GH_TOKEN|authentication/i.test(stderr)) {
-          return reject(new InboxError("authentication", "Sign in with gh auth login --hostname github.com. This view retries automatically while visible.", 401));
+          const custom = args.includes("--hostname") && args[args.indexOf("--hostname") + 1] !== "github.com";
+          return reject(new InboxError("authentication", custom
+            ? "Sign in to the selected API host with gh auth login --hostname <host>. This view retries automatically while visible."
+            : "Sign in with gh auth login --hostname github.com. This view retries automatically while visible.", 401));
         }
         reject(new InboxError("gh_failed", "GitHub CLI could not reach GitHub. Check your connection and gh auth status.", 502));
       });
@@ -99,7 +102,8 @@ function seconds(value) {
 }
 
 export class GitHubClient {
-  constructor({ run = runGh, now = Date.now, sleep = wait } = {}) {
+  constructor({ run = runGh, now = Date.now, sleep = wait, apiBaseUrl = API_ORIGIN } = {}) {
+    this.target = apiTarget(apiBaseUrl);
     this.run = run;
     this.now = now;
     this.cache = new Map();
@@ -210,12 +214,12 @@ export class GitHubClient {
       this.failures.delete(requestKey);
       this.lastError = null;
     };
-    const args = ["api", "--hostname", "github.com", "--method", method, "--include",
+    const args = ["api", "--hostname", this.target.hostname, "--method", method, "--include",
       "-H", "Accept: application/vnd.github+json",
       "-H", "X-GitHub-Api-Version: 2022-11-28"];
     if (cached?.etag) args.push("-H", `If-None-Match: ${cached.etag}`);
     else if (cached?.modified) args.push("-H", `If-Modified-Since: ${cached.modified}`);
-    args.push(endpoint);
+    args.push(this.target.custom ? `${this.target.baseUrl}${endpoint}` : endpoint);
     const sequence = method === "GET" ? ++this.sequence : undefined;
     let response;
     try {
@@ -238,9 +242,13 @@ export class GitHubClient {
         throw new InboxError("rate_limited", "GitHub rate limit reached. Requests are paused; wait for the retry time.", 429);
       }
       if (status === 401) throw new InboxError("authentication",
-        "GitHub sign-in expired. Run gh auth login --hostname github.com. This view retries automatically while visible.", 401);
+        this.target.custom
+          ? "API sign-in expired. Run gh auth login --hostname <host> for the selected development API host. This view retries automatically while visible."
+          : "GitHub sign-in expired. Run gh auth login --hostname github.com. This view retries automatically while visible.", 401);
       if (status === 403 || status === 404) throw new InboxError("permission",
-        "GitHub denied notifications access. Check gh auth status; grant notifications scope with gh auth refresh --hostname github.com --scopes notifications. Check organization SSO if applicable. Fine-grained tokens are unsupported.", 403);
+        this.target.custom
+          ? "The selected API denied notifications access. Check its URL, network access and gh authentication for that host, including notifications scope. Fine-grained tokens are unsupported."
+          : "GitHub denied notifications access. Check gh auth status; grant notifications scope with gh auth refresh --hostname github.com --scopes notifications. Check organization SSO if applicable. Fine-grained tokens are unsupported.", 403);
       if (!(method === "DELETE" ? [204] : method === "PATCH" ? [205, 304] : [200, 304]).includes(status)) throw new InboxError("github_http",
         `GitHub returned HTTP ${status}. Check GitHub status and try again.`, 502);
       if (method !== "GET") {
@@ -257,8 +265,8 @@ export class GitHubClient {
         } catch {
           throw new InboxError("invalid_response", "GitHub returned invalid JSON; the previous inbox was kept.");
         }
-        items = normalizeThreads(body);
-        next = nextPage(headers.link, endpoint);
+        items = normalizeThreads(body, this.target);
+        next = nextPage(headers.link, endpoint, this.target);
       }
       const page = {
         sequence,

@@ -9,9 +9,11 @@ import { Preferences } from "../src/settings.mjs";
 import { startServer } from "../src/server.mjs";
 import { Updates, CURRENT_VERSION } from "../src/updates.mjs";
 import { http, next, thread } from "./fixtures.mjs";
+import { apiTarget } from "../src/model.mjs";
+import { loadDevelopmentAPI } from "../src/development.mjs";
 
 export async function createCanvasFixture({
-  assetFailure = false, desktopEnabled = false, packaged = false, development, log: report = () => {},
+  assetFailure = false, desktopEnabled = false, packaged = false, development, developmentApiBaseUrl, log: report = () => {},
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), "notification-fixture-"));
   const directory = join(root, "home", "extensions", "github-notifications", "artifacts");
@@ -21,6 +23,7 @@ export async function createCanvasFixture({
   const requests = [];
   const errors = [];
   const warnings = [];
+  const target = apiTarget(packaged ? undefined : developmentApiBaseUrl);
   let assetsUnavailable = assetFailure;
   let requestHook;
   let offset = 0;
@@ -47,7 +50,8 @@ export async function createCanvasFixture({
       return http({ tag_name: `v${CURRENT_VERSION}`, draft: false, prerelease: false });
     }
     if (args.includes("PATCH") || args.includes("DELETE")) {
-      const match = /^\/notifications\/threads\/(\d+)$/.exec(endpoint);
+      const path = new URL(endpoint, target.origin).pathname.slice(target.prefix.length);
+      const match = /^\/notifications\/threads\/(\d+)$/.exec(path);
       const row = rows.find(item => item.id === match?.[1]);
       assert.ok(row?.unread, `Unexpected or repeated synthetic write: ${endpoint}`);
       row.unread = false;
@@ -56,13 +60,14 @@ export async function createCanvasFixture({
       return `HTTP/2 ${args.includes("DELETE") ? 204 : 205} Synthetic\r\n\r\n`;
     }
     const url = new URL(endpoint, "https://api.github.com");
-    assert.ok(args.includes("GET") && url.origin === "https://api.github.com" && url.pathname === "/notifications",
+    assert.ok(args.includes("GET") && url.origin === target.origin && url.pathname === `${target.prefix}/notifications`,
       `Unexpected request: ${endpoint}`);
     const offset = (Number(url.searchParams.get("page")) - 1) * 50;
     const unread = rows.filter(row => row.unread);
-    return http(unread.slice(offset, offset + 50), offset + 50 < unread.length ? { link: next } : {});
+    return http(unread.slice(offset, offset + 50), offset + 50 < unread.length
+      ? { link: next.replace("https://api.github.com", target.baseUrl) } : {});
   };
-  const client = new GitHubClient({ run, now: () => Date.now() + offset });
+  const client = new GitHubClient({ run, now: () => Date.now() + offset, apiBaseUrl: target.baseUrl });
   const preferences = new Preferences({ directory });
   const log = (message, options) => {
     (options.level === "warning" ? warnings : errors).push(message);
@@ -99,10 +104,12 @@ export async function createCanvasFixture({
   }
   try {
     if (desktopEnabled) await preferences.update({ desktopNotifications: true });
+    if (developmentApiBaseUrl !== undefined) await preferences.updateDevelopmentAPI({ baseUrl: developmentApiBaseUrl });
+    const developmentAPI = developmentApiBaseUrl !== undefined && !packaged ? await loadDevelopmentAPI(preferences) : undefined;
     server = packaged
       ? await (await import("./browser/package-fixtures.mjs")).startPackagedCanvas(root, run, log)
       : await startServer(inbox, {
-        preferences, desktop, updates, development, log,
+        preferences, desktop: target.custom ? undefined : desktop, updates, development, developmentAPI, log,
         read: (path, options) => {
           if (assetsUnavailable && path.pathname.endsWith("/app.mjs")) {
             throw Object.assign(new Error("Synthetic asset failure"), { code: "ENOENT" });
@@ -111,7 +118,7 @@ export async function createCanvasFixture({
         },
       });
     registration = server.ready?.then(ready => {
-      if (ready) desktop.add("synthetic-fixture");
+      if (ready && !target.custom) desktop.add("synthetic-fixture");
     });
     return {
       root, url: server.url, rows, writes, doneWrites, requests, preferences, deliveries, desktop, errors, warnings, close,

@@ -7,14 +7,16 @@ import { Preferences } from "./settings.mjs";
 import { Startup } from "./startup.mjs";
 import { DesktopNotifications } from "./desktop.mjs";
 import { Updates } from "./updates.mjs";
+import { loadDevelopmentAPI } from "./development.mjs";
 
 const instances = new Map();
-const client = new GitHubClient();
 const preferences = new Preferences();
+const developmentAPI = await loadDevelopmentAPI(preferences);
+const client = new GitHubClient({ apiBaseUrl: developmentAPI?.target.baseUrl });
 let session;
 let startup;
 const log = (message, options) => session?.log(message, options);
-const desktop = new DesktopNotifications({ preferences, client, log });
+const desktop = developmentAPI?.target.custom ? undefined : new DesktopNotifications({ preferences, client, log });
 const updates = new Updates({ log });
 
 async function action(ctx, run) {
@@ -34,7 +36,7 @@ async function close(instanceId) {
   if (!entry) return;
   instances.delete(instanceId);
   entry.inbox.close();
-  await desktop.remove(instanceId);
+  await desktop?.remove(instanceId);
   try {
     await (await entry.pending).close();
   } catch (error) {
@@ -61,7 +63,9 @@ session = await joinSession({
         description: "Read saved grouping, theme, auto-open and desktop notification settings and status. Settings are changed through the panel.",
         inputSchema: emptySchema,
         handler: ctx => action(ctx, async () => ({
-          ...await preferences.read(), desktopStatus: desktop.snapshot(), startupStatus: startup?.status ?? "initializing",
+          ...await preferences.read(), desktopStatus: desktop?.snapshot() ?? {
+            supported: false, state: "off", message: "Desktop notifications are disabled for custom development APIs.",
+          }, startupStatus: startup?.status ?? "initializing",
         })),
       },
       {
@@ -94,7 +98,7 @@ session = await joinSession({
       try {
         if (!instances.has(ctx.instanceId)) {
           const inbox = new Inbox(client, ctx.input ?? {});
-          const pending = startServer(inbox, { log, preferences, desktop, updates }).catch(error => {
+          const pending = startServer(inbox, { log, preferences, desktop, updates, developmentAPI }).catch(error => {
             inbox.close();
             throw error;
           });
@@ -106,7 +110,7 @@ session = await joinSession({
           throw new InboxError("closed", "The Notifications canvas was closed while opening.", 410);
         }
         opening.desktopRegistration ??= entry.ready.then(ready => {
-          if (ready && instances.get(ctx.instanceId) === opening) desktop.add(ctx.instanceId);
+          if (ready && instances.get(ctx.instanceId) === opening) desktop?.add(ctx.instanceId);
         }).catch(() => {
           log("Could not start desktop notifications for the canvas.", { level: "error" });
         });
@@ -125,7 +129,7 @@ startup = new Startup(session, preferences);
 
 async function shutdown() {
   await startup?.close();
-  await desktop.close();
+  await desktop?.close();
   updates.close();
   await Promise.allSettled([...instances.keys()].map(close));
   process.exit(0);

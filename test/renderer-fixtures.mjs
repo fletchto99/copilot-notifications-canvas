@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { Inbox } from "../src/inbox.mjs";
 import { GitHubClient } from "../src/github.mjs";
 import { desktopCapabilities } from "../src/notifier.mjs";
-import { attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads } from "../src/model.mjs";
+import { apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads } from "../src/model.mjs";
 import { http, thread } from "./fixtures.mjs";
 
 export const script = await readFile(process.env.NOTIFICATIONS_TEST_SCRIPT ??
@@ -17,7 +17,7 @@ export const settle = () => new Promise(resolve => setImmediate(resolve));
 // Minimal DOM/event/timer doubles exercise the actual renderer without a browser dependency.
 export async function renderer({ hidden = false, token = "a".repeat(64), readFailure = false,
   initialRows, onWrite, onFetch, onState, onFilters, initialOffline = false, release, development = null,
-  onUpdates, clipboardFailure = false, onSettings, retainDisabledFocus = false, desktopPlatform = "darwin", desktopStatus = {},
+  onUpdates, clipboardFailure = false, onSettings, developmentApi, onDevelopment, retainDisabledFocus = false, desktopPlatform = "darwin", desktopStatus = {},
   storedSettings = { autoOpen: false, darkMode: null, desktopNotifications: false, desktopSound: "default" },
   appColorMode = "light", systemDark = false } = {}) {
   const calls = [];
@@ -46,6 +46,10 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
   const patches = [];
   const deletions = [];
   const githubCalls = [];
+  const apiState = () => developmentApi ? {
+    developmentApiBaseUrl: developmentApi.baseUrl,
+    inboxUrl: `${apiTarget(developmentApi.baseUrl).webOrigin}/notifications`,
+  } : {};
   class Node {
     constructor(tag) {
       this.tag = tag;
@@ -73,6 +77,10 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     }
     set innerHTML(_) { throw new Error("HTML interpolation is forbidden"); }
     setAttribute(key, value) { this.attributes[key] = value; }
+    removeAttribute(key) {
+      delete this.attributes[key];
+      if (key === "href") this.href = "";
+    }
     getAttribute(key) { return this.attributes[key] ?? null; }
     append(...children) {
       for (const child of children) child.parentNode = this;
@@ -127,7 +135,8 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     ["batch-progress", "batch-stop", "batch-retry", "batch-dismiss"].some(id => ids.get(id) === node);
   ids.get("settings").contains = node =>
     node === ids.get("settings") ||
-    ["settings-toggle", "settings-panel", "auto-open", "theme", "group-by", "check-updates", "desktop-notifications", "desktop-sound"].some(id => ids.get(id).contains(node));
+    ["settings-toggle", "settings-panel", "auto-open", "theme", "group-by", "check-updates", "desktop-notifications", "desktop-sound",
+      "development-api", "development-api-url", "development-api-save"].some(id => ids.get(id).contains(node));
   const document = {
     hidden,
     body: new Node("body"),
@@ -143,6 +152,11 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     addEventListener(name, handler) { this.events[name] = handler; },
   };
   const window = { events: {}, addEventListener(name, handler) { this.events[name] = handler; } };
+  const inboxLink = ids.get("open-inbox");
+  inboxLink.href = "";
+  inboxLink.tabIndex = -1;
+  inboxLink.setAttribute("aria-disabled", "true");
+  ids.get("development-api-notice").hidden = true;
   const updateDetails = ids.get("update-prompt-details");
   updateDetails.contains = node =>
     ["update-prompt-details", "update-instructions", "update-prompt"].some(id => ids.get(id) === node);
@@ -167,8 +181,8 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     return onFetch ? onFetch(args) : http(rows);
   } }));
   const context = createContext({
-    document, window, location: { hash: `#${token}` }, Intl, AbortController,
-    attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads,
+    document, window, location: { hash: `#${token}` }, Intl, URL, AbortController,
+    apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads,
     navigator: { clipboard: { writeText: async text => {
       if (clipboardFailure) throw new Error("Clipboard denied");
       copied.push(text);
@@ -194,13 +208,19 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     fetch: async (path, options) => {
       if (offline) throw new Error("Synthetic connection failure");
       calls.push({ path, options });
-      if (path === "/api/settings") {
+      if (path === "/api/settings" || path === "/api/development") {
         const input = options.body ? JSON.parse(options.body) : undefined;
-        if (onSettings) await onSettings(input);
-        if (input) Object.assign(storedSettings, input);
+        if (path === "/api/development") {
+          if (onDevelopment) await onDevelopment(input);
+          developmentApi.savedBaseUrl = input.baseUrl;
+          developmentApi.requiresReload = input.baseUrl !== developmentApi.baseUrl;
+        } else {
+          if (onSettings) await onSettings(input);
+          if (input) Object.assign(storedSettings, input);
+        }
         const capabilities = desktopCapabilities(desktopPlatform);
         return { ok: true, json: async () => ({ desktopNotifications: false, desktopSound: "default", ...storedSettings,
-          desktopStatus: { ...capabilities, state: "watching",
+          developmentApi, desktopStatus: { ...capabilities, state: "watching",
             message: capabilities.supported ? "Watching in the background." : capabilities.help, ...desktopStatus },
         }) };
       }
@@ -211,7 +231,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       if (path === "/api/refresh") await inbox.refresh(JSON.parse(options.body));
       if (path === "/api/more") await inbox.more();
       if (path === "/api/state") {
-        const snapshot = { ...inbox.snapshot(), updates: releaseMetadata, development };
+        const snapshot = { ...inbox.snapshot(), updates: releaseMetadata, development, ...apiState() };
         if (onState) await onState();
         return { ok: true, json: async () => snapshot };
       }
@@ -223,12 +243,12 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       if (path === "/api/read") await inbox.markRead(JSON.parse(options.body));
       if (path === "/api/done") await inbox.markDone(JSON.parse(options.body));
       if (path.startsWith("/api/batch/")) inbox.batch[path.slice("/api/batch/".length)](JSON.parse(options.body));
-      return { ok: true, json: async () => ({ ...inbox.snapshot(), updates: releaseMetadata, development }) };
+      return { ok: true, json: async () => ({ ...inbox.snapshot(), updates: releaseMetadata, development, ...apiState() }) };
     },
   });
-  if (!process.env.NOTIFICATIONS_TEST_SCRIPT) assert.match(script, /^import \{ attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads \} from "\.\/model\.mjs";/);
+  if (!process.env.NOTIFICATIONS_TEST_SCRIPT) assert.match(script, /^import \{ apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads \} from "\.\/model\.mjs";/);
   // Preserve source offsets for the coverage report when removing the injected import.
-  runInContext(script.replace(/^import \{ attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads \} from "\.\/model\.mjs";/, match => " ".repeat(match.length)), context, {
+  runInContext(script.replace(/^import \{ apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads \} from "\.\/model\.mjs";/, match => " ".repeat(match.length)), context, {
     filename: process.env.NOTIFICATIONS_TEST_SCRIPT ?? fileURLToPath(new URL("../src/app.mjs", import.meta.url)),
   });
   await settle();

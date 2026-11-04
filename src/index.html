@@ -56,7 +56,7 @@
           <input id="search" type="search" maxlength="200" placeholder="Search..." autocomplete="off" spellcheck="false">
         </label>
         <div id="inbox-control" class="tooltip-anchor">
-          <a id="open-inbox" class="icon-button" href="https://github.com/notifications" target="_blank" rel="noopener noreferrer" aria-label="Open GitHub inbox" aria-describedby="inbox-tooltip">
+          <a id="open-inbox" class="icon-button" role="link" aria-disabled="true" tabindex="-1" target="_blank" rel="noopener noreferrer" aria-label="Open GitHub inbox" aria-describedby="inbox-tooltip">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true" focusable="false">
               <path d="M4 4h16l2 10v6H2v-6Z"/>
               <path d="M2 14h6l2 3h4l2-3h6"/>
@@ -111,6 +111,24 @@
                 <option value="date">Date</option>
               </select>
             </div>
+            <section id="development-settings" aria-label="Development API settings" hidden>
+              <div class="select-setting">
+                <label for="development-api">Development API</label>
+                <select id="development-api" aria-describedby="development-api-help development-api-auth">
+                  <option value="github">GitHub.com</option>
+                  <option value="custom">Custom</option>
+                </select>
+              </div>
+              <div id="development-api-custom" class="development-api-custom" hidden>
+                <label for="development-api-url">REST API base URL</label>
+                <input id="development-api-url" type="url" maxlength="2048" placeholder="https://git.example.com/api/v3" autocomplete="off" spellcheck="false" aria-describedby="development-api-help development-api-auth">
+              </div>
+              <button id="development-api-save" type="button">Save API</button>
+              <p id="development-api-active" class="settings-help"></p>
+              <p id="development-api-help" class="settings-help">Source builds only. Reload extension after saving with ⌘+k -> refresh canvas.</p>
+              <p id="development-api-auth" class="settings-help">Authenticate the selected host with gh; never enter tokens here. Custom APIs use the same host for website links and may share production data.</p>
+              <p id="development-api-reload" class="settings-help" role="status" hidden>Saved. Reload extensions to apply this API. The current API is unchanged.</p>
+            </section>
             <button id="check-updates" type="button">Check for updates</button>
             <p class="settings-help"><span id="installed-version">Canvas version loading...</span><span id="update-status" role="status" aria-live="polite" hidden></span></p>
           </div>
@@ -123,6 +141,7 @@
       <p id="retry-status" class="retry-status" role="status" hidden></p>
     </header>
     <div id="attention-panel" role="tabpanel" aria-labelledby="attention-all" tabindex="0">
+      <div id="development-api-notice" class="notice" role="status" hidden></div>
       <div id="settings-error" class="notice" role="alert" hidden></div>
       <div id="notice" class="notice" role="alert" hidden></div>
       <section id="batch-progress" class="batch-progress" aria-label="Notification operation" tabindex="-1" hidden>

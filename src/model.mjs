@@ -6,6 +6,31 @@ export class InboxError extends Error {
   }
 }
 
+export const DEFAULT_API_BASE_URL = "https://api.github.com";
+
+export function apiTarget(value = DEFAULT_API_BASE_URL) {
+  let url;
+  try {
+    if (typeof value !== "string" || value.length > 2048 ||
+        !/^https:\/\/[^\s\\%?#@{}]+$/.test(value) || /\/\.{1,2}(?:\/|$)/.test(value)) throw new Error();
+    url = new URL(value);
+    if (!url.hostname || !/^\/(?:[A-Za-z0-9._~-]+\/)*[A-Za-z0-9._~-]*$/.test(url.pathname)) throw new Error();
+  } catch {
+    throw new InboxError("invalid_api", "Use an HTTPS REST API base URL without credentials, query parameters, fragments, or encoded paths.", 400);
+  }
+  if (url.hostname.includes(":")) {
+    throw new InboxError("invalid_api", "Use a DNS hostname or IPv4 address for the API. GitHub CLI does not support IPv6 literal hosts.", 400);
+  }
+  const prefix = url.pathname.replace(/\/$/, "");
+  const baseUrl = `${url.origin}${prefix}`;
+  const custom = baseUrl !== DEFAULT_API_BASE_URL;
+  return Object.freeze({
+    baseUrl, origin: url.origin, prefix, custom,
+    hostname: custom ? url.hostname : "github.com",
+    webOrigin: custom ? url.origin : "https://github.com",
+  });
+}
+
 export const attentionFilters = [
   { value: "all", label: "All", reasons: [] },
   { value: "review_requested", label: "Review requested", reasons: ["review_requested"] },
@@ -54,12 +79,12 @@ function parsedURL(value, origin) {
   }
 }
 
-export function notificationLink(subject, repository) {
-  const fallback = { url: "https://github.com/notifications", label: "Open GitHub inbox", direct: false, number: null };
+export function notificationLink(subject, repository, target = apiTarget()) {
+  const fallback = { url: `${target.webOrigin}/notifications`, label: "Open GitHub inbox", direct: false, number: null };
   if (!repoName(repository)) return fallback;
-  const base = `https://github.com/${repository}`;
-  const api = parsedURL(subject.url, "https://api.github.com");
-  const prefix = `/repos/${repository}/`;
+  const base = `${target.webOrigin}/${repository}`;
+  const api = parsedURL(subject.url, target.origin);
+  const prefix = `${target.prefix}/repos/${repository}/`;
   const path = api?.pathname.startsWith(prefix) ? api.pathname.slice(prefix.length) : "";
   const routes = {
     Issue: [/^issues\/([1-9]\d*)$/, "issues"],
@@ -89,7 +114,7 @@ export function notificationTitle(thread, fallback = "") {
   return thread.number ? `#${thread.number}${title ? ` ${title}` : ""}` : title;
 }
 
-export function normalizeThreads(body) {
+export function normalizeThreads(body, target = apiTarget()) {
   if (!Array.isArray(body)) throw new InboxError("invalid_response", "GitHub returned an invalid notifications list.");
   return body.map(thread => {
     if (!thread || !/^\d+$/.test(thread.id) || typeof thread.id !== "string" ||
@@ -109,7 +134,7 @@ export function normalizeThreads(body) {
       reason: thread.reason,
       unread: thread.unread,
       updatedAt: new Date(thread.updated_at).toISOString(),
-      ...notificationLink(thread.subject, thread.repository.full_name),
+      ...notificationLink(thread.subject, thread.repository.full_name, target),
     };
   });
 }
