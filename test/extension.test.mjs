@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { host, CanvasError } from "./fixtures/sdk.mjs";
-import { http, next, thread } from "./fixtures.mjs";
+import { http, thread } from "./fixtures.mjs";
 import { apiTarget, filterSchema, emptySchema, InboxError } from "../src/model.mjs";
 import { Inbox } from "../src/inbox.mjs";
 import { DesktopNotifications } from "../src/desktop.mjs";
@@ -63,7 +63,9 @@ test("the extension entry point wires an isolated session through its complete l
       response = http({ tag_name: `v${CURRENT_VERSION}`, draft: false, prerelease: false });
     } else if (new URL(endpoint, "https://api.github.com").pathname === "/notifications" &&
         new URL(endpoint, "https://api.github.com").searchParams.get("page") === "1") {
-      response = http([thread("1")], { link: next });
+      const next = new URL(endpoint, "https://api.github.com");
+      next.searchParams.set("page", "2");
+      response = http([thread("1")], { link: `<${next.href}>; rel="next"` });
     } else if (endpoint.includes("page=2")) {
       response = http([thread("2")]);
     } else {
@@ -117,16 +119,16 @@ test("the extension entry point wires an isolated session through its complete l
     }
     assert.deepEqual(opens, [{
       extensionId: "project:github-notifications", canvasId: "github-notifications",
-      instanceId: "unread-notifications-startup", input: {},
+      instanceId: "github-notifications-startup", input: {},
     }]);
-    const { desktopStatus, ...settings } = await invoke("get_settings", "unread-notifications-startup");
+    const { desktopStatus, ...settings } = await invoke("get_settings", "github-notifications-startup");
     assert.deepEqual(settings,
-      { autoOpen: true, darkMode: false, desktopNotifications: false, desktopSound: "default", groupBy: "repo", startupStatus: "opened" });
+      { matchGitHubInbox: true, autoOpen: true, darkMode: false, desktopNotifications: false, desktopSound: "default", groupBy: "repo", startupStatus: "opened" });
     assert.equal(desktopStatus.state, "off");
     assert.equal(desktopStatus.platform, process.platform);
     assert.equal(desktopStatus.supported, true);
     assert.equal(calls.length, 0);
-    await canvas.onClose({ instanceId: "unread-notifications-startup" });
+    await canvas.onClose({ instanceId: "github-notifications-startup" });
     for (const signal of signals) {
       assert.equal(process.listeners(signal).length, oldListeners.get(signal).length + 1);
       assert.ok(process.listeners(signal).includes(shutdown));
@@ -225,11 +227,44 @@ test("the extension entry point wires an isolated session through its complete l
     assert.equal(attention.matching, 0);
     assert.equal(attention.loaded, 2);
     assert.doesNotMatch(JSON.stringify(attention), /Synthetic|example\/widgets|notification 2/);
+    const teams = await invoke("set_filters", "one", { attention: "team_mentioned" });
+    assert.equal(teams.attention, "team_mentioned");
+    assert.equal(teams.matching, 0);
+    assert.equal(teams.attentionCounts.team_mentioned, 0);
     await invoke("set_filters", "one", { attention: "all" });
     assert.equal((await invoke("check_for_updates", "one")).status, "current");
     await assert.rejects(invoke("get_state", "missing"), error => error instanceof CanvasError && error.code === "not_open");
     await assert.rejects(invoke("set_filters", "one", { mode: "all" }), { code: "invalid_filters" });
     await assert.rejects(invoke("set_filters", "one", { attention: "unknown" }), { code: "invalid_filters" });
+  });
+
+  await t.test("agent inbox actions retain their view and report settings-read failures", async () => {
+    const path = join(artifacts, "settings.json");
+    const original = await fs.readFile(path, "utf8");
+    const valid = JSON.stringify({ ...JSON.parse(original), matchGitHubInbox: false });
+    try {
+      await fs.writeFile(path, valid);
+      await canvas.open({ instanceId: "settings-failure" });
+      const initial = await invoke("refresh", "settings-failure");
+      assert.equal(initial.matchGitHubInbox, false);
+      const invalid = '{"autoOpen":"yes"}';
+      await fs.writeFile(path, invalid);
+      await assert.rejects(invoke("get_settings", "settings-failure"), { code: "settings_read" });
+      for (const action of ["refresh", "load_more", "set_filters"]) {
+        const state = await invoke(action, "settings-failure");
+        assert.equal(state.settingsError.code, "settings_read");
+        assert.equal(state.matchGitHubInbox, false);
+        assert.equal(state.error, null);
+        assert.ok(state.loaded > 0);
+        assert.doesNotMatch(JSON.stringify(state), /Synthetic notification|example\/widgets/);
+      }
+      assert.equal(await fs.readFile(path, "utf8"), invalid);
+      await fs.writeFile(path, valid);
+      assert.equal((await invoke("refresh", "settings-failure")).settingsError, null);
+    } finally {
+      await fs.writeFile(path, original);
+      await canvas.onClose({ instanceId: "settings-failure" });
+    }
   });
 
   await t.test("unexpected action errors are sanitized and logged", async subtest => {

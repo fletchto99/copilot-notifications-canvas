@@ -8,7 +8,7 @@ import { Inbox } from "../src/inbox.mjs";
 import { InboxError } from "../src/model.mjs";
 import { Preferences } from "../src/settings.mjs";
 import { startServer } from "../src/server.mjs";
-import { http, next, thread } from "./fixtures.mjs";
+import { http, inboxNext as next, thread } from "./fixtures.mjs";
 
 const confirmed = "HTTP/2 204 No Content\r\n\r\n";
 const settle = () => new Promise(resolve => setImmediate(resolve));
@@ -64,10 +64,11 @@ test("only 204 confirms Done; failed or ambiguous responses retain the row and r
   }
 });
 
-test("Done rejects malformed, unloaded and already-read thread IDs before issuing a write", async t => {
+test("Done rejects malformed and unloaded IDs but accepts read inbox items", async t => {
   const calls = [];
   const client = new GitHubClient({ run: async args => {
     calls.push(args);
+    if (args.includes("DELETE")) return confirmed;
     return http([thread("1"), thread("2", { unread: false })]);
   } });
   const inbox = new Inbox(client);
@@ -77,9 +78,12 @@ test("Done rejects malformed, unloaded and already-read thread IDs before issuin
     { id: "1", extra: true }, { id: "9".repeat(65) }]) {
     await assert.rejects(inbox.markDone(input), { code: "invalid_thread" });
   }
-  for (const id of ["2", "999"]) await assert.rejects(inbox.markDone({ id }), { code: "unknown_thread" });
+  await assert.rejects(inbox.markDone({ id: "999" }), { code: "unknown_thread" });
   assert.throws(() => client.markDone("../1"), { code: "invalid_thread" });
   assert.equal(calls.length, 1);
+  await inbox.markDone({ id: "2" });
+  assert.ok(calls[1].includes("DELETE"));
+  assert.deepEqual(inbox.loadedItems().map(item => item.id), ["1"]);
 });
 
 test("read and Done clicks share duplicate protection across panels and block overlapping batches", async t => {
@@ -159,7 +163,8 @@ test("Done shares write spacing and rate backoff with reads without automatic re
   await assert.rejects(inbox.markRead({ id: "4" }), { code: "rate_limited" });
   assert.deepEqual(methods, ["DELETE", "PATCH", "DELETE"]);
   assert.deepEqual(waits, [1000, 1000, 1000]);
-  assert.deepEqual(inbox.loadedItems().map(item => item.id), ["3", "4"]);
+  assert.deepEqual(inbox.loadedItems().map(item => item.id), ["2", "3", "4"]);
+  assert.equal(inbox.summary().unread, 2);
 });
 
 test("Done invalidates cached pages without hiding new unread activity behind a local completion ledger", async t => {

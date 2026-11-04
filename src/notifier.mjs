@@ -90,7 +90,7 @@ export async function notifyDesktop({ title, body, sound = "default", signal, pl
       COPILOT_TOAST_SOUND: sound === "default" ? "Default" : sound };
   } else {
     command = "notify-send";
-    args = ["--app-name=GitHub notifications", "--icon=dialog-information",
+    args = ["--app-name=GitHub Notifications", "--icon=dialog-information",
       `--hint=boolean:suppress-sound:${sound === "none"}`];
     if (!["none", "default"].includes(sound)) args.push(`--hint=string:sound-name:${sound}`);
     args.push("--", heading, escapeLinuxBody(text));

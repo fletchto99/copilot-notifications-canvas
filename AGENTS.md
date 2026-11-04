@@ -8,7 +8,7 @@ installation safeguards, and release process.
 
 ## Project and source layout
 
-Unread Notifications is a GitHub Copilot canvas extension for **github.com**.
+GitHub Notifications is a GitHub Copilot canvas extension for **github.com**.
 Its runtime supports Node.js 22 or later, with JavaScript ES modules, a plain
 HTML/CSS/JavaScript renderer, and GitHub CLI for authenticated API calls.
 Development tooling requires Node.js 24 or later; `.node-version` selects the
@@ -85,10 +85,19 @@ output. Development loads source without a build; release builds bundle
 
 ### Inbox and read/done behavior
 
-- Search and counts cover **loaded unread items**, not the entire GitHub inbox.
+- Show notifications defaults to All (`matchGitHubInbox: true`) and uses
+  `all=true&is_done=false` to mirror GitHub's read and unread inbox. Unread only
+  (`matchGitHubInbox: false`) uses `all=false`, as does desktop polling.
+  Neither view includes done notifications.
+  Search and counts cover **loaded items**, not the entire GitHub inbox.
   Refresh reconciles loaded pages; a failed refresh must not discard usable data.
-- Read and done updates require explicit panel actions. Row actions target a
-  loaded unread thread; repository, date, and shown-list batches target the loaded
+- All views preserve API row order. REST `updated_at` is not the inbox ordering
+  key. Preserve cross-repository API positions when regrouping into flat/date
+  views; date headings alone sort newest-first. Keep timestamp sorting for
+  desktop activity logic, and keep API positions out of agent-facing results.
+- Read and done updates require explicit panel actions. Read targets loaded
+  unread threads; Done also accepts loaded read threads. Repository, date, and
+  shown-list batches target the loaded
   attention/search matches identified by their selection key. Shown-list batches
   may span repositories, but never fetch or include unloaded items. Read is the
   default, and retries retain the original scope and explicitly chosen action
@@ -240,3 +249,5 @@ actually ran and any checks that could not run.
   user's installation as part of routine code validation. Follow the
   [release process](docs/development.md#publishing-releases) only when explicitly
   requested.
+- Do not publish the All inbox behavior before the notification API's
+  `is_done` filter is deployed. Older servers may silently ignore the filter.

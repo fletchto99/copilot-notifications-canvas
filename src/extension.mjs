@@ -19,10 +19,11 @@ const log = (message, options) => session?.log(message, options);
 const desktop = developmentAPI?.target.custom ? undefined : new DesktopNotifications({ preferences, client, log });
 const updates = new Updates({ log });
 
-async function action(ctx, run) {
+async function action(ctx, run, syncSettings = false) {
   try {
     const entry = await instances.get(ctx.instanceId)?.pending;
     if (!entry) throw new InboxError("not_open", "Open the notifications canvas first.", 404);
+    if (syncSettings) await entry.inbox.syncSettings(preferences);
     return await run(entry.inbox);
   } catch (error) {
     if (error instanceof InboxError) throw new CanvasError(error.code, error.message);
@@ -48,8 +49,8 @@ async function close(instanceId) {
 session = await joinSession({
   canvases: [createCanvas({
     id: "github-notifications",
-    displayName: "Unread Notifications",
-    description: "Unread GitHub notifications with read/done actions limited to shown, loaded items.",
+    displayName: "GitHub Notifications",
+    description: "GitHub inbox or unread-only notifications, with read/done actions limited to shown, loaded items.",
     inputSchema: filterSchema,
     actions: [
       {
@@ -60,7 +61,7 @@ session = await joinSession({
       },
       {
         name: "get_settings",
-        description: "Read saved grouping, theme, auto-open and desktop notification settings and status. Settings are changed through the panel.",
+        description: "Read the saved notification view, grouping, theme, auto-open and desktop notification settings and status. Settings are changed through the panel.",
         inputSchema: emptySchema,
         handler: ctx => action(ctx, async () => ({
           ...await preferences.read(), desktopStatus: desktop?.snapshot() ?? {
@@ -78,19 +79,19 @@ session = await joinSession({
         name: "refresh",
         description: "Refresh loaded pages, respecting GitHub polling and rate limits; return aggregate status.",
         inputSchema: emptySchema,
-        handler: ctx => action(ctx, inbox => inbox.refresh()),
+        handler: ctx => action(ctx, inbox => inbox.refresh(), true),
       },
       {
         name: "set_filters",
-        description: "Filter loaded unread notifications by attention reason and search titles, issue or PR numbers, and repositories; return aggregate status.",
+        description: "Choose inbox or unread notifications, then filter loaded items by attention reason or search; return aggregate status.",
         inputSchema: filterSchema,
-        handler: ctx => action(ctx, inbox => inbox.setFilters(ctx.input)),
+        handler: ctx => action(ctx, inbox => inbox.setFilters(ctx.input), true),
       },
       {
         name: "load_more",
         description: "Load the next page of up to 50 notifications; return aggregate status.",
         inputSchema: emptySchema,
-        handler: ctx => action(ctx, inbox => inbox.more()),
+        handler: ctx => action(ctx, inbox => inbox.more(), true),
       },
     ],
     open: async ctx => {
@@ -114,7 +115,7 @@ session = await joinSession({
         }).catch(() => {
           log("Could not start desktop notifications for the canvas.", { level: "error" });
         });
-        return { title: "Unread Notifications", url: entry.url };
+        return { title: "GitHub Notifications", url: entry.url };
       } catch (error) {
         if (instances.get(ctx.instanceId) === opening) instances.delete(ctx.instanceId);
         if (error instanceof InboxError) throw new CanvasError(error.code, error.message);

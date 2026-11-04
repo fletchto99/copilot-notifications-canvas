@@ -3,15 +3,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Unread Notifications</title>
+  <title>GitHub Notifications</title>
   <link rel="stylesheet" href="/styles.css">
   <script type="module" src="/app.mjs"></script>
 </head>
 <body>
   <main>
-    <header>
+    <header id="inbox-header">
       <p class="eyebrow">YOUR GITHUB INBOX</p>
-      <h1>Unread Notifications</h1>
+      <h1>GitHub Notifications</h1>
       <p id="subtitle" class="subtitle">A little less noise. One repository at a time.</p>
       <section id="update-banner" class="update-banner" aria-label="Canvas update" hidden>
         <div class="update-heading">
@@ -81,6 +81,13 @@
             <span id="settings-tooltip" class="tooltip" role="tooltip"><span class="tooltip-content">Settings</span></span>
           </summary>
           <div id="settings-panel" class="settings-panel" role="group" aria-label="Notification settings">
+            <div class="select-setting">
+              <label for="show-notifications">Show notifications</label>
+              <select id="show-notifications" disabled>
+                <option value="all" selected>All</option>
+                <option value="unread">Unread only</option>
+              </select>
+            </div>
             <button id="auto-open" class="switch-toggle" type="button" role="switch" aria-checked="false" disabled>
               <span>Auto-open</span>
               <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
@@ -98,7 +105,7 @@
             <div class="select-setting">
               <label for="theme">Theme</label>
               <select id="theme" disabled>
-                <option value="system" selected>System</option>
+                <option value="system" selected>Match Copilot</option>
                 <option value="dark">Dark</option>
                 <option value="light">Light</option>
               </select>

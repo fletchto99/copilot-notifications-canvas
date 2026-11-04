@@ -33,17 +33,21 @@ export function apiTarget(value = DEFAULT_API_BASE_URL) {
 
 export const attentionFilters = [
   { value: "all", label: "All", reasons: [] },
-  { value: "review_requested", label: "Review requested", reasons: ["review_requested"] },
-  { value: "mentioned", label: "Mentioned", reasons: ["mention", "team_mention"] },
   { value: "assigned", label: "Assigned", reasons: ["assign"] },
-  { value: "participating", label: "Participating", reasons: ["author", "comment"] },
+  { value: "participating", label: "Participating", reasons: [
+    "comment", "mention", "author", "team_mention", "assign", "manual",
+    "state_change", "invitation", "review_requested", "security_advisory_credit",
+  ] },
+  { value: "mentioned", label: "Mentioned", reasons: ["mention"] },
+  { value: "team_mentioned", label: "Team Mentioned", reasons: ["team_mention"] },
+  { value: "review_requested", label: "Review Requested", reasons: ["review_requested"] },
 ];
 
 export const filterSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
-    mode: { type: "string", enum: ["unread"] },
+    mode: { type: "string", enum: ["inbox", "unread"] },
     query: { type: "string", maxLength: 200 },
     attention: { type: "string", enum: attentionFilters.map(filter => filter.value) },
   },
@@ -54,10 +58,10 @@ export const emptySchema = { type: "object", properties: {}, additionalPropertie
 export function validateFilters(input) {
   if (!input || typeof input !== "object" || Array.isArray(input) ||
       Object.keys(input).some(key => !["mode", "query", "attention"].includes(key)) ||
-      (input.mode !== undefined && input.mode !== "unread") ||
+      (input.mode !== undefined && !["inbox", "unread"].includes(input.mode)) ||
       (input.query !== undefined && (typeof input.query !== "string" || input.query.length > 200)) ||
       (input.attention !== undefined && !attentionFilters.some(filter => filter.value === input.attention))) {
-    throw new InboxError("invalid_filters", "Only unread notifications are supported. Search must be at most 200 characters. Choose a supported attention filter.", 400);
+    throw new InboxError("invalid_filters", "Choose inbox or unread notifications. Search must be at most 200 characters. Choose a supported attention filter.", 400);
   }
   return input;
 }
@@ -139,13 +143,18 @@ export function normalizeThreads(body, target = apiTarget()) {
   });
 }
 
-export function orderedThreads(threads) {
+export function uniqueThreads(threads, compareFreshness = (a, b) => a.updatedAt.localeCompare(b.updatedAt)) {
+  // A newer duplicate replaces the data, not its first-seen API position.
   const unique = new Map();
   for (const thread of threads) {
     const previous = unique.get(thread.id);
-    if (!previous || previous.updatedAt <= thread.updatedAt) unique.set(thread.id, thread);
+    if (!previous || compareFreshness(previous, thread) <= 0) unique.set(thread.id, thread);
   }
-  return [...unique.values()].sort((a, b) =>
+  return [...unique.values()];
+}
+
+export function orderedThreads(threads) {
+  return uniqueThreads(threads).sort((a, b) =>
     b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id));
 }
 
@@ -169,8 +178,7 @@ export function groupThreadsByDate(threads, timeZone) {
     throw error;
   }
   const groups = new Map();
-  for (const item of orderedThreads(threads)) {
-    if (!item.unread) continue;
+  for (const item of uniqueThreads(threads)) {
     const parts = Object.fromEntries(formatter.formatToParts(new Date(item.updatedAt)).map(({ type, value }) => [type, value]));
     const date = `${parts.year.padStart(4, "0")}-${parts.month}-${parts.day}`;
     let group = groups.get(date);
@@ -179,21 +187,21 @@ export function groupThreadsByDate(threads, timeZone) {
       groups.set(date, group);
     }
     group.items.push(item);
-    group.unread++;
+    group.unread += Number(item.unread);
   }
-  return [...groups.values()];
+  return [...groups.values()].sort((a, b) => b.date.localeCompare(a.date));
 }
 
 function searchThreads(threads, query) {
   const search = query.trim().toLocaleLowerCase();
-  return orderedThreads(threads).filter(thread => thread.unread &&
-    (!search || `${notificationTitle(thread)}\n${thread.repository}`.toLocaleLowerCase().includes(search)));
+  return uniqueThreads(threads).filter(thread =>
+    !search || `${notificationTitle(thread)}\n${thread.repository}`.toLocaleLowerCase().includes(search));
 }
 
 export function attentionCounts(threads) {
-  const unread = orderedThreads(threads).filter(thread => thread.unread);
+  const items = uniqueThreads(threads);
   return Object.fromEntries(attentionFilters.map(({ value, reasons }) => [
-    value, value === "all" ? unread.length : unread.filter(thread => reasons.includes(thread.reason)).length,
+    value, value === "all" ? items.length : items.filter(thread => reasons.includes(thread.reason)).length,
   ]));
 }
 
@@ -209,7 +217,7 @@ export function groupThreads(threads, { query, attention = "all" }) {
       groups.set(thread.repository, group);
     }
     group.items.push(thread);
-    group.unread++;
+    group.unread += Number(thread.unread);
   }
-  return [...groups.values()].sort((a, b) => a.repository.localeCompare(b.repository));
+  return [...groups.values()];
 }

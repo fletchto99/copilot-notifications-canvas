@@ -8,7 +8,7 @@ import { DesktopNotifications } from "../src/desktop.mjs";
 import { Preferences } from "../src/settings.mjs";
 import { startServer } from "../src/server.mjs";
 import { Updates, CURRENT_VERSION } from "../src/updates.mjs";
-import { http, next, thread } from "./fixtures.mjs";
+import { http, thread } from "./fixtures.mjs";
 import { apiTarget } from "../src/model.mjs";
 import { loadDevelopmentAPI } from "../src/development.mjs";
 
@@ -53,19 +53,25 @@ export async function createCanvasFixture({
       const path = new URL(endpoint, target.origin).pathname.slice(target.prefix.length);
       const match = /^\/notifications\/threads\/(\d+)$/.exec(path);
       const row = rows.find(item => item.id === match?.[1]);
-      assert.ok(row?.unread, `Unexpected or repeated synthetic write: ${endpoint}`);
+      assert.ok(row && (args.includes("DELETE") || row.unread), `Unexpected synthetic write: ${endpoint}`);
       row.unread = false;
       writes.push(row.id);
-      if (args.includes("DELETE")) doneWrites.push(row.id);
+      if (args.includes("DELETE")) {
+        row.done = true;
+        doneWrites.push(row.id);
+      }
       return `HTTP/2 ${args.includes("DELETE") ? 204 : 205} Synthetic\r\n\r\n`;
     }
     const url = new URL(endpoint, "https://api.github.com");
     assert.ok(args.includes("GET") && url.origin === target.origin && url.pathname === `${target.prefix}/notifications`,
       `Unexpected request: ${endpoint}`);
     const offset = (Number(url.searchParams.get("page")) - 1) * 50;
-    const unread = rows.filter(row => row.unread);
-    return http(unread.slice(offset, offset + 50), offset + 50 < unread.length
-      ? { link: next.replace("https://api.github.com", target.baseUrl) } : {});
+    const selected = rows.filter(row => url.searchParams.get("all") === "false" ? row.unread :
+      url.searchParams.get("is_done") !== "false" || !row.done);
+    const next = new URL(url);
+    next.searchParams.set("page", String(Number(url.searchParams.get("page")) + 1));
+    return http(selected.slice(offset, offset + 50), offset + 50 < selected.length
+      ? { link: `<${next.href}>; rel="next"` } : {});
   };
   const client = new GitHubClient({ run, now: () => Date.now() + offset, apiBaseUrl: target.baseUrl });
   const preferences = new Preferences({ directory });

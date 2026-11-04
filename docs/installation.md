@@ -91,7 +91,7 @@ Use the same `COPILOT_HOME` for an upgrade as for the original installation.
 
 3. Only after the installer succeeds, ask Copilot:
 
-   > Reload extensions, then open the Unread Notifications canvas.
+   > Reload extensions, then open the GitHub Notifications canvas.
 
    Other already-open Copilot sessions need their own extension reload.
 

@@ -40,10 +40,11 @@ test("the private preview launcher opens an accessible synthetic inbox with work
   await expect(page.locator(".row")).toHaveCount(50);
   await expect(page.getByRole("tab", { name: /^Mentioned \([1-9]\d*\)$/ })).toBeVisible();
   await page.getByRole("button", { name: "Mark as read: Needle widget 2", exact: true }).click();
-  await expect(page.locator(".row")).toHaveCount(49);
+  await expect(page.locator(".row")).toHaveCount(50);
+  await expect(page.locator(".row.read")).toHaveCount(1);
   expect(preview.writes).toEqual(["2"]);
   await page.getByRole("button", { name: "Mark as done: Needle tool", exact: true }).click();
-  await expect(page.locator(".row")).toHaveCount(48);
+  await expect(page.locator(".row")).toHaveCount(49);
   expect(preview.writes).toEqual(["2", "3"]);
   expect(preview.doneWrites).toEqual(["3"]);
   await page.getByLabel("Settings", { exact: true }).click();
@@ -73,8 +74,8 @@ test.describe("long-title preview", () => {
     await page.setViewportSize({ width: 320, height: 640 });
     await page.goto(preview.launcher);
     await expect(page.locator(".row")).toHaveCount(50);
-    await expect(page.getByRole("link", { name: preview.rows[0].subject.title, exact: true })).toBeVisible();
-    await expect(page.getByRole("link", { name: preview.rows[1].subject.title, exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: preview.rows[0].subject.title })).toBeVisible();
+    await expect(page.getByRole("link", { name: preview.rows[1].subject.title })).toBeVisible();
     for (const colorScheme of ["light", "dark"]) {
       await page.emulateMedia({ colorScheme });
       await expect(page.locator("html")).toHaveAttribute("data-notification-theme", colorScheme);

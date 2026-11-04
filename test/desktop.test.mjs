@@ -140,10 +140,10 @@ test("background desktop checks run at one minute, never earlier", async t => {
   assert.equal(f.deliveries.length, 1);
 });
 
-test("foreground refreshes share results with alerts at one minute and background checks retain that cadence", async t => {
+test("unread-mode foreground refreshes share results with alerts and retain the polling cadence", async t => {
   const f = await fixture(t);
   const watcher = f.make();
-  const inbox = new Inbox(watcher.client);
+  const inbox = new Inbox(watcher.client, { mode: "unread" });
   t.after(() => inbox.close());
   await watcher.prepareForeground();
   await inbox.refresh();
@@ -171,10 +171,41 @@ test("foreground refreshes share results with alerts at one minute and backgroun
   assert.equal(f.deliveries.length, 2);
 });
 
-test("an immediate foreground return feeds new activity to alerts without waiting for the polling interval", async t => {
+test("inbox matching uses a separate cache while disabling it shares the unread desktop feed", async t => {
   const f = await fixture(t);
   const watcher = f.make();
   const inbox = new Inbox(watcher.client);
+  const unmatched = new Inbox(watcher.client);
+  unmatched.setMatchGitHubInbox(false);
+  t.after(() => { inbox.close(); unmatched.close(); });
+  let unread = [thread("1")];
+  f.response(args => {
+    const query = new URL(args.at(-1), "https://api.github.com").searchParams;
+    return http(query.get("all") === "false" ? unread :
+      [...unread, thread("9", { unread: false, updated_at: "2026-02-01T12:00:00Z" })]);
+  });
+  await watcher.prepareForeground();
+  await inbox.refresh();
+  await unmatched.refresh();
+  await watcher.sync();
+  assert.equal(f.calls.length, 2);
+  assert.equal(unmatched.summary().loaded, 1);
+  assert.equal((await f.state()).watermark, epoch);
+  assert.deepEqual(f.deliveries, []);
+  const time = f.advance(POLL_MS);
+  unread = [updated("2", time), ...unread];
+  await inbox.refresh();
+  await watcher.check();
+  assert.deepEqual(f.deliveries.map(message => message.body), ["#42 Synthetic notification 2"]);
+  assert.match(f.calls.at(-1).at(-1), /all=false/);
+  assert.equal(inbox.summary().loaded, 3);
+  assert.equal(inbox.summary().unread, 2);
+});
+
+test("an immediate unread-mode foreground return feeds activity to alerts without waiting", async t => {
+  const f = await fixture(t);
+  const watcher = f.make();
+  const inbox = new Inbox(watcher.client, { mode: "unread" });
   t.after(() => inbox.close());
   await watcher.prepareForeground();
   await inbox.refresh();
@@ -193,8 +224,8 @@ test("opening another panel with cached results does not postpone the background
   for (const interval of [60, 300]) {
     const f = await fixture(t);
     const watcher = f.make();
-    const first = new Inbox(watcher.client);
-    const second = new Inbox(watcher.client);
+    const first = new Inbox(watcher.client, { mode: "unread" });
+    const second = new Inbox(watcher.client, { mode: "unread" });
     t.after(() => { first.close(); second.close(); });
     f.response(() => http([thread()], { "x-poll-interval": String(interval) }));
     await watcher.prepareForeground();
@@ -244,7 +275,7 @@ test("quota-exhausting foreground responses establish silent baselines without h
   for (const initialRows of [[], [thread()]]) {
     const f = await fixture(t);
     const watcher = f.make();
-    const inbox = new Inbox(watcher.client);
+    const inbox = new Inbox(watcher.client, { mode: "unread" });
     t.after(() => inbox.close());
     f.response(() => http(initialRows, {
       date: new Date(epoch).toUTCString(),
@@ -274,7 +305,7 @@ test("an established watcher immediately delivers fresh cached activity even whe
   const f = await fixture(t);
   const watcher = f.make();
   await watcher.check();
-  const inbox = new Inbox(watcher.client);
+  const inbox = new Inbox(watcher.client, { mode: "unread" });
   t.after(() => inbox.close());
   const time = f.advance(60_000);
   f.response(() => http([updated("2", time), thread()], { "x-ratelimit-remaining": "0" }));
@@ -293,7 +324,7 @@ test("an established watcher immediately delivers fresh cached activity even whe
 test("complete foreground scans can deliver across cached pages when the final response exhausts quota", async t => {
   const f = await fixture(t);
   const watcher = f.make();
-  const inbox = new Inbox(watcher.client);
+  const inbox = new Inbox(watcher.client, { mode: "unread" });
   t.after(() => inbox.close());
   const backlog = Array.from({ length: 50 }, (_, index) => thread(String(index + 1)));
   f.response(args => args.at(-1).includes("page=1") ? http(backlog, { link: next }) : http([thread("51")]));
@@ -318,7 +349,7 @@ test("quota-paused scans reject missing and stale continuations without committi
   for (const cachedContinuation of [false, true]) {
     const f = await fixture(t);
     const watcher = f.make();
-    const inbox = new Inbox(watcher.client);
+    const inbox = new Inbox(watcher.client, { mode: "unread" });
     t.after(() => inbox.close());
     if (cachedContinuation) {
       const backlog = Array.from({ length: 50 }, (_, index) => thread(String(index + 1)));
@@ -343,7 +374,7 @@ test("quota-paused scans reject missing and stale continuations without committi
 test("foreground alerts scan all new activity pages without changing the canvas's loaded selection", async t => {
   const f = await fixture(t);
   const watcher = f.make();
-  const inbox = new Inbox(watcher.client, { query: "notification 2" });
+  const inbox = new Inbox(watcher.client, { mode: "unread", query: "notification 2" });
   t.after(() => inbox.close());
   await watcher.prepareForeground();
   await inbox.refresh();
@@ -365,7 +396,7 @@ test("foreground alerts scan all new activity pages without changing the canvas'
 test("a fresh first page cannot advance the watermark past arrivals hidden by an older cached continuation", async t => {
   const f = await fixture(t);
   const watcher = f.make();
-  const inbox = new Inbox(watcher.client);
+  const inbox = new Inbox(watcher.client, { mode: "unread" });
   t.after(() => inbox.close());
   const backlog = Array.from({ length: 51 }, (_, index) => updated(String(index + 1), epoch));
   let rows = backlog;
@@ -399,7 +430,7 @@ test("a fresh first page cannot advance the watermark past arrivals hidden by an
 test("enabling desktop alerts silently baselines activity missing from a pre-activation foreground cache", async t => {
   const f = await fixture(t, { enabled: false });
   const watcher = f.make();
-  const inbox = new Inbox(watcher.client);
+  const inbox = new Inbox(watcher.client, { mode: "unread" });
   t.after(() => inbox.close());
   await inbox.refresh();
   f.rows([updated("2", f.advance(1000)), thread()]);
@@ -480,7 +511,7 @@ test("foreground synchronization retries contention on the timer and consumes th
     await held;
   } });
   const newer = f.make({ schedule: clock.schedule, cancel: clock.cancel });
-  const inbox = new Inbox(newer.client);
+  const inbox = new Inbox(newer.client, { mode: "unread" });
   t.after(() => inbox.close());
   await older.check();
   await newer.check();

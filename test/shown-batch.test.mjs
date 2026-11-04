@@ -8,13 +8,13 @@ import { Inbox } from "../src/inbox.mjs";
 import { InboxError, normalizeThreads } from "../src/model.mjs";
 import { Preferences } from "../src/settings.mjs";
 import { startServer } from "../src/server.mjs";
-import { http, next, thread } from "./fixtures.mjs";
+import { http, inboxNext as next, thread } from "./fixtures.mjs";
 
 const confirmed = method => `HTTP/2 ${method === "DELETE" ? 204 : 205} Synthetic\r\n\r\n`;
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const rows = [
   thread("1", { repository: { full_name: "example/alpha" }, reason: "mention", updated_at: "2026-01-13T12:00:00Z" }),
-  thread("2", { repository: { full_name: "example/beta" }, reason: "team_mention", updated_at: "2026-01-12T12:00:00Z" }),
+  thread("2", { repository: { full_name: "example/beta" }, reason: "mention", updated_at: "2026-01-12T12:00:00Z" }),
   thread("3", { repository: { full_name: "example/gamma" }, reason: "assign", updated_at: "2026-01-11T12:00:00Z" }),
 ];
 
@@ -48,7 +48,7 @@ function selection(inbox, action = "done") {
   return { scope: "shown", selectionKey: inbox.snapshot().selectionKey, action };
 }
 
-test("shown read and Done batches capture only loaded filter matches across repositories in newest-first order", async t => {
+test("shown read and Done batches capture only loaded filter matches across repositories in API order", async t => {
   for (const action of ["read", "done"]) {
     const pageOne = [
       ...rows,
@@ -75,11 +75,11 @@ test("shown read and Done batches capture only loaded filter matches across repo
     assert.equal(inbox.batch.snapshot().action, action);
     assert.doesNotMatch(JSON.stringify(inbox.summary()), /selectionKey|"token"|example\/|Synthetic notification|"items"/);
     await inbox.batch.done;
-    assert.deepEqual(writes, ["5", "1", "2"].map(id => ({ id, method: action === "done" ? "DELETE" : "PATCH" })));
+    assert.deepEqual(writes, ["1", "2", "5"].map(id => ({ id, method: action === "done" ? "DELETE" : "PATCH" })));
     assert.deepEqual(waits, [1000, 1000]);
     assert.equal(calls.filter(call => call.method === "GET").length, 2);
     for (const panel of [inbox, other]) {
-      assert.deepEqual(panel.loadedItems().map(item => item.id), ["3", "4"]);
+      assert.deepEqual(panel.loadedItems().filter(item => action === "done" || item.unread).map(item => item.id), ["3", "4"]);
       assert.equal(panel.summary().hasMore, true);
       assert.equal(panel.summary().needsRefresh, true);
     }

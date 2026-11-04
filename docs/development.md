@@ -69,7 +69,7 @@ because GitHub CLI does not accept them; use a DNS hostname or IPv4 address.
 
 Only HTTPS bases without embedded credentials, query strings, fragments, or
 encoded paths are accepted. Notification pagination must stay on that base's
-notifications endpoint with the original unread query and page size.
+notifications endpoint with the original `all` and `is_done` filters and page size.
 Issue/PR, repository, and inbox links use the selected API's origin as the
 website origin; APIs with a separate website hostname are not supported.
 Release discovery and installation links remain on GitHub.com.
@@ -82,6 +82,21 @@ without changing saved desktop preferences or production coordination files.
 The inbox link stays unavailable until the active API is known; the link and
 custom-API warning do not need to wait for the first notification fetch.
 Use synthetic fixtures for automated validation, never live notification writes.
+
+### Inbox API contract
+
+Show notifications defaults to All and uses `all=true&is_done=false`. Unread only
+uses `all=false` without `is_done`. Both use `per_page=50` and explicit
+pagination. The existing agent `mode: "unread"` overrides this preference with
+`all=false`, and desktop polling also stays unread-only. Cache entries and
+pagination validation keep the two queries separate. Unfiltered `all=true`
+requests are rejected so neither view can include Done notifications.
+
+This behavior requires server support for the `is_done` filter. Do not release
+or publish these changes before that support is deployed: older servers may
+ignore the parameter and include Done items in the default inbox. Validate
+against an explicitly selected development API using read-only requests and
+aggregate counts, never captured notification content.
 
 ### Synthetic preview
 

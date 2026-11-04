@@ -6,8 +6,9 @@ export const POLL_MS = 60_000;
 export const RETRY_MS = 120_000;
 const API_ORIGIN = DEFAULT_API_BASE_URL;
 
-export function firstPage() {
-  return "/notifications?all=false&per_page=50&page=1";
+export function firstPage({ mode = "unread", matchGitHubInbox = true } = {}) {
+  const inbox = mode === "inbox" && matchGitHubInbox;
+  return `/notifications?all=${inbox ? "true&is_done=false" : "false"}&per_page=50&page=1`;
 }
 
 function endpointURL(endpoint, target = apiTarget()) {
@@ -18,10 +19,13 @@ function endpointURL(endpoint, target = apiTarget()) {
     throw new InboxError("invalid_pagination", "GitHub returned an invalid pagination link.");
   }
   const keys = [...url.searchParams.keys()];
+  const all = url.searchParams.get("all");
+  const done = url.searchParams.get("is_done");
   if (url.origin !== target.origin || url.username || url.password || url.hash ||
-      url.pathname !== `${target.prefix}/notifications` || keys.length !== 3 ||
-      !keys.every(key => ["all", "per_page", "page"].includes(key)) ||
-      url.searchParams.get("all") !== "false" ||
+      url.pathname !== `${target.prefix}/notifications` || keys.length !== (done === null ? 3 : 4) ||
+      new Set(keys).size !== keys.length ||
+      !keys.every(key => ["all", "is_done", "per_page", "page"].includes(key)) ||
+      !(all === "false" && done === null || all === "true" && done === "false") ||
       url.searchParams.get("per_page") !== "50" ||
       !/^[1-9]\d*$/.test(url.searchParams.get("page") ?? "") ||
       !Number.isSafeInteger(Number(url.searchParams.get("page")))) {
@@ -46,6 +50,7 @@ export function nextPage(header, currentEndpoint, target = apiTarget()) {
   const url = endpointURL(match[1], target);
   const current = endpointURL(currentEndpoint);
   if (url.searchParams.get("all") !== current.searchParams.get("all") ||
+      url.searchParams.get("is_done") !== current.searchParams.get("is_done") ||
       Number(url.searchParams.get("page")) !== Number(current.searchParams.get("page")) + 1) {
     throw new InboxError("invalid_pagination", "GitHub returned an inconsistent next-page link.");
   }
@@ -189,12 +194,19 @@ export class GitHubClient {
         this.writeAvailableAt = this.now() + 1000;
       }
       this.revision++;
-      for (const page of this.cache.values()) {
-        page.items = page.items.filter(item => item.id !== id);
-        page.etag = undefined;
-        page.modified = undefined;
+      const action = method === "DELETE" ? "done" : "read";
+      for (const [endpoint, page] of this.cache) {
+        const query = endpointURL(endpoint).searchParams;
+        const retain = query.get("all") === "true" && action === "read";
+        this.cache.set(endpoint, {
+          ...page,
+          items: page.items.flatMap(item => item.id !== id ? [item] : retain ? [{ ...item, unread: false }] : []),
+          etag: undefined,
+          modified: undefined,
+          invalidated: true,
+        });
       }
-      for (const listener of this.threadListeners) listener(id);
+      for (const listener of this.threadListeners) listener(id, action);
     }).finally(() => this.pendingThreads.delete(id));
     this.queue = pending.catch(() => {});
     return pending;
@@ -204,11 +216,11 @@ export class GitHubClient {
     if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
     const now = this.now();
     const cached = method === "GET" ? this.cache.get(endpoint) : undefined;
-    if (allowCachedDuringBackoff && !force && cached &&
+    if (allowCachedDuringBackoff && !force && cached && !cached.invalidated &&
         cached.sequence >= minSequence && now < cached.nextRefreshAt) return cached;
     if (now < this.blockedUntil) throw this.lastError ??
       new InboxError("rate_limited", "GitHub requests are paused until the rate limit resets.", 429);
-    if (!force && cached && now < cached.nextRefreshAt) return cached;
+    if (!force && cached && !cached.invalidated && now < cached.nextRefreshAt) return cached;
     const requestKey = `${method} ${endpoint}`;
     const clearFailure = () => {
       this.failures.delete(requestKey);
@@ -268,12 +280,14 @@ export class GitHubClient {
         items = normalizeThreads(body, this.target);
         next = nextPage(headers.link, endpoint, this.target);
       }
+      const invalidated = status === 304 && Boolean(cached?.invalidated);
       const page = {
         sequence,
+        invalidated,
         items, next, fetchedAt, nextRefreshAt: Math.max(fetchedAt + poll, this.blockedUntil),
         serverTime: Number.isFinite(serverTime) && serverTime >= 0 ? serverTime : null,
-        etag: headers.etag ?? (status === 304 ? cached?.etag : undefined),
-        modified: headers["last-modified"] ?? (status === 304 ? cached?.modified : undefined),
+        etag: invalidated ? undefined : headers.etag ?? (status === 304 ? cached?.etag : undefined),
+        modified: invalidated ? undefined : headers["last-modified"] ?? (status === 304 ? cached?.modified : undefined),
       };
       this.cache.set(endpoint, page);
       clearFailure();

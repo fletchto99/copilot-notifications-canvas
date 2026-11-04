@@ -131,7 +131,7 @@ test("the published archive installs and upgrades a self-contained provider with
   // Model an already-running previous packaged release, not the unsupported legacy layout.
   const text = bundle.content.toString("utf8");
   const code = text.slice(text.indexOf("\n") + 1)
-    .replaceAll("Unread Notifications", "Previous Notifications")
+    .replaceAll("GitHub Notifications", "Previous Notifications")
     .replaceAll(JSON.stringify(CURRENT_VERSION), '"0.0.0"');
   assert.notEqual(code, text.slice(text.indexOf("\n") + 1));
   await writeFile(entry, encodeBundle(code, "0.0.0"));
@@ -209,7 +209,7 @@ try {
   assert.equal(current.id, "github-notifications");
   await rm(join(root, "package"), { recursive: true });
   const after = await open(current, "after");
-  assert.match(after.assets["index.html"], /<title>Unread Notifications<\\/title>/);
+  assert.match(after.assets["index.html"], /<title>GitHub Notifications<\\/title>/);
   assert.deepEqual((await open(old, "old-opened-after-upgrade")).assets, before.assets);
   assert.equal(await (await fetch(new URL("/", before.url))).text(), before.assets["index.html"]);
   const state = await current.actions.find(action => action.name === "check_for_updates").handler({ instanceId: "after" });
@@ -260,19 +260,35 @@ try {
       },
     } },
   };
+  const legacy = {
+    extensionId: "user:github-notifications", canvasId: "github-notifications",
+    instanceId: "unread-notifications-startup", input: {},
+  };
+  assert.deepEqual((await open(current, legacy.instanceId)).assets, after.assets);
+  livePanels.push(legacy);
+  await import(pathToFileURL(entry).href + "?legacy-startup");
+  assert.equal(opens.length, 0, "A restored legacy panel must prevent duplicate auto-open");
+  await current.onClose({ instanceId: legacy.instanceId });
+  livePanels.length = 0;
+  for (const type of ["session.canvas.closed", "session.canvas.removed"]) {
+    startupEvents.push({ type, data: legacy });
+    await import(pathToFileURL(entry).href + "?legacy-" + type);
+    assert.equal(opens.length, 0, "Legacy dismissal must survive provider reload");
+    startupEvents.pop();
+  }
   await import(pathToFileURL(entry).href + "?startup");
   assert.deepEqual(opens, [{
     extensionId: "user:github-notifications", canvasId: "github-notifications",
-    instanceId: "unread-notifications-startup", input: {},
+    instanceId: "github-notifications-startup", input: {},
   }]);
   const startup = globalThis.testCanvases.at(-1);
   const startupSettings = await startup.actions.find(action => action.name === "get_settings")
-    .handler({ instanceId: "unread-notifications-startup" });
+    .handler({ instanceId: "github-notifications-startup" });
   assert.equal(startupSettings.startupStatus, "opened");
   assert.equal(startupSettings.desktopNotifications, false);
   await import(pathToFileURL(entry).href + "?startup-reload");
   assert.equal(opens.length, 1, "Reloading must leave an existing panel alone");
-  await startup.onClose({ instanceId: "unread-notifications-startup" });
+  await startup.onClose({ instanceId: "github-notifications-startup" });
   livePanels.length = 0;
   startupEvents.push({ type: "session.canvas.removed", data: opens[0] });
   await import(pathToFileURL(entry).href + "?startup-dismissed");

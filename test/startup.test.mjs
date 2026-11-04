@@ -118,6 +118,33 @@ test("existing notification panels are left alone without resolving or focusing 
   }
 });
 
+test("legacy startup IDs preserve existing panels and dismissal history after resume", async () => {
+  const legacy = { ...notificationPanel, instanceId: "unread-notifications-startup" };
+  const existing = fixture({ panels: [legacy], events: [...resumedHistory] });
+  existing.session.rpc.canvas.list = async () => assert.fail("A legacy panel must not be replaced or focused");
+  await existing.startup.start();
+  assert.equal(existing.startup.status, "panel-already-open");
+  assert.deepEqual(existing.opened, []);
+
+  for (const type of ["session.canvas.closed", "session.canvas.removed"]) {
+    const dismissed = fixture({ events: [...resumedHistory, { type, data: legacy }] });
+    await dismissed.startup.start();
+    assert.equal(dismissed.startup.status, "dismissed");
+    const reload = new Startup(dismissed.session, dismissed.preferences, dismissed.dependencies);
+    await reload.start();
+    assert.equal(reload.status, "dismissed");
+    assert.deepEqual(dismissed.opened, []);
+  }
+
+  const missing = fixture({ events: [
+    { type: "session.canvas.recorded", data: legacy }, ...resumedHistory,
+  ] });
+  await missing.startup.start();
+  assert.equal(missing.startup.status, "opened");
+  assert.equal(missing.opened.length, 1);
+  assert.equal(missing.opened[0].instanceId, "github-notifications-startup");
+});
+
 test("the final live snapshot prevents refocusing a panel opened during provider discovery", async () => {
   const item = fixture();
   item.session.rpc.canvas.list = async () => {

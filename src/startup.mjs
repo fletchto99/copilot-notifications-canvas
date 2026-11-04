@@ -2,7 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { acquireLock } from "./lock.mjs";
 
-export const STARTUP_INSTANCE = "unread-notifications-startup";
+export const STARTUP_INSTANCE = "github-notifications-startup";
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 1_000;
 
@@ -156,8 +156,8 @@ export class Startup {
 
   async warn(retrying) {
     await this.session.log(retrying
-      ? "Unread Notifications could not auto-open. Retrying shortly."
-      : "Unread Notifications could not complete auto-open. Check notification settings, the session workspace, and canvas availability; re-enter or reload the session to try again.",
+      ? "GitHub Notifications could not auto-open. Retrying shortly."
+      : "GitHub Notifications could not complete auto-open. Check notification settings, the session workspace, and canvas availability; re-enter or reload the session to try again.",
     { level: "warning" });
   }
 

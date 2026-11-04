@@ -14,6 +14,7 @@ export const test = base.extend({
     const { errors, warnings } = canvas;
     const consoleErrors = [];
     const expectedConsoleErrors = [];
+    const expectedProviderErrors = [];
     try {
       const origin = new URL(canvas.url).origin;
       await context.route("**/*", async route => {
@@ -29,8 +30,9 @@ export const test = base.extend({
       await use({
         ...canvas,
         expectConsoleError: (path, text) => expectedConsoleErrors.push({ text, url: new URL(path, origin).href }),
+        expectProviderError: message => expectedProviderErrors.push(message),
       });
-      expect(errors, "Browser execution, CSP, and external-network errors").toEqual([]);
+      expect(errors, "Exact expected provider errors; no browser, CSP or external-network errors").toEqual(expectedProviderErrors);
       expect(consoleErrors, "Exact expected browser console errors").toEqual(expectedConsoleErrors);
       expect(warnings).toEqual(assetFailure
         ? ["Could not load the notifications canvas assets (ENOENT). Retrying in the background."] : []);

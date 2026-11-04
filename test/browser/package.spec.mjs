@@ -26,7 +26,7 @@ test("installed bundle supports search, saved settings and exact row writes in a
   await expect(page.locator(".toolbar > #refresh-control + #settings")).toHaveCount(1);
   await page.getByRole("searchbox").fill("Needle");
   await expect(page.locator(".row")).toHaveCount(3);
-  await page.getByRole("tab", { name: "Review requested (1)", exact: true }).click();
+  await page.getByRole("tab", { name: "Review Requested (1)", exact: true }).click();
   await expect(page.locator(".row")).toHaveCount(1);
   await page.getByLabel("Settings", { exact: true }).click();
   await page.getByRole("combobox", { name: "Theme", exact: true }).selectOption("dark");
@@ -37,14 +37,15 @@ test("installed bundle supports search, saved settings and exact row writes in a
   await page.keyboard.press("Escape");
   await expect(page.getByRole("button", { name: "Mark as read: Needle widget 2", exact: true })).toHaveAccessibleDescription("Mark as read");
   await page.getByRole("button", { name: "Mark as read: Needle widget 2", exact: true }).click();
-  await expect(page.locator(".row")).toHaveCount(0);
-  await expect(page.locator("#empty-title")).toHaveText("No matches in loaded notifications");
+  await expect(page.locator(".row")).toHaveCount(1);
+  await expect(page.locator(".mark-read")).toHaveCount(0);
+  await expect(page.locator("#empty")).toBeHidden();
   await page.getByRole("searchbox").fill("");
   await expect(page.getByRole("searchbox")).toHaveValue("");
-  await expect(page.getByRole("tab", { name: "Review requested (0)", exact: true })).toHaveAttribute("aria-selected", "true");
-  await expect(page.locator(".row")).toHaveCount(0);
-  await page.getByRole("tab", { name: "All (49)", exact: true }).click();
-  await expect(page.locator(".row")).toHaveCount(49);
+  await expect(page.getByRole("tab", { name: "Review Requested (1)", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(".row")).toHaveCount(1);
+  await page.getByRole("tab", { name: "All (50)", exact: true }).click();
+  await expect(page.locator(".row")).toHaveCount(50);
   expect(canvas.writes).toEqual(["2"]);
   const done = page.getByRole("button", { name: "Mark as done: Needle tool", exact: true });
   await expect(done).toHaveText("");
@@ -53,8 +54,8 @@ test("installed bundle supports search, saved settings and exact row writes in a
   await expect(page.locator("#row-done-3-tooltip")).toBeVisible();
   await expect(page.locator("#row-done-3-tooltip")).toHaveText("Mark as done");
   await done.click();
-  await expect(page.locator(".row")).toHaveCount(48);
-  await expect(page.getByRole("tab", { name: "All (48)", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(".row")).toHaveCount(49);
+  await expect(page.getByRole("tab", { name: "All (49)", exact: true })).toHaveAttribute("aria-selected", "true");
   expect(canvas.writes).toEqual(["2", "3"]);
   expect(canvas.doneWrites).toEqual(["3"]);
   await page.reload();
@@ -65,11 +66,11 @@ test("installed bundle supports search, saved settings and exact row writes in a
   expect((await canvas.preferences.read()).groupBy).toBe("none");
 });
 
-test("installed bundle sends single-notification Done actions through the split control", async ({ page, canvas }) => {
+test("installed bundle sends single-notification Done actions through the group button", async ({ page, canvas }) => {
   canvas.rows.splice(1);
   await page.goto(canvas.url);
-  await page.getByRole("button", { name: "More actions for example/widgets", exact: true }).click();
   const done = page.getByRole("button", { name: "Mark 1 as done in example/widgets; 1 shown, loaded notifications", exact: true });
+  await done.focus();
   await expect(done).toBeFocused();
   expect(canvas.doneWrites).toEqual([]);
   await done.press("Enter");

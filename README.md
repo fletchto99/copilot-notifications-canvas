@@ -1,10 +1,12 @@
-# Unread Notifications
+# GitHub Notifications
 
-Unread GitHub notifications in the GitHub Copilot app, grouped by repository or
-date, or shown as a single newest-first list. Search, mark rows or repositories
-as read or done, and opt into desktop notifications or auto-open.
+Your GitHub inbox in the GitHub Copilot app, grouped by repository or date, or
+shown as a single newest-first list. **Show notifications** defaults to **All**,
+showing read and unread inbox items; choose **Unread only** to narrow the view. Completed items
+stay hidden in both views. Search, mark rows
+or groups as read or done, and opt into desktop notifications or auto-open.
 
-![Unread Notifications canvas showing attention tabs, two demo notifications, and row and repository read/done controls](docs/images/unread-notifications.png)
+![GitHub Notifications canvas showing eight synthetic notifications, five unread, grouped across three example repositories with attention tabs and read/done controls](docs/images/github-notifications.png)
 
 ## Prerequisites
 
@@ -28,7 +30,7 @@ or later; this does not change the packaged extension's runtime requirement.
 Paste this prompt into Copilot:
 
 ```text
-Install or update the Unread Notifications canvas as a user-wide Copilot
+Install or update the GitHub Notifications canvas as a user-wide Copilot
 extension using the latest stable release from:
 https://github.com/fletchto99/copilot-notifications-canvas
 
@@ -44,6 +46,8 @@ full procedure, verification requirements, and troubleshooting.
 
 - Filter with the attention tabs or search by title, issue/PR number, or repository.
 - Choose **All notifications**, **Repository**, or **Date** in **Settings**.
+- Set **Show notifications** in **Settings** to **All** for read and unread inbox
+  items, or **Unread only** to narrow the view.
 - Use the envelope to mark a row **read**, or the checkmark to mark it **done**.
   Each group header offers the same bulk actions.
 - Use **Load more** for older notifications. Search, counts, and bulk actions

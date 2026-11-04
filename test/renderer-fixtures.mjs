@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { Inbox } from "../src/inbox.mjs";
 import { GitHubClient } from "../src/github.mjs";
 import { desktopCapabilities } from "../src/notifier.mjs";
-import { apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads } from "../src/model.mjs";
+import { apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle } from "../src/model.mjs";
 import { http, thread } from "./fixtures.mjs";
 
 export const script = await readFile(process.env.NOTIFICATIONS_TEST_SCRIPT ??
@@ -13,6 +13,7 @@ export const script = await readFile(process.env.NOTIFICATIONS_TEST_SCRIPT ??
 export const html = await readFile(new URL("../src/index.html", import.meta.url), "utf8");
 export const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
 export const settle = () => new Promise(resolve => setImmediate(resolve));
+export const groupActionText = button => button.parentNode.querySelectorAll(".tooltip-content")[0].textContent;
 
 // Minimal DOM/event/timer doubles exercise the actual renderer without a browser dependency.
 export async function renderer({ hidden = false, token = "a".repeat(64), readFailure = false,
@@ -22,7 +23,9 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
   appColorMode = "light", systemDark = false } = {}) {
   const calls = [];
   const timers = new Map();
+  const animationFrames = new Map();
   let timerId = 0;
+  let frameId = 0;
   let intersect;
   let themeChanged;
   let themeDisconnected = false;
@@ -31,10 +34,9 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
   const attentionObserved = [];
   let now = Date.now();
   let offline = initialOffline;
-  let rows = initialRows ?? [
+  let rows = structuredClone(initialRows ?? [
     thread("1", { subject: { title: "<img src=x onerror=alert(1)>", type: "Issue", url: null } }),
-    thread("2", { unread: false }),
-  ];
+  ]);
   let releaseMetadata = {
     currentVersion: "0.1.0", latestVersion: "0.1.0", status: "current", checking: false,
     checkedAt: now, nextCheckAt: now + 15 * 60_000, canCheckAt: 0, error: null,
@@ -57,12 +59,14 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       this.dataset = {};
       this.attributes = {};
       this.events = {};
+      this.style = {};
       this.textContent = "";
       this.value = "";
       this._disabled = false;
       this._hidden = false;
       this.scrollLeft = 0;
       this.scrollWidth = 0;
+      this.scrollHeight = 0;
       this.clientWidth = 0;
     }
     get disabled() { return this._disabled; }
@@ -95,7 +99,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     addEventListener(name, handler) { this.events[name] = handler; }
     removeEventListener(name) { delete this.events[name]; }
     select() { this.selected = true; }
-    getBoundingClientRect() { return this.bounds ?? { left: 0, right: 0 }; }
+    getBoundingClientRect() { return this.bounds ?? { left: 0, right: 0, top: 0, bottom: 0, width: 0, height: 0 }; }
     scrollIntoView(options) { this.lastScroll = options; }
     scrollBy({ left }) {
       this.scrollLeft = Math.max(0, Math.min(this.scrollWidth - this.clientWidth, this.scrollLeft + left));
@@ -112,6 +116,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       document.activeElement = this;
     }
     contains(node) { return this === node || this.children.some(child => child.contains(node)); }
+    matches(selector) { return selector === ":hover" && this.hovered === true; }
     querySelectorAll(selector) {
       const result = [];
       for (const child of this.children) {
@@ -130,12 +135,24 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
   const desktopLabel = new Node("span");
   desktopLabel.textContent = "Desktop notifications";
   ids.get("desktop-notifications").append(desktopLabel);
+  ids.get("settings-toggle").bounds = { top: 175, bottom: 213, left: 270, right: 308, width: 38, height: 38 };
+  ids.get("settings-panel").scrollHeight = 364;
+  for (const [anchor, tooltip] of [
+    ["inbox-control", "inbox-tooltip"], ["refresh-control", "refresh-tooltip"], ["settings-toggle", "settings-tooltip"],
+  ]) {
+    ids.get(tooltip).className = "tooltip";
+    ids.get(anchor).append(ids.get(tooltip));
+  }
+  for (const [anchorId, controlId] of [["inbox-control", "open-inbox"], ["refresh-control", "force-refresh"]]) {
+    const anchor = ids.get(anchorId);
+    anchor.contains = node => node === anchor || node === ids.get(controlId) || anchor.children.some(child => child.contains(node));
+  }
   for (const id of ["batch-stop", "batch-retry", "batch-dismiss"]) ids.get(id).parentNode = ids.get("batch-progress");
   ids.get("batch-progress").contains = node =>
     ["batch-progress", "batch-stop", "batch-retry", "batch-dismiss"].some(id => ids.get(id) === node);
   ids.get("settings").contains = node =>
     node === ids.get("settings") ||
-    ["settings-toggle", "settings-panel", "auto-open", "theme", "group-by", "check-updates", "desktop-notifications", "desktop-sound",
+    ["settings-toggle", "settings-panel", "show-notifications", "auto-open", "theme", "group-by", "check-updates", "desktop-notifications", "desktop-sound",
       "development-api", "development-api-url", "development-api-save"].some(id => ids.get(id).contains(node));
   const document = {
     hidden,
@@ -151,7 +168,12 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     querySelectorAll: selector => [...ids.values()].flatMap(node => node.querySelectorAll(selector)),
     addEventListener(name, handler) { this.events[name] = handler; },
   };
-  const window = { events: {}, addEventListener(name, handler) { this.events[name] = handler; } };
+  const window = {
+    innerHeight: 900,
+    events: {},
+    addEventListener(name, handler) { this.events[name] = handler; },
+    removeEventListener(name) { delete this.events[name]; },
+  };
   const inboxLink = ids.get("open-inbox");
   inboxLink.href = "";
   inboxLink.tabIndex = -1;
@@ -176,13 +198,20 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       const done = args.includes("DELETE");
       (done ? deletions : patches).push(args.at(-1));
       if (onWrite) return onWrite(args.at(-1), patches.length + deletions.length, done ? "DELETE" : "PATCH");
+      const row = rows.find(row => args.at(-1).endsWith(`/threads/${row.id}`));
+      if (row && (!readFailure || done)) {
+        row.unread = false;
+        if (done) row.done = true;
+      }
       return readFailure && !done ? http({}, {}, 403) : `HTTP/2 ${done ? 204 : 205} Synthetic\r\n\r\n`;
     }
-    return onFetch ? onFetch(args) : http(rows);
+    const query = new URL(args.at(-1), "https://api.github.com").searchParams;
+    return onFetch ? onFetch(args) : http(rows.filter(row => query.get("all") === "false" ? row.unread :
+      query.get("is_done") !== "false" || !row.done));
   } }));
   const context = createContext({
     document, window, location: { hash: `#${token}` }, Intl, URL, AbortController,
-    apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads,
+    apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle,
     navigator: { clipboard: { writeText: async text => {
       if (clipboardFailure) throw new Error("Clipboard denied");
       copied.push(text);
@@ -190,6 +219,12 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     Date: class extends Date { static now() { return now; } },
     setTimeout(fn, delay) { timers.set(++timerId, { fn, delay }); return timerId; },
     clearTimeout(id) { timers.delete(id); },
+    requestAnimationFrame(fn) {
+      const id = frameId++;
+      animationFrames.set(id, fn);
+      return id;
+    },
+    cancelAnimationFrame(id) { animationFrames.delete(id); },
     IntersectionObserver: class {
       constructor(callback) { intersect = callback; }
       observe() {}
@@ -219,7 +254,8 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
           if (input) Object.assign(storedSettings, input);
         }
         const capabilities = desktopCapabilities(desktopPlatform);
-        return { ok: true, json: async () => ({ desktopNotifications: false, desktopSound: "default", ...storedSettings,
+        inbox.setMatchGitHubInbox(storedSettings.matchGitHubInbox ?? true);
+        return { ok: true, json: async () => ({ matchGitHubInbox: true, desktopNotifications: false, desktopSound: "default", ...storedSettings,
           developmentApi, desktopStatus: { ...capabilities, state: "watching",
             message: capabilities.supported ? "Watching in the background." : capabilities.help, ...desktopStatus },
         }) };
@@ -228,6 +264,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
         if (onUpdates) releaseMetadata = await onUpdates();
         return { ok: true, json: async () => releaseMetadata };
       }
+      if (["/api/refresh", "/api/state", "/api/more"].includes(path)) inbox.setMatchGitHubInbox(storedSettings.matchGitHubInbox ?? true);
       if (path === "/api/refresh") await inbox.refresh(JSON.parse(options.body));
       if (path === "/api/more") await inbox.more();
       if (path === "/api/state") {
@@ -246,14 +283,14 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       return { ok: true, json: async () => ({ ...inbox.snapshot(), updates: releaseMetadata, development, ...apiState() }) };
     },
   });
-  if (!process.env.NOTIFICATIONS_TEST_SCRIPT) assert.match(script, /^import \{ apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads \} from "\.\/model\.mjs";/);
+  if (!process.env.NOTIFICATIONS_TEST_SCRIPT) assert.match(script, /^import \{ apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle \} from "\.\/model\.mjs";/);
   // Preserve source offsets for the coverage report when removing the injected import.
-  runInContext(script.replace(/^import \{ apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads \} from "\.\/model\.mjs";/, match => " ".repeat(match.length)), context, {
+  runInContext(script.replace(/^import \{ apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle \} from "\.\/model\.mjs";/, match => " ".repeat(match.length)), context, {
     filename: process.env.NOTIFICATIONS_TEST_SCRIPT ?? fileURLToPath(new URL("../src/app.mjs", import.meta.url)),
   });
   await settle();
   return {
-    calls, document, window, ids, timers, context, inbox, patches, deletions, githubCalls, copied, media,
+    calls, document, window, ids, timers, animationFrames, context, inbox, patches, deletions, githubCalls, copied, media,
     get themeDisconnected() { return themeDisconnected; },
     attentionObserved,
     resizeAttention: () => attentionResized(),
@@ -268,6 +305,12 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       media.events.change?.();
     },
     advance(milliseconds = 120_000) { now += milliseconds; return now; },
+    fireAnimationFrame() {
+      for (const [id, callback] of [...animationFrames]) {
+        animationFrames.delete(id);
+        callback(now);
+      }
+    },
     async fireTimer(delay = 5000) {
       const [id, timer] = [...timers].find(([, timer]) => timer.delay === delay);
       timers.delete(id);

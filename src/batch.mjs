@@ -1,10 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
-import { InboxError } from "./model.mjs";
+import { InboxError, uniqueThreads } from "./model.mjs";
 
 export function selectionKey(group, filters) {
   return createHash("sha256").update(JSON.stringify([
-    group.repository, filters.query, filters.attention,
-    group.items.map(item => [item.id, item.updatedAt, item.repository]),
+    group.repository, filters.mode, filters.query, filters.attention,
+    group.items.map(item => [item.id, item.updatedAt, item.repository, item.unread]),
   ])).digest("hex");
 }
 
@@ -69,7 +69,9 @@ export class NotificationBatch {
     if (!selection || selection.selectionKey !== input.selectionKey) {
       throw new InboxError("selection_changed", "The shown selection changed. Review its updated count and try again.", 409);
     }
-    this.launch(selection.repository, selection.items, input.action ?? "read", dated ? "date" : shown ? "shown" : "repository", input);
+    const action = input.action ?? "read";
+    const items = selection.items.filter(item => action === "done" || item.unread);
+    this.launch(selection.repository, items, action, dated ? "date" : shown ? "shown" : "repository", input);
   }
 
   launch(repository, items, action = "read", scope = "repository", { date, timeZone } = {}) {
@@ -86,7 +88,7 @@ export class NotificationBatch {
       token: randomUUID(), repository, scope, action, status: "running",
       ...(scope === "date" ? { date, timeZone } : {}),
       searchActive: Boolean(this.inbox.filters.query.trim()),
-      items: items.map(({ id, updatedAt, repository }) => ({ id, updatedAt, repository, result: "pending" })),
+      items: items.map(({ id, updatedAt, repository, unread }) => ({ id, updatedAt, repository, unread, result: "pending" })),
       inFlight: false, cancelled: false, error: null, owner, controller: new AbortController(),
     };
     this.operation = operation;
@@ -96,11 +98,14 @@ export class NotificationBatch {
   eligible(operation, item) {
     const current = this.inbox.loadedItems().find(row => row.id === item.id);
     if (!current || current.repository !== item.repository || current.updatedAt !== item.updatedAt ||
+        current.unread !== item.unread || (operation.action === "read" && !current.unread) ||
         (operation.scope === "repository" && current.repository !== operation.repository)) return false;
-    // A different panel may have fetched a newer version since this selection was clicked.
+    const sequence = this.inbox.pages.find(page => page.items.includes(current)).sequence;
+    // Other views can retain older read states. Only newer responses can invalidate this selection.
     for (const page of this.inbox.client.cache.values()) {
-      if (page.items.some(row => row.id === item.id &&
-          (!row.unread || row.repository !== item.repository || row.updatedAt > item.updatedAt))) return false;
+      if (page.sequence < sequence) continue;
+      if (uniqueThreads(page.items).some(row => row.id === item.id &&
+          (row.unread !== item.unread || row.repository !== item.repository || row.updatedAt > item.updatedAt))) return false;
     }
     return true;
   }

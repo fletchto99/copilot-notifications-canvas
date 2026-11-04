@@ -1,37 +1,74 @@
 import { firstPage, RETRY_MS } from "./github.mjs";
-import { attentionCounts, groupThreads, groupThreadsByDate, InboxError, orderedThreads, validateFilters } from "./model.mjs";
+import { attentionCounts, groupThreads, groupThreadsByDate, InboxError, uniqueThreads, validateFilters } from "./model.mjs";
 import { NotificationBatch, selectionKey } from "./batch.mjs";
 
 export class Inbox {
   constructor(client, input = {}) {
     this.client = client;
-    this.filters = { mode: "unread", query: "", attention: "all", ...validateFilters(input) };
+    this.filters = { mode: "inbox", query: "", attention: "all", ...validateFilters(input) };
+    this.matchGitHubInbox = true;
+    this.requestedMatchGitHubInbox = true;
     this.pages = [];
     this.busy = false;
     this.marking = new Set();
     this.batch = new NotificationBatch(this);
     this.error = null;
+    this.settingsError = null;
     this.nextRefreshAt = 0;
     this.controller = new AbortController();
     this.needsRefresh = false;
-    this.onThreadUpdated = id => {
-      this.pages = this.pages.map(page => ({ ...page, items: page.items.filter(item => item.id !== id) }));
+    this.onThreadUpdated = (id, action = "done") => {
+      const retain = this.filters.mode === "inbox" && this.matchGitHubInbox && action === "read";
+      this.pages = this.pages.map(page => ({
+        ...page,
+        items: page.items.flatMap(item => item.id !== id ? [item] : retain ? [{ ...item, unread: false }] : []),
+      }));
       this.needsRefresh = true;
     };
     client.threadListeners.add(this.onThreadUpdated);
   }
 
   loadedItems() {
-    return orderedThreads(this.pages.flatMap(page => page.items)).filter(item => item.unread);
+    const sequences = new Map(this.pages.flatMap(page => page.items.map(item => [item, page.sequence])));
+    return uniqueThreads([...sequences.keys()], (a, b) =>
+      sequences.get(a) - sequences.get(b) || a.updatedAt.localeCompare(b.updatedAt))
+      .filter(item => this.filters.mode === "inbox" && this.matchGitHubInbox || item.unread);
+  }
+
+  setMatchGitHubInbox(value) {
+    if (typeof value !== "boolean") throw new InboxError("invalid_settings", "The notification view preference must be a boolean.", 400);
+    this.settingsError = null;
+    if (value === this.requestedMatchGitHubInbox) return;
+    this.requestedMatchGitHubInbox = value;
+    if (this.viewChanged) this.nextRefreshAt = 0;
+  }
+
+  get viewChanged() {
+    return firstPage({ mode: this.filters.mode, matchGitHubInbox: this.matchGitHubInbox }) !==
+      firstPage({ mode: this.filters.mode, matchGitHubInbox: this.requestedMatchGitHubInbox });
+  }
+
+  async syncSettings(preferences) {
+    try {
+      this.setMatchGitHubInbox((await preferences.read()).matchGitHubInbox);
+    } catch (error) {
+      if (!(error instanceof InboxError) || error.code !== "settings_read") throw error;
+      this.settingsError = { code: error.code, message: error.message };
+    }
   }
 
   groups(items = this.loadedItems()) {
-    return groupThreads(items, this.filters).map(group =>
-      ({ ...group, selectionKey: selectionKey(group, this.filters) }));
+    const positions = new Map(items.map((item, index) => [item.id, index]));
+    return groupThreads(items, this.filters).map(group => ({
+      ...group,
+      items: group.items.map(item => ({ ...item, apiPosition: positions.get(item.id) })),
+      selectionKey: selectionKey(group, this.filters),
+    }));
   }
 
   shownSelection(groups = this.groups()) {
-    const selection = { repository: null, items: orderedThreads(groups.flatMap(group => group.items)) };
+    const selection = { repository: null, items: groups.flatMap(group => group.items)
+      .sort((a, b) => a.apiPosition - b.apiPosition) };
     return { ...selection, selectionKey: selectionKey(selection, this.filters) };
   }
 
@@ -47,16 +84,18 @@ export class Inbox {
     const groups = this.groups(items);
     return {
       filters: { ...this.filters },
+      matchGitHubInbox: this.matchGitHubInbox,
       status: this.busy ? "loading" : this.error ? (this.pages.length ? "stale" : "error") :
         this.pages.length ? "ready" : "idle",
       error: this.error,
+      settingsError: this.settingsError,
       loaded: items.length,
-      unread: items.length,
+      unread: items.filter(item => item.unread).length,
       matching: groups.reduce((count, group) => count + group.items.length, 0),
       selectionKey: this.shownSelection(groups).selectionKey,
       attentionCounts: attentionCounts(items),
       hasMore: Boolean(this.pages.at(-1)?.next),
-      needsRefresh: this.needsRefresh,
+      needsRefresh: this.needsRefresh || this.viewChanged,
       lastFetchedAt: this.pages.length ? Math.min(...this.pages.map(page => page.fetchedAt)) : null,
       nextRefreshAt: Math.max(this.nextRefreshAt, this.client.blockedUntil),
       retryAt: this.client.blockedUntil,
@@ -110,9 +149,10 @@ export class Inbox {
     }
     return this.execute(async () => {
       const revision = this.client.revision;
+      const matchGitHubInbox = this.requestedMatchGitHubInbox;
       const pages = [];
-      let next = firstPage();
-      const target = Math.max(1, this.pages.length);
+      let next = firstPage({ mode: this.filters.mode, matchGitHubInbox });
+      const target = this.viewChanged ? 1 : Math.max(1, this.pages.length);
       while (next && pages.length < target) {
         const page = await this.client.page(next, this.controller.signal, { force: input.force });
         pages.push(page);
@@ -121,14 +161,17 @@ export class Inbox {
       if (this.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
       if (revision !== this.client.revision) throw new InboxError("inbox_changed", "The inbox changed while refreshing. The next automatic refresh will reconcile it.", 409);
       this.pages = pages;
-      this.needsRefresh = false;
-      this.nextRefreshAt = Math.max(...pages.map(page => page.nextRefreshAt));
+      this.matchGitHubInbox = matchGitHubInbox;
+      this.needsRefresh = pages.some(page => page.invalidated);
+      this.nextRefreshAt = this.viewChanged ? 0 : Math.max(...pages.map(page => page.nextRefreshAt));
     });
   }
 
   async more() {
     if (this.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
-    if (this.needsRefresh) throw new InboxError("refresh_required", "Refresh notifications before loading more after marking a notification as read or done.", 409);
+    if (this.needsRefresh || this.viewChanged) {
+      throw new InboxError("refresh_required", "Refresh notifications before loading more after changing the inbox or notification view.", 409);
+    }
     if (!this.pages.at(-1)?.next) throw new InboxError("no_more_pages", "No more notifications to load.", 409);
     return this.execute(async () => {
       const revision = this.client.revision;
@@ -136,6 +179,10 @@ export class Inbox {
       const page = await this.client.page(next, this.controller.signal);
       if (this.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
       if (revision !== this.client.revision) throw new InboxError("inbox_changed", "The inbox changed while loading. Try loading more again.", 409);
+      if (page.invalidated) {
+        this.needsRefresh = true;
+        throw new InboxError("refresh_required", "GitHub has not revalidated this page after an inbox update. Refresh notifications before loading more.", 409);
+      }
       this.pages = [...this.pages, page];
       this.nextRefreshAt = Math.max(this.nextRefreshAt, page.nextRefreshAt);
     }, "more");
@@ -146,6 +193,21 @@ export class Inbox {
     if (this.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
     if (this.busy) throw new InboxError("busy", "An inbox request is already running.", 409);
     if (this.batch.locked) throw new InboxError("busy", "Finish or cancel the current batch before changing filters.", 409);
+    if (input.mode !== undefined && input.mode !== this.filters.mode) {
+      if (this.marking.size) throw new InboxError("busy", "Wait for the current notification update to finish.", 409);
+      return this.execute(async () => {
+        const revision = this.client.revision;
+        const matchGitHubInbox = this.requestedMatchGitHubInbox;
+        const page = await this.client.page(firstPage({ mode: input.mode, matchGitHubInbox }), this.controller.signal);
+        if (this.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
+        if (revision !== this.client.revision) throw new InboxError("inbox_changed", "The inbox changed while switching views. Try again.", 409);
+        this.filters = { ...this.filters, ...input };
+        this.pages = [page];
+        this.matchGitHubInbox = matchGitHubInbox;
+        this.needsRefresh = Boolean(page.invalidated);
+        this.nextRefreshAt = this.viewChanged ? 0 : page.nextRefreshAt;
+      });
+    }
     this.filters = { ...this.filters, ...input };
     return this.summary();
   }
@@ -168,7 +230,7 @@ export class Inbox {
     if (this.busy) throw new InboxError("busy", "Wait for the current inbox request to finish.", 409);
     if (this.batch.locked) throw new InboxError("busy", "Finish or cancel the current batch first.", 409);
     if (this.marking.has(input.id)) throw new InboxError("busy", "This notification is already being updated.", 409);
-    if (!this.pages.some(page => page.items.some(item => item.id === input.id && item.unread))) {
+    if (!this.loadedItems().some(item => item.id === input.id && (method === "markDone" || item.unread))) {
       throw new InboxError("unknown_thread", "This notification is no longer in the loaded inbox. Let the view update automatically before trying again.", 404);
     }
     this.marking.add(input.id);

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { runInContext } from "node:vm";
 import { http, thread } from "./fixtures.mjs";
-import { renderer, script, html, styles, settle } from "./renderer-fixtures.mjs";
+import { groupActionText, renderer, script, html, styles, settle } from "./renderer-fixtures.mjs";
 
 test("row actions use distinct decorative SVGs with accessible names and shared tooltip behavior", async t => {
   const ui = await renderer();
@@ -52,8 +52,10 @@ test("timestamps remain inside row metadata in every grouping", async t => {
     assert.equal(times[0].parentNode.parentNode.className, "metadata");
     assert.equal(times[0].dateTime, new Date(row.updated_at).toISOString());
     assert.equal(times[0].attributes["aria-label"], new Date(row.updated_at).toLocaleString());
-    assert.deepEqual(article.children.map(node => node.tag), ["span", "div", "div"]);
-    assert.equal(article.children[2].className, "row-actions");
+    assert.deepEqual(article.children.map(node => node.tag), ["a", "div"]);
+    assert.equal(article.children[0].className, "row-link");
+    assert.equal(article.children[1].className, "row-actions");
+    assert.equal(article.children[0].contains(times[0]), true);
   }
 });
 
@@ -170,7 +172,7 @@ test("Done preserves focus across changed polls and never overrides a newer sear
   }
 });
 
-test("mark-read requires a click and removes only on confirmation", async () => {
+test("mark-read requires a click and retains the row after confirmation", async () => {
   const ui = await renderer();
   assert.equal(ui.calls.some(call => call.path === "/api/read"), false);
   const button = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "1");
@@ -181,12 +183,43 @@ test("mark-read requires a click and removes only on confirmation", async () => 
   await button.events.click();
   await marking;
   assert.equal(ui.calls.filter(call => call.path === "/api/read").length, 1);
-  assert.equal(ui.document.querySelectorAll("article").length, 0);
-  assert.equal(ui.document.activeElement, ui.ids.get("search"));
+  assert.equal(ui.document.querySelectorAll("article").length, 1);
+  assert.equal(ui.inbox.summary().unread, 0);
+  assert.equal(ui.document.activeElement.dataset.focusKey, "done:1");
   ui.window.events.pagehide();
 });
 
-test("row reads focus the next row whether disabling a button blurs it immediately or retains focus", async () => {
+test("read rows omit Read and its tooltip, including external updates in every grouping", async t => {
+  for (const groupBy of ["repo", "none", "date"]) {
+    for (const update of ["state", "refresh"]) {
+      const ui = await renderer({ storedSettings: { groupBy }, initialRows: [thread("1"), thread("2", { unread: false })] });
+      t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+      const buttons = () => ui.ids.get("groups").querySelectorAll("button");
+      const readButtons = () => buttons().filter(button => button.dataset.action === "read");
+      assert.deepEqual(readButtons().map(button => button.dataset.threadId), ["1"]);
+      assert.ok(buttons().some(button => button.dataset.focusKey === "done:2"));
+      assert.equal(ui.ids.get("groups").querySelectorAll(".tooltip").some(node => node.id === "row-read-2-tooltip"), false);
+      readButtons()[0].focus();
+      if (update === "state") {
+        ui.inbox.onThreadUpdated("1", "read");
+        await runInContext("update()", ui.context);
+      } else {
+        ui.setRows([thread("1", { unread: false }), thread("2", { unread: false })]);
+        await runInContext('update("refresh", { force: true })', ui.context);
+      }
+      assert.equal(readButtons().length, 0);
+      assert.equal(ui.document.querySelectorAll("article").length, 2);
+      assert.equal(ui.document.activeElement.dataset.focusKey, "done:1");
+      assert.deepEqual(ui.patches, []);
+      assert.deepEqual(ui.deletions, []);
+      ui.setRows([thread("1"), thread("2", { unread: false })]);
+      await runInContext('update("refresh", { force: true })', ui.context);
+      assert.deepEqual(readButtons().map(button => button.dataset.threadId), ["1"]);
+    }
+  }
+});
+
+test("row reads focus the retained row's Done action across browser focus behaviors", async () => {
   for (const retainDisabledFocus of [false, true]) {
     const ui = await renderer({ retainDisabledFocus, initialRows: [
       thread("1", { updated_at: "2026-01-11T12:00:00Z" }),
@@ -196,13 +229,13 @@ test("row reads focus the next row whether disabling a button blurs it immediate
     const first = readButton("1");
     first.focus();
     await first.events.click();
-    assert.equal(ui.document.activeElement, readButton("2"));
+    assert.equal(ui.document.activeElement.dataset.focusKey, "done:1");
     assert.equal(ui.ids.get("search").value, "");
     ui.window.events.pagehide();
   }
 });
 
-test("row reads fall back to Search when the next row belongs to a collapsed group", async t => {
+test("row reads retain focus in their group without expanding another collapsed group", async t => {
   for (const groupBy of ["repo", "date"]) {
     for (const retainDisabledFocus of [false, true]) {
       const ui = await renderer({ retainDisabledFocus, storedSettings: { groupBy }, initialRows: [
@@ -216,9 +249,9 @@ test("row reads fall back to Search when the next row belongs to a collapsed gro
       first.focus();
       await first.events.click();
       assert.deepEqual(ui.patches, ["/notifications/threads/1"]);
-      assert.equal(ui.document.activeElement, ui.ids.get("search"));
-      assert.equal(buttons().find(node => node.dataset.disclosure).attributes["aria-expanded"], "false");
-      assert.equal(ui.ids.get("groups").children[0].children[1].hidden, true);
+      assert.equal(ui.document.activeElement.dataset.focusKey, "done:1");
+      assert.equal(buttons().filter(node => node.dataset.disclosure)[1].attributes["aria-expanded"], "false");
+      assert.equal(ui.ids.get("groups").children[1].children[1].hidden, true);
     }
   }
 });
@@ -238,7 +271,7 @@ test("a row read never steals focus moved to Search while the write is pending",
   ui.window.events.pagehide();
 });
 
-test("mark-read keeps repository groups alphabetical as their newest and last notifications disappear", async () => {
+test("mark-read keeps repository activity order and retains read notifications in inbox mode", async () => {
   const ui = await renderer({ initialRows: [
     thread("1", { repository: { full_name: "example/alpha" }, updated_at: "2026-01-30T00:00:00Z" }),
     thread("2", { repository: { full_name: "example/alpha" }, updated_at: "2026-01-01T00:00:00Z" }),
@@ -251,12 +284,35 @@ test("mark-read keeps repository groups alphabetical as their newest and last no
 
   await ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "1").events.click();
   assert.deepEqual(repositories(), ["example/alpha", "example/middle", "example/zulu"]);
-  assert.equal(ui.document.querySelectorAll("article").length, 3);
+  assert.equal(ui.document.querySelectorAll("article").length, 4);
 
   await ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "2").events.click();
-  assert.deepEqual(repositories(), ["example/middle", "example/zulu"]);
-  assert.equal(ui.document.querySelectorAll("article").length, 2);
+  assert.deepEqual(repositories(), ["example/alpha", "example/middle", "example/zulu"]);
+  assert.equal(ui.document.querySelectorAll("article").length, 4);
   ui.window.events.pagehide();
+});
+
+test("Done reorders repository groups by remaining activity without losing collapsed state", async () => {
+  for (const matchGitHubInbox of [true, false]) {
+    const ui = await renderer({ storedSettings: { matchGitHubInbox }, initialRows: [
+      thread("1", { repository: { full_name: "example/zulu" }, updated_at: "2026-01-30T00:00:00Z" }),
+      thread("2", { repository: { full_name: "example/alpha" }, updated_at: "2026-01-20T00:00:00Z" }),
+      thread("3", { repository: { full_name: "example/zulu" }, updated_at: "2026-01-10T00:00:00Z" }),
+    ] });
+    const disclosures = () => ui.ids.get("groups").querySelectorAll("button").filter(button => button.dataset.disclosure);
+    assert.deepEqual(disclosures().map(button => button.dataset.focusKey), ["repo:example/zulu", "repo:example/alpha"]);
+    disclosures()[1].events.click();
+    const done = ui.ids.get("groups").querySelectorAll("button").find(button => button.dataset.focusKey === "done:1");
+    done.focus();
+    await done.events.click();
+    assert.deepEqual(disclosures().map(button => button.dataset.focusKey), ["repo:example/alpha", "repo:example/zulu"]);
+    assert.equal(disclosures()[0].getAttribute("aria-expanded"), "false");
+    assert.equal(ui.ids.get("groups").children[0].children[1].hidden, true);
+    assert.equal(ui.document.activeElement, ui.ids.get("search"));
+    assert.deepEqual(ui.deletions, ["/notifications/threads/1"]);
+    ui.window.events.pagehide();
+    ui.inbox.close();
+  }
 });
 
 test("mark-read failure retains the row with a usable retry control", async () => {
@@ -268,18 +324,18 @@ test("mark-read failure retains the row with a usable retry control", async () =
   assert.match(ui.ids.get("notice").textContent, /Could not mark/);
 });
 
-test("single-item repository groups retain their split control alongside row actions", async () => {
+test("single-item repository groups retain direct group actions alongside row actions", async () => {
   const ui = await renderer({ initialRows: [thread("1"), thread("2")] });
   const buttons = () => ui.ids.get("groups").querySelectorAll("button");
   const bulk = () => buttons().filter(button => button.dataset.batchAction === "read");
   const count = () => buttons().find(button => button.dataset.disclosure).children[1].textContent;
   assert.equal(bulk().length, 1);
-  assert.equal(count(), "2 unread");
+  assert.equal(count(), "2 total \u00b7 2 unread");
   await runInContext('update("filters", { query: "notification 1" })', ui.context);
   assert.equal(bulk().length, 1);
-  assert.equal(bulk()[0].textContent, "Mark 1 as read");
-  assert.equal(buttons().find(button => button.dataset.batchAction === "done").textContent, "Mark 1 as done");
-  assert.equal(count(), "1 unread");
+  assert.equal(groupActionText(bulk()[0]), "Mark 1 as read");
+  assert.equal(groupActionText(buttons().find(button => button.dataset.batchAction === "done")), "Mark 1 as done");
+  assert.equal(count(), "1 total \u00b7 1 unread");
   assert.equal(buttons().find(button => button.dataset.threadId === "1").disabled, false);
   await runInContext('update("filters", { query: "no match" })', ui.context);
   assert.equal(bulk().length, 0);
@@ -289,27 +345,31 @@ test("single-item repository groups retain their split control alongside row act
   row.focus();
   await row.events.click();
   assert.equal(bulk().length, 1);
-  assert.equal(bulk()[0].textContent, "Mark 1 as read");
-  assert.equal(count(), "1 unread");
-  assert.equal(ui.document.activeElement, buttons().find(button => button.dataset.threadId === "2"));
-  await ui.document.activeElement.events.click();
-  assert.equal(ui.document.querySelectorAll("article").length, 0);
-  assert.equal(bulk().length, 0);
+  assert.equal(groupActionText(bulk()[0]), "Mark 1 as read");
+  assert.equal(count(), "2 total \u00b7 1 unread");
+  assert.equal(ui.document.activeElement.dataset.focusKey, "done:1");
+  await buttons().find(button => button.dataset.focusKey === "read:2").events.click();
+  assert.equal(ui.document.querySelectorAll("article").length, 2);
+  assert.equal(bulk().length, 1);
+  assert.equal(bulk()[0].disabled, true);
   assert.deepEqual(ui.patches, ["/notifications/threads/1", "/notifications/threads/2"]);
   assert.equal(ui.calls.some(call => call.path.startsWith("/api/batch/")), false);
   ui.window.events.pagehide();
 });
 
-test("repository header shares its hover background across the toggle and read action", async () => {
+test("repository headers stay highlighted while only their action buttons change on hover", async () => {
   const ui = await renderer({ initialRows: [thread("1"), thread("2")] });
   const buttons = ui.ids.get("groups").querySelectorAll("button");
   const disclosure = buttons.find(node => node.dataset.disclosure);
   const groupRead = buttons.find(node => node.dataset.focusKey === "bulk:example/widgets");
   assert.equal(disclosure.className, "repo-toggle");
   assert.equal(disclosure.parentNode.className, "repo-header");
-  assert.equal(groupRead.parentNode.className, "repo-actions");
-  assert.equal(groupRead.parentNode.parentNode, disclosure.parentNode);
-  assert.match(styles, /button:hover:not\(:disabled, \[aria-disabled="true"\], \.repo-toggle\),\s+summary:hover,\s+\.icon-button:hover:not\(:disabled\),\s+\.repo-header:hover,\s+\.row:hover \{\s*background: color-mix\(in srgb, var\(--canvas-text\) 4%, transparent\);/);
+  assert.equal(groupRead.parentNode.className, "tooltip-anchor");
+  assert.equal(groupRead.parentNode.parentNode.className, "repo-actions");
+  assert.equal(groupRead.parentNode.parentNode.parentNode, disclosure.parentNode);
+  assert.match(styles, /button:hover:not\(:disabled, \[aria-disabled="true"\], \.repo-toggle\),\s+summary:hover,\s+\.icon-button:hover:not\(:disabled\),\s+\.row:hover \{\s*background: color-mix\(in srgb, var\(--canvas-text\) 4%, transparent\);/);
+  assert.match(styles, /\.repo-header \{[^}]*background: color-mix\(in srgb, var\(--canvas-text\) 4%, transparent\);/);
+  assert.doesNotMatch(styles, /\.repo-header:hover/);
   assert.match(styles, /@media \(prefers-reduced-motion: no-preference\) \{\s*button,\s+a,\s+\.repo-header \{\s+transition: background-color 0?\.12s ease;\s+\}/);
   ui.window.events.pagehide();
 });
@@ -329,8 +389,8 @@ test("compact toolbar keeps a shrinkable search beside matching inbox, refresh a
   assert.doesNotMatch(styles, /\.search \{[^}]*flex-basis: 100%/);
 });
 
-test("notification metadata, counts and repository read actions use 12px text", () => {
-  for (const selector of ["\\.metadata", "time", "\\.repo-count", "\\.repo-read"]) {
+test("notification metadata, counts and action tooltips use 12px text", () => {
+  for (const selector of ["\\.metadata", "time", "\\.repo-count", "\\.tooltip-content"]) {
     const rule = styles.match(new RegExp(`(?:^|\\n)${selector} \\{[^}]*\\}`))?.[0] ?? "";
     assert.match(rule, /font-size: 12px;/, selector);
   }
@@ -359,7 +419,7 @@ test("repository action starts from one click with no dialog and preserves indep
   const buttons = ui.ids.get("groups").querySelectorAll("button");
   const disclosure = buttons.find(node => node.dataset.disclosure);
   const groupRead = buttons.find(node => node.dataset.focusKey === "bulk:example/widgets");
-  assert.match(groupRead.textContent, /Mark 2 as read/);
+  assert.match(groupActionText(groupRead), /Mark 2 as read/);
   assert.equal(disclosure.contains(groupRead), false);
   assert.equal(groupRead.contains(disclosure), false);
   disclosure.events.click();
@@ -370,7 +430,7 @@ test("repository action starts from one click with no dialog and preserves indep
   assert.deepEqual(ui.calls.filter(call => call.path.startsWith("/api/batch/")).map(call => call.path), ["/api/batch/start"]);
   assert.equal(ui.document.activeElement, ui.ids.get("batch-stop"));
   assert.equal(disclosure.attributes["aria-expanded"], "false");
-  assert.match(groupRead.textContent, /Marking 0\/2/);
+  assert.match(groupActionText(groupRead), /Marking 0\/2/);
   assert.equal(groupRead.attributes["aria-busy"], "true");
   assert.doesNotMatch(html, /<dialog|batch-confirm|batch-start|batch-cancel/);
   assert.doesNotMatch(script, /showModal|batch\/prepare|Repository action finished/);
@@ -384,7 +444,7 @@ test("repository action starts from one click with no dialog and preserves indep
   assert.equal(ui.document.activeElement, ui.ids.get("search"));
 });
 
-test("one-click repository read honors search, blocks duplicate clicks and quietly clears successful rows", async () => {
+test("one-click repository read honors search, blocks duplicate clicks and retains successful rows", async () => {
   let release;
   const ui = await renderer({
     initialRows: [thread("1"), thread("2"), thread("10")],
@@ -394,7 +454,7 @@ test("one-click repository read honors search, blocks duplicate clicks and quiet
   });
   await runInContext('update("filters", { query: "notification 1" })', ui.context);
   const groupRead = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.focusKey.startsWith("bulk:"));
-  assert.equal(groupRead.textContent, "Mark 2 as read");
+  assert.equal(groupActionText(groupRead), "Mark 2 as read");
   groupRead.focus();
   const first = groupRead.events.click();
   await groupRead.events.click();
@@ -405,7 +465,7 @@ test("one-click repository read honors search, blocks duplicate clicks and quiet
   assert.equal(ui.document.activeElement, ui.ids.get("batch-stop"));
   await settle();
   await runInContext("update()", ui.context);
-  assert.match(groupRead.textContent, /Marking 0\/2/);
+  assert.match(groupActionText(groupRead), /Marking 0\/2/);
   assert.equal(ui.ids.has("refresh"), false);
   assert.equal(ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "1").disabled, true);
   release();
@@ -416,8 +476,9 @@ test("one-click repository read honors search, blocks duplicate clicks and quiet
   assert.equal(ui.ids.get("batch-counts").textContent, "");
   assert.equal(ui.ids.get("notice").hidden, true);
   assert.deepEqual(ui.patches, ["/notifications/threads/1", "/notifications/threads/10"]);
-  assert.equal(ui.inbox.summary().loaded, 1);
-  assert.equal(ui.document.querySelectorAll("article").length, 0);
+  assert.equal(ui.inbox.summary().loaded, 3);
+  assert.equal(ui.inbox.summary().unread, 1);
+  assert.equal(ui.document.querySelectorAll("article").length, 2);
   assert.equal(ui.document.activeElement, ui.ids.get("search"));
   ui.window.events.pagehide();
 });
@@ -445,7 +506,8 @@ test("partial batch progress shows retryable remaining counts without repeating 
   await ui.inbox.batch.done;
   await runInContext("update()", ui.context);
   assert.deepEqual(ui.patches, ["/notifications/threads/1", "/notifications/threads/2", "/notifications/threads/2", "/notifications/threads/3"]);
-  assert.equal(ui.document.querySelectorAll("article").length, 0);
+  assert.equal(ui.document.querySelectorAll("article").length, 3);
+  assert.equal(ui.inbox.summary().unread, 0);
   assert.equal(ui.ids.get("batch-progress").hidden, true);
   assert.equal(ui.ids.get("batch-counts").textContent, "");
   assert.equal(ui.ids.get("batch-error").textContent, "");
@@ -464,13 +526,13 @@ test("batch failure to reconnect is visible and never silently retries a mutatio
 test("a group changed before the click is accepted reloads its count instead of marking a wider selection", async () => {
   const ui = await renderer({ initialRows: [thread("1"), thread("2")] });
   const oldButton = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.repository);
-  assert.equal(oldButton.textContent, "Mark 2 as read");
+  assert.equal(groupActionText(oldButton), "Mark 2 as read");
   ui.inbox.pages[0].items.push({ ...ui.inbox.pages[0].items[0], id: "3", title: "Synthetic newcomer" });
   await oldButton.events.click();
   assert.deepEqual(ui.patches, []);
   assert.match(ui.ids.get("notice").textContent, /shown selection changed/);
   const currentButton = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.repository);
-  assert.equal(currentButton.textContent, "Mark 3 as read");
+  assert.equal(groupActionText(currentButton), "Mark 3 as read");
   assert.equal(currentButton.disabled, false);
 });
 
@@ -531,8 +593,8 @@ test("a row action clicked during a delayed local poll runs after the poll inste
   await polling;
   await reading;
   assert.deepEqual(ui.patches, ["/notifications/threads/1"]);
-  assert.equal(ui.document.querySelectorAll("article").length, 1);
-  assert.equal(ui.document.activeElement.dataset.focusKey, "read:2");
+  assert.equal(ui.document.querySelectorAll("article").length, 2);
+  assert.equal(ui.document.activeElement.dataset.focusKey, "done:1");
   assert.equal(ui.document.activeElement.disabled, false);
 });
 
@@ -560,9 +622,9 @@ test("changed local polls do not steal focus from pending row reads", async t =>
       await polling;
       await reading;
       assert.deepEqual(ui.patches, ["/notifications/threads/1"]);
-      assert.equal(ui.document.querySelectorAll("article").length, 1);
+      assert.equal(ui.document.querySelectorAll("article").length, 2);
       assert.equal(ui.document.activeElement, moveFocus ? ui.ids.get("search")
-        : buttons().find(node => node.dataset.threadId === "2"));
+        : buttons().find(node => node.dataset.focusKey === "done:1"));
     }
   }
 });
@@ -589,7 +651,8 @@ test("a repository action clicked during local polling is not dropped and cannot
   release();
   await finalPoll;
   assert.deepEqual(ui.patches, ["/notifications/threads/1", "/notifications/threads/2"]);
-  assert.equal(ui.document.querySelectorAll("article").length, 0);
+  assert.equal(ui.document.querySelectorAll("article").length, 2);
+  assert.equal(ui.inbox.summary().unread, 0);
   assert.equal(ui.ids.get("batch-progress").hidden, true);
   assert.equal(ui.ids.get("notice").hidden, true);
 });
@@ -617,27 +680,29 @@ test("search edits during a row write are preserved on success and failure, with
     assert.equal(search.value, "notification 3");
     assert.equal(ui.inbox.filters.query, "notification 3");
     assert.equal(ui.document.querySelectorAll("article").length, 1);
-    assert.equal(ui.document.querySelectorAll("a")[0].textContent, "Synthetic notification 3");
+    assert.equal(ui.document.querySelectorAll(".title")[0].textContent, "Synthetic notification 3");
     assert.deepEqual(ui.calls.filter(call => call.path === "/api/filters").map(call => JSON.parse(call.options.body).query), ["notification 3"]);
     assert.equal(ui.document.activeElement, search);
     assert.equal(ui.ids.get("notice").hidden, success);
   }
 });
 
-test("a search debounce already pending before a read is flushed after the read", async () => {
+test("a read cannot overtake an already pending search debounce", async () => {
   const ui = await renderer({ initialRows: [thread("1"), thread("2")] });
   const search = ui.ids.get("search");
   search.value = "notification 2";
   search.events.input();
   const button = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "1");
   await button.events.click();
-  await settle();
+  assert.equal(button.disabled, true);
+  assert.deepEqual(ui.patches, []);
+  await ui.fireTimer(250);
   assert.equal(ui.inbox.filters.query, "notification 2");
   assert.equal(ui.document.querySelectorAll("article").length, 1);
   assert.equal([...ui.timers.values()].some(timer => timer.delay === 250), false);
 });
 
-test("pending search is retained while a repository batch runs", async () => {
+test("a repository batch waits for pending search and uses the resulting selection", async () => {
   let release;
   const ui = await renderer({
     initialRows: [thread("1"), thread("2", { repository: { full_name: "example/other" } }), thread("3")],
@@ -651,7 +716,12 @@ test("pending search is retained while a repository batch runs", async () => {
   const group = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.repository === "example/widgets");
   await group.events.click();
   await settle();
+  assert.equal(search.disabled, false);
+  assert.deepEqual(ui.patches, []);
   await ui.fireTimer(250);
+  const matching = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.repository === "example/other");
+  await matching.events.click();
+  await settle();
   assert.equal(search.disabled, true);
   release();
   await ui.inbox.batch.done;
@@ -661,6 +731,7 @@ test("pending search is retained while a repository batch runs", async () => {
   assert.equal(search.value, "other");
   assert.equal(ui.inbox.filters.query, "other");
   assert.equal(ui.document.querySelectorAll("article").length, 1);
+  assert.deepEqual(ui.patches, ["/notifications/threads/2"]);
 });
 
 test("newer queued queries replace older edits while waiting for a local poll", async () => {

@@ -8,8 +8,8 @@ for (const packaged of [false, true]) {
   test.describe(`passive tab updates (${packaged ? "packaged" : "source"})`, () => {
     test.use({ packaged });
     for (const [label, reason, hiddenSide] of [
-      ["Review requested", "review_requested", "left"],
-      ["Participating", "comment", "right"],
+      ["Assigned", "assign", "left"],
+      ["Review Requested", "review_requested", "right"],
     ]) {
       test(`preserve page scroll and reveal a focused tab hidden to the ${hiddenSide}`, async ({ page, canvas }) => {
         canvas.rows.splice(50);
@@ -32,11 +32,11 @@ for (const packaged of [false, true]) {
         expect(await page.evaluate(() => scrollY)).toBe(900);
 
         const url = new URL(canvas.url);
-        const read = await page.request.post(new URL("/api/read", url).href, {
+        const done = await page.request.post(new URL("/api/done", url).href, {
           headers: { Authorization: `Bearer ${url.hash.slice(1)}`, Origin: url.origin },
           data: { id: "1" },
         });
-        expect(read.status()).toBe(200);
+        expect(done.status()).toBe(200);
         await page.clock.fastForward(5000);
         await expect(tab).toHaveText(`${label} (49)`);
         await expect(page.locator(".row")).toHaveCount(49);
@@ -58,7 +58,7 @@ for (const packaged of [false, true]) {
 test("the header keeps its typography and spacing while resizing across the compact breakpoint", async ({ page, canvas }) => {
   canvas.rows.splice(1);
   await page.goto(canvas.url);
-  const title = page.getByRole("heading", { name: "Unread Notifications", exact: true });
+  const title = page.getByRole("heading", { name: "GitHub Notifications", exact: true });
   const initial = await title.evaluate(node => ({
     fontSize: getComputedStyle(node).fontSize,
     lineHeight: getComputedStyle(node).lineHeight,
@@ -126,7 +126,7 @@ test("real assets load under CSP, render titles as text, and support search and 
   expect(response.headers()["content-security-policy"]).toContain("default-src 'none'");
   await expect(page.locator(".row")).toHaveCount(50);
   await expect(page.locator(".metadata").getByText("Unread", { exact: true })).toHaveCount(0);
-  await expect(page.getByRole("link", { name: "<img src=x onerror=alert(1)> Needle widget 1", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "<img src=x onerror=alert(1)> Needle widget 1" })).toBeVisible();
   await expect(page.locator(".row img")).toHaveCount(0);
   await page.getByRole("searchbox", { name: searchName }).fill("Needle");
   await expect(page.locator(".row")).toHaveCount(3);
@@ -144,7 +144,7 @@ test("clearing search leaves the selected attention tab unchanged", async ({ pag
   await expect(page.locator(".row")).toHaveCount(50);
   const requests = canvas.requests.length;
   const search = page.getByRole("searchbox");
-  for (const [label, count] of [["Review requested", 50], ["Assigned", 0]]) {
+  for (const [label, count] of [["Review Requested", 50], ["Assigned", 0]]) {
     const tab = page.getByRole("tab", { name: `${label} (${count})`, exact: true });
     await tab.click();
     await search.fill("No matching notification");
@@ -167,17 +167,18 @@ test("issue and PR numbers render in metadata and search selects the notificatio
   canvas.rows[1].subject.type = "PullRequest";
   canvas.rows[1].subject.url = "https://api.github.com/repos/example/widgets/pulls/8";
   await page.goto(canvas.url);
-  await expect(page.getByRole("link", { name: "<img src=x onerror=alert(1)> Needle widget 1", exact: true })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Needle widget 2", exact: true })).toHaveAttribute("href", "https://github.com/example/widgets/pull/8");
+  await expect(page.getByRole("link", { name: "<img src=x onerror=alert(1)> Needle widget 1" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Needle widget 2" })).toHaveAttribute("href", "https://github.com/example/widgets/pull/8");
   await expect(page.locator(".metadata").getByText("Issue #7", { exact: true })).toBeVisible();
   await expect(page.locator(".metadata").getByText("Pull Request #8", { exact: true })).toBeVisible();
   await expect(page.locator(".metadata").getByText("Issue", { exact: true })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Needle tool", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Needle tool" })).toBeVisible();
   await expect(page.locator(".row img")).toHaveCount(0);
   await page.getByRole("searchbox", { name: searchName }).fill("#7");
   await expect(page.locator(".row")).toHaveCount(1);
   await page.getByRole("button", { name: "Mark as read: #7 <img src=x onerror=alert(1)> Needle widget 1", exact: true }).click();
-  await expect(page.locator(".row")).toHaveCount(0);
+  await expect(page.locator(".row")).toHaveCount(1);
+  await expect(page.locator(".mark-read")).toHaveCount(0);
   expect(canvas.writes).toEqual(["1"]);
 });
 
@@ -191,30 +192,31 @@ test("attention tabs combine with search and constrain repository reads to match
   await page.goto(canvas.url);
   await expect(page.getByRole("tab", { name: "All (50)", exact: true })).toHaveAttribute("aria-selected", "true");
   await page.getByRole("searchbox").fill("Needle");
-  await page.getByRole("tab", { name: /^Review requested \(\d+\)$/ }).click();
+  await page.getByRole("tab", { name: /^Review Requested \(\d+\)$/ }).click();
   await expect(page.locator(".row")).toHaveCount(3);
-  await expect(page.locator("#count")).toHaveText("50 unread \u00b7 3 matching");
+  await expect(page.locator("#count")).toHaveText("50 total \u00b7 50 unread \u00b7 3 matching");
   await expect(page.getByRole("tab", { name: "All (50)", exact: true })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "Review requested (3)", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "Review Requested (3)", exact: true })).toHaveAttribute("aria-selected", "true");
   await page.getByRole("button", { name: "Mark 2 as read in example/widgets; 2 shown, loaded notifications", exact: true }).click();
-  await expect(page.locator(".row")).toHaveCount(1);
+  await expect(page.locator(".row")).toHaveCount(3);
+  await expect(page.locator(".row.unread")).toHaveCount(1);
   expect(canvas.writes).toEqual(["1", "4"]);
   expect(canvas.rows.find(row => row.id === "2").unread).toBe(true);
   expect(canvas.rows.find(row => row.id === "51").unread).toBe(true);
-  await expect(page.getByRole("tab", { name: "Review requested (1)", exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Review Requested (3)", exact: true })).toBeVisible();
   await page.getByRole("tab", { name: /^Assigned \(\d+\)$/ }).click();
   await expect(page.locator("#empty-title")).toHaveText("No matches in loaded notifications");
-  await expect(page.locator("#count")).toHaveText("48 unread \u00b7 0 matching");
-  await expect(page.getByRole("tab", { name: "All (48)", exact: true })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "Review requested (1)", exact: true })).toBeVisible();
+  await expect(page.locator("#count")).toHaveText("50 total \u00b7 48 unread \u00b7 0 matching");
+  await expect(page.getByRole("tab", { name: "All (50)", exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Review Requested (3)", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Force refresh", exact: true }).click();
   await expect(page.getByRole("tab", { name: /^Assigned \(\d+\)$/ })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("searchbox")).toHaveValue("Needle");
-  await page.getByRole("tab", { name: /^Review requested \(\d+\)$/ }).click();
+  await page.getByRole("tab", { name: /^Review Requested \(\d+\)$/ }).click();
   await page.getByRole("button", { name: "Load more (up to 50)", exact: true }).click();
-  await expect(page.locator(".row")).toHaveCount(2);
-  await expect(page.getByRole("tab", { name: "Review requested (2)", exact: true })).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByRole("tab", { name: "All (51)", exact: true })).toBeVisible();
+  await expect(page.locator(".row")).toHaveCount(4);
+  await expect(page.getByRole("tab", { name: "Review Requested (4)", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "All (53)", exact: true })).toBeVisible();
 });
 
 test("attention tabs are keyboard accessible and fit narrow light and dark panels", async ({ page, canvas }, testInfo) => {
@@ -224,23 +226,24 @@ test("attention tabs are keyboard accessible and fit narrow light and dark panel
   await page.setViewportSize({ width: 320, height: 800 });
   await page.goto(canvas.url);
   const tabs = page.getByRole("tablist", { name: "Attention filters" });
-  await expect(tabs.getByRole("tab")).toHaveText(["All (7)", "Review requested (1)", "Mentioned (2)", "Assigned (1)", "Participating (2)"]);
+  await expect(tabs.getByRole("tab")).toHaveText(["All (7)", "Assigned (1)", "Participating (6)", "Mentioned (1)", "Team Mentioned (1)", "Review Requested (1)"]);
   await page.getByRole("tab", { name: /^All \(\d+\)$/ }).focus();
   await page.keyboard.press("ArrowLeft");
-  const participating = page.getByRole("tab", { name: /^Participating \(\d+\)$/ });
-  await expect(participating).toBeFocused();
-  await expect(participating).toBeInViewport({ ratio: 1 });
-  await expect(participating).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByRole("tabpanel", { name: "Participating (2)", exact: true })).toBeVisible();
-  await expect(page.locator(".row")).toHaveCount(2);
+  const reviews = page.getByRole("tab", { name: /^Review Requested \(\d+\)$/ });
+  await expect(reviews).toBeFocused();
+  await expect(reviews).toBeInViewport({ ratio: 1 });
+  await expect(reviews).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tabpanel", { name: "Review Requested (1)", exact: true })).toBeVisible();
+  await expect(page.locator(".row")).toHaveCount(1);
   await page.keyboard.press("Home");
+  await page.keyboard.press("ArrowRight");
   await page.keyboard.press("ArrowRight");
   await page.keyboard.press("ArrowRight");
   const mentioned = page.getByRole("tab", { name: /^Mentioned \(\d+\)$/ });
   await expect(mentioned).toBeFocused();
   await expect(mentioned).toBeInViewport({ ratio: 1 });
   await expect(mentioned).toHaveAttribute("aria-selected", "true");
-  await expect(page.locator(".row")).toHaveCount(2);
+  await expect(page.locator(".row")).toHaveCount(1);
   for (const colorScheme of ["light", "dark"]) {
     await page.emulateMedia({ colorScheme });
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
@@ -249,7 +252,7 @@ test("attention tabs are keyboard accessible and fit narrow light and dark panel
     await page.screenshot({ path: testInfo.outputPath(`attention-${colorScheme}.png`) });
   }
   await page.keyboard.press("End");
-  await expect(participating).toBeFocused();
+  await expect(reviews).toBeFocused();
   await page.keyboard.press("ArrowRight");
   await expect(page.getByRole("tab", { name: /^All \(\d+\)$/ })).toBeFocused();
   await page.keyboard.press("Tab");
@@ -288,7 +291,7 @@ test("overflow arrows scroll without filtering and stay accessible at both ends"
   await expect(next).toBeDisabled();
   await expect(next).toBeFocused();
   await expect(next).toHaveCSS("opacity", "1");
-  await expect(page.getByRole("tab", { name: /^Participating \(\d+\)$/ })).toBeInViewport({ ratio: 1 });
+  await expect(page.getByRole("tab", { name: /^Review Requested \(\d+\)$/ })).toBeInViewport({ ratio: 1 });
   const end = await strip.evaluate(node => node.scrollLeft);
   await next.press("Enter");
   expect(await strip.evaluate(node => node.scrollLeft)).toBe(end);
@@ -334,7 +337,7 @@ test("search preserves total tab counts and overflow controls without resizing",
   const counts = await strip.getByRole("tab").allTextContents();
   for (const [query, matching] of [["Needle", 3], ["No matching notification", 0], ["", 50]]) {
     await page.getByRole("searchbox").fill(query);
-    await expect(page.locator("#count")).toHaveText(query ? `50 unread \u00b7 ${matching} matching` : "50 unread");
+    await expect(page.locator("#count")).toHaveText(query ? `50 total \u00b7 50 unread \u00b7 ${matching} matching` : "50 total \u00b7 50 unread");
     await expect(strip.getByRole("tab")).toHaveText(counts);
     await expect(page.locator(".row")).toHaveCount(matching);
     await expect(next).toBeVisible();
@@ -342,14 +345,14 @@ test("search preserves total tab counts and overflow controls without resizing",
   expect(canvas.writes).toEqual([]);
 });
 
-test("keyboard row actions mark exactly one notification and move focus to the next row", async ({ page, canvas }) => {
+test("keyboard reads mark exactly one notification and focus its retained Done action", async ({ page, canvas }) => {
   await page.goto(canvas.url);
   const button = page.getByRole("button", { name: "Mark as read: Needle widget 2", exact: true });
   await button.focus();
   await button.press("Enter");
-  await expect(page.locator(".row")).toHaveCount(49);
+  await expect(page.locator(".row")).toHaveCount(50);
   await expect(button).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Mark as read: Synthetic notification 4", exact: true })).toBeFocused();
+  await expect(page.getByRole("button", { name: "Mark as done: Needle widget 2", exact: true })).toBeFocused();
   expect(canvas.writes).toEqual(["2"]);
 });
 
@@ -396,7 +399,7 @@ for (const width of [320, 480, 960]) {
         if (fields[index].y > fields[index - 1].y + 1) expect(fields[index].x).toBeCloseTo(fields[0].x);
       }
     }
-    await expect(page.locator(".row .metadata time").first()).toHaveAttribute("datetime", canvas.rows[2].updated_at);
+    await expect(page.locator(".row .metadata time").first()).toHaveAttribute("datetime", canvas.rows[0].updated_at);
     await expect(read.locator("svg")).toBeVisible();
     await expect(done.locator("svg")).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
@@ -406,7 +409,7 @@ for (const width of [320, 480, 960]) {
       for (const action of ["read", "done"]) {
         const button = page.locator(`[data-focus-key="${action}:${id}"]`);
         const tooltip = page.locator(`#row-${action}-${id}-tooltip`);
-        await page.getByRole("heading", { name: "Unread Notifications", exact: true }).hover();
+        await page.getByRole("heading", { name: "GitHub Notifications", exact: true }).hover();
         await page.getByRole("searchbox").focus();
         await expect(tooltip).toBeHidden();
         await expect(button).not.toHaveAttribute("title");
@@ -443,31 +446,30 @@ for (const width of [320, 480, 960]) {
   });
 }
 
-test("repository split controls remain usable for a single matching notification", async ({ page, canvas }) => {
+test("repository group controls remain usable for a single matching notification", async ({ page, canvas }) => {
   canvas.rows.splice(2);
   await page.setViewportSize({ width: 320, height: 800 });
   await page.goto(canvas.url);
-  await expect(page.locator(".repo-count")).toHaveText("2 unread");
+  await expect(page.locator(".repo-count")).toHaveText("2 total \u00b7 2 unread");
   await expect(page.locator(".repo-read")).toHaveCount(1);
   await page.getByRole("searchbox").fill("Needle widget 2");
-  await expect(page.locator(".repo-count")).toHaveText("1 unread");
-  await expect(page.locator(".repo-read")).toHaveText("Mark 1 as read");
-  await expect(page.locator(".repo-more")).toBeVisible();
+  await expect(page.locator(".repo-count")).toHaveText("1 total \u00b7 1 unread");
+  await expect(page.locator(".repo-read")).toHaveAccessibleDescription("Mark 1 as read");
+  await expect(page.locator(".repo-done")).toBeVisible();
   await expect(page.locator('[data-focus-key="read:2"]')).toBeVisible();
   await expect(page.locator('[data-focus-key="done:2"]')).toBeVisible();
   await page.getByRole("searchbox").fill("");
   await expect(page.locator(".repo-read")).toHaveCount(1);
   await page.locator('[data-focus-key="read:1"]').click();
-  await expect(page.locator(".repo-count")).toHaveText("1 unread");
-  await expect(page.locator(".repo-read")).toHaveText("Mark 1 as read");
+  await expect(page.locator(".repo-count")).toHaveText("2 total \u00b7 1 unread");
+  await expect(page.locator(".repo-read")).toHaveAccessibleDescription("Mark 1 as read");
   await expect(page.locator('[data-focus-key="read:2"]')).toBeVisible();
   await expect(page.locator('[data-focus-key="done:2"]')).toBeVisible();
-  await page.getByRole("button", { name: "More actions for example/widgets", exact: true }).click();
-  await page.getByRole("button", { name: "Mark 1 as done in example/widgets; 1 shown, loaded notifications", exact: true }).click();
+  await page.getByRole("button", { name: "Mark 2 as done in example/widgets; 2 shown, loaded notifications", exact: true }).click();
   await expect(page.locator(".row")).toHaveCount(0);
   await expect(page.locator(".repo-actions")).toHaveCount(0);
-  expect(canvas.writes).toEqual(["1", "2"]);
-  expect(canvas.doneWrites).toEqual(["2"]);
+  expect(canvas.writes).toEqual(["1", "1", "2"]);
+  expect(canvas.doneWrites).toEqual(["1", "2"]);
 });
 
 for (const groupBy of ["repo", "date", "none"]) {
@@ -477,7 +479,7 @@ for (const groupBy of ["repo", "date", "none"]) {
     await page.goto(canvas.url);
     await expect(page.locator(".row")).toHaveCount(2);
     expect(canvas.writes).toEqual([]);
-    const title = page.locator(".row .title").first();
+    const title = page.locator(".row-link").first();
     await title.focus();
     await page.keyboard.press("Tab");
     await expect(page.locator('[data-focus-key="read:1"]')).toBeFocused();
@@ -510,10 +512,11 @@ for (const groupBy of ["repo", "date"]) {
       const button = page.locator(`[data-focus-key="${action}:1"]`);
       await button.focus();
       await button.press("Enter");
-      await expect(page.locator(".row")).toHaveCount(1);
-      await expect(page.getByRole("searchbox", { name: searchName })).toBeFocused();
-      await expect(page.locator(".repo-toggle")).toHaveAttribute("aria-expanded", "false");
-      await expect(page.locator(".row")).toBeHidden();
+      await expect(page.locator(".row")).toHaveCount(action === "read" ? 2 : 1);
+      if (action === "read") await expect(page.locator('[data-focus-key="done:1"]')).toBeFocused();
+      else await expect(page.getByRole("searchbox", { name: searchName })).toBeFocused();
+      await expect(page.locator(".repo-toggle").last()).toHaveAttribute("aria-expanded", "false");
+      await expect(page.locator(".row").last()).toBeHidden();
       expect(canvas.writes).toEqual(["1"]);
       expect(canvas.doneWrites).toEqual(action === "done" ? ["1"] : []);
     });
@@ -527,7 +530,8 @@ test("repository actions affect only shown loaded matches, not another repositor
   const group = page.getByRole("button", { name: "Mark 2 as read in example/widgets; 2 shown, loaded notifications", exact: true });
   await expect(group).toBeVisible();
   await group.click();
-  await expect(page.locator(".row")).toHaveCount(1);
+  await expect(page.locator(".row")).toHaveCount(3);
+  await expect(page.locator(".row.unread")).toHaveCount(1);
   await expect(page.locator("#batch-progress")).toBeHidden();
   expect(canvas.writes).toEqual(["1", "2"]);
   expect(canvas.rows.find(row => row.id === "3").unread).toBe(true);
@@ -538,7 +542,8 @@ test("repository actions affect only shown loaded matches, not another repositor
 test("refresh preserves keyboard focus and collapsed repository state", async ({ page, canvas }) => {
   await page.goto(canvas.url);
   await expect(page.locator(".row")).toHaveCount(50);
-  const disclosure = page.getByRole("button", { name: /example\/widgets 49 unread/ });
+  const disclosure = page.locator('[data-focus-key="repo:example/widgets"]');
+  await expect(disclosure).toHaveAccessibleName(/example\/widgets 49 total \u00b7 49 unread/);
   await disclosure.focus();
   await disclosure.press("Enter");
   await expect(disclosure).toHaveAttribute("aria-expanded", "false");
@@ -552,7 +557,7 @@ test("refresh preserves keyboard focus and collapsed repository state", async ({
   await expect(refresh).toBeFocused();
   await expect(disclosure).toHaveAttribute("aria-expanded", "false");
   await disclosure.press("Enter");
-  await expect(page.getByRole("link", { name: "Changed during refresh", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Changed during refresh" })).toBeVisible();
 });
 
 test("the toolbar refresh icon shows the current update age on hover and keyboard focus", async ({ page, canvas }, testInfo) => {
@@ -591,7 +596,7 @@ test("the toolbar refresh icon shows the current update age on hover and keyboar
   const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
   expect(results.violations).toEqual([]);
   await page.screenshot({ path: testInfo.outputPath("refresh-tooltip-dark.png") });
-  await page.getByRole("heading", { name: "Unread Notifications", exact: true }).hover();
+  await page.getByRole("heading", { name: "GitHub Notifications", exact: true }).hover();
   await expect(tooltip).toBeHidden();
   canvas.advance(1000);
   await page.clock.setFixedTime(new Date(initial.lastFetchedAt + 24_000));
@@ -608,7 +613,7 @@ test("the toolbar refresh icon shows the current update age on hover and keyboar
   const requestCount = canvas.requests.length;
   canvas.rows[0].subject.title = "Updated from the toolbar";
   await refresh.press("Enter");
-  await expect(page.getByRole("link", { name: "Updated from the toolbar", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Updated from the toolbar" })).toBeVisible();
   await expect(refresh).toHaveAttribute("aria-busy", "false");
   await expect(tooltip).toHaveText("Last updated 0 seconds ago");
   await expect(refresh).toBeFocused();
@@ -653,7 +658,7 @@ test("all toolbar icons use matching instant tooltips with keyboard and Escape s
   await page.setViewportSize({ width: 320, height: 800 });
   await page.goto(canvas.url);
   await expect(page.locator(".row")).toHaveCount(1);
-  const heading = page.getByRole("heading", { name: "Unread Notifications", exact: true });
+  const heading = page.getByRole("heading", { name: "GitHub Notifications", exact: true });
   for (const dark of [false, true]) {
     await page.emulateMedia({ colorScheme: dark ? "dark" : "light" });
     await expect(page.locator("html")).toHaveAttribute("data-notification-theme", dark ? "dark" : "light");
@@ -702,27 +707,37 @@ test("all toolbar icons use matching instant tooltips with keyboard and Escape s
   expect(canvas.writes).toEqual([]);
 });
 
-test("opening Settings hides its active tooltip despite hover or keyboard focus", async ({ page, canvas }) => {
+test("opening and closing Settings dismisses its tooltip until a fresh hover or focus", async ({ page, canvas }) => {
   canvas.rows.splice(1);
   await page.goto(canvas.url);
   const settings = page.locator("#settings-toggle");
   const tooltip = page.locator("#settings-tooltip");
   const panel = page.locator("#settings-panel");
-  for (const trigger of ["pointer", "keyboard"]) {
-    await page.getByRole("heading", { name: "Unread Notifications", exact: true }).hover();
+  for (const trigger of ["pointer", "Enter", "Space"]) {
+    await page.getByRole("heading", { name: "GitHub Notifications", exact: true }).hover();
     await page.getByRole("searchbox").focus();
     if (trigger === "pointer") await settings.hover();
     else await settings.focus();
     await expect(tooltip).toBeVisible();
     if (trigger === "pointer") await settings.click();
-    else await settings.press("Enter");
+    else await settings.press(trigger);
     await expect(panel).toBeVisible();
     await expect(tooltip).toBeHidden();
     await settings.hover();
     await settings.focus();
     await expect(tooltip).toBeHidden();
-    await settings.click();
+    if (trigger === "pointer") await settings.click();
+    else await settings.press(trigger);
     await expect(panel).toBeHidden();
+    await expect(settings).toHaveAttribute("aria-expanded", "false");
+    await expect(tooltip).toBeHidden();
+    await page.getByRole("heading", { name: "GitHub Notifications", exact: true }).hover();
+    await expect(tooltip).toBeHidden();
+    if (trigger === "pointer") await settings.hover();
+    else {
+      await page.getByRole("searchbox").focus();
+      await settings.focus();
+    }
     await expect(tooltip).toBeVisible();
   }
   expect(canvas.writes).toEqual([]);
@@ -739,7 +754,7 @@ test("activating Open inbox and losing canvas focus dismiss tooltips despite ret
     document.getElementById("open-inbox").addEventListener("click", event => event.preventDefault());
   });
   for (const trigger of ["pointer", "keyboard"]) {
-    await page.getByRole("heading", { name: "Unread Notifications", exact: true }).hover();
+    await page.getByRole("heading", { name: "GitHub Notifications", exact: true }).hover();
     await page.getByRole("searchbox").focus();
     if (trigger === "pointer") await inbox.hover();
     else await inbox.focus();
@@ -809,12 +824,12 @@ test("foreground checks use a 60-second interval, pause while hidden, and refres
   const resumedRequest = page.waitForRequest(request => request.url().endsWith("/api/refresh"));
   await page.evaluate(() => { document.documentElement.style.display = ""; });
   expect((await resumedRequest).postDataJSON()).toEqual({ force: true });
-  await expect(page.getByRole("link", { name: "Updated when visible again", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Updated when visible again" })).toBeVisible();
   expect(notificationRequests()).toBe(2);
 
   canvas.rows[0].subject.title = "Updated on the next foreground check";
   await page.clock.setFixedTime(new Date(canvas.advance(61_000)));
-  await expect(page.getByRole("link", { name: "Updated on the next foreground check", exact: true })).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByRole("link", { name: "Updated on the next foreground check" })).toBeVisible({ timeout: 10_000 });
   expect(notificationRequests()).toBe(3);
   expect(canvas.writes).toEqual([]);
 });
@@ -828,15 +843,15 @@ test.describe("synchronized desktop alerts", () => {
     await canvas.desktop.sync();
     expect(canvas.deliveries).toEqual([]);
     const notificationRequests = () => canvas.requests.filter(path => path.startsWith("/notifications")).length;
-    expect(notificationRequests()).toBe(1);
+    expect(notificationRequests()).toBe(2);
 
     const time = canvas.advance(61_000);
     canvas.rows[0].updated_at = new Date(time).toISOString();
     canvas.rows[0].subject.title = "Synchronized foreground notification";
     await page.clock.setFixedTime(new Date(time));
-    await expect(page.getByRole("link", { name: "Synchronized foreground notification", exact: true })).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole("link", { name: "Synchronized foreground notification" })).toBeVisible({ timeout: 10_000 });
     await expect.poll(() => canvas.deliveries.map(alert => alert.body)).toEqual(["Synchronized foreground notification"]);
-    expect(notificationRequests()).toBe(2);
+    expect(notificationRequests()).toBe(4);
 
     await page.evaluate(() => { document.documentElement.style.display = "none"; });
     await expect(page.locator("html")).toBeHidden();
@@ -844,13 +859,13 @@ test.describe("synchronized desktop alerts", () => {
     canvas.rows[0].subject.title = "Background notification";
     await canvas.desktop.check();
     expect(canvas.deliveries).toHaveLength(1);
-    expect(notificationRequests()).toBe(2);
+    expect(notificationRequests()).toBe(4);
     canvas.advance(31_000);
     await canvas.desktop.check();
     expect(canvas.deliveries.map(alert => alert.body)).toEqual([
       "Synchronized foreground notification", "Background notification",
     ]);
-    expect(notificationRequests()).toBe(3);
+    expect(notificationRequests()).toBe(5);
     expect(canvas.writes).toEqual([]);
   });
 });
@@ -867,6 +882,7 @@ test("Settings supports keyboard dismissal and persists theme and auto-open acro
   ]);
   const theme = page.getByRole("combobox", { name: "Theme", exact: true });
   await expect(theme).toBeEnabled();
+  await expect(theme.locator("option")).toHaveText(["Match Copilot", "Dark", "Light"]);
   await expect(theme).toHaveValue("system");
   await theme.focus();
   await theme.selectOption("dark");
@@ -886,7 +902,7 @@ test("Settings supports keyboard dismissal and persists theme and auto-open acro
   await expect(page.getByRole("switch", { name: "Desktop notifications", exact: true })).toHaveAttribute("aria-checked", "false");
   await expect(page.getByRole("combobox", { name: "Sound", exact: true })).toHaveValue("default");
   expect(await canvas.preferences.read()).toEqual({
-    autoOpen: true, darkMode: true, desktopNotifications: false, desktopSound: "default", groupBy: "repo",
+    matchGitHubInbox: true, autoOpen: true, darkMode: true, desktopNotifications: false, desktopSound: "default", groupBy: "repo",
   });
   await theme.selectOption("system");
   await expect.poll(async () => (await canvas.preferences.read()).darkMode).toBeNull();
@@ -908,14 +924,14 @@ test("All notifications stays globally newest first through pagination, search a
   await grouping.selectOption("none");
   await expect(page.locator(".repo-group")).toHaveCount(1);
   await expect(page.locator(".repo-name")).toHaveText("All notifications");
-  await expect(page.locator(".repo-count")).toHaveText("50 unread");
+  await expect(page.locator(".repo-count")).toHaveText("50 total \u00b7 50 unread");
   await expect(page.locator("#collapse")).toBeVisible();
   await expect(page.locator(".row .title")).toHaveText(canvas.rows.slice(0, 50).map(row => row.subject.title));
   await expect(page.locator(".row .repository").nth(2)).toHaveText("example/tools");
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Load more (up to 50)", exact: true }).click();
   await expect(page.locator(".row .title")).toHaveText(canvas.rows.map(row => row.subject.title));
-  await expect(page.locator(".repo-count")).toHaveText("53 unread");
+  await expect(page.locator(".repo-count")).toHaveText("53 total \u00b7 53 unread");
   await page.getByRole("searchbox", { name: searchName }).fill("Needle");
   await expect(page.locator(".row .title")).toHaveText(canvas.rows.filter(row => row.subject.title.includes("Needle")).map(row => row.subject.title));
   await page.reload();
@@ -926,7 +942,7 @@ test("All notifications stays globally newest first through pagination, search a
   expect(canvas.writes).toEqual([]);
 });
 
-test("date groups span repositories and keep row-action focus in newest-first order", async ({ page, canvas }) => {
+test("date groups span repositories and keep API row order and action focus", async ({ page, canvas }) => {
   canvas.rows.splice(4);
   canvas.rows[0].updated_at = "2026-01-09T23:59:00Z";
   canvas.rows[1].updated_at = "2026-01-10T00:01:00Z";
@@ -936,21 +952,21 @@ test("date groups span repositories and keep row-action focus in newest-first or
   await page.getByLabel("Settings", { exact: true }).click();
   await page.getByRole("combobox", { name: "Group By", exact: true }).selectOption("date");
   await expect(page.locator(".repo-name")).toHaveText(["January 10, 2026", "January 9, 2026"]);
-  await expect(page.locator(".row .title")).toHaveText([2, 1, 0, 3].map(index => canvas.rows[index].subject.title));
+  await expect(page.locator(".row .title")).toHaveText([1, 2, 0, 3].map(index => canvas.rows[index].subject.title));
   await expect(page.locator('.repo-group [data-batch-scope="date"].repo-read')).toHaveCount(2);
   await expect(page.locator('[data-batch-scope="shown"]')).toHaveCount(0);
   await page.keyboard.press("Escape");
   const read = page.getByRole("button", { name: "Mark as read: Needle tool", exact: true });
   await read.focus();
   await read.press("Enter");
-  await expect(page.locator(".row")).toHaveCount(3);
-  await expect(page.getByRole("button", { name: "Mark as read: Needle widget 2", exact: true })).toBeFocused();
+  await expect(page.locator(".row")).toHaveCount(4);
+  await expect(page.getByRole("button", { name: "Mark as done: Needle tool", exact: true })).toBeFocused();
   expect(canvas.writes).toEqual(["3"]);
   const collapse = page.getByRole("button", { name: "Collapse all", exact: true });
   await collapse.click();
   await expect(page.locator(".row:visible")).toHaveCount(0);
   await page.getByRole("button", { name: "Expand all", exact: true }).click();
-  await expect(page.locator(".row:visible")).toHaveCount(3);
+  await expect(page.locator(".row:visible")).toHaveCount(4);
 });
 
 for (const width of [320, 480, 960]) {
@@ -972,12 +988,12 @@ for (const width of [320, 480, 960]) {
         context.font = `${style.fontSize} ${style.fontFamily}`;
         return context.measureText(node.placeholder).width <= node.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
       })).toBe(true);
-      await expect(page.locator(".repo-count")).toHaveText(["1 unread", "3 unread"]);
+      await expect(page.locator(".repo-count")).toHaveText(["3 total \u00b7 3 unread", "1 total \u00b7 1 unread"]);
       await expect(page.getByRole("button", { name: "Mark 1 as read in example/tools; 1 shown, loaded notifications", exact: true })).toBeVisible();
       await expect(page.getByRole("button", { name: "Mark 3 as read in example/widgets; 3 shown, loaded notifications", exact: true })).toBeVisible();
       await expect(page.locator(".eyebrow")).toBeVisible();
       await expect(page.locator("#subtitle")).toBeVisible();
-      await expect(page.locator(".attention-navigation")).toHaveCSS("margin-top", "20px");
+      await expect(page.locator(".attention-navigation")).toHaveCSS("margin-top", "16px");
       if (width <= 480) {
         const rows = await page.locator(".row").evaluateAll(nodes => nodes.map(node => {
           const time = node.querySelector("time").getBoundingClientRect();

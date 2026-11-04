@@ -42,6 +42,33 @@ test("poll floor and server interval are enforced even across concurrent panels;
   assert.equal(page.nextRefreshAt, 700_000);
 });
 
+test("write-invalidated caches are revalidated without bypassing rate-limit backoff", async () => {
+  for (const action of ["markRead", "markDone"]) {
+    let now = 0;
+    const calls = [];
+    const client = new GitHubClient({ now: () => now, run: async args => {
+      calls.push(args);
+      if (!args.includes("GET")) {
+        return `HTTP/2 ${action === "markRead" ? 205 : 204} Synthetic\r\nX-RateLimit-Remaining: 0\r\n\r\n`;
+      }
+      return http(calls.length === 1 ? [thread()] : [], { etag: '"synthetic"', "x-poll-interval": "300" });
+    } });
+    await client.page(firstPage());
+    await client[action]("1");
+    assert.equal(client.cache.values().next().value.invalidated, true);
+    await assert.rejects(client.page(firstPage(), undefined, { allowCachedDuringBackoff: true }), { code: "rate_limited" });
+    assert.equal(calls.length, 2);
+    now = client.blockedUntil;
+    const fresh = await client.page(firstPage());
+    assert.equal(fresh.invalidated, false);
+    assert.equal(fresh.items.length, 0);
+    assert.equal(calls.length, 3);
+    assert.equal(calls[2].some(arg => arg.startsWith("If-")), false);
+    assert.equal(await client.page(firstPage()), fresh);
+    assert.equal(calls.length, 3);
+  }
+});
+
 test("successful requests cache for at least 60 seconds, including conditional responses", async () => {
   for (const headers of [{}, { "x-poll-interval": "10" }, { "x-poll-interval": "30" }, { "x-poll-interval": "60" }]) {
     let now = 1000;
@@ -465,9 +492,9 @@ test("aborted requests never repopulate cache even if a transport resolves after
   assert.equal(client.cache.size, 0);
 });
 
-test("the API client rejects direct All requests before invoking gh", () => {
-  const client = new GitHubClient({ run: async () => assert.fail("Must not invoke gh for All") });
-  assert.throws(() => client.page("/notifications?all=true&per_page=50&page=1"), { code: "invalid_pagination" });
+test("the API client rejects unsupported done-only requests before invoking gh", () => {
+  const client = new GitHubClient({ run: async () => assert.fail("Must not invoke gh for an unsupported query") });
+  assert.throws(() => client.page("/notifications?all=true&is_done=true&per_page=50&page=1"), { code: "invalid_pagination" });
 });
 
 test("later-page failures back off exponentially despite earlier-page successes, then reset on recovery", async () => {
@@ -477,7 +504,7 @@ test("later-page failures back off exponentially despite earlier-page successes,
     if (args.at(-1).includes("page=1")) return http([thread("1")], { link: next });
     return fail ? http({ message: "secondary rate limit" }, {}, 403) : http([thread("2")]);
   } });
-  const inbox = new Inbox(client);
+  const inbox = new Inbox(client, { mode: "unread" });
   await inbox.refresh();
   await inbox.more();
   fail = true;

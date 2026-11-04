@@ -2,11 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { runInContext } from "node:vm";
 import { renderer, settle } from "./renderer-fixtures.mjs";
-import { http, next, thread } from "./fixtures.mjs";
+import { http, inboxNext as next, thread } from "./fixtures.mjs";
 
 test("clearing loaded rows waits for reconciliation before claiming the inbox is caught up", async t => {
   for (const hasMore of [false, true]) {
-    for (const action of ["read", "done"]) {
+    for (const action of ["done"]) {
       let fetches = 0;
       const ui = await renderer({ onFetch: () => ++fetches === 1
         ? http([thread("1"), thread("2")], hasMore ? { link: next } : {})
@@ -17,7 +17,7 @@ test("clearing loaded rows waits for reconciliation before claiming the inbox is
       }
       assert.equal(fetches, 1);
       assert.equal(ui.ids.get("empty-title").textContent, "Loaded notifications cleared");
-      assert.equal(ui.ids.get("empty-description").textContent, "Refresh to check for remaining unread notifications.");
+      assert.equal(ui.ids.get("empty-description").textContent, "Refresh to check for remaining notifications.");
       assert.equal(ui.ids.get("count").hidden, false);
       const refresh = ui.ids.get("empty-refresh");
       assert.equal(refresh.hidden, false);
@@ -41,7 +41,7 @@ test("empty loaded pages with a next page offer loading rather than an unnecessa
   const ui = await renderer({ onFetch: () => http([], { link: next }) });
   t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
   assert.equal(ui.ids.get("empty-title").textContent, "Loaded notifications cleared");
-  assert.equal(ui.ids.get("empty-description").textContent, "Load more to continue through your unread notifications.");
+  assert.equal(ui.ids.get("empty-description").textContent, "Load more to continue through your notifications.");
   assert.equal(ui.ids.get("empty-refresh").hidden, true);
   assert.equal(ui.ids.get("more").disabled, false);
 });
@@ -150,7 +150,7 @@ test("failed filters wait for the polling cadence while a foreground refresh is 
     await ui.fireTimer();
     await settle();
     assert.equal(attempts, 3);
-    assert.deepEqual(ui.inbox.filters, { mode: "unread", query: "notification", attention: "review_requested" });
+    assert.deepEqual(ui.inbox.filters, { mode: "inbox", query: "notification", attention: "review_requested" });
     assert.equal(ui.ids.get("notice").hidden, true);
     assert.equal(fetches, recoverAtDeadline ? 2 : 1);
     if (!recoverAtDeadline) {
@@ -211,6 +211,6 @@ test("shared action errors use scope-neutral and read-or-Done wording", async t 
   });
   ui.inbox.needsRefresh = true;
   await assert.rejects(ui.inbox.more(), {
-    code: "refresh_required", message: "Refresh notifications before loading more after marking a notification as read or done.",
+    code: "refresh_required",     message: "Refresh notifications before loading more after changing the inbox or notification view.",
   });
 });
