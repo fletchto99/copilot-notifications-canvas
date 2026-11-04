@@ -13,6 +13,7 @@ let stopped = false;
 let intersecting = true;
 let timer;
 let tooltipTimer;
+let overlayFrame;
 let refreshStatusKey;
 let searchTimer;
 let pendingFilters;
@@ -1147,8 +1148,14 @@ const themeObserver = new MutationObserver(renderTheme);
 themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: themeAttributes });
 themeObserver.observe(document.body, { attributes: true, attributeFilter: themeAttributes });
 const layoutObserver = new ResizeObserver(() => {
+  if (stopped) return;
   renderAttentionOverflow();
-  positionOverlays();
+  if (overlayFrame !== undefined) return;
+  // Settings positioning can resize the panel this observer is watching.
+  overlayFrame = requestAnimationFrame(() => {
+    overlayFrame = undefined;
+    positionOverlays();
+  });
 });
 layoutObserver.observe($("attention-navigation"));
 for (const tab of attentionTabs.values()) layoutObserver.observe(tab);
@@ -1164,6 +1171,8 @@ window.addEventListener("pagehide", () => {
   clearTimeout(tooltipTimer);
   clearTimeout(searchTimer);
   clearTimeout(copyFeedbackTimer);
+  if (overlayFrame !== undefined) cancelAnimationFrame(overlayFrame);
+  overlayFrame = undefined;
   for (const controller of requestControllers) controller.abort();
   observer.disconnect();
   themeObserver.disconnect();

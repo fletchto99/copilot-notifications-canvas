@@ -23,7 +23,9 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
   appColorMode = "light", systemDark = false } = {}) {
   const calls = [];
   const timers = new Map();
+  const animationFrames = new Map();
   let timerId = 0;
+  let frameId = 0;
   let intersect;
   let themeChanged;
   let themeDisconnected = false;
@@ -217,6 +219,12 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     Date: class extends Date { static now() { return now; } },
     setTimeout(fn, delay) { timers.set(++timerId, { fn, delay }); return timerId; },
     clearTimeout(id) { timers.delete(id); },
+    requestAnimationFrame(fn) {
+      const id = frameId++;
+      animationFrames.set(id, fn);
+      return id;
+    },
+    cancelAnimationFrame(id) { animationFrames.delete(id); },
     IntersectionObserver: class {
       constructor(callback) { intersect = callback; }
       observe() {}
@@ -282,7 +290,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
   });
   await settle();
   return {
-    calls, document, window, ids, timers, context, inbox, patches, deletions, githubCalls, copied, media,
+    calls, document, window, ids, timers, animationFrames, context, inbox, patches, deletions, githubCalls, copied, media,
     get themeDisconnected() { return themeDisconnected; },
     attentionObserved,
     resizeAttention: () => attentionResized(),
@@ -297,6 +305,12 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       media.events.change?.();
     },
     advance(milliseconds = 120_000) { now += milliseconds; return now; },
+    fireAnimationFrame() {
+      for (const [id, callback] of [...animationFrames]) {
+        animationFrames.delete(id);
+        callback(now);
+      }
+    },
     async fireTimer(delay = 5000) {
       const [id, timer] = [...timers].find(([, timer]) => timer.delay === delay);
       timers.delete(id);

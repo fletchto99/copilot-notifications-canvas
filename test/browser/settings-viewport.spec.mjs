@@ -12,6 +12,28 @@ async function expectPanelInViewport(page) {
 for (const packaged of [false, true]) {
   test.describe(`settings viewport (${packaged ? "packaged" : "source"})`, () => {
     test.use({ packaged });
+    test("opening Settings before its native toggle event avoids resize-observer errors", async ({ page, canvas }) => {
+      canvas.rows.splice(6);
+      await page.setViewportSize({ width: 320, height: 480 });
+      await page.goto(canvas.url);
+      await expect(page.locator(".row")).toHaveCount(6);
+      await expect(page.locator("#theme")).toBeEnabled();
+      await page.evaluate(async () => {
+        // Deliver layout before the browser's queued details toggle handler.
+        await new Promise(resolve => requestAnimationFrame(() => {
+          document.getElementById("settings").open = true;
+          resolve();
+        }));
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      });
+      await expect(page.locator("#settings-panel")).toBeVisible();
+      await expectPanelInViewport(page);
+      await page.keyboard.press("Escape");
+      await expect(page.locator("#settings-panel")).toBeHidden();
+      expect(canvas.writes).toEqual([]);
+      expect(canvas.deliveries).toEqual([]);
+    });
+
     test("Settings stays on-screen through resizing and scrolls its own content", async ({ page, canvas }) => {
       canvas.rows.splice(6);
       await page.setViewportSize({ width: 320, height: 480 });
@@ -151,7 +173,6 @@ for (const packaged of [false, true]) {
         await route.fulfill({ response, json: state });
       });
       await page.clock.install();
-      await page.clock.pauseAt(new Date(Date.now() + 1000));
       await page.setViewportSize({ width: 320, height: 480 });
       await page.goto(canvas.url);
       await expect(page.locator(".row")).toHaveCount(6);

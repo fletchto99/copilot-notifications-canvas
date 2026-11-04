@@ -105,6 +105,7 @@ test("Settings fits the available viewport and moves above only when that provid
   assert.equal(panel.style.maxHeight, "251px");
   toggle.bounds = { top: 207, bottom: 245 };
   ui.resizeAttention();
+  ui.fireAnimationFrame();
   assert.equal(panel.style.maxHeight, "219px");
   toggle.bounds = { top: 175, bottom: 213 };
   ui.window.innerHeight = 320;
@@ -124,6 +125,49 @@ test("Settings fits the available viewport and moves above only when that provid
   toggle.bounds = { top: 330, bottom: 368 };
   ui.window.events.resize();
   assert.equal(settings.open, false);
+});
+
+test("resize observations coalesce overlay writes into the next animation frame", async t => {
+  const ui = await renderer();
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  const panel = ui.ids.get("settings-panel");
+  ui.ids.get("settings").open = true;
+  ui.window.innerHeight = 480;
+  const anchor = ui.ids.get("refresh-control");
+  anchor.hovered = true;
+  anchor.bounds = { top: 100 };
+  ui.ids.get("refresh-tooltip").bounds = { height: 40 };
+  for (let index = 0; index < 3; index++) ui.resizeAttention();
+  assert.equal(panel.style.maxHeight, undefined);
+  assert.equal(anchor.dataset.tooltipPlacement, undefined);
+  assert.equal(ui.animationFrames.size, 1);
+  ui.fireAnimationFrame();
+  assert.equal(ui.animationFrames.size, 0);
+  assert.equal(panel.style.maxHeight, "251px");
+  assert.equal(anchor.dataset.tooltipPlacement, "above");
+  ui.ids.get("settings-toggle").bounds = { top: 207, bottom: 245 };
+  anchor.bounds = { top: 20 };
+  ui.resizeAttention();
+  assert.equal(ui.animationFrames.size, 1);
+  assert.equal(panel.style.maxHeight, "251px");
+  ui.fireAnimationFrame();
+  assert.equal(panel.style.maxHeight, "219px");
+  assert.equal(anchor.dataset.tooltipPlacement, "below");
+});
+
+test("pagehide cancels pending overlay frames and prevents observer rescheduling", async t => {
+  const ui = await renderer();
+  t.after(() => ui.inbox.close());
+  ui.ids.get("settings").open = true;
+  ui.resizeAttention();
+  assert.equal(ui.animationFrames.size, 1);
+  ui.window.events.pagehide();
+  assert.equal(ui.animationFrames.size, 0);
+  assert.equal(ui.attentionDisconnected, true);
+  ui.resizeAttention();
+  ui.fireAnimationFrame();
+  assert.equal(ui.animationFrames.size, 0);
+  assert.equal(ui.ids.get("settings-panel").style.maxHeight, undefined);
 });
 
 test("Settings activation dismisses its tooltip without preventing pointer or keyboard toggles", async t => {
