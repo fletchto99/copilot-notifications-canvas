@@ -465,6 +465,25 @@ test("settings failures are visible and do not claim a saved toggle", async () =
   assert.equal(ui.ids.get("settings-status").hidden, true);
 });
 
+test("inbox settings warnings stay visible with Settings closed and clear after recovery", async t => {
+  const ui = await renderer();
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  const warning = { code: "settings_read", message: "Saved settings are unavailable." };
+  await runInContext(`state.settingsError = ${JSON.stringify(warning)}; render()`, ui.context);
+  assert.equal(Boolean(ui.ids.get("settings").open), false);
+  assert.equal(ui.ids.get("settings-error").hidden, false);
+  assert.equal(ui.ids.get("settings-error").textContent, warning.message);
+  assert.equal(ui.ids.get("notice").hidden, true);
+  assert.equal(ui.document.querySelectorAll("article").length, 1);
+  await runInContext("update()", ui.context);
+  assert.equal(ui.ids.get("settings-error").hidden, true);
+  await runInContext(`state.settingsError = ${JSON.stringify(warning)}; render()`, ui.context);
+  ui.ids.get("settings").open = true;
+  ui.ids.get("settings").events.toggle();
+  await settle();
+  assert.equal(ui.ids.get("settings-error").hidden, true);
+});
+
 test("Group By is a labeled select above development settings and defaults to repo", async () => {
   assert.match(html, /<div class="select-setting">\s*<label for="group-by">Group By<\/label>\s*<select id="group-by" disabled>/);
   assert.match(html, /<option value="none">All notifications<\/option>\s*<option value="repo" selected>Repository<\/option>\s*<option value="date">Date<\/option>/);

@@ -23,6 +23,7 @@ const requestControllers = new Set();
 let connectionError = "";
 let preferences;
 let settingsBusy = false;
+let settingsError = "";
 let pendingSettings;
 let soundOptionsKey;
 let developmentSettingsKey;
@@ -120,6 +121,12 @@ function renderNotificationView() {
     busy || state?.status === "loading" || batchBusy || batchLocked() || marking.size > 0;
 }
 
+function renderSettingsError() {
+  const message = settingsError || state?.settingsError?.message || "";
+  $("settings-error").textContent = message;
+  $("settings-error").hidden = !message;
+}
+
 function renderSettings() {
   renderNotificationView();
   $("theme").disabled = settingsBusy || !preferences;
@@ -176,6 +183,7 @@ function renderSettings() {
     $("development-api-active").textContent = `Active API: ${api.baseUrl}`;
     $("development-api-reload").hidden = !api.requiresReload;
   }
+  renderSettingsError();
   positionSettings();
 }
 
@@ -192,21 +200,21 @@ async function settingsRequest(input, quiet = false, path = "settings") {
   let refreshInbox = false;
   settingsBusy = true;
   if (!quiet) {
+    settingsError = "";
     renderSettings();
     $("settings-status").textContent = input ? "" : "Loading...";
     $("settings-status").hidden = !$("settings-status").textContent;
-    $("settings-error").hidden = true;
   }
   try {
     preferences = await api(path, input);
+    settingsError = "";
+    if (state) state.settingsError = null;
     render();
     refreshInbox = input && Object.hasOwn(input, "matchGitHubInbox");
     $("settings-status").textContent = "";
-    $("settings-error").hidden = true;
   } catch (error) {
     $("settings-status").textContent = `${error.message || "Settings request failed."} Close and reopen Settings to retry.`;
-    $("settings-error").textContent = $("settings-status").textContent;
-    $("settings-error").hidden = false;
+    settingsError = $("settings-status").textContent;
   } finally {
     settingsBusy = false;
     $("settings-status").hidden = !$("settings-status").textContent;
@@ -851,6 +859,7 @@ function renderGroups(groups, fallbackFocusKey) {
 }
 
 function render(fallbackFocusKey) {
+  renderSettingsError();
   renderUpdates(state?.updates);
   const development = state?.development;
   $("development-build").hidden = !development;

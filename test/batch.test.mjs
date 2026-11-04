@@ -11,6 +11,25 @@ const ok = "HTTP/2 205 Reset Content\r\n\r\n";
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const laterThread = id => thread(id, { updated_at: "2026-01-11T12:00:00Z" });
 
+test("batch eligibility ignores discarded duplicates within one response", async t => {
+  for (const action of ["read", "done"]) {
+    for (const tied of [false, true]) {
+      const { inbox, writes, methods } = await fixture({ rows: [
+        thread("1", { unread: action !== "read", updated_at: "2026-01-10T12:00:00Z" }),
+        thread("1", { unread: action === "read", updated_at: tied ? "2026-01-10T12:00:00Z" : "2026-01-10T13:00:00Z" }),
+      ] });
+      t.after(() => inbox.close());
+      assert.equal(inbox.loadedItems().length, 1);
+      assert.equal(inbox.loadedItems()[0].unread, action === "read");
+      inbox.batch.start({ ...selection(inbox), action });
+      await inbox.batch.done;
+      assert.equal(inbox.batch.snapshot(), null);
+      assert.deepEqual(writes, ["/notifications/threads/1"]);
+      assert.deepEqual(methods, [action === "read" ? "PATCH" : "DELETE"]);
+    }
+  }
+});
+
 async function fixture({ rows = [thread("1"), thread("2"), thread("3")], run, sleep } = {}) {
   let now = 0;
   const writes = [];

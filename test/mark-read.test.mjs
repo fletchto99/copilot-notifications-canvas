@@ -110,10 +110,13 @@ test("cached/304 pages cannot resurrect reads; later real activity can reappear,
   assert.equal(inbox.summary().loaded, 1);
   assert.equal(inbox.summary().unread, 0);
   assert.equal(calls.at(-1).some(arg => arg.startsWith("If-")), false);
+  assert.equal(inbox.summary().needsRefresh, true);
+  await assert.rejects(inbox.more(), { code: "refresh_required" });
   phase = "new";
   now += POLL_MS;
   await inbox.refresh();
   assert.equal(inbox.summary().loaded, 1);
+  assert.equal(inbox.summary().needsRefresh, false);
 });
 
 test("HTTP mark-read routes authorize known IDs and leave mutations out of agent actions", async t => {

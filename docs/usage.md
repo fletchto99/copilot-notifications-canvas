@@ -51,6 +51,8 @@ history.
 The agent-facing `mode: "unread"` filter remains supported for existing callers.
 In that view, the dropdown displays **Unread only** and is unavailable; switching
 back to `mode: "inbox"` restores the saved preference.
+Changing the saved view elsewhere does not reset pagination in an explicitly
+selected unread view.
 
 ## Choose a view
 
@@ -70,6 +72,9 @@ Search and attention filters retain the relative order of matching items.
 Pagination keeps the first-seen position of duplicate threads while using data
 from the newest response. Older cached pages cannot restore stale read status,
 even when the notification's update timestamp has not changed.
+Pages invalidated by a confirmed Read/Done write are revalidated before cache
+reuse, so returning to a view cannot skip notifications at page boundaries.
+Rate-limit and error backoff still apply.
 
 Displayed relative times and date buckets still use REST `updated_at`, so they
 can differ from GitHub's website. **All notifications** preserves the original

@@ -203,6 +203,7 @@ export class GitHubClient {
           items: page.items.flatMap(item => item.id !== id ? [item] : retain ? [{ ...item, unread: false }] : []),
           etag: undefined,
           modified: undefined,
+          invalidated: true,
         });
       }
       for (const listener of this.threadListeners) listener(id, action);
@@ -215,11 +216,11 @@ export class GitHubClient {
     if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
     const now = this.now();
     const cached = method === "GET" ? this.cache.get(endpoint) : undefined;
-    if (allowCachedDuringBackoff && !force && cached &&
+    if (allowCachedDuringBackoff && !force && cached && !cached.invalidated &&
         cached.sequence >= minSequence && now < cached.nextRefreshAt) return cached;
     if (now < this.blockedUntil) throw this.lastError ??
       new InboxError("rate_limited", "GitHub requests are paused until the rate limit resets.", 429);
-    if (!force && cached && now < cached.nextRefreshAt) return cached;
+    if (!force && cached && !cached.invalidated && now < cached.nextRefreshAt) return cached;
     const requestKey = `${method} ${endpoint}`;
     const clearFailure = () => {
       this.failures.delete(requestKey);
@@ -279,12 +280,14 @@ export class GitHubClient {
         items = normalizeThreads(body, this.target);
         next = nextPage(headers.link, endpoint, this.target);
       }
+      const invalidated = status === 304 && Boolean(cached?.invalidated);
       const page = {
         sequence,
+        invalidated,
         items, next, fetchedAt, nextRefreshAt: Math.max(fetchedAt + poll, this.blockedUntil),
         serverTime: Number.isFinite(serverTime) && serverTime >= 0 ? serverTime : null,
-        etag: headers.etag ?? (status === 304 ? cached?.etag : undefined),
-        modified: headers["last-modified"] ?? (status === 304 ? cached?.modified : undefined),
+        etag: invalidated ? undefined : headers.etag ?? (status === 304 ? cached?.etag : undefined),
+        modified: invalidated ? undefined : headers["last-modified"] ?? (status === 304 ? cached?.modified : undefined),
       };
       this.cache.set(endpoint, page);
       clearFailure();

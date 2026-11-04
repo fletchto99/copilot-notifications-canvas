@@ -12,8 +12,7 @@ import { startServer } from "../src/server.mjs";
 import { http, thread } from "./fixtures.mjs";
 import { renderer, settle } from "./renderer-fixtures.mjs";
 
-function fixture() {
-  const rows = [thread("1"), thread("2", { unread: false }), thread("3", { unread: false, done: true })];
+function fixture(rows = [thread("1"), thread("2", { unread: false }), thread("3", { unread: false, done: true })]) {
   const calls = [];
   let now = 0;
   const client = new GitHubClient({
@@ -29,12 +28,98 @@ function fixture() {
         if (method === "DELETE") row.done = true;
         return `HTTP/2 ${method === "DELETE" ? 204 : 205} Synthetic\r\n\r\n`;
       }
-      return http(rows.filter(row => url.searchParams.get("all") === "false" ? row.unread :
-        url.searchParams.get("is_done") !== "false" || !row.done), { etag: '"synthetic"' });
+      const selected = rows.filter(row => url.searchParams.get("all") === "false" ? row.unread :
+        url.searchParams.get("is_done") !== "false" || !row.done);
+      const page = Number(url.searchParams.get("page"));
+      url.searchParams.set("page", String(page + 1));
+      return http(selected.slice((page - 1) * 50, page * 50), {
+        etag: '"synthetic"',
+        ...(selected.length > page * 50 ? { link: `<${url.href}>; rel="next"` } : {}),
+      });
     },
   });
   return { client, calls, rows, advance: () => { now += POLL_MS; } };
 }
+
+test("switching cached views after Done never skips a shifted pagination boundary", async t => {
+  for (const switchMode of [false, true]) {
+    for (const cachedSecondPage of [false, true]) {
+      const { client } = fixture(Array.from({ length: 100 }, (_, index) => thread(String(index + 1))));
+      const inbox = new Inbox(client);
+      t.after(() => inbox.close());
+      await inbox.refresh();
+      if (cachedSecondPage) await inbox.more();
+      await inbox.markDone({ id: "1" });
+      if (switchMode) {
+        await inbox.setFilters({ mode: "unread" });
+        await inbox.setFilters({ mode: "inbox" });
+      } else {
+        inbox.setMatchGitHubInbox(false);
+        await inbox.refresh();
+        inbox.setMatchGitHubInbox(true);
+        await inbox.refresh();
+      }
+      assert.equal(inbox.summary().loaded, 50);
+      assert.equal(inbox.summary().needsRefresh, false);
+      await inbox.more();
+      assert.deepEqual(inbox.loadedItems().map(item => item.id),
+        Array.from({ length: 99 }, (_, index) => String(index + 2)));
+      assert.equal(inbox.summary().hasMore, false);
+    }
+  }
+});
+
+test("saved view changes do not reset explicit unread pagination or its polling deadline", async t => {
+  const { client, calls } = fixture(Array.from({ length: 100 }, (_, index) => thread(String(index + 1))));
+  const inbox = new Inbox(client, { mode: "unread" });
+  t.after(() => inbox.close());
+  await inbox.refresh();
+  const deadline = inbox.nextRefreshAt;
+  inbox.setMatchGitHubInbox(false);
+  assert.equal(inbox.summary().needsRefresh, false);
+  assert.equal(inbox.nextRefreshAt, deadline);
+  await inbox.more();
+  const count = calls.length;
+  for (const value of [true, false]) {
+    inbox.setMatchGitHubInbox(value);
+    await inbox.refresh();
+    assert.equal(inbox.summary().loaded, 100);
+    assert.equal(inbox.summary().needsRefresh, false);
+    assert.equal(inbox.nextRefreshAt, deadline);
+    assert.equal(calls.length, count);
+  }
+});
+
+test("a preference change during an explicit unread refresh keeps every loaded page", async t => {
+  const { client, advance } = fixture(Array.from({ length: 100 }, (_, index) => thread(String(index + 1))));
+  const inbox = new Inbox(client, { mode: "unread" });
+  t.after(() => inbox.close());
+  await inbox.refresh();
+  await inbox.more();
+  advance();
+  let enter;
+  let release;
+  const entered = new Promise(resolve => { enter = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const run = client.run;
+  let started = false;
+  client.run = async args => {
+    if (!started) {
+      started = true;
+      enter();
+      await held;
+    }
+    return run(args);
+  };
+  const refreshing = inbox.refresh();
+  await entered;
+  inbox.setMatchGitHubInbox(false);
+  release();
+  await refreshing;
+  assert.equal(inbox.summary().loaded, 100);
+  assert.equal(inbox.summary().needsRefresh, false);
+  assert.ok(inbox.nextRefreshAt > client.now());
+});
 
 test("inbox matching and unread queries preserve their exact scope through pagination", async () => {
   assert.equal(firstPage(), "/notifications?all=false&per_page=50&page=1");
@@ -262,8 +347,8 @@ test("mode switches retain previous data on failure and reject changed or closed
     if (change === "setting") {
       await inbox.setFilters({ mode: "unread" });
       assert.equal(inbox.filters.mode, "unread");
-      assert.equal(inbox.nextRefreshAt, 0);
-      assert.equal(inbox.summary().needsRefresh, true);
+      assert.ok(inbox.nextRefreshAt > client.now());
+      assert.equal(inbox.summary().needsRefresh, false);
     } else {
       await assert.rejects(inbox.setFilters({ mode: "unread" }), {
         code: change === "failure" ? "github_http" : change === "closed" ? "closed" : "inbox_changed",

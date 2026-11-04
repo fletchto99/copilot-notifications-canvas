@@ -238,6 +238,35 @@ test("the extension entry point wires an isolated session through its complete l
     await assert.rejects(invoke("set_filters", "one", { attention: "unknown" }), { code: "invalid_filters" });
   });
 
+  await t.test("agent inbox actions retain their view and report settings-read failures", async () => {
+    const path = join(artifacts, "settings.json");
+    const original = await fs.readFile(path, "utf8");
+    const valid = JSON.stringify({ ...JSON.parse(original), matchGitHubInbox: false });
+    try {
+      await fs.writeFile(path, valid);
+      await canvas.open({ instanceId: "settings-failure" });
+      const initial = await invoke("refresh", "settings-failure");
+      assert.equal(initial.matchGitHubInbox, false);
+      const invalid = '{"autoOpen":"yes"}';
+      await fs.writeFile(path, invalid);
+      await assert.rejects(invoke("get_settings", "settings-failure"), { code: "settings_read" });
+      for (const action of ["refresh", "load_more", "set_filters"]) {
+        const state = await invoke(action, "settings-failure");
+        assert.equal(state.settingsError.code, "settings_read");
+        assert.equal(state.matchGitHubInbox, false);
+        assert.equal(state.error, null);
+        assert.ok(state.loaded > 0);
+        assert.doesNotMatch(JSON.stringify(state), /Synthetic notification|example\/widgets/);
+      }
+      assert.equal(await fs.readFile(path, "utf8"), invalid);
+      await fs.writeFile(path, valid);
+      assert.equal((await invoke("refresh", "settings-failure")).settingsError, null);
+    } finally {
+      await fs.writeFile(path, original);
+      await canvas.onClose({ instanceId: "settings-failure" });
+    }
+  });
+
   await t.test("unexpected action errors are sanitized and logged", async subtest => {
     subtest.mock.method(Inbox.prototype, "summary", () => { throw new Error("Synthetic private detail"); });
     await assert.rejects(invoke("get_state", "one"), { code: "internal_error", message: "Unexpected inbox error. Inspect the extension log." });

@@ -30,7 +30,7 @@ for (const width of [320, 960]) {
 
     for (const control of [controls[1], controls[3], controls[5]]) {
       await page.mouse.move(0, 0);
-      await page.getByRole("searchbox").focus();
+      await page.getByRole("searchbox").evaluate(node => node.focus({ preventScroll: true }));
       await control.evaluate(node => window.scrollTo(0, window.scrollY + node.getBoundingClientRect().top - 12));
       await expect.poll(async () => (await control.boundingBox()).y).toBeCloseTo(12);
       await control.hover();

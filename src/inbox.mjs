@@ -13,6 +13,7 @@ export class Inbox {
     this.marking = new Set();
     this.batch = new NotificationBatch(this);
     this.error = null;
+    this.settingsError = null;
     this.nextRefreshAt = 0;
     this.controller = new AbortController();
     this.needsRefresh = false;
@@ -36,9 +37,24 @@ export class Inbox {
 
   setMatchGitHubInbox(value) {
     if (typeof value !== "boolean") throw new InboxError("invalid_settings", "The notification view preference must be a boolean.", 400);
+    this.settingsError = null;
     if (value === this.requestedMatchGitHubInbox) return;
     this.requestedMatchGitHubInbox = value;
-    this.nextRefreshAt = 0;
+    if (this.viewChanged) this.nextRefreshAt = 0;
+  }
+
+  get viewChanged() {
+    return firstPage({ mode: this.filters.mode, matchGitHubInbox: this.matchGitHubInbox }) !==
+      firstPage({ mode: this.filters.mode, matchGitHubInbox: this.requestedMatchGitHubInbox });
+  }
+
+  async syncSettings(preferences) {
+    try {
+      this.setMatchGitHubInbox((await preferences.read()).matchGitHubInbox);
+    } catch (error) {
+      if (!(error instanceof InboxError) || error.code !== "settings_read") throw error;
+      this.settingsError = { code: error.code, message: error.message };
+    }
   }
 
   groups(items = this.loadedItems()) {
@@ -72,13 +88,14 @@ export class Inbox {
       status: this.busy ? "loading" : this.error ? (this.pages.length ? "stale" : "error") :
         this.pages.length ? "ready" : "idle",
       error: this.error,
+      settingsError: this.settingsError,
       loaded: items.length,
       unread: items.filter(item => item.unread).length,
       matching: groups.reduce((count, group) => count + group.items.length, 0),
       selectionKey: this.shownSelection(groups).selectionKey,
       attentionCounts: attentionCounts(items),
       hasMore: Boolean(this.pages.at(-1)?.next),
-      needsRefresh: this.needsRefresh || this.matchGitHubInbox !== this.requestedMatchGitHubInbox,
+      needsRefresh: this.needsRefresh || this.viewChanged,
       lastFetchedAt: this.pages.length ? Math.min(...this.pages.map(page => page.fetchedAt)) : null,
       nextRefreshAt: Math.max(this.nextRefreshAt, this.client.blockedUntil),
       retryAt: this.client.blockedUntil,
@@ -135,7 +152,7 @@ export class Inbox {
       const matchGitHubInbox = this.requestedMatchGitHubInbox;
       const pages = [];
       let next = firstPage({ mode: this.filters.mode, matchGitHubInbox });
-      const target = matchGitHubInbox !== this.matchGitHubInbox ? 1 : Math.max(1, this.pages.length);
+      const target = this.viewChanged ? 1 : Math.max(1, this.pages.length);
       while (next && pages.length < target) {
         const page = await this.client.page(next, this.controller.signal, { force: input.force });
         pages.push(page);
@@ -145,14 +162,14 @@ export class Inbox {
       if (revision !== this.client.revision) throw new InboxError("inbox_changed", "The inbox changed while refreshing. The next automatic refresh will reconcile it.", 409);
       this.pages = pages;
       this.matchGitHubInbox = matchGitHubInbox;
-      this.needsRefresh = false;
-      this.nextRefreshAt = this.matchGitHubInbox !== this.requestedMatchGitHubInbox ? 0 : Math.max(...pages.map(page => page.nextRefreshAt));
+      this.needsRefresh = pages.some(page => page.invalidated);
+      this.nextRefreshAt = this.viewChanged ? 0 : Math.max(...pages.map(page => page.nextRefreshAt));
     });
   }
 
   async more() {
     if (this.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
-    if (this.needsRefresh || this.matchGitHubInbox !== this.requestedMatchGitHubInbox) {
+    if (this.needsRefresh || this.viewChanged) {
       throw new InboxError("refresh_required", "Refresh notifications before loading more after changing the inbox or notification view.", 409);
     }
     if (!this.pages.at(-1)?.next) throw new InboxError("no_more_pages", "No more notifications to load.", 409);
@@ -162,6 +179,10 @@ export class Inbox {
       const page = await this.client.page(next, this.controller.signal);
       if (this.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
       if (revision !== this.client.revision) throw new InboxError("inbox_changed", "The inbox changed while loading. Try loading more again.", 409);
+      if (page.invalidated) {
+        this.needsRefresh = true;
+        throw new InboxError("refresh_required", "GitHub has not revalidated this page after an inbox update. Refresh notifications before loading more.", 409);
+      }
       this.pages = [...this.pages, page];
       this.nextRefreshAt = Math.max(this.nextRefreshAt, page.nextRefreshAt);
     }, "more");
@@ -183,8 +204,8 @@ export class Inbox {
         this.filters = { ...this.filters, ...input };
         this.pages = [page];
         this.matchGitHubInbox = matchGitHubInbox;
-        this.needsRefresh = false;
-        this.nextRefreshAt = this.matchGitHubInbox !== this.requestedMatchGitHubInbox ? 0 : page.nextRefreshAt;
+        this.needsRefresh = Boolean(page.invalidated);
+        this.nextRefreshAt = this.viewChanged ? 0 : page.nextRefreshAt;
       });
     }
     this.filters = { ...this.filters, ...input };

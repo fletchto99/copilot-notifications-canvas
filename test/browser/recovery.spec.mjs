@@ -1,10 +1,89 @@
 import { test, expect } from "./fixtures.mjs";
 import { http, thread } from "../fixtures.mjs";
+import { readFile, writeFile } from "node:fs/promises";
 
 function gate() {
   let release;
   const promise = new Promise(resolve => { release = resolve; });
   return { promise, release };
+}
+
+for (const packaged of [false, true]) {
+  test.describe(`settings recovery (${packaged ? "packaged" : "source"})`, () => {
+    test.use({ packaged });
+
+    test("bad settings warn while a closed Settings panel still permits refreshing and filtering", async ({ page, canvas }) => {
+      canvas.rows.splice(3);
+      canvas.rows[1].unread = false;
+      await canvas.preferences.update({ matchGitHubInbox: false });
+      const valid = await readFile(canvas.preferences.path, "utf8");
+      await page.clock.install();
+      await page.clock.pauseAt(new Date(Date.now() + 1000));
+      await page.goto(canvas.url);
+      await expect(page.locator(".row")).toHaveCount(2);
+      await expect(page.locator("#show-notifications")).toHaveValue("unread");
+      const invalid = '{"matchGitHubInbox":false,"autoOpen":"yes"}';
+      await writeFile(canvas.preferences.path, invalid);
+      const error = await canvas.preferences.read().catch(error => error);
+      expect(error.code).toBe("settings_read");
+      canvas.expectProviderError(error.message);
+      await page.clock.runFor(5000);
+      await expect(page.locator("#settings")).not.toHaveAttribute("open");
+      await expect(page.locator("#settings-error")).toContainText("Could not read notification settings");
+      await expect(page.locator("#notice")).toBeHidden();
+      canvas.rows.push(thread("4", { subject: { title: "Arrived while settings were invalid", type: "Issue", url: null } }));
+      await page.locator("#force-refresh").click();
+      await expect(page.locator(".row")).toHaveCount(3);
+      await expect(page.locator(".row.read")).toHaveCount(0);
+      await page.getByRole("searchbox").fill("Arrived");
+      await page.clock.runFor(250);
+      await expect(page.locator(".row")).toHaveCount(1);
+      await expect(page.locator("#settings-error")).toBeVisible();
+      expect(await readFile(canvas.preferences.path, "utf8")).toBe(invalid);
+      await writeFile(canvas.preferences.path, valid);
+      await page.clock.runFor(5000);
+      await expect(page.locator("#settings-error")).toBeHidden();
+      await expect(page.getByRole("searchbox")).toHaveValue("Arrived");
+      await expect(page.locator(".row")).toHaveCount(1);
+      expect(canvas.writes).toEqual([]);
+      expect(canvas.deliveries).toEqual([]);
+    });
+
+    test("a first inbox load can use defaults with an explicit settings warning", async ({ page, canvas }) => {
+      canvas.rows.splice(2);
+      canvas.rows[1].unread = false;
+      await canvas.preferences.update({ matchGitHubInbox: false });
+      const valid = await readFile(canvas.preferences.path, "utf8");
+      await writeFile(canvas.preferences.path, "{");
+      const error = await canvas.preferences.read().catch(error => error);
+      expect(error.code).toBe("settings_read");
+      canvas.expectProviderError(error.message);
+      let failedSettingsReads = 0;
+      page.on("response", response => {
+        if (new URL(response.url()).pathname === "/api/settings" && response.status() === 500) {
+          failedSettingsReads++;
+          canvas.expectConsoleError("/api/settings", "Failed to load resource: the server responded with a status of 500 (Internal Server Error)");
+        }
+      });
+      await page.goto(canvas.url);
+      await expect(page.locator(".row")).toHaveCount(2);
+      await expect(page.locator("#settings-error")).toContainText("Could not read notification settings");
+      await expect(page.locator("#notice")).toBeHidden();
+      await expect(page.locator(".row.read")).toHaveCount(1);
+      expect(failedSettingsReads).toBeGreaterThan(0);
+      expect(await readFile(canvas.preferences.path, "utf8")).toBe("{");
+      await writeFile(canvas.preferences.path, valid);
+      await page.locator("#settings-toggle").click();
+      await expect(page.locator("#show-notifications")).toHaveValue("unread");
+      await expect(page.locator("#settings-error")).toBeHidden();
+      await page.keyboard.press("Escape");
+      await page.locator("#force-refresh").click();
+      await expect(page.locator(".row")).toHaveCount(1);
+      await expect(page.locator(".row.read")).toHaveCount(0);
+      expect(canvas.writes).toEqual([]);
+      expect(canvas.deliveries).toEqual([]);
+    });
+  });
 }
 
 test("a delayed refresh survives hiding and showing the document without losing search", async ({ page, canvas }) => {

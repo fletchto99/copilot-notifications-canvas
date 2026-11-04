@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { request } from "node:http";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GitHubClient } from "../src/github.mjs";
@@ -11,16 +11,72 @@ import { DesktopNotifications } from "../src/desktop.mjs";
 import { Preferences } from "../src/settings.mjs";
 import { http, thread } from "./fixtures.mjs";
 
-async function setup(t, run = async () => http([thread()])) {
+async function setup(t, run = async () => http([thread()]), options = {}) {
   const client = new GitHubClient({ run });
   const inbox = new Inbox(client);
-  const server = await startServer(inbox);
+  const server = await startServer(inbox, options);
   t.after(() => server.close());
   const url = new URL(server.url);
   const origin = url.origin;
   const headers = { Authorization: `Bearer ${url.hash.slice(1)}`, Origin: origin };
   return { ...server, origin, headers };
 }
+
+test("unreadable or invalid preferences warn without disabling a loaded inbox", async t => {
+  for (const invalid of ["{", '{"autoOpen":"yes"}', '{"desktopSound":true}', '{"matchGitHubInbox":"all"}', "EACCES"]) {
+    await t.test(invalid, async subtest => {
+      const directory = await mkdtemp(join(tmpdir(), "notification-settings-recovery-"));
+      const preferences = new Preferences({ directory });
+      await preferences.update({ matchGitHubInbox: false });
+      const valid = await readFile(preferences.path, "utf8");
+      let denied = false;
+      const io = preferences.io;
+      preferences.io = { ...io, open: (...args) => denied
+        ? Promise.reject(Object.assign(new Error("Synthetic access failure"), { code: "EACCES" }))
+        : io.open(...args) };
+      const rows = Array.from({ length: 53 }, (_, index) => thread(String(index + 1), { unread: index !== 0 }));
+      const { origin, headers } = await setup(subtest, async args => {
+        assert.ok(args.includes("GET"));
+        const url = new URL(args.at(-1), "https://api.github.com");
+        assert.equal(url.searchParams.get("all"), "false");
+        const page = Number(url.searchParams.get("page"));
+        const selected = rows.filter(row => row.unread);
+        url.searchParams.set("page", String(page + 1));
+        return http(selected.slice((page - 1) * 50, page * 50),
+          selected.length > page * 50 ? { link: `<${url.href}>; rel="next"` } : {});
+      }, { preferences });
+      subtest.after(() => rm(directory, { recursive: true, force: true }));
+      const call = async (path, method = "POST", body = {}) => {
+        const response = await fetch(`${origin}/api/${path}`, {
+          method, headers: { ...headers, "Content-Type": "application/json" },
+          ...(method === "POST" ? { body: JSON.stringify(body) } : {}),
+        });
+        return { status: response.status, data: await response.json() };
+      };
+      assert.equal((await call("refresh")).status, 200);
+      if (invalid === "EACCES") denied = true;
+      else await writeFile(preferences.path, invalid);
+      for (const [path, method] of [["state", "GET"], ["refresh", "POST"], ["more", "POST"], ["filters", "POST"]]) {
+        const { status, data } = await call(path, method);
+        assert.equal(status, 200, path);
+        assert.equal(data.settingsError.code, "settings_read", path);
+        assert.equal(data.error, null);
+        assert.equal(data.matchGitHubInbox, false);
+        assert.equal(data.unread, data.loaded);
+      }
+      const settings = await call("settings", "GET");
+      assert.equal(settings.status, 500);
+      assert.equal(settings.data.error.code, "settings_read");
+      assert.equal(await readFile(preferences.path, "utf8"), invalid === "EACCES" ? valid : invalid);
+      denied = false;
+      await writeFile(preferences.path, valid);
+      const repaired = await call("state", "GET");
+      assert.equal(repaired.status, 200);
+      assert.equal(repaired.data.settingsError, null);
+      assert.equal(repaired.data.loaded, 52);
+    });
+  }
+});
 
 test("HTTP integration serves a protected inbox, rejects cross-origin access and never enables CORS", async t => {
   const { origin, headers } = await setup(t);

@@ -221,11 +221,15 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         throw new InboxError("settings_unavailable", "Notification settings are unavailable.", 503);
       }
       if (preferences && ["/api/state", "/api/refresh", "/api/more"].includes(path)) {
-        inbox.setMatchGitHubInbox((await preferences.read()).matchGitHubInbox);
+        await inbox.syncSettings(preferences);
       }
       if (path === "/api/state" || (path === "/api/settings" && req.method === "GET")) {
         if (req.method !== "GET") throw new InboxError("method", "Only GET is supported.", 405);
-        if (path === "/api/settings") return json(200, await settingsSnapshot(await preferences.read()));
+        if (path === "/api/settings") {
+          const settings = await preferences.read();
+          inbox.setMatchGitHubInbox(settings.matchGitHubInbox);
+          return json(200, await settingsSnapshot(settings));
+        }
       } else {
         if (req.method !== "POST") throw new InboxError("method", "Only POST is supported.", 405);
         if (req.headers.origin !== origin) throw new InboxError("origin", "A same-origin request is required.", 403);

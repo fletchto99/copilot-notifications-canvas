@@ -30,13 +30,17 @@ It opens above its button when that offers more space and closes if the button
 scrolls out of view. Labels and dropdowns stack when needed to accommodate wider
 text, and the panel adjusts when typography or header content changes.
 
-The dropdown retains the existing `matchGitHubInbox` boolean in the user-wide
-settings file: `true` means **All** and `false` means **Unread only**. Existing
+The dropdown stores `matchGitHubInbox` in the user-wide settings file:
+`true` means **All** and `false` means **Unread only**. Existing
 choices are preserved without migration. Other open panels apply changes on
 their next poll, without interrupting an active batch.
+If settings become unreadable or invalid, an open inbox keeps its last applied
+view and displays a settings warning rather than stopping refreshes or pagination.
+The settings file is not reset or rewritten; repair it to restore preference
+changes. A panel that has not read valid settings uses the default view with
+the same warning. API-target validation at provider startup remains unchanged.
 Desktop alerts still poll unread notifications only; this setting does not change
 their baseline, enable alerts, or replay read or completed activity.
-The earlier local `showDone` key is ignored and preserved, not migrated.
 
 Auto-open is a user-wide preference, but dismissal belongs to each session.
 Closing Notifications in one conversation does not affect other conversations.

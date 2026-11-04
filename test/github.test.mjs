@@ -42,6 +42,33 @@ test("poll floor and server interval are enforced even across concurrent panels;
   assert.equal(page.nextRefreshAt, 700_000);
 });
 
+test("write-invalidated caches are revalidated without bypassing rate-limit backoff", async () => {
+  for (const action of ["markRead", "markDone"]) {
+    let now = 0;
+    const calls = [];
+    const client = new GitHubClient({ now: () => now, run: async args => {
+      calls.push(args);
+      if (!args.includes("GET")) {
+        return `HTTP/2 ${action === "markRead" ? 205 : 204} Synthetic\r\nX-RateLimit-Remaining: 0\r\n\r\n`;
+      }
+      return http(calls.length === 1 ? [thread()] : [], { etag: '"synthetic"', "x-poll-interval": "300" });
+    } });
+    await client.page(firstPage());
+    await client[action]("1");
+    assert.equal(client.cache.values().next().value.invalidated, true);
+    await assert.rejects(client.page(firstPage(), undefined, { allowCachedDuringBackoff: true }), { code: "rate_limited" });
+    assert.equal(calls.length, 2);
+    now = client.blockedUntil;
+    const fresh = await client.page(firstPage());
+    assert.equal(fresh.invalidated, false);
+    assert.equal(fresh.items.length, 0);
+    assert.equal(calls.length, 3);
+    assert.equal(calls[2].some(arg => arg.startsWith("If-")), false);
+    assert.equal(await client.page(firstPage()), fresh);
+    assert.equal(calls.length, 3);
+  }
+});
+
 test("successful requests cache for at least 60 seconds, including conditional responses", async () => {
   for (const headers of [{}, { "x-poll-interval": "10" }, { "x-poll-interval": "30" }, { "x-poll-interval": "60" }]) {
     let now = 1000;

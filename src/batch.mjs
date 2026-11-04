@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { InboxError } from "./model.mjs";
+import { InboxError, uniqueThreads } from "./model.mjs";
 
 export function selectionKey(group, filters) {
   return createHash("sha256").update(JSON.stringify([
@@ -104,7 +104,7 @@ export class NotificationBatch {
     // Other views can retain older read states. Only newer responses can invalidate this selection.
     for (const page of this.inbox.client.cache.values()) {
       if (page.sequence < sequence) continue;
-      if (page.items.some(row => row.id === item.id &&
+      if (uniqueThreads(page.items).some(row => row.id === item.id &&
           (row.unread !== item.unread || row.repository !== item.repository || row.updatedAt > item.updatedAt))) return false;
     }
     return true;

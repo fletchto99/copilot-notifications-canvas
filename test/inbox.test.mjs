@@ -2,7 +2,61 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { firstPage, GitHubClient, POLL_MS } from "../src/github.mjs";
 import { Inbox } from "../src/inbox.mjs";
+import { InboxError } from "../src/model.mjs";
 import { http, inboxNext as next, thread } from "./fixtures.mjs";
+
+test("settings-read failures preserve the requested view and surface an independent warning", async t => {
+  const inbox = new Inbox(new GitHubClient({ run: async () => http([thread()]) }));
+  t.after(() => inbox.close());
+  const unavailable = new InboxError("settings_read", "Saved settings are unavailable.", 500);
+  const failing = { read: async () => { throw unavailable; } };
+  await inbox.syncSettings(failing);
+  assert.equal(inbox.requestedMatchGitHubInbox, true);
+  await inbox.refresh();
+  assert.equal(inbox.summary().status, "ready");
+  assert.equal(inbox.summary().settingsError.code, "settings_read");
+  await inbox.syncSettings({ read: async () => ({ matchGitHubInbox: false }) });
+  await inbox.refresh();
+  const deadline = inbox.nextRefreshAt;
+  await inbox.syncSettings(failing);
+  assert.equal(inbox.requestedMatchGitHubInbox, false);
+  assert.equal(inbox.matchGitHubInbox, false);
+  assert.equal(inbox.nextRefreshAt, deadline);
+  assert.deepEqual(inbox.summary().settingsError, { code: "settings_read", message: unavailable.message });
+  assert.equal(inbox.summary().error, null);
+  const unexpected = new Error("Unexpected preferences failure");
+  await assert.rejects(inbox.syncSettings({ read: async () => { throw unexpected; } }), error => error === unexpected);
+  await assert.rejects(inbox.syncSettings({ read: async () => ({ matchGitHubInbox: "all" }) }), { code: "invalid_settings" });
+  await inbox.syncSettings({ read: async () => ({ matchGitHubInbox: false }) });
+  assert.equal(inbox.summary().settingsError, null);
+});
+
+test("a 304 response cannot validate pagination invalidated by a confirmed write", async t => {
+  let written = false;
+  const client = new GitHubClient({ run: async args => {
+    if (args.includes("DELETE")) {
+      written = true;
+      return "HTTP/2 204 Synthetic\r\n\r\n";
+    }
+    if (args.at(-1).includes("page=2")) return written
+      ? http(null, { etag: '"still-old"', "last-modified": "Sat, 10 Jan 2026 12:00:00 GMT" }, 304)
+      : http([thread("3")]);
+    return http(written ? [thread("2")] : [thread("1"), thread("2")], { link: next });
+  } });
+  const inbox = new Inbox(client);
+  t.after(() => inbox.close());
+  await inbox.refresh();
+  await client.page(inbox.pages[0].next);
+  await inbox.markDone({ id: "1" });
+  await inbox.refresh({ force: true });
+  assert.equal(inbox.summary().needsRefresh, false);
+  await assert.rejects(inbox.more(), { code: "refresh_required" });
+  assert.deepEqual(inbox.loadedItems().map(item => item.id), ["2"]);
+  assert.equal(inbox.summary().needsRefresh, true);
+  const invalidated = [...client.cache.values()].find(page => page.invalidated);
+  assert.equal(invalidated.etag, undefined);
+  assert.equal(invalidated.modified, undefined);
+});
 
 test("regrouping restores API positions across repositories without exposing positions in summaries", async t => {
   const inbox = new Inbox(new GitHubClient({ run: async () => http([
