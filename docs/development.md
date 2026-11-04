@@ -63,6 +63,10 @@ in the URL, canvas, repository, or logs. The extension uses an explicit
 or copies the production token. GitHub CLI's own host credentials and token
 environment-variable rules still apply.
 
+Non-default HTTPS ports are supported: the port stays in API and website URLs,
+while `gh --hostname` receives only the hostname. IPv6 literal hosts are rejected
+because GitHub CLI does not accept them; use a DNS hostname or IPv4 address.
+
 Only HTTPS bases without embedded credentials, query strings, fragments, or
 encoded paths are accepted. Notification pagination must stay on that base's
 notifications endpoint with the original unread query and page size.
@@ -75,6 +79,8 @@ still perform real per-thread writes when explicitly clicked, and some
 development servers share production data. A banner identifies the active
 custom API. Desktop polling and native delivery are disabled for custom APIs
 without changing saved desktop preferences or production coordination files.
+The inbox link stays unavailable until the active API is known; the link and
+custom-API warning do not need to wait for the first notification fetch.
 Use synthetic fixtures for automated validation, never live notification writes.
 
 ### Synthetic preview

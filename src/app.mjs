@@ -1,4 +1,4 @@
-import { attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads } from "./model.mjs";
+import { apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads } from "./model.mjs";
 
 const $ = id => document.getElementById(id);
 const token = location.hash.slice(1);
@@ -831,11 +831,15 @@ function render(fallbackFocusKey) {
   const development = state?.development;
   $("development-build").hidden = !development;
   $("development-build").textContent = development ? `dev (v${development.version}) ${development.branch}` : "";
-  $("open-inbox").href = state?.inboxUrl ?? "https://github.com/notifications";
-  const customAPI = state?.developmentApiBaseUrl && state.developmentApiBaseUrl !== "https://api.github.com";
-  $("development-api-notice").hidden = !customAPI;
-  $("development-api-notice").textContent = customAPI
-    ? `Development API: ${state.developmentApiBaseUrl}. Read/done actions affect this API, which may share production data. Desktop alerts are disabled.`
+  const activeAPI = state || preferences ? apiTarget(state?.developmentApiBaseUrl ?? preferences?.developmentApi?.baseUrl) : null;
+  const inboxLink = $("open-inbox");
+  if (activeAPI) inboxLink.href = `${activeAPI.webOrigin}/notifications`;
+  else inboxLink.removeAttribute("href");
+  inboxLink.setAttribute("aria-disabled", String(!activeAPI));
+  inboxLink.tabIndex = activeAPI ? 0 : -1;
+  $("development-api-notice").hidden = !activeAPI?.custom;
+  $("development-api-notice").textContent = activeAPI?.custom
+    ? `Development API: ${activeAPI.baseUrl}. Read/done actions affect this API, which may share production data. Desktop alerts are disabled.`
     : "";
   renderControls();
   const error = actionError || state?.error?.message || connectionError;

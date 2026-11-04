@@ -18,12 +18,15 @@ export function apiTarget(value = DEFAULT_API_BASE_URL) {
   } catch {
     throw new InboxError("invalid_api", "Use an HTTPS REST API base URL without credentials, query parameters, fragments, or encoded paths.", 400);
   }
+  if (url.hostname.includes(":")) {
+    throw new InboxError("invalid_api", "Use a DNS hostname or IPv4 address for the API. GitHub CLI does not support IPv6 literal hosts.", 400);
+  }
   const prefix = url.pathname.replace(/\/$/, "");
   const baseUrl = `${url.origin}${prefix}`;
   const custom = baseUrl !== DEFAULT_API_BASE_URL;
   return Object.freeze({
     baseUrl, origin: url.origin, prefix, custom,
-    hostname: custom ? url.host : "github.com",
+    hostname: custom ? url.hostname : "github.com",
     webOrigin: custom ? url.origin : "https://github.com",
   });
 }

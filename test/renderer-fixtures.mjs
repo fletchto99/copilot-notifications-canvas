@@ -77,6 +77,10 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     }
     set innerHTML(_) { throw new Error("HTML interpolation is forbidden"); }
     setAttribute(key, value) { this.attributes[key] = value; }
+    removeAttribute(key) {
+      delete this.attributes[key];
+      if (key === "href") this.href = "";
+    }
     getAttribute(key) { return this.attributes[key] ?? null; }
     append(...children) {
       for (const child of children) child.parentNode = this;
@@ -148,6 +152,11 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     addEventListener(name, handler) { this.events[name] = handler; },
   };
   const window = { events: {}, addEventListener(name, handler) { this.events[name] = handler; } };
+  const inboxLink = ids.get("open-inbox");
+  inboxLink.href = "";
+  inboxLink.tabIndex = -1;
+  inboxLink.setAttribute("aria-disabled", "true");
+  ids.get("development-api-notice").hidden = true;
   const updateDetails = ids.get("update-prompt-details");
   updateDetails.contains = node =>
     ["update-prompt-details", "update-instructions", "update-prompt"].some(id => ids.get(id) === node);
@@ -172,8 +181,8 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     return onFetch ? onFetch(args) : http(rows);
   } }));
   const context = createContext({
-    document, window, location: { hash: `#${token}` }, Intl, AbortController,
-    attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads,
+    document, window, location: { hash: `#${token}` }, Intl, URL, AbortController,
+    apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads,
     navigator: { clipboard: { writeText: async text => {
       if (clipboardFailure) throw new Error("Clipboard denied");
       copied.push(text);
@@ -237,9 +246,9 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       return { ok: true, json: async () => ({ ...inbox.snapshot(), updates: releaseMetadata, development, ...apiState() }) };
     },
   });
-  if (!process.env.NOTIFICATIONS_TEST_SCRIPT) assert.match(script, /^import \{ attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads \} from "\.\/model\.mjs";/);
+  if (!process.env.NOTIFICATIONS_TEST_SCRIPT) assert.match(script, /^import \{ apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads \} from "\.\/model\.mjs";/);
   // Preserve source offsets for the coverage report when removing the injected import.
-  runInContext(script.replace(/^import \{ attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads \} from "\.\/model\.mjs";/, match => " ".repeat(match.length)), context, {
+  runInContext(script.replace(/^import \{ apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads \} from "\.\/model\.mjs";/, match => " ".repeat(match.length)), context, {
     filename: process.env.NOTIFICATIONS_TEST_SCRIPT ?? fileURLToPath(new URL("../src/app.mjs", import.meta.url)),
   });
   await settle();

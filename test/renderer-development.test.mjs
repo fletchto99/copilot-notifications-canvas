@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { html, renderer, settle } from "./renderer-fixtures.mjs";
+import { http } from "./fixtures.mjs";
 
 const baseUrl = "https://git.example.com/api/v3";
 const defaultBase = "https://api.github.com";
@@ -19,6 +20,53 @@ test("API controls stay hidden without the source-only capability", async () => 
   assert.equal(ui.calls.some(call => call.path === "/api/development"), false);
   ui.window.events.pagehide();
 });
+
+for (const settingsFailed of [false, true]) {
+  test(`initial inbox links wait for the active API when settings ${settingsFailed ? "fail" : "load"}`, async t => {
+    const activeBaseUrl = "https://git.example.com:8443/api/v3";
+    const developmentApi = { baseUrl: activeBaseUrl, savedBaseUrl: defaultBase, requiresReload: true };
+    let finishSettings;
+    let finishRefresh;
+    const ui = await renderer({
+      developmentApi,
+      onSettings: () => new Promise((resolve, reject) => {
+        finishSettings = () => settingsFailed ? reject(new Error("Synthetic settings failure")) : resolve();
+      }),
+      onFetch: async () => {
+        await new Promise(resolve => { finishRefresh = resolve; });
+        return http([]);
+      },
+    });
+    t.after(() => {
+      finishSettings?.();
+      finishRefresh?.();
+      ui.window.events.pagehide();
+    });
+    const link = ui.ids.get("open-inbox");
+    assert.equal(link.href, "");
+    assert.equal(link.getAttribute("aria-disabled"), "true");
+    assert.equal(link.tabIndex, -1);
+    assert.equal(ui.ids.get("development-api-notice").hidden, true);
+    finishSettings();
+    await settle();
+    assert.equal(ui.inbox.busy, true);
+    assert.equal(link.getAttribute("aria-disabled"), String(settingsFailed));
+    if (settingsFailed) {
+      assert.equal(link.href, "");
+      assert.equal(ui.ids.get("development-api-notice").hidden, true);
+    } else {
+      assert.equal(link.href, "https://git.example.com:8443/notifications");
+      assert.equal(ui.ids.get("development-api-notice").hidden, false);
+      assert.match(ui.ids.get("development-api-notice").textContent, /https:\/\/git\.example\.com:8443\/api\/v3/);
+    }
+    finishRefresh();
+    await settle();
+    assert.equal(link.href, "https://git.example.com:8443/notifications");
+    assert.equal(link.getAttribute("aria-disabled"), "false");
+    assert.equal(link.tabIndex, 0);
+    assert.equal(ui.ids.get("development-api-notice").hidden, false);
+  });
+}
 
 test("source settings save a custom URL without changing the active API, then allow reverting the selection", async () => {
   const developmentApi = { baseUrl: defaultBase, savedBaseUrl: defaultBase, requiresReload: false };

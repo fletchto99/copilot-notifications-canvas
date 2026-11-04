@@ -41,17 +41,20 @@ test("GitHub inbox is an accessible icon link before Refresh and Settings in the
   assert.ok(link);
   const [, attributes, content] = link;
   assert.match(attributes, /class="icon-button"/);
-  assert.match(attributes, /href="https:\/\/github\.com\/notifications"/);
+  assert.doesNotMatch(attributes, /\bhref=/);
+  assert.match(attributes, /role="link"/);
+  assert.match(attributes, /aria-disabled="true"/);
+  assert.match(attributes, /tabindex="-1"/);
   assert.match(attributes, /target="_blank"/);
   assert.match(attributes, /rel="noopener noreferrer"/);
   assert.match(attributes, /aria-label="Open GitHub inbox"/);
   assert.match(attributes, /aria-describedby="inbox-tooltip"/);
   assert.doesNotMatch(attributes, /\btitle=/);
-  assert.doesNotMatch(attributes, /\bhidden\b|\btabindex=/);
+  assert.doesNotMatch(attributes, /\bhidden\b/);
   assert.match(content, /<svg\b[^>]*aria-hidden="true"[^>]*focusable="false"/);
   assert.match(content, /^\s*<svg\b[^>]*>\s*<path\b[^>]*\/>\s*<path\b[^>]*\/>\s*<\/svg>\s*$/);
   assert.match(html, /<div class="toolbar">\s*<label class="search">[\s\S]*?<\/label>\s*<div id="inbox-control"[^>]*>[\s\S]*?<\/div>\s*<div id="refresh-control"[^>]*>[\s\S]*?<\/div>\s*<details id="settings"/);
-  assert.equal([...html.matchAll(/href="https:\/\/github\.com\/notifications"/g)].length, 1);
+  assert.equal([...html.matchAll(/href="https:\/\/github\.com\/notifications"/g)].length, 0);
 });
 
 test("Settings uses an icon-only toggle with an accessible name and tooltip", () => {

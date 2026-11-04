@@ -63,7 +63,7 @@ export class Preferences {
     try {
       return apiTarget(data.developmentApiBaseUrl).baseUrl;
     } catch {
-      throw new InboxError("settings_read", "Could not read the development API. Check developmentApiBaseUrl in artifacts/settings.json; it must be an HTTPS REST API base URL without credentials, query parameters, or fragments.", 500);
+      throw new InboxError("settings_read", "Could not read the development API. Check developmentApiBaseUrl in artifacts/settings.json; it must be an HTTPS REST API base URL with a DNS hostname or IPv4 address and no credentials, query parameters, or fragments.", 500);
     }
   }
 

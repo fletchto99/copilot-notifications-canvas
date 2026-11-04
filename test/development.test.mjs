@@ -28,9 +28,14 @@ test("API bases are HTTPS, canonical, credential-free and safe for gh arguments"
   assert.equal(apiTarget().custom, false);
   assert.equal(apiTarget("https://api.github.com/").hostname, "github.com");
   assert.equal(apiTarget("https://GIT.example.com:443/api/v3/").baseUrl, baseUrl);
-  assert.equal(apiTarget("https://git.example.com:8443/rest").hostname, "git.example.com:8443");
+  assert.equal(apiTarget("https://git.example.com:8443/rest").hostname, "git.example.com");
+  assert.equal(apiTarget("https://git.example.com:8443/rest").baseUrl, "https://git.example.com:8443/rest");
+  assert.equal(apiTarget("https://127.0.0.1:8443/api/v3").hostname, "127.0.0.1");
   assert.equal(apiTarget("https://git.example.com").prefix, "");
   assert.equal(Object.isFrozen(target), true);
+  for (const value of ["https://[::1]/api/v3", "https://[2001:db8::1]:8443/api/v3"]) {
+    assert.throws(() => apiTarget(value), error => error.code === "invalid_api" && /IPv6/.test(error.message));
+  }
   for (const value of [null, {}, 7, "", "git.example.com", "http://git.example.com/api/v3", "file:///tmp/api",
     "https://user:secret@git.example.com/api/v3", `${baseUrl}?token=secret`, `${baseUrl}#secret`,
     "https://git.example.com/api/../v3", "https://git.example.com/api/%2e/v3",
@@ -59,42 +64,47 @@ assert.throws(() => apiTarget(invalidURL), { code: "invalid_api" });
 });
 
 test("custom notification reads, conditional pagination and both writes stay on the selected API", async () => {
-  let now = 0;
-  const calls = [];
-  const client = new GitHubClient({ apiBaseUrl: baseUrl, now: () => now, sleep: async delay => { now += delay; },
-    run: async args => {
-      calls.push(args);
-      if (args.includes("PATCH")) return http(null, {}, 205);
-      if (args.includes("DELETE")) return http(null, {}, 204);
-      if (args.at(-1).includes("page=2")) return http([]);
-      if (args.includes('If-None-Match: "lab"')) return http(null, {}, 304);
-      return http([thread("1", { subject: { type: "Issue", title: "Synthetic", url: `${baseUrl}/repos/example/widgets/issues/42` } })],
-        { link: nextLink, etag: '"lab"' });
-    },
-  });
-  const page = await client.page(firstPage());
-  assert.equal(page.items[0].url, "https://git.example.com/example/widgets/issues/42");
-  assert.equal(page.items[0].number, "42");
-  await client.page(firstPage(), undefined, { force: true });
-  await client.page(page.next);
-  await client.markRead("1");
-  await client.markDone("2");
-  assert.deepEqual(calls.map(args => args[args.indexOf("--method") + 1]), ["GET", "GET", "GET", "PATCH", "DELETE"]);
-  for (const args of calls) {
-    assert.equal(args[2], "git.example.com");
-    assert.ok(args.at(-1).startsWith(baseUrl + "/notifications"));
-    assert.equal(args.includes("auth"), false);
-    assert.equal(args.some(arg => /Authorization|secret/.test(arg)), false);
+  for (const apiBaseUrl of [baseUrl, "https://git.example.com:8443/api/v3"]) {
+    let now = 0;
+    const calls = [];
+    const client = new GitHubClient({ apiBaseUrl, now: () => now, sleep: async delay => { now += delay; },
+      run: async args => {
+        calls.push(args);
+        if (args.includes("PATCH")) return http(null, {}, 205);
+        if (args.includes("DELETE")) return http(null, {}, 204);
+        if (args.at(-1).includes("page=2")) return http([]);
+        if (args.includes('If-None-Match: "lab"')) return http(null, {}, 304);
+        return http([thread("1", { subject: { type: "Issue", title: "Synthetic", url: `${apiBaseUrl}/repos/example/widgets/issues/42` } })],
+          { link: next.replace(DEFAULT_API_BASE_URL, apiBaseUrl), etag: '"lab"' });
+      },
+    });
+    const page = await client.page(firstPage());
+    assert.equal(page.items[0].url, `${new URL(apiBaseUrl).origin}/example/widgets/issues/42`);
+    assert.equal(page.items[0].number, "42");
+    await client.page(firstPage(), undefined, { force: true });
+    await client.page(page.next);
+    await client.markRead("1");
+    await client.markDone("2");
+    assert.deepEqual(calls.map(args => args[args.indexOf("--method") + 1]), ["GET", "GET", "GET", "PATCH", "DELETE"]);
+    for (const args of calls) {
+      assert.equal(args[2], "git.example.com");
+      assert.ok(args.at(-1).startsWith(apiBaseUrl + "/notifications"));
+      assert.equal(args.includes("auth"), false);
+      assert.equal(args.some(arg => /Authorization|secret/.test(arg)), false);
+    }
+    assert.equal(calls.at(-2).at(-1), `${apiBaseUrl}/notifications/threads/1`);
+    assert.equal(calls.at(-1).at(-1), `${apiBaseUrl}/notifications/threads/2`);
+    assert.equal(client.cache.values().next().value.items.length, 0);
   }
-  assert.equal(calls.at(-2).at(-1), `${baseUrl}/notifications/threads/1`);
-  assert.equal(calls.at(-1).at(-1), `${baseUrl}/notifications/threads/2`);
-  assert.equal(client.cache.values().next().value.items.length, 0);
 });
 
 test("custom pagination rejects other hosts, prefixes, credentials and altered unread scope", () => {
   assert.equal(nextPage(nextLink, firstPage(), target), nextPage(next, firstPage()));
   assert.equal(nextPage(nextLink.replace(baseUrl, "/api/v3"), firstPage(), target), nextPage(next, firstPage()));
-  for (const link of [next, nextLink.replace("git.example.com", "evil.test"),
+  const portTarget = apiTarget("https://git.example.com:8443/api/v3");
+  assert.equal(nextPage(next.replace(DEFAULT_API_BASE_URL, portTarget.baseUrl), firstPage(), portTarget), nextPage(next, firstPage()));
+  assert.throws(() => nextPage(nextLink, firstPage(), portTarget), { code: "invalid_pagination" });
+  for (const link of [next, nextLink.replace("git.example.com", "evil.test"), nextLink.replace("git.example.com", "git.example.com:8443"),
     nextLink.replace("/api/v3", "/api/v4"), nextLink.replace("https:", "http:"),
     nextLink.replace("https://", "https://user:secret@"), nextLink.replace("all=false", "all=true"),
     nextLink.replace("page=2", "page=3"), nextLink.replace("page=2", "page=2&token=secret")]) {
@@ -154,13 +164,16 @@ test("development API saves preserve preferences and unknown data without changi
 
 test("invalid development settings fail explicitly and cannot be set through ordinary preferences", async t => {
   const preferences = await preferencesFor(t);
-  for (const input of [null, [], {}, { baseUrl: null }, { baseUrl, token: "secret" }, { baseUrl: "http://git.example.com" }]) {
+  for (const input of [null, [], {}, { baseUrl: null }, { baseUrl, token: "secret" },
+    { baseUrl: "http://git.example.com" }, { baseUrl: "https://[::1]/api/v3" }]) {
     await assert.rejects(preferences.updateDevelopmentAPI(input), { code: "invalid_api" });
   }
   await assert.rejects(preferences.update({ developmentApiBaseUrl: baseUrl }), { code: "invalid_settings" });
   await writeFile(preferences.path, '{"developmentApiBaseUrl":"not a URL","autoOpen":true}');
   await assert.rejects(loadDevelopmentAPI(preferences), { code: "settings_read" });
   assert.equal((await preferences.read()).autoOpen, true, "ordinary packaged preferences ignore development-only data");
+  await writeFile(preferences.path, '{"developmentApiBaseUrl":"https://[::1]/api/v3"}');
+  await assert.rejects(loadDevelopmentAPI(preferences), error => error.code === "settings_read" && /DNS hostname or IPv4/.test(error.message));
 });
 
 test("protected development settings save without switching the running inbox or making API requests", async t => {
