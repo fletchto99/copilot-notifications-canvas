@@ -3,7 +3,7 @@ import { constants } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { InboxError } from "./model.mjs";
+import { apiTarget, InboxError } from "./model.mjs";
 import { validSound } from "./notifier.mjs";
 import { acquireLock } from "./lock.mjs";
 
@@ -58,6 +58,24 @@ export class Preferences {
     return settingsValue(data);
   }
 
+  async readDevelopmentAPI() {
+    const data = await this.document();
+    try {
+      return apiTarget(data.developmentApiBaseUrl).baseUrl;
+    } catch {
+      throw new InboxError("settings_read", "Could not read the development API. Check developmentApiBaseUrl in artifacts/settings.json; it must be an HTTPS REST API base URL without credentials, query parameters, or fragments.", 500);
+    }
+  }
+
+  async updateDevelopmentAPI(input) {
+    if (!input || typeof input !== "object" || Array.isArray(input) ||
+        Object.keys(input).length !== 1 || typeof input.baseUrl !== "string") {
+      throw new InboxError("invalid_api", "Development API settings accept only a baseUrl string.", 400);
+    }
+    const { baseUrl } = apiTarget(input.baseUrl);
+    await this.#write({ developmentApiBaseUrl: baseUrl });
+  }
+
   async update(input) {
     if (!input || typeof input !== "object" || Array.isArray(input) ||
         Object.keys(input).length === 0 ||
@@ -65,6 +83,10 @@ export class Preferences {
         Object.entries(settingValidators).some(([key, valid]) => Object.hasOwn(input, key) && !valid(input[key]))) {
       throw new InboxError("invalid_settings", "Settings accept autoOpen and desktopNotifications booleans, darkMode as a boolean or null, desktopSound as a supported sound name, and groupBy set to none, repo, or date.", 400);
     }
+    return settingsValue(await this.#write(input));
+  }
+
+  async #write(input) {
     const lockPath = join(this.directory, ".settings.lock");
     const temporary = join(this.directory, `.settings-${randomUUID()}.tmp`);
     let release;
@@ -97,7 +119,7 @@ export class Preferences {
       }
       await this.io.rename(temporary, this.path);
       temporaryCreated = false;
-      return settingsValue(updated);
+      return updated;
     } catch (error) {
       if (error instanceof InboxError) throw error;
       throw new InboxError("settings_write", "Could not save notification settings. Check permissions, free disk space and unrecognized .settings.lock contents in the extension artifacts directory.", 500);

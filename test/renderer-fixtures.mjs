@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { Inbox } from "../src/inbox.mjs";
 import { GitHubClient } from "../src/github.mjs";
 import { desktopCapabilities } from "../src/notifier.mjs";
-import { attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads } from "../src/model.mjs";
+import { apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads } from "../src/model.mjs";
 import { http, thread } from "./fixtures.mjs";
 
 export const script = await readFile(process.env.NOTIFICATIONS_TEST_SCRIPT ??
@@ -17,7 +17,7 @@ export const settle = () => new Promise(resolve => setImmediate(resolve));
 // Minimal DOM/event/timer doubles exercise the actual renderer without a browser dependency.
 export async function renderer({ hidden = false, token = "a".repeat(64), readFailure = false,
   initialRows, onWrite, onFetch, onState, onFilters, initialOffline = false, release, development = null,
-  onUpdates, clipboardFailure = false, onSettings, retainDisabledFocus = false, desktopPlatform = "darwin", desktopStatus = {},
+  onUpdates, clipboardFailure = false, onSettings, developmentApi, onDevelopment, retainDisabledFocus = false, desktopPlatform = "darwin", desktopStatus = {},
   storedSettings = { autoOpen: false, darkMode: null, desktopNotifications: false, desktopSound: "default" },
   appColorMode = "light", systemDark = false } = {}) {
   const calls = [];
@@ -46,6 +46,10 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
   const patches = [];
   const deletions = [];
   const githubCalls = [];
+  const apiState = () => developmentApi ? {
+    developmentApiBaseUrl: developmentApi.baseUrl,
+    inboxUrl: `${apiTarget(developmentApi.baseUrl).webOrigin}/notifications`,
+  } : {};
   class Node {
     constructor(tag) {
       this.tag = tag;
@@ -127,7 +131,8 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     ["batch-progress", "batch-stop", "batch-retry", "batch-dismiss"].some(id => ids.get(id) === node);
   ids.get("settings").contains = node =>
     node === ids.get("settings") ||
-    ["settings-toggle", "settings-panel", "auto-open", "theme", "group-by", "check-updates", "desktop-notifications", "desktop-sound"].some(id => ids.get(id).contains(node));
+    ["settings-toggle", "settings-panel", "auto-open", "theme", "group-by", "check-updates", "desktop-notifications", "desktop-sound",
+      "development-api", "development-api-url", "development-api-save"].some(id => ids.get(id).contains(node));
   const document = {
     hidden,
     body: new Node("body"),
@@ -194,13 +199,19 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     fetch: async (path, options) => {
       if (offline) throw new Error("Synthetic connection failure");
       calls.push({ path, options });
-      if (path === "/api/settings") {
+      if (path === "/api/settings" || path === "/api/development") {
         const input = options.body ? JSON.parse(options.body) : undefined;
-        if (onSettings) await onSettings(input);
-        if (input) Object.assign(storedSettings, input);
+        if (path === "/api/development") {
+          if (onDevelopment) await onDevelopment(input);
+          developmentApi.savedBaseUrl = input.baseUrl;
+          developmentApi.requiresReload = input.baseUrl !== developmentApi.baseUrl;
+        } else {
+          if (onSettings) await onSettings(input);
+          if (input) Object.assign(storedSettings, input);
+        }
         const capabilities = desktopCapabilities(desktopPlatform);
         return { ok: true, json: async () => ({ desktopNotifications: false, desktopSound: "default", ...storedSettings,
-          desktopStatus: { ...capabilities, state: "watching",
+          developmentApi, desktopStatus: { ...capabilities, state: "watching",
             message: capabilities.supported ? "Watching in the background." : capabilities.help, ...desktopStatus },
         }) };
       }
@@ -211,7 +222,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       if (path === "/api/refresh") await inbox.refresh(JSON.parse(options.body));
       if (path === "/api/more") await inbox.more();
       if (path === "/api/state") {
-        const snapshot = { ...inbox.snapshot(), updates: releaseMetadata, development };
+        const snapshot = { ...inbox.snapshot(), updates: releaseMetadata, development, ...apiState() };
         if (onState) await onState();
         return { ok: true, json: async () => snapshot };
       }
@@ -223,7 +234,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       if (path === "/api/read") await inbox.markRead(JSON.parse(options.body));
       if (path === "/api/done") await inbox.markDone(JSON.parse(options.body));
       if (path.startsWith("/api/batch/")) inbox.batch[path.slice("/api/batch/".length)](JSON.parse(options.body));
-      return { ok: true, json: async () => ({ ...inbox.snapshot(), updates: releaseMetadata, development }) };
+      return { ok: true, json: async () => ({ ...inbox.snapshot(), updates: releaseMetadata, development, ...apiState() }) };
     },
   });
   if (!process.env.NOTIFICATIONS_TEST_SCRIPT) assert.match(script, /^import \{ attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, orderedThreads \} from "\.\/model\.mjs";/);

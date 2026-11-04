@@ -114,11 +114,25 @@ async function readBody(req) {
   return input;
 }
 
-export async function startServer(inbox, { log = () => {}, preferences, desktop, updates, read, development } = {}) {
+export async function startServer(inbox, { log = () => {}, preferences, desktop, updates, read, development, developmentAPI } = {}) {
   const secret = randomBytes(32).toString("hex");
-  const snapshot = () => ({ ...inbox.snapshot(), development, ...(updates ? { updates: updates.snapshot() } : {}) });
-  const settingsSnapshot = settings => ({
-    ...settings, desktopStatus: desktop?.snapshot() ?? { supported: false, state: "off", message: "Desktop notifications are unavailable." },
+  const inboxUrl = `${developmentAPI?.target.webOrigin ?? "https://github.com"}/notifications`;
+  const recoveryPage = recoveryHtml.replace("https://github.com/notifications",
+    inboxUrl.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"));
+  const snapshot = () => ({
+    ...inbox.snapshot(), development,
+    ...(developmentAPI ? {
+      developmentApiBaseUrl: developmentAPI.target.baseUrl,
+      inboxUrl,
+    } : {}),
+    ...(updates ? { updates: updates.snapshot() } : {}),
+  });
+  const settingsSnapshot = async settings => ({
+    ...settings, desktopStatus: desktop?.snapshot() ?? {
+      supported: false, state: "off", message: developmentAPI?.target.custom
+        ? "Desktop notifications are disabled for custom development APIs." : "Desktop notifications are unavailable.",
+    },
+    ...(developmentAPI ? { developmentApi: await developmentAPI.snapshot() } : {}),
   });
   const controller = new AbortController();
   const signal = AbortSignal.any([inbox.controller.signal, controller.signal]);
@@ -180,13 +194,13 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         if (req.method !== "GET") throw new InboxError("method", "Only GET is supported.", 405);
         const file = path === "/startup.mjs"
           ? { body: recoveryScript, type: "text/javascript; charset=utf-8" }
-          : staticFiles?.get(path) ?? (path === "/" ? { body: recoveryHtml, type: "text/html; charset=utf-8" } : null);
+          : staticFiles?.get(path) ?? (path === "/" ? { body: recoveryPage, type: "text/html; charset=utf-8" } : null);
         if (!file) throw new InboxError("server_initializing", "The canvas is still loading its local files. Retrying in the background.", 503);
         res.writeHead(200, { "Content-Type": file.type });
         res.end(file.body);
         return;
       }
-      if (!["/api/ready", "/api/state", "/api/refresh", "/api/more", "/api/filters", "/api/settings", "/api/read", "/api/done", "/api/updates"].includes(path) &&
+      if (!["/api/ready", "/api/state", "/api/refresh", "/api/more", "/api/filters", "/api/settings", "/api/development", "/api/read", "/api/done", "/api/updates"].includes(path) &&
           !batchRoutes.has(path)) {
         throw new InboxError("not_found", "Route not found.", 404);
       }
@@ -200,23 +214,30 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         return json(200, { ready: Boolean(staticFiles) });
       }
       if (!staticFiles) throw new InboxError("server_initializing", "The canvas is still loading its local files. Retrying in the background.", 503);
+      if (path === "/api/development" && !developmentAPI) {
+        throw new InboxError("not_found", "Development API selection is unavailable in this build.", 404);
+      }
       if (path === "/api/settings" && !preferences) {
         throw new InboxError("settings_unavailable", "Notification settings are unavailable.", 503);
       }
       if (path === "/api/state" || (path === "/api/settings" && req.method === "GET")) {
         if (req.method !== "GET") throw new InboxError("method", "Only GET is supported.", 405);
-        if (path === "/api/settings") return json(200, settingsSnapshot(await preferences.read()));
+        if (path === "/api/settings") return json(200, await settingsSnapshot(await preferences.read()));
       } else {
         if (req.method !== "POST") throw new InboxError("method", "Only POST is supported.", 405);
         if (req.headers.origin !== origin) throw new InboxError("origin", "A same-origin request is required.", 403);
         const input = await readBody(req);
-        if (!["/api/refresh", "/api/filters", "/api/settings", "/api/read", "/api/done"].includes(path) && !batchRoutes.has(path) && Object.keys(input).length) {
+        if (!["/api/refresh", "/api/filters", "/api/settings", "/api/development", "/api/read", "/api/done"].includes(path) && !batchRoutes.has(path) && Object.keys(input).length) {
           throw new InboxError("invalid_input", "This action takes an empty object.", 400);
         }
         if (path === "/api/updates") {
           if (!updates) throw new InboxError("updates_unavailable", "Release checks are unavailable.", 503);
           void updates.check({ force: true });
           return json(202, updates.snapshot());
+        }
+        if (path === "/api/development") {
+          await developmentAPI.update(input);
+          return json(200, await settingsSnapshot(await preferences.read()));
         }
         if (path === "/api/refresh") {
           await desktop?.prepareForeground();
@@ -233,7 +254,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
           }
           const settings = await preferences.update(input);
           desktop?.wake(settings);
-          return json(200, settingsSnapshot(settings));
+          return json(200, await settingsSnapshot(settings));
         }
         if (path === "/api/read") await inbox.markRead(input);
         if (path === "/api/done") await inbox.markDone(input);

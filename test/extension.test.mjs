@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { host, CanvasError } from "./fixtures/sdk.mjs";
 import { http, next, thread } from "./fixtures.mjs";
-import { filterSchema, emptySchema, InboxError } from "../src/model.mjs";
+import { apiTarget, filterSchema, emptySchema, InboxError } from "../src/model.mjs";
 import { Inbox } from "../src/inbox.mjs";
 import { DesktopNotifications } from "../src/desktop.mjs";
 import { CURRENT_VERSION } from "../src/updates.mjs";
@@ -294,12 +294,13 @@ test("the extension entry point wires an isolated session through its complete l
 
 const source = await fs.readFile(new URL("../src/extension.mjs", import.meta.url), "utf8");
 
-async function fixture() {
+async function fixture(apiBaseUrl) {
   let canvas;
   let desktop;
   const servers = [];
   const inboxes = [];
   const logs = [];
+  const clientOptions = [];
   const session = { log: message => logs.push(message) };
   class CanvasError extends Error {
     constructor(code, message) { super(message); this.code = code; }
@@ -309,8 +310,9 @@ async function fixture() {
     createCanvas: value => { canvas = value; return value; },
     CanvasError, InboxError, emptySchema: {}, filterSchema: {},
     Preferences: class {},
+    loadDevelopmentAPI: async () => ({ target: apiTarget(apiBaseUrl) }),
     Updates: class {},
-    GitHubClient: class { clear() {} },
+    GitHubClient: class { constructor(options) { clientOptions.push(options); } clear() {} },
     Inbox: class {
       constructor() { this.closed = false; inboxes.push(this); }
       close() { this.closed = true; }
@@ -328,8 +330,20 @@ async function fixture() {
     }),
     process: { once() {} },
   });
-  return { canvas, desktop, servers, inboxes, logs };
+  return { canvas, desktop, servers, inboxes, logs, clientOptions };
 }
+
+test("custom development APIs never construct or register a desktop watcher", async () => {
+  const f = await fixture("https://git.example.com/api/v3");
+  assert.equal(f.desktop, undefined);
+  assert.equal(f.clientOptions[0].apiBaseUrl, "https://git.example.com/api/v3");
+  const opening = f.canvas.open({ instanceId: "custom" });
+  f.servers[0].ready();
+  await opening;
+  await f.canvas.onClose({ instanceId: "custom" });
+  assert.equal(f.servers[0].server.closed, true);
+  assert.deepEqual(f.logs, []);
+});
 
 test("concurrent opens use one server and closing during startup cannot leave a desktop watcher", async () => {
   const f = await fixture();

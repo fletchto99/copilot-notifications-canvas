@@ -25,6 +25,7 @@ let preferences;
 let settingsBusy = false;
 let pendingSettings;
 let soundOptionsKey;
+let developmentSettingsKey;
 let releaseState;
 let updatesBusy = false;
 let updateError = "";
@@ -151,13 +152,28 @@ function renderSettings() {
       : "";
     $("desktop-status").hidden = !$("desktop-status").textContent;
   }
+  const api = preferences?.developmentApi;
+  $("development-settings").hidden = !api;
+  if (api) {
+    if (developmentSettingsKey !== api.savedBaseUrl) {
+      $("development-api").value = api.savedBaseUrl === "https://api.github.com" ? "github" : "custom";
+      $("development-api-url").value = api.savedBaseUrl === "https://api.github.com" ? "" : api.savedBaseUrl;
+      developmentSettingsKey = api.savedBaseUrl;
+    }
+    $("development-api").disabled = settingsBusy;
+    $("development-api-url").disabled = settingsBusy || $("development-api").value !== "custom";
+    $("development-api-custom").hidden = $("development-api").value !== "custom";
+    $("development-api-save").disabled = settingsBusy;
+    $("development-api-active").textContent = `Active API: ${api.baseUrl}`;
+    $("development-api-reload").hidden = !api.requiresReload;
+  }
 }
 
-async function settingsRequest(input, quiet = false) {
+async function settingsRequest(input, quiet = false, path = "settings") {
   if (!visible()) return;
   if (settingsBusy) {
     if (input && !pendingSettings) {
-      pendingSettings = { input, focus: document.activeElement };
+      pendingSettings = { input, path, focus: document.activeElement };
       renderSettings();
     }
     return;
@@ -171,7 +187,7 @@ async function settingsRequest(input, quiet = false) {
     $("settings-error").hidden = true;
   }
   try {
-    preferences = await api("settings", input);
+    preferences = await api(path, input);
     render();
     $("settings-status").textContent = "";
     $("settings-error").hidden = true;
@@ -188,7 +204,7 @@ async function settingsRequest(input, quiet = false) {
       const next = pendingSettings;
       pendingSettings = undefined;
       restoreFocus(next.focus);
-      void settingsRequest(next.input);
+      void settingsRequest(next.input, false, next.path);
     }
   }
 }
@@ -815,6 +831,12 @@ function render(fallbackFocusKey) {
   const development = state?.development;
   $("development-build").hidden = !development;
   $("development-build").textContent = development ? `dev (v${development.version}) ${development.branch}` : "";
+  $("open-inbox").href = state?.inboxUrl ?? "https://github.com/notifications";
+  const customAPI = state?.developmentApiBaseUrl && state.developmentApiBaseUrl !== "https://api.github.com";
+  $("development-api-notice").hidden = !customAPI;
+  $("development-api-notice").textContent = customAPI
+    ? `Development API: ${state.developmentApiBaseUrl}. Read/done actions affect this API, which may share production data. Desktop alerts are disabled.`
+    : "";
   renderControls();
   const error = actionError || state?.error?.message || connectionError;
   const loading = state?.status === "idle" || state?.status === "loading";
@@ -959,6 +981,13 @@ $("settings").addEventListener("toggle", () => {
   const open = $("settings").open;
   $("settings-toggle").setAttribute("aria-expanded", String(open));
   if (open) void settingsRequest();
+});
+$("development-api").addEventListener("change", renderSettings);
+$("development-api-save").addEventListener("click", () => {
+  if (preferences?.developmentApi && !settingsBusy) {
+    const baseUrl = $("development-api").value === "github" ? "https://api.github.com" : $("development-api-url").value;
+    void settingsRequest({ baseUrl }, false, "development");
+  }
 });
 $("auto-open").addEventListener("click", () => {
   if (preferences) void settingsRequest({ autoOpen: !preferences.autoOpen });

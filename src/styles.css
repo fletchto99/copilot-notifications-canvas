@@ -421,6 +421,19 @@ button:disabled {
   margin: 0;
 }
 
+#development-settings,
+.development-api-custom {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+#development-api-active,
+#development-api-notice {
+  overflow-wrap: anywhere;
+}
+
 .search {
   flex: 1;
   min-width: 0;

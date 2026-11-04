@@ -68,8 +68,12 @@ output. Development loads source without a build; release builds bundle
   snapshots belong only in the protected renderer. Do not log raw GitHub
   responses, subprocess stderr, credentials, or loopback capability URLs.
 - GitHub CLI owns authentication. Keep API traffic in the provider and pinned
-  to supported github.com endpoints; never pass credentials into the renderer.
-  Do not introduce telemetry or remote renderer assets.
+  to supported github.com endpoints in packaged releases. Source builds may
+  explicitly select an HTTPS development REST API in Settings; freeze that
+  target until provider reload, bind pagination and writes to it, and disable
+  desktop polling/delivery for custom targets. Never extract or copy credentials
+  between hosts or pass them into the renderer. Do not introduce telemetry or
+  remote renderer assets.
 - Native alerts are the explicit opt-in exception: they send titles and
   repository names to the OS. Do not enable desktop alerts or change preferences
   as a side effect of opening, updating, or testing the extension.

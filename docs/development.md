@@ -37,6 +37,46 @@ user-wide completion marker. Separate sessions can each open their own panel.
 For manual opens, pass `extensionId: project:github-notifications` to select the
 local canvas.
 
+### Selecting a development API
+
+In a source-loaded canvas, open **Settings > Development API**, choose
+**Custom**, and enter the complete HTTPS REST API base URL, for example
+`https://git.example.com/api/v3`. Click **Save API**, then reload extensions.
+Choose **GitHub.com** and save/reload to return to the production API.
+
+The selection is a user-wide source-development preference, stored as
+`developmentApiBaseUrl` in the existing `artifacts/settings.json`. It becomes
+active when each provider starts; saving never switches a running provider,
+its loaded notifications, batches, retries, or caches to another API.
+Other running sessions keep their current API until their extensions reload.
+Settings shows both the active API and whether a reload is needed. Invalid
+stored URLs fail explicitly; correct that key rather than deleting other
+settings. Packaged releases ignore the preference and reject API-selection
+requests, including when they share the same settings file with source builds.
+
+GitHub CLI still owns authentication. Authenticate for the **selected host**,
+for example with `gh auth login --hostname git.example.com`, using an account
+and token supported by that server with notifications access. Configure any
+required private-network connection separately. Do not enter tokens or cookies
+in the URL, canvas, repository, or logs. The extension uses an explicit
+`gh api --hostname <host>` and the selected absolute REST URL; it never extracts
+or copies the production token. GitHub CLI's own host credentials and token
+environment-variable rules still apply.
+
+Only HTTPS bases without embedded credentials, query strings, fragments, or
+encoded paths are accepted. Notification pagination must stay on that base's
+notifications endpoint with the original unread query and page size.
+Issue/PR, repository, and inbox links use the selected API's origin as the
+website origin; APIs with a separate website hostname are not supported.
+Release discovery and installation links remain on GitHub.com.
+
+**A custom API is not necessarily an isolated dataset.** Read/done controls
+still perform real per-thread writes when explicitly clicked, and some
+development servers share production data. A banner identifies the active
+custom API. Desktop polling and native delivery are disabled for custom APIs
+without changing saved desktop preferences or production coordination files.
+Use synthetic fixtures for automated validation, never live notification writes.
+
 ### Synthetic preview
 
 ```sh

@@ -369,10 +369,10 @@ test("settings failures are visible and do not claim a saved toggle", async () =
   assert.equal(ui.ids.get("settings-status").hidden, true);
 });
 
-test("Group By is a labeled select immediately above Check for updates and defaults to repo", async () => {
+test("Group By is a labeled select above development settings and defaults to repo", async () => {
   assert.match(html, /<div class="select-setting">\s*<label for="group-by">Group By<\/label>\s*<select id="group-by" disabled>/);
   assert.match(html, /<option value="none">All notifications<\/option>\s*<option value="repo" selected>Repository<\/option>\s*<option value="date">Date<\/option>/);
-  assert.match(html, /<select id="group-by"[^>]*>[\s\S]*?<\/select>\s*<\/div>\s*<button id="check-updates"/);
+  assert.match(html, /<select id="group-by"[^>]*>[\s\S]*?<\/select>\s*<\/div>\s*<section id="development-settings"/);
   const ui = await renderer();
   assert.equal(ui.ids.get("group-by").value, "repo");
   assert.equal(ui.ids.get("group-by").disabled, false);
