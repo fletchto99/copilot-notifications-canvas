@@ -215,6 +215,27 @@ only warning. Release bundles still target Node.js 22; the development
 requirement does not raise the runtime minimum. CI does not separately test the
 initial 24.0.0 release.
 
+The README coverage badge shows measured aggregate **line coverage** from the
+Node.js 22 run, rounded to two decimal places, not the 95% minimum. The existing
+reporter writes a standalone SVG when `COVERAGE_BADGE_PATH` is set; normal local
+coverage runs do not create badge files. CI uploads only that SVG, not source
+files or per-file coverage data.
+
+After all checks in a main-branch push pass, the separate **Coverage badge**
+workflow publishes the SVG to an automatically created, independent `badges`
+branch. Only that publishing job has `contents: write`; test jobs remain
+read-only, and the publisher does not check out or execute repository code.
+It downloads the artifact from that exact successful run, skips superseded
+main commits, and never force-pushes. Pull requests, tags, failed runs, and
+manual test runs cannot publish a badge. The badge becomes available after
+the first successful main-branch push with these workflows installed; until
+then, its image URL will not exist. Later failed runs leave the previous badge
+in place, so consult the adjacent CI badge for current build health.
+No external coverage service, additional secret, or source-branch commit is
+required. Repository rules must allow the Actions token to create and update
+`badges`; publication failures appear in the workflow rather than silently
+replacing the measurement.
+
 The recovery lint check starts an isolated loopback server with synthetic
 missing renderer assets and lints the fallback content it serves. It makes no
 GitHub requests, sends no desktop alerts, and checks invalid snippets to verify
