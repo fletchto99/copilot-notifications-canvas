@@ -43,9 +43,9 @@ for (const packaged of [false, true]) {
       const panel = page.locator("#settings-panel");
       await toggle.click();
       await expect(page.locator("#theme")).toBeEnabled();
-      for (const [width, height, placement] of [[320, 480, "below"], [320, 320, "above"], [480, 640, "below"]]) {
+      for (const [width, height] of [[320, 480], [320, 320], [480, 640]]) {
         await page.setViewportSize({ width, height });
-        await expect(panel).toHaveAttribute("data-placement", placement);
+        await expect(panel).toHaveAttribute("data-placement", "below");
         await expect.poll(async () => {
           const box = await panel.boundingBox();
           return box.y >= 8 && box.y + box.height <= height - 8 && box.x >= 0 && box.x + box.width <= width;
@@ -55,6 +55,11 @@ for (const packaged of [false, true]) {
         const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
         expect(results.violations).toEqual([]);
       }
+      const offset = await page.addStyleTag({ content: ".toolbar { margin-top: 160px; }" });
+      await page.setViewportSize({ width: 320, height: 320 });
+      await expect(panel).toHaveAttribute("data-placement", "above");
+      await expectPanelInViewport(page);
+      await offset.evaluate(node => node.remove());
       await page.setViewportSize({ width: 320, height: 480 });
       await expect(panel).toHaveAttribute("data-placement", "below");
       const scrollBefore = await page.evaluate(() => window.scrollY);
@@ -180,12 +185,16 @@ for (const packaged of [false, true]) {
       await expectPanelInViewport(page);
       const panel = page.locator("#settings-panel");
       await expect(panel).toHaveAttribute("data-placement", "below");
+      const initialTop = (await panel.boundingBox()).y;
       await page.addStyleTag({ content: "h1 { line-height: 64px; }" });
+      await expect.poll(async () => (await panel.boundingBox()).y).toBeGreaterThan(initialTop);
       await expectPanelInViewport(page);
+      const topAfterTypography = (await panel.boundingBox()).y;
       showUpdate = true;
       await page.clock.runFor(5000);
       await expect(page.locator("#update-banner")).toBeVisible();
-      await expect(panel).toHaveAttribute("data-placement", "above");
+      await expect(panel).toHaveAttribute("data-placement", "below");
+      expect((await panel.boundingBox()).y).toBe(topAfterTypography);
       await expectPanelInViewport(page);
       expect(canvas.writes).toEqual([]);
       expect(canvas.deliveries).toEqual([]);
