@@ -67,8 +67,14 @@ for (const packaged of [false, true]) {
       await page.goto(canvas.url);
       const tabs = page.getByRole("tablist", { name: "Attention filters" }).getByRole("tab");
       await expect(tabs).toHaveText(["All (1)", "Participating (1)", "Mentioned (1)"]);
-      await page.getByLabel("Settings", { exact: true }).click();
+      await Promise.all([
+        page.evaluate(() => new Promise(resolve => {
+          document.getElementById("settings").addEventListener("toggle", () => resolve(), { once: true });
+        })),
+        page.getByLabel("Settings", { exact: true }).click(),
+      ]);
       const toggle = page.getByRole("switch", { name: "Hide empty tabs", exact: true });
+      await expect(toggle).toBeEnabled();
       await expect(toggle).toBeChecked();
       await toggle.focus();
       await page.keyboard.press("Tab");

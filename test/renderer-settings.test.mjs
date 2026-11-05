@@ -252,6 +252,7 @@ test("tooltips prefer above, flip near the top edge and follow viewport changes 
     assert.equal(anchor.dataset.tooltipDismissed, undefined);
     anchor.hovered = false;
     ui.ids.get("force-refresh").focus();
+    ui.ids.get("force-refresh").events.focus();
     anchor.bounds = { top: 100 };
     ui.window.events[event]();
     assert.equal(anchor.dataset.tooltipPlacement, "above");
@@ -274,6 +275,7 @@ test("opening the inbox dismisses tooltips without cancelling navigation or maki
   link.events.focus();
   const calls = ui.calls.length;
   link.events.click({ preventDefault: () => assert.fail("The inbox link must keep its default navigation") });
+  assert.equal(ui.document.documentElement.dataset.pointerHoverSuppressed, "true");
   assert.equal(ui.ids.get("inbox-control").dataset.tooltipDismissed, "true");
   assert.equal(ui.document.activeElement, link);
   await ui.fireTimer(15_000);
@@ -281,6 +283,11 @@ test("opening the inbox dismisses tooltips without cancelling navigation or maki
   assert.equal(ui.calls.length, calls);
   link.events.pointerenter();
   assert.equal(ui.ids.get("inbox-control").dataset.tooltipDismissed, undefined);
+  ui.document.events.pointermove();
+  link.events.auxclick({ button: 2 });
+  assert.equal(ui.document.documentElement.dataset.pointerHoverSuppressed, undefined);
+  link.events.auxclick({ button: 1, preventDefault: () => assert.fail("Middle-click must remain native") });
+  assert.equal(ui.document.documentElement.dataset.pointerHoverSuppressed, "true");
   ui.window.events.pagehide();
 });
 

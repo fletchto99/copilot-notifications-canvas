@@ -69,7 +69,11 @@ test.describe("All notifications group", () => {
       await openFiltered(page, canvas, groupBy);
       const root = page.locator(shownGroup);
       const done = page.getByRole("button", { name: "Mark 3 as done; 3 shown, loaded notifications", exact: true });
-      await expect(root.locator(".repo-read")).toHaveCSS("color", await done.evaluate(node => getComputedStyle(node).color));
+      await expect.poll(() => root.locator(".repo-actions").evaluate(node => {
+        const read = getComputedStyle(node.querySelector(".repo-read")).color;
+        const done = getComputedStyle(node.querySelector(".repo-done")).color;
+        return node.isConnected && read !== "" && read === done;
+      })).toBe(true);
       await expect(page.locator("#count")).toHaveText("50 total \u00b7 50 unread \u00b7 3 matching");
       await expect(page.locator("#collapse")).toBeVisible();
       await expect(root.locator(".repo-name")).toHaveText("All notifications");

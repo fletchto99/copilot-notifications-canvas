@@ -2,7 +2,8 @@ import { createServer } from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { setTimeout as wait } from "node:timers/promises";
 import { assetPaths, loadAssets, loadDevelopmentInfo } from "./assets.mjs";
-import { InboxError } from "./model.mjs";
+import { groupThreadsByDate, InboxError } from "./model.mjs";
+import { RETRY_MS } from "./github.mjs";
 import { validSound } from "./notifier.mjs";
 
 const batchRoutes = new Map([
@@ -119,14 +120,70 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
   const inboxUrl = `${developmentAPI?.target.webOrigin ?? "https://github.com"}/notifications`;
   const recoveryPage = recoveryHtml.replace("https://github.com/notifications",
     inboxUrl.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"));
-  const snapshot = () => ({
-    ...inbox.snapshot(), development,
-    ...(developmentAPI ? {
-      developmentApiBaseUrl: developmentAPI.target.baseUrl,
-      inboxUrl,
-    } : {}),
-    ...(updates ? { updates: updates.snapshot() } : {}),
-  });
+  let subjectRefresh;
+  let subjectFailure = null;
+  let subjectRetryAt = 0;
+  let subjectView = { groupBy: "repo", timeZone: null };
+  let subjectViewport = null;
+  let subjectItems = [];
+  const orderSubjects = (groups = inbox.groups()) => {
+    if (subjectViewport !== null) {
+      const loaded = new Map(groups.flatMap(group => group.items).map(item => [item.id, item]));
+      subjectItems = subjectViewport.flatMap(id => loaded.has(id) ? [loaded.get(id)] : []);
+    } else if (subjectView.groupBy === "repo") {
+      subjectItems = groups.flatMap(group => group.items);
+    } else if (subjectView.groupBy === "date" && subjectView.timeZone === null) {
+      // Settings-only callers have no browser zone; defer date lookups until the panel supplies one.
+      subjectItems = [];
+    } else {
+      const items = inbox.shownSelection(groups).items;
+      subjectItems = subjectView.groupBy === "date" ? groupThreadsByDate(items, subjectView.timeZone).flatMap(group => group.items) : items;
+    }
+  };
+  const setSubjectView = view => {
+    if (view.groupBy === "date" && view.timeZone !== null) groupThreadsByDate([], view.timeZone);
+    subjectView = view;
+    orderSubjects();
+  };
+  const snapshot = () => {
+    const state = inbox.snapshot();
+    orderSubjects(state.groups);
+    const selected = new Set(subjectItems.map(item => item.id));
+    if (!subjectRefresh && !signal.aborted && inbox.client.now() >= subjectRetryAt && inbox.client.subjectsNeedRefresh(subjectItems)) {
+      subjectRefresh = inbox.client.refreshSubjects(() => subjectItems, signal).then(() => {
+        subjectFailure = null;
+      }).catch(error => {
+        if (error instanceof InboxError && error.code === "closed") return;
+        subjectFailure = "Notification subject status is unavailable. Inspect the extension log.";
+        subjectRetryAt = inbox.client.now() + RETRY_MS;
+        log("Unexpected notification subject status failure.", { level: "error" });
+      }).finally(() => { subjectRefresh = undefined; });
+    }
+    return {
+      ...state, development, subjectsLoading: Boolean(subjectRefresh),
+      groups: state.groups.map(group => ({
+        ...group, items: group.items.map(item => {
+          const subject = inbox.client.subjectSnapshot(item);
+          const failed = subjectFailure && Object.hasOwn(subject, "subjectState");
+          return {
+            ...item, ...subject,
+            ...(failed ? {
+              subjectStateError: subject.subjectStateError ? `${subject.subjectStateError} ${subjectFailure}` : subjectFailure,
+              ...(subject.subjectCheckedAt !== undefined ? { subjectStateStale: true } : {}),
+            } : {}),
+            subjectLinkLoading: !failed && inbox.client.subjectLinkPending(item),
+            subjectLoading: selected.has(item.id) && Boolean(subjectRefresh) && !failed && subject.subjectState === null &&
+              !subject.subjectStateError && inbox.client.subjectsNeedRefresh([item]),
+          };
+        }),
+      })),
+      ...(developmentAPI ? {
+        developmentApiBaseUrl: developmentAPI.target.baseUrl,
+        inboxUrl,
+      } : {}),
+      ...(updates ? { updates: updates.snapshot() } : {}),
+    };
+  };
   const settingsSnapshot = async settings => ({
     ...settings, desktopStatus: desktop?.snapshot() ?? {
       supported: false, state: "off", message: developmentAPI?.target.custom
@@ -214,20 +271,37 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         return json(200, { ready: Boolean(staticFiles) });
       }
       if (!staticFiles) throw new InboxError("server_initializing", "The canvas is still loading its local files. Retrying in the background.", 503);
+      const viewport = req.headers["x-notification-visible-ids"];
+      if (viewport !== undefined) {
+        if (typeof viewport !== "string" || viewport.length > 8192 || viewport !== "" && !/^\d+(?:,\d+)*$/.test(viewport)) {
+          throw new InboxError("invalid_viewport", "Use a bounded list of notification IDs for the visible rows.", 400);
+        }
+        const ids = viewport ? viewport.split(",") : [];
+        if (new Set(ids).size !== ids.length) throw new InboxError("invalid_viewport", "Visible notification IDs must not repeat.", 400);
+        subjectViewport = ids;
+        orderSubjects();
+      }
       if (path === "/api/development" && !developmentAPI) {
         throw new InboxError("not_found", "Development API selection is unavailable in this build.", 404);
       }
       if (path === "/api/settings" && !preferences) {
         throw new InboxError("settings_unavailable", "Notification settings are unavailable.", 503);
       }
-      if (preferences && ["/api/state", "/api/refresh", "/api/more"].includes(path)) {
-        await inbox.syncSettings(preferences);
+      const groupBy = req.headers["x-notification-group-by"];
+      const timeZone = req.headers["x-notification-time-zone"] ?? subjectView.timeZone;
+      if (groupBy !== undefined && !["repo", "none", "date"].includes(groupBy)) {
+        throw new InboxError("invalid_grouping", "Choose a supported notification grouping.", 400);
       }
+      if (timeZone !== null || groupBy === "date") groupThreadsByDate([], timeZone);
+      const settings = preferences && ["/api/state", "/api/refresh", "/api/more"].includes(path)
+        ? await inbox.syncSettings(preferences) : null;
+      setSubjectView({ groupBy: groupBy ?? settings?.groupBy ?? subjectView.groupBy, timeZone });
       if (path === "/api/state" || (path === "/api/settings" && req.method === "GET")) {
         if (req.method !== "GET") throw new InboxError("method", "Only GET is supported.", 405);
         if (path === "/api/settings") {
           const settings = await preferences.read();
           inbox.setMatchGitHubInbox(settings.matchGitHubInbox);
+          setSubjectView({ groupBy: settings.groupBy ?? subjectView.groupBy, timeZone });
           return json(200, await settingsSnapshot(settings));
         }
       } else {
@@ -249,6 +323,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         if (path === "/api/refresh") {
           await desktop?.prepareForeground();
           await inbox.refresh(input);
+          if (input.force) inbox.client.invalidateSubjects(inbox.loadedItems());
         }
         if (path === "/api/more") await inbox.more();
         if (path === "/api/filters") await inbox.setFilters(input);
@@ -261,6 +336,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
           }
           const settings = await preferences.update(input);
           inbox.setMatchGitHubInbox(settings.matchGitHubInbox);
+          setSubjectView({ groupBy: settings.groupBy ?? subjectView.groupBy, timeZone });
           desktop?.wake(settings);
           return json(200, await settingsSnapshot(settings));
         }
@@ -348,6 +424,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         server.closeAllConnections();
       });
       await inbox.batch.done;
+      await subjectRefresh;
     },
   };
 }

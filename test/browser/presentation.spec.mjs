@@ -108,6 +108,34 @@ for (const packaged of [false, true]) {
       expect(canvas.writes).toEqual([]);
     });
 
+    test("a poll between pointer down and up does not cancel Load more", async ({ page, canvas }) => {
+      await page.clock.install();
+      await page.goto(canvas.url);
+      await expect(page.locator(".row")).toHaveCount(50);
+      const more = page.locator("#more");
+      await more.scrollIntoViewIfNeeded();
+      await page.clock.pauseAt(new Date(Date.now() + 1000));
+      const box = await more.boundingBox();
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.down();
+      try {
+        await page.evaluate(() => {
+          window.pollRendered = false;
+          const observer = new MutationObserver(() => {
+            window.pollRendered = true;
+            observer.disconnect();
+          });
+          observer.observe(document.getElementById("count"), { childList: true });
+        });
+        await page.clock.runFor(5000);
+        await expect.poll(() => page.evaluate(() => window.pollRendered)).toBe(true);
+      } finally {
+        await page.mouse.up();
+      }
+      await expect(page.locator(".row")).toHaveCount(53);
+      expect(canvas.writes).toEqual([]);
+    });
+
     test("100 loaded notifications keep API order, counts and DOM identity through unchanged polls", async ({ page, canvas }) => {
       const rows = Array.from({ length: 100 }, (_, index) => thread(String(index + 1), {
         unread: index % 2 === 0,
@@ -116,7 +144,6 @@ for (const packaged of [false, true]) {
       canvas.rows.splice(0, canvas.rows.length, ...rows);
       await canvas.preferences.update({ groupBy: "none" });
       await page.clock.install();
-      await page.clock.pauseAt(new Date(Date.now() + 1000));
       await page.goto(canvas.url);
       await expect(page.locator(".row")).toHaveCount(50);
       await page.locator("#more").click();
@@ -125,6 +152,8 @@ for (const packaged of [false, true]) {
       await expect(page.locator("#count")).toHaveText("100 total \u00b7 50 unread");
       await expect(page.locator(".repo-count")).toHaveText("100 total \u00b7 50 unread");
       const first = page.locator('[data-focus-key="thread:1"]');
+      await expect(first.locator(".subject-open")).toHaveCount(1);
+      await page.clock.pauseAt(new Date(Date.now() + 1000));
       await first.focus();
       const original = await first.elementHandle();
       const poll = page.waitForResponse(response => response.url().endsWith("/api/state"));
