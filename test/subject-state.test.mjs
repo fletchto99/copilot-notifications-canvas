@@ -4,7 +4,7 @@ import { GitHubClient, firstPage, RETRY_MS, SUBJECT_POLL_MS } from "../src/githu
 import { apiTarget, InboxError, normalizeThreads } from "../src/model.mjs";
 import { Inbox } from "../src/inbox.mjs";
 import { startServer } from "../src/server.mjs";
-import { http, thread } from "./fixtures.mjs";
+import { http, staticSubjectTypes, thread } from "./fixtures.mjs";
 
 function item(type = "PullRequest", baseUrl = "https://api.github.com") {
   return normalizeThreads([thread("1", { subject: {
@@ -149,10 +149,12 @@ test("pending status work excludes warm caches, unavailable links, and request b
 
 test("unsupported and unsafe subject links never produce API requests", async () => {
   const client = new GitHubClient({ run: async () => assert.fail("No subject request expected") });
+  const unsupported = [...staticSubjectTypes, "FutureSubject", "__proto__", "constructor"]
+    .map(type => ({ ...item(), type }));
   const invalid = [
     { ...item(), number: null }, { ...item(), number: "../1" }, { ...item(), number: "1?redirect=evil" },
     { ...item(), repository: "example/.." }, { ...item(), repository: "example/widgets/../../evil" },
-    { ...item(), type: "Release" }, { ...item(), type: "constructor" },
+    ...unsupported,
     ...normalizeThreads(["https://evil.test/repos/example/widgets/pulls/42",
       "https://api.github.com/repos/example/other/pulls/42",
       "https://api.github.com/repos/example/widgets/pulls/42?token=bad",
@@ -161,7 +163,7 @@ test("unsupported and unsafe subject links never produce API requests", async ()
   ];
   await client.refreshSubjects(invalid);
   assert.match(client.subjectSnapshot(invalid[0]).subjectStateError, /supported link/);
-  assert.deepEqual(client.subjectSnapshot(invalid[5]), {});
+  for (const subject of unsupported) assert.deepEqual(client.subjectSnapshot(subject), {});
 });
 
 test("custom API subjects remain pinned to the selected host and prefix", async () => {

@@ -174,16 +174,29 @@ test("row actions stay inline across the old breakpoint without clipping tooltip
   canvas.rows[1].subject.title = "Clarify installation instructions";
   await canvas.preferences.update({ groupBy: "none" });
   await page.goto(canvas.url);
-  const heights = [];
+  await expect(page.locator(".row")).toHaveCount(2);
   for (const width of [320, 480, 481]) {
     await page.setViewportSize({ width, height: 700 });
-    const rows = await page.locator(".row").evaluateAll(nodes => nodes.map(node => {
-      const content = node.querySelector(".row-content").getBoundingClientRect();
-      const actions = node.querySelector(".row-actions").getBoundingClientRect();
-      return { height: node.getBoundingClientRect().height, contentRight: content.right, actionsLeft: actions.left };
-    }));
-    for (const row of rows) expect(row.contentRight).toBeLessThanOrEqual(row.actionsLeft);
-    heights.push(rows.reduce((sum, row) => sum + row.height, 0));
+    const rows = await page.locator(".row").evaluateAll(nodes => nodes.map(node => ({
+      row: node.getBoundingClientRect().toJSON(),
+      content: node.querySelector(".row-content").getBoundingClientRect().toJSON(),
+      read: node.querySelector('[data-focus-key^="read:"]').getBoundingClientRect().toJSON(),
+      done: node.querySelector('[data-focus-key^="done:"]').getBoundingClientRect().toJSON(),
+    })));
+    for (const { row, content, read, done } of rows) {
+      expect(content.right).toBeLessThanOrEqual(read.left);
+      expect(done.left - read.right).toBeCloseTo(4);
+      expect(done.top).toBeCloseTo(read.top);
+      for (const action of [read, done]) {
+        expect(action.width).toBe(32);
+        expect(action.height).toBe(32);
+        expect(action.top).toBeLessThan(content.bottom);
+        expect(action.bottom).toBeGreaterThan(content.top);
+        expect(action.top).toBeGreaterThanOrEqual(row.top);
+        expect(action.bottom).toBeLessThanOrEqual(row.bottom);
+        expect(action.right).toBeLessThanOrEqual(row.right);
+      }
+    }
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
     const read = page.locator('[data-focus-key="read:1"]');
     await read.focus();
@@ -193,7 +206,6 @@ test("row actions stay inline across the old breakpoint without clipping tooltip
     await page.keyboard.press("Tab");
     await expect(page.locator('[data-focus-key="done:1"]')).toHaveAccessibleDescription("Mark as done");
   }
-  expect(Math.abs(heights[1] - heights[2])).toBeLessThanOrEqual(10);
   const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
   expect(results.violations).toEqual([]);
   expect(canvas.writes).toEqual([]);

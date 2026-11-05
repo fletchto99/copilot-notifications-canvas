@@ -17,6 +17,10 @@ panels without shrinking the utility buttons.
 
 Search by title, issue/PR number, or repository. Each row shows its type, number
 when available, notification reason, and last-updated time.
+The repository is also shown when it is not already in the group heading.
+Visible row metadata never includes custom destination hints such as
+**Open repository releases** or **Open GitHub inbox**. Fallback destinations
+remain available to screen readers without adding visible metadata.
 Date grouping requires a supported browser time zone; the other groupings do not.
 Issues and pull requests also have state-aware icons: open
 items are green, completed issues and merged pull requests are purple, closed
@@ -29,6 +33,30 @@ The age advances locally without extra GitHub requests. A failed refresh keeps
 the last known icon and identifies it as a **cached result** with the failure
 reason; it does not pretend the old result was just rechecked.
 These are subject states, not the notification's Read/Done state.
+
+Other notification types have static icons, with no status lookup or loading
+indicator:
+
+| Subject type | Icon |
+| --- | --- |
+| `Release` | Tag |
+| `Commit` | Commit |
+| `Discussion` | Discussion bubbles |
+| `RepositoryAdvisory`, `RepositoryVulnerabilityAlert`, `RepositoryDependabotAlertsThread` | Security shield |
+| `RepositoryInvitation` | Envelope |
+| `WorkflowRun` | Workflow |
+| `AgentSessionThread` | Robot |
+| Any other type | Bell |
+
+Unknown types keep their type label; an empty or whitespace-only label appears as
+**Notification**. Release links still open the repository's releases page.
+
+GitHub's [notifications REST API documentation](https://docs.github.com/en/rest/activity/notifications)
+lists notification **reasons**, not an exhaustive set of subject types. Its
+[official OpenAPI schema](https://github.com/github/rest-api-description/blob/main/descriptions/api.github.com/api.github.com.json)
+defines `subject.type` as a string without an enum. The named static icons cover
+known types also handled by [Gitify](https://github.com/gitify-app/gitify/blob/main/src/renderer/utils/forges/github/handlers/index.ts);
+the bell fallback allows new types without assuming that this list is complete.
 
 Check suites use a green checkmark for passing, a red cross for failure,
 timeout or startup failure, and an amber clock for pending work. Cancelled,

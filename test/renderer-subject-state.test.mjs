@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { thread } from "./fixtures.mjs";
+import { staticSubjectTypes, thread } from "./fixtures.mjs";
 import { renderer, settle } from "./renderer-fixtures.mjs";
 
 test("state icons have accessible names without hover tooltips or visible status text in every view", async () => {
@@ -52,21 +52,159 @@ test("state icons have accessible names without hover tooltips or visible status
   }
 });
 
+test("release notifications have static tag icons in every view without status loading or lookups", async () => {
+  const ui = await renderer({
+    initialRows: [
+      thread("1", { subject: {
+        type: "Release", title: "Synthetic v1.2.0", url: "https://api.github.com/repos/example/widgets/releases/123",
+      } }),
+      thread("2", { unread: false, subject: { type: "Release", title: "Synthetic v1.1.0", url: null } }),
+    ],
+    subjectsLoading: true,
+  });
+  try {
+    for (const groupBy of ["repo", "none", "date"]) {
+      ui.ids.get("group-by").value = groupBy;
+      await ui.ids.get("group-by").events.change();
+      await settle();
+      const groups = ui.ids.get("groups");
+      const fields = groups.querySelectorAll(".notification-subject");
+      assert.equal(fields.length, 2);
+      for (const field of fields) {
+        assert.equal(field.className, "notification-subject");
+        assert.equal(field.dataset.subjectType, "Release");
+        assert.equal(field.querySelectorAll(".notification-type")[0].textContent, "Release");
+        const icon = field.querySelectorAll(".subject-icon")[0];
+        assert.equal(icon.attributes["aria-label"], "Release");
+        assert.equal(icon.attributes.role, "img");
+        assert.equal(icon.title, undefined);
+        assert.equal(icon.dataset.checkedAt, undefined);
+        const svg = icon.querySelectorAll("svg")[0];
+        assert.equal(svg.attributes["aria-hidden"], "true");
+        assert.equal(svg.attributes.width, "16");
+        assert.equal(svg.querySelectorAll("path")[0].attributes.d, "M3 3h7l11 11-7 7L3 10V3ZM7 7h.01");
+      }
+      assert.deepEqual(groups.querySelectorAll(".row-link").map(link => link.href),
+        ["https://github.com/example/widgets/releases", "https://github.com/example/widgets/releases"]);
+      assert.equal(groups.querySelectorAll(".destination").length, 0);
+      assert.equal(groups.querySelectorAll(".sr-only").filter(node => node.textContent === "Open repository releases").length, 2);
+      await ui.fireTimer(1000);
+      assert.ok(groups.querySelectorAll(".notification-subject").every((field, index) => field === fields[index]));
+      assert.ok(groups.querySelectorAll(".subject-icon").every(icon => icon.attributes["aria-label"] === "Release"));
+      assert.equal(groups.querySelectorAll(".subject-loading").length, 0);
+    }
+    assert.ok(ui.githubCalls.every(args => args.at(-1).startsWith("/notifications?")));
+    assert.deepEqual(ui.patches, []);
+    assert.deepEqual(ui.deletions, []);
+  } finally {
+    ui.window.events.pagehide();
+    ui.inbox.close();
+  }
+});
+
+test("known types get static icons and unknown or untrusted types get an accessible bell", async () => {
+  const types = [...staticSubjectTypes, "FutureSubject", "__proto__", "constructor", "toString", "<img src=x onerror=alert(1)>", "", " "];
+  const labels = types.map(type => type.replace(/([a-z])([A-Z])/g, "$1 $2").trim() || "Notification");
+  const bell = "M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9ZM10 21a2 2 0 0 0 4 0";
+  const ui = await renderer({
+    initialRows: types.map((type, index) => thread(String(index + 1), {
+      unread: index % 2 === 0, subject: { type, title: `Synthetic type ${index}`, url: null },
+    })),
+    subjectsLoading: true,
+    subjectStates: Object.fromEntries(types.map((_, index) =>
+      [String(index + 1), { subjectState: null, subjectCheckedAt: Date.now() }])),
+  });
+  try {
+    for (const groupBy of ["repo", "none", "date"]) {
+      ui.ids.get("group-by").value = groupBy;
+      ui.ids.get("group-by").events.change();
+      await settle();
+      const groups = ui.ids.get("groups");
+      const fields = groups.querySelectorAll(".notification-subject");
+      assert.equal(fields.length, types.length);
+      const paths = [];
+      for (const [index, field] of fields.entries()) {
+        assert.equal(field.className, "notification-subject");
+        assert.equal(field.dataset.subjectType, types[index]);
+        assert.equal(field.querySelectorAll(".notification-type")[0].textContent, labels[index]);
+        const icon = field.querySelectorAll(".subject-icon")[0];
+        assert.equal(icon.attributes["aria-label"], labels[index]);
+        assert.equal(icon.attributes.role, "img");
+        assert.equal(icon.title, undefined);
+        assert.equal(icon.dataset.checkedAt, undefined);
+        const svg = icon.querySelectorAll("svg")[0];
+        assert.equal(svg.attributes["aria-hidden"], "true");
+        assert.equal(svg.attributes.width, "16");
+        paths.push(svg.querySelectorAll("path")[0].attributes.d);
+      }
+      assert.ok(paths.slice(0, staticSubjectTypes.length).every(path => path && path !== bell));
+      assert.ok(paths.slice(staticSubjectTypes.length).every(path => path === bell));
+      assert.equal(new Set(paths.slice(0, staticSubjectTypes.length)).size, 7);
+      assert.equal(paths[3], paths[4], "security-related types share a shield");
+      assert.equal(paths[4], paths[5]);
+      assert.equal(groups.querySelectorAll("img").length, 0);
+      assert.equal(groups.querySelectorAll(".subject-loading").length, 0);
+      await ui.fireTimer(1000);
+      assert.ok(groups.querySelectorAll(".notification-subject").every((field, index) => field === fields[index]));
+      assert.deepEqual(groups.querySelectorAll(".subject-icon").map(icon => icon.attributes["aria-label"]), labels);
+    }
+    assert.ok(ui.githubCalls.every(args => args.at(-1).startsWith("/notifications?")));
+    assert.deepEqual(ui.patches, []);
+    assert.deepEqual(ui.deletions, []);
+  } finally {
+    ui.window.events.pagehide();
+    ui.inbox.close();
+  }
+});
+
+test("row metadata never includes custom destination hints for any notification type", async () => {
+  const types = ["Issue", "PullRequest", "CheckSuite", ...staticSubjectTypes, "FutureSubject"];
+  const ui = await renderer({
+    initialRows: types.map((type, index) => thread(String(index + 1), {
+      subject: { type, title: `Synthetic type ${index}`, url: null },
+    })),
+  });
+  try {
+    for (const groupBy of ["repo", "none", "date"]) {
+      ui.ids.get("group-by").value = groupBy;
+      ui.ids.get("group-by").events.change();
+      await settle();
+      const groups = ui.ids.get("groups");
+      assert.equal(groups.querySelectorAll(".destination").length, 0);
+      for (const metadata of groups.querySelectorAll(".metadata")) {
+        assert.equal(metadata.children.length, groupBy === "repo" ? 3 : 4);
+        assert.equal(metadata.querySelectorAll(".sr-only").length, 0);
+        assert.ok(metadata.querySelectorAll("span").every(node => !node.textContent.startsWith("Open ")));
+      }
+      for (const [index, link] of groups.querySelectorAll(".row-link").entries()) {
+        const label = types[index] === "Release" ? "Open repository releases" :
+          types[index] === "CheckSuite" ? "Open repository Actions" : "Open GitHub inbox";
+        assert.ok(link.querySelectorAll(".sr-only").some(node => node.textContent === label));
+      }
+    }
+    assert.deepEqual(ui.patches, []);
+    assert.deepEqual(ui.deletions, []);
+  } finally {
+    ui.window.events.pagehide();
+    ui.inbox.close();
+  }
+});
+
 test("unavailable status is explicit, untrusted errors are text, and other types keep their labels", async () => {
   const ui = await renderer({
-    initialRows: [thread("1"), thread("2", { subject: { type: "Release", title: "Synthetic release", url: null } })],
+    initialRows: [thread("1"), thread("2", { subject: { type: "Discussion", title: "Synthetic discussion", url: null } })],
     subjectStates: { 1: { subjectState: null, subjectStateError: "<img src=x onerror=alert(1)>" } },
   });
   try {
     const fields = ui.ids.get("groups").querySelectorAll(".notification-subject");
-    assert.equal(fields.length, 1);
+    assert.equal(fields.length, 2);
     const icon = fields[0].querySelectorAll(".subject-icon")[0];
     assert.equal(icon.textContent, "");
     assert.equal(icon.attributes["aria-label"], "Pull Request: Status unavailable. <img src=x onerror=alert(1)>");
     assert.equal(icon.title, undefined);
     assert.equal(icon.querySelectorAll("img").length, 0);
     assert.deepEqual(ui.ids.get("groups").querySelectorAll(".notification-type").map(node => node.textContent),
-      ["Pull Request #42", "Release"]);
+      ["Pull Request #42", "Discussion"]);
   } finally {
     ui.window.events.pagehide();
   }
