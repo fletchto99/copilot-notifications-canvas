@@ -42,8 +42,12 @@ test("state icons have accessible names without hover tooltips or visible status
         assert.equal(svg.attributes.width, "16");
         assert.equal(field.dataset.subjectType, cases[index][0]);
       }
+      const queuedShape = fields[cases.findIndex(([, state]) => state === "merge_queued")].querySelectorAll("path")[0].attributes.d;
+      assert.equal(queuedShape,
+        "M6 11v6M8 19a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM21 12a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM6.75 5a.75 .75 0 1 1-1.5 0 .75 .75 0 0 1 1.5 0ZM12.25 8.5a.75 .75 0 1 1-1.5 0 .75 .75 0 0 1 1.5 0Z",
+        "queued PRs show two dots leading into merge nodes");
       const shapes = fields.slice(4, 8).map(field => field.querySelectorAll("path")[0].attributes.d);
-      assert.equal(new Set(shapes).size, 4, "open, draft, closed, and merged PRs have different shapes");
+      assert.equal(new Set([...shapes, queuedShape]).size, 5, "open, draft, closed, merged, and queued PRs have different shapes");
     }
     assert.deepEqual(ui.patches, []);
     assert.deepEqual(ui.deletions, []);

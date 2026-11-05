@@ -81,7 +81,7 @@ const subjectIcons = {
     draft: `${pullRequestNodes}M6 7v2m0 3v2m0 2v1M18 17v-2m0-3V9m0-3V5`,
     closed: `${pullRequestNodes}M6 7v10M18 17v-6m-3-8 6 6m0-6-6 6`,
     merged: "M8 5a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM8 19a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM21 12a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM6 7v10m0-10c0 3 4 5 11 5",
-    merge_queued: "M3 5h12M3 10h8M3 15h6M3 20h6M21 16a5 5 0 1 1-10 0 5 5 0 0 1 10 0Zm-5-3v3l2 1",
+    merge_queued: "M6 11v6M8 19a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM21 12a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM6.75 5a.75 .75 0 1 1-1.5 0 .75 .75 0 0 1 1.5 0ZM12.25 8.5a.75 .75 0 1 1-1.5 0 .75 .75 0 0 1 1.5 0Z",
   },
   CheckSuite: {
     unknown: "M4 3h16v18H4ZM8 8h8M8 12h8M8 16h4",

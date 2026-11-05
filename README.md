@@ -12,7 +12,7 @@ showing read and unread inbox items; choose **Unread only** to narrow the view. 
 stay hidden in both views. Search, mark rows
 or groups as read or done, and opt into desktop notifications or auto-open.
 
-![GitHub Notifications canvas with a compact title toolbar, full-width search, and attention tabs above nine synthetic notifications, six unread, across three example repositories with pull request status icons, a release tag, a failed check run, and read/done controls](docs/images/github-notifications.png)
+![GitHub Notifications canvas with a compact title toolbar, full-width search, and attention tabs above nine synthetic notifications, six unread, across three example repositories with pull request status icons including a yellow merge-queue icon, a release tag, a failed check run, and read/done controls](docs/images/github-notifications.png)
 
 ## Prerequisites
 
@@ -54,8 +54,8 @@ full procedure, verification requirements, and troubleshooting.
 - Choose **All notifications**, **Repository**, or **Date** in **Settings**.
 - Set **Show notifications** in **Settings** to **All** for read and unread inbox
   items, or **Unread only** to narrow the view.
-- Icons show issue/PR states, including merge queue membership, and check-suite
-  results. Screen-reader descriptions include status, freshness, and failures;
+- Icons show issue/PR states, including a yellow dotted merge icon for queued PRs,
+  and check-suite results. Screen-reader descriptions include status, freshness, and failures;
   icons have no hover tooltips. Status loads for on-screen, expanded rows
   without delaying the inbox. Releases, commits, discussions, security alerts,
   invitations, workflow runs, and agent sessions have static type icons;
