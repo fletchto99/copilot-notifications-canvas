@@ -5,6 +5,8 @@ const token = location.hash.slice(1);
 const hasCapability = /^[a-f0-9]{64}$/.test(token);
 const collapsed = new Set();
 const attentionTabs = new Map();
+const tooltipAnchorsByControl = new WeakMap();
+let pointerInteraction = false;
 const relative = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
 let state;
 let listKey;
@@ -14,8 +16,11 @@ let intersecting = true;
 let timer;
 let tooltipTimer;
 let overlayFrame;
+let viewportFrame;
+let lastViewport = "";
 let refreshStatusKey;
 let searchTimer;
+let searchComposing = false;
 let pendingFilters;
 let pendingRefresh = false;
 let refreshing = false;
@@ -43,6 +48,50 @@ const iconPaths = {
   read: "M3 9 12 3l9 6v11H3V9Zm0 0 9 6 9-6M3 20l6-7m12 7-6-7",
   done: "m5 12 4 4L19 6",
 };
+const issueOutline = "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z";
+const pullRequestNodes = "M8 5a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM8 19a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM20 19a2 2 0 1 1-4 0 2 2 0 0 1 4 0Z";
+const pendingCheck = `${issueOutline}M12 7v5l3 2`;
+const failedCheck = "M6 6 18 18M6 18 18 6";
+const subjectIcons = {
+  Issue: {
+    unknown: `${issueOutline}M13 12a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z`,
+    open: `${issueOutline}M13 12a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z`,
+    closed: `${issueOutline}m-13-1 3 3 5-5`,
+    not_planned: `${issueOutline}M6 18 18 6`,
+    duplicate: `${issueOutline}m-13-1 3 3 5-5`,
+  },
+  PullRequest: {
+    unknown: `${pullRequestNodes}M6 7v10M18 17V9a4 4 0 0 0-4-4h-1m3-3-3 3 3 3`,
+    open: `${pullRequestNodes}M6 7v10M18 17V9a4 4 0 0 0-4-4h-1m3-3-3 3 3 3`,
+    draft: `${pullRequestNodes}M6 7v2m0 3v2m0 2v1M18 17v-2m0-3V9m0-3V5`,
+    closed: `${pullRequestNodes}M6 7v10M18 17v-6m-3-8 6 6m0-6-6 6`,
+    merged: "M8 5a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM8 19a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM21 12a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM6 7v10m0-10c0 3 4 5 11 5",
+    merge_queued: "M3 5h12M3 10h8M3 15h6M3 20h6M21 16a5 5 0 1 1-10 0 5 5 0 0 1 10 0Zm-5-3v3l2 1",
+  },
+  CheckSuite: {
+    unknown: "M4 3h16v18H4ZM8 8h8M8 12h8M8 16h4",
+    success: "m5 12 4 4L19 6",
+    failure: failedCheck,
+    queued: pendingCheck,
+    in_progress: pendingCheck,
+    waiting: pendingCheck,
+    requested: pendingCheck,
+    pending: pendingCheck,
+    neutral: "M5 12h14",
+    cancelled: `${issueOutline}M6 18 18 6`,
+    skipped: "m6 5 9 7-9 7ZM18 5v14",
+    timed_out: failedCheck,
+    action_required: `${issueOutline}M12 7v6m0 4h.01`,
+    startup_failure: failedCheck,
+    stale: pendingCheck,
+  },
+};
+const subjectLabels = {
+  open: "Open", closed: "Closed", not_planned: "Closed (not planned)", duplicate: "Closed (duplicate)", draft: "Draft", merged: "Merged",
+  merge_queued: "In merge queue", success: "Passing", failure: "Failed", queued: "Queued", in_progress: "In progress",
+  waiting: "Waiting", requested: "Requested", pending: "Pending", neutral: "Neutral", cancelled: "Cancelled",
+  skipped: "Skipped", timed_out: "Timed out", action_required: "Action required", startup_failure: "Startup failure", stale: "Stale",
+};
 const tooltipControls = [
   ["open-inbox", "inbox-control"],
   ["force-refresh", "refresh-control"],
@@ -56,26 +105,84 @@ function element(tag, className, text) {
   return node;
 }
 
+function setControlText(control, text) {
+  // Replacing an unchanged button label during a pointer press cancels its click in WebKit.
+  if (control.textContent !== text) control.textContent = text;
+}
+
 function actionIcon(action) {
+  return svgIcon(iconPaths[action], 18);
+}
+
+function svgIcon(d, size) {
   const namespace = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(namespace, "svg");
   for (const [name, value] of Object.entries({
-    width: "18", height: "18", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor",
+    width: String(size), height: String(size), viewBox: "0 0 24 24", fill: "none", stroke: "currentColor",
     "stroke-width": "1.5", "stroke-linecap": "round", "stroke-linejoin": "round",
     "aria-hidden": "true", focusable: "false",
   })) svg.setAttribute(name, value);
   const path = document.createElementNS(namespace, "path");
-  path.setAttribute("d", iconPaths[action]);
+  path.setAttribute("d", d);
   svg.append(path);
   return svg;
 }
 
+function subjectMetadata(item) {
+  const type = item.type.replace(/([a-z])([A-Z])/g, "$1 $2");
+  const label = element("span", "notification-type", item.number ? `${type} #${item.number}` : type);
+  if (!Object.hasOwn(subjectIcons, item.type)) return label;
+  const status = Object.hasOwn(subjectIcons[item.type], item.subjectState) ? item.subjectState : "unknown";
+  const linkLoading = item.subjectLinkLoading === true;
+  const loading = linkLoading || item.subjectLoading === true && status === "unknown" && !item.subjectStateError;
+  const field = element("span", `notification-subject subject-${loading ? "loading" : status.replaceAll("_", "-")}`);
+  field.dataset.subjectType = item.type;
+  const icon = element("span", "subject-icon");
+  icon.append(svgIcon(loading ? "M21 12a9 9 0 1 1-9-9" : subjectIcons[item.type][status], 16));
+  const stateLabel = subjectLabels[status] ?? (linkLoading ? "Loading run destination" : item.subjectStateError ? "Status unavailable" : loading ? "Loading status" : "Status not loaded yet");
+  const description = `${type}: ${stateLabel}${linkLoading && status !== "unknown" ? ". Loading run destination" : ""}${item.subjectStateSource === "notification"
+    ? ". Reported by this notification; may not reflect a later rerun." : ""}${item.subjectStateStale
+    ? ". Cached result; refresh failed" : ""}${item.subjectStateError ? `. ${item.subjectStateError}` : ""}${item.subjectLinkSource === "inferred"
+    ? ". Run link inferred from workflow, branch, result, attempt and timing; not confirmed by GitHub." : ""}${item.subjectLinkTarget === "job"
+    ? ". Opens the only failed job's log viewer." : ""}${item.subjectLinkError ? `. ${item.subjectLinkError}` : ""}`;
+  icon.dataset.description = description;
+  if (Number.isFinite(item.subjectCheckedAt) && item.subjectCheckedAt >= 0) icon.dataset.checkedAt = String(item.subjectCheckedAt);
+  icon.setAttribute("role", "img");
+  updateSubjectDescription(icon);
+  field.append(icon, label);
+  return field;
+}
+
 function relativeTime(date) {
-  const seconds = Math.round((Date.parse(date) - Date.now()) / 1000);
+  const seconds = Math.round(((typeof date === "number" ? date : Date.parse(date)) - Date.now()) / 1000);
   if (Math.abs(seconds) < 60) return "just now";
   for (const [unit, divisor] of [["year", 31536000], ["month", 2592000], ["day", 86400], ["hour", 3600], ["minute", 60]]) {
     if (Math.abs(seconds) >= divisor) return relative.format(Math.trunc(seconds / divisor), unit);
   }
+}
+
+function updateSubjectDescription(icon) {
+  const age = icon.dataset.checkedAt === undefined ? "" :
+    `${icon.dataset.description.endsWith(".") ? " " : ". "}Checked ${relativeTime(Math.min(Date.now(), Number(icon.dataset.checkedAt)))}`;
+  const description = icon.dataset.description + age;
+  icon.setAttribute("aria-label", description);
+}
+
+function visibleSubjectIds() {
+  if (!visible()) return "";
+  return [...$("groups").querySelectorAll(".row-link")].filter(link => {
+    const bounds = link.getBoundingClientRect();
+    return bounds.bottom > 0 && bounds.top < window.innerHeight && bounds.bottom > bounds.top;
+  }).map(link => link.dataset.threadId).join(",");
+}
+
+function scheduleViewportSync() {
+  if (!hasCapability || !visible() || connectionError || viewportFrame !== undefined || visibleSubjectIds() === lastViewport) return;
+  viewportFrame = requestAnimationFrame(() => {
+    viewportFrame = undefined;
+    if (!visible() || busy || batchBusy || marking.size || pendingFilters || pollPromise) return;
+    if (visibleSubjectIds() !== lastViewport) void update();
+  });
 }
 
 async function api(path, input) {
@@ -83,9 +190,23 @@ async function api(path, input) {
   requestControllers.add(controller);
   const timeout = setTimeout(() => controller.abort(), 35_000);
   try {
+    const viewport = visibleSubjectIds();
+    if (viewport.length > 8192) throw new Error("Too many visible notifications to load status. Narrow the view and try again.");
+    lastViewport = viewport;
+    const groupBy = path === "settings" ? input?.groupBy ?? preferences?.groupBy : preferences?.groupBy;
+    const timeZone = groupBy === "date" ? Intl.DateTimeFormat().resolvedOptions().timeZone : undefined;
+    if (groupBy === "date" && (typeof timeZone !== "string" || !timeZone)) {
+      throw new Error("Date grouping requires a supported browser time zone. Choose another grouping in Settings.");
+    }
     const response = await fetch(`/api/${path}`, {
       method: input === undefined ? "GET" : "POST",
-      headers: { Authorization: `Bearer ${token}`, ...(input === undefined ? {} : { "Content-Type": "application/json" }) },
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(input === undefined ? {} : { "Content-Type": "application/json" }),
+        ...(groupBy ? { "X-Notification-Group-By": groupBy } : {}),
+        ...(timeZone ? { "X-Notification-Time-Zone": timeZone } : {}),
+        "X-Notification-Visible-Ids": viewport,
+      },
       body: input === undefined ? undefined : JSON.stringify(input),
       signal: controller.signal,
       credentials: "omit",
@@ -281,7 +402,7 @@ function renderUpdates(updates = releaseState) {
 function setUpdateDetails(open) {
   const details = $("update-prompt-details");
   const toggle = $("update-details-toggle");
-  if (!open && details.contains(document.activeElement)) toggle.focus();
+  if (!open && document.hasFocus() && details.contains(document.activeElement)) toggle.focus();
   details.hidden = !open;
   toggle.setAttribute("aria-expanded", String(open));
 }
@@ -325,8 +446,10 @@ async function copyUpdatePrompt() {
     if (attempt !== copyAttempt || !visible() || releaseState?.status !== "available" || releaseState.prompt !== prompt) return;
     resetCopyFeedback();
     setUpdateDetails(true);
-    $("update-prompt").focus();
-    $("update-prompt").select();
+    if (document.hasFocus()) {
+      $("update-prompt").focus();
+      $("update-prompt").select();
+    }
     $("copy-status").textContent = "Clipboard unavailable. Copy the selected prompt and paste it into Copilot.";
   }
 }
@@ -350,7 +473,7 @@ function closeSettings(focus = false) {
   $("settings").open = false;
   $("settings-toggle").setAttribute("aria-expanded", "false");
   $("settings-toggle").dataset.tooltipDismissed = "true";
-  if (focus) $("settings-toggle").focus();
+  if (focus && document.hasFocus()) $("settings-toggle").focus();
 }
 
 async function markThread(id, action) {
@@ -404,7 +527,7 @@ function focusKey(key) {
 }
 
 function restoreFocus(previous, preferred) {
-  if (!visible() || !previous || (!previous.id && !previous.dataset?.focusKey)) return;
+  if (!visible() || !document.hasFocus() || !previous || (!previous.id && !previous.dataset?.focusKey)) return;
   const current = document.activeElement;
   const key = previous.dataset?.focusKey;
   if (current && current !== previous && current !== document.body && current !== document.documentElement &&
@@ -417,7 +540,16 @@ function restoreFocus(previous, preferred) {
       break;
     }
   }
-  (target && !target.disabled ? target : $("search")).focus({ preventScroll: true });
+  const previousTooltip = tooltipAnchorsByControl.get(previous);
+  const keyboardTooltip = previousTooltip?.dataset.tooltipKeyboard === "true";
+  const dismissedTooltip = previousTooltip?.dataset.tooltipDismissed === "true";
+  const destination = target && !target.disabled ? target : $("search");
+  destination.focus({ preventScroll: true });
+  if (previousTooltip) {
+    setTooltipKeyboard(destination, keyboardTooltip);
+    const anchor = tooltipAnchorsByControl.get(destination);
+    if (anchor && dismissedTooltip) anchor.dataset.tooltipDismissed = "true";
+  }
 }
 
 async function batchRequest(action, input) {
@@ -485,7 +617,7 @@ function renderBatch() {
   $("batch-stop").hidden = !running;
   $("batch-stop").disabled = batchBusy || busy || batch.status === "stopping";
   $("batch-retry").hidden = running || remaining === 0;
-  $("batch-retry").textContent = `${cancelled ? "Continue" : "Retry"} remaining (${remaining})`;
+  setControlText($("batch-retry"), `${cancelled ? "Continue" : "Retry"} remaining (${remaining})`);
   $("batch-retry").disabled = batchBusy || busy || Boolean(pendingFilters) || batch.retryAt > Date.now();
   $("batch-dismiss").hidden = running;
   $("batch-dismiss").disabled = batchBusy || busy;
@@ -494,7 +626,7 @@ function renderBatch() {
 
 function schedule() {
   clearTimeout(timer);
-  if (visible()) timer = setTimeout(tick, batchLocked() ? 1000 : 5000);
+  if (visible()) timer = setTimeout(tick, batchLocked() || state?.subjectsLoading && !connectionError ? 1000 : 5000);
 }
 
 async function performUpdate(path, input) {
@@ -546,6 +678,7 @@ async function blockingUpdate(path, input) {
   renderControls();
   try {
     await pollPromise;
+    if (path === "filters" && searchComposing) return;
     if (path === "filters" && pendingFilters) {
       input = { ...input, ...pendingFilters };
       pendingFilters = undefined;
@@ -569,7 +702,7 @@ async function flushPendingUpdates() {
     pendingRefresh = false;
     return blockingUpdate("refresh", { force: true });
   }
-  if (!pendingFilters) return;
+  if (!pendingFilters || searchComposing) return;
   const input = pendingFilters;
   pendingFilters = undefined;
   clearTimeout(searchTimer);
@@ -625,30 +758,51 @@ function tooltipAnchors() {
 function positionOverlays() {
   positionSettings();
   for (const anchor of tooltipAnchors()) {
-    if (!anchor.dataset.tooltipDismissed && (anchor.contains(document.activeElement) || anchor.matches(":hover"))) {
+    if (!anchor.dataset.tooltipDismissed && (anchor.dataset.tooltipKeyboard === "true" && anchor.contains(document.activeElement) || anchor.matches(":hover"))) {
       positionTooltip(anchor);
     }
   }
+  scheduleViewportSync();
 }
 
 function bindTooltip(control, anchor) {
+  tooltipAnchorsByControl.set(control, anchor);
   const show = () => {
     delete anchor.dataset.tooltipDismissed;
     if (anchor.id === "refresh-control") renderRefreshStatus(true);
     positionTooltip(anchor);
   };
   control.addEventListener("pointerenter", show);
-  control.addEventListener("focus", show);
+  control.addEventListener("focus", () => {
+    setTooltipKeyboard(control, !pointerInteraction && control.matches(":focus-visible"));
+    show();
+  });
+  control.addEventListener("keydown", event => {
+    if (event.key === "Escape") return;
+    setTooltipKeyboard(control, true);
+    show();
+  });
+}
+
+function setTooltipKeyboard(control, keyboard) {
+  const anchor = tooltipAnchorsByControl.get(control);
+  if (anchor) anchor.dataset.tooltipKeyboard = String(keyboard);
 }
 
 function dismissTooltips() {
   for (const anchor of tooltipAnchors()) anchor.dataset.tooltipDismissed = "true";
 }
 
+function suppressHover() {
+  document.documentElement.dataset.pointerHoverSuppressed = "true";
+  dismissTooltips();
+}
+
 function tickTooltip() {
   clearTimeout(tooltipTimer);
   if (!visible()) return;
   renderRefreshStatus(true);
+  for (const icon of $("groups").querySelectorAll(".subject-icon")) updateSubjectDescription(icon);
   tooltipTimer = setTimeout(tickTooltip, 15_000);
 }
 
@@ -749,13 +903,16 @@ function createBatchControls({ repository, date, timeZone, selectionKey, count, 
 
 function renderGroups(groups, fallbackFocusKey) {
   $("collapse").hidden = !groups.length;
-  $("collapse").textContent = groups.some(group => !collapsed.has(group.key)) ? "Collapse all" : "Expand all";
+  setControlText($("collapse"), groups.some(group => !collapsed.has(group.key)) ? "Collapse all" : "Expand all");
   // Keep focused controls and disclosure state stable across unchanged polls.
   const key = JSON.stringify(groups);
   if (key === listKey) return;
   listKey = key;
   const previousFocus = document.activeElement;
   const focused = previousFocus?.dataset.focusKey;
+  const dismissedTooltips = new Set([...$("groups").querySelectorAll("[data-focus-key]")]
+    .filter(control => tooltipAnchorsByControl.get(control)?.dataset.tooltipDismissed === "true")
+    .map(control => control.dataset.focusKey));
   const fragment = document.createDocumentFragment();
   for (const [index, group] of groups.entries()) {
     const rows = element("div", "repo-items");
@@ -776,7 +933,8 @@ function renderGroups(groups, fallbackFocusKey) {
       if (rows.hidden) collapsed.add(group.key);
       else collapsed.delete(group.key);
       disclosure.setAttribute("aria-expanded", String(!rows.hidden));
-      $("collapse").textContent = groups.some(item => !collapsed.has(item.key)) ? "Collapse all" : "Expand all";
+      setControlText($("collapse"), groups.some(item => !collapsed.has(item.key)) ? "Collapse all" : "Expand all");
+      scheduleViewportSync();
     });
     header.append(disclosure, createBatchControls({
       repository: group.repository, date: group.date, timeZone: group.timeZone,
@@ -791,26 +949,43 @@ function renderGroups(groups, fallbackFocusKey) {
       const content = element("div", "row-content");
       const title = element("span", "title", item.title || "(Untitled notification)");
       const link = element("a", "row-link");
-      link.href = item.url;
+      const linkLoading = item.subjectLinkLoading === true;
+      if (linkLoading) {
+        link.setAttribute("role", "link");
+        link.setAttribute("aria-disabled", "true");
+        link.setAttribute("aria-busy", "true");
+      } else {
+        link.href = item.url;
+      }
       link.target = "_blank";
       link.rel = "noopener noreferrer";
-      link.title = item.label;
+      link.addEventListener("click", event => {
+        if (linkLoading) return event.preventDefault();
+        suppressHover();
+      });
+      link.addEventListener("auxclick", event => {
+        if (event.button === 1) {
+          if (linkLoading) return event.preventDefault();
+          suppressHover();
+        }
+      });
       // WebKit's default Tab navigation can skip links without an explicit tab stop.
       link.tabIndex = 0;
       link.dataset.focusKey = `thread:${item.id}`;
+      link.dataset.threadId = item.id;
       content.append(title);
       content.append(element("span", "sr-only", item.unread ? "Unread" : "Read"));
+      if (!linkLoading && item.type === "CheckSuite" && (!item.direct || item.subjectLinkSource === "inferred" || item.subjectLinkTarget === "job")) content.append(element("span", "sr-only", item.label));
       const metadata = element("div", "metadata");
-      const type = item.type.replace(/([a-z])([A-Z])/g, "$1 $2");
       const time = element("time", "", relativeTime(item.updatedAt));
       time.dateTime = item.updatedAt;
       time.title = new Date(item.updatedAt).toLocaleString();
       time.setAttribute("aria-label", time.title);
       const fields = [
         ...(group.repository ? [] : [element("span", "repository", item.repository)]),
-        element("span", "notification-type", item.number ? `${type} #${item.number}` : type),
+        subjectMetadata(item),
         element("span", "", item.reason.replaceAll("_", " ")),
-        ...(!item.direct ? [element("span", "destination", item.label)] : []),
+        ...(!item.direct && item.type !== "CheckSuite" ? [element("span", "destination", item.label)] : []),
         time,
       ];
       for (const [index, field] of fields.entries()) {
@@ -852,6 +1027,10 @@ function renderGroups(groups, fallbackFocusKey) {
     }
   }
   $("groups").replaceChildren(fragment);
+  for (const control of $("groups").querySelectorAll("[data-focus-key]")) {
+    const anchor = tooltipAnchorsByControl.get(control);
+    if (anchor && dismissedTooltips.has(control.dataset.focusKey)) anchor.dataset.tooltipDismissed = "true";
+  }
   if (focused) {
     const target = focusKey(focused) ?? focusKey(fallbackFocusKey);
     // Pending actions restore focus once their replacement controls are enabled.
@@ -889,7 +1068,7 @@ function render(fallbackFocusKey) {
     const text = state ? `${label} (${state.attentionCounts[value]})` : label;
     const selected = String(value === attention);
     if (tab.textContent !== text || tab.getAttribute("aria-selected") !== selected) tabsChanged = true;
-    tab.textContent = text;
+    setControlText(tab, text);
     tab.setAttribute("aria-selected", selected);
     tab.tabIndex = (focusedTab ? tab === focusedTab : value === attention) ? 0 : -1;
   }
@@ -913,7 +1092,7 @@ function render(fallbackFocusKey) {
   if (document.activeElement !== $("search") && pendingFilters?.query === undefined) $("search").value = state.filters.query;
   $("count").textContent = `${state.loaded} total \u00b7 ${state.unread} unread${filtered ? ` \u00b7 ${state.matching} matching` : ""}`;
   $("more").hidden = !state.hasMore;
-  $("more").textContent = "Load more (up to 50)";
+  setControlText($("more"), "Load more (up to 50)");
   $("more").title = state.needsRefresh ? "Refresh notifications before loading more." : "";
   const groupBy = preferences?.groupBy ?? "repo";
   $("groups").setAttribute("aria-label", groupBy === "repo" ? "Notifications by repository" :
@@ -921,6 +1100,7 @@ function render(fallbackFocusKey) {
   $("subtitle").textContent = groupBy === "repo" ? "A little less noise. One repository at a time." :
     groupBy === "date" ? "A little less noise. One day at a time." : "A little less noise. Your GitHub inbox order.";
   renderGroups(displayGroups(), fallbackFocusKey);
+  scheduleViewportSync();
   renderControls();
   if (state.groups.length && movePanelFocus) {
     restoreFocus(panel, $("groups").querySelectorAll(".repo-toggle")[0]);
@@ -968,7 +1148,7 @@ function renderAttentionOverflow() {
   // aria-disabled keeps keyboard focus on an arrow when scrolling reaches an end.
   previous.setAttribute("aria-disabled", String(!overflow || tabs.scrollLeft <= 1));
   next.setAttribute("aria-disabled", String(!overflow || tabs.scrollWidth - tabs.clientWidth - tabs.scrollLeft <= 1));
-  if (!overflow && (focused === previous || focused === next)) {
+  if (!overflow && document.hasFocus() && (focused === previous || focused === next)) {
     attentionTabs.get(state?.filters.attention ?? "all").focus({ preventScroll: true });
   }
 }
@@ -1078,6 +1258,12 @@ document.addEventListener("focusin", event => {
   if ($("settings").open && !$("settings").contains(event.target)) closeSettings();
 });
 document.addEventListener("keydown", event => {
+  pointerInteraction = false;
+  if (event.key === "Enter" && event.repeat && (event.target?.dataset?.action || event.target?.dataset?.batchAction ||
+      ["batch-stop", "batch-retry", "batch-dismiss"].includes(event.target?.id))) {
+    event.preventDefault();
+    return;
+  }
   if (event.key !== "Escape") return;
   if ($("settings").open) {
     event.preventDefault();
@@ -1085,9 +1271,20 @@ document.addEventListener("keydown", event => {
   }
   dismissTooltips();
 });
-$("open-inbox").addEventListener("click", dismissTooltips);
+document.addEventListener("pointerdown", () => {
+  delete document.documentElement.dataset.pointerHoverSuppressed;
+  pointerInteraction = true;
+  setTooltipKeyboard(document.activeElement, false);
+});
+document.addEventListener("pointermove", () => {
+  delete document.documentElement.dataset.pointerHoverSuppressed;
+});
+$("open-inbox").addEventListener("click", suppressHover);
+$("open-inbox").addEventListener("auxclick", event => {
+  if (event.button === 1) suppressHover();
+});
 window.addEventListener("blur", () => {
-  dismissTooltips();
+  suppressHover();
 });
 window.addEventListener("scroll", positionOverlays, { passive: true });
 window.addEventListener("resize", positionOverlays);
@@ -1102,13 +1299,26 @@ for (const id of ["force-refresh", "empty-refresh"]) $(id).addEventListener("cli
 for (const [control, anchor] of tooltipControls) {
   bindTooltip($(control), $(anchor));
 }
-$("search").addEventListener("input", () => {
+function queueSearch() {
   pendingFilters = { ...pendingFilters, query: $("search").value };
   renderControls();
   clearTimeout(searchTimer);
+  if (searchComposing) return;
   searchTimer = setTimeout(() => {
     void flushPendingUpdates();
   }, 250);
+}
+$("search").addEventListener("compositionstart", () => {
+  searchComposing = true;
+  queueSearch();
+});
+$("search").addEventListener("compositionend", () => {
+  searchComposing = false;
+  queueSearch();
+});
+$("search").addEventListener("input", event => {
+  if (event?.isComposing) searchComposing = true;
+  queueSearch();
 });
 $("collapse").addEventListener("click", () => {
   const groups = displayGroups();
@@ -1119,7 +1329,8 @@ $("collapse").addEventListener("click", () => {
   }
   listKey = undefined;
   renderGroups(groups);
-  $("collapse").textContent = close ? "Expand all" : "Collapse all";
+  scheduleViewportSync();
+  setControlText($("collapse"), close ? "Expand all" : "Collapse all");
 });
 let wasVisible = visible();
 function visibilityChanged() {
@@ -1136,6 +1347,8 @@ function visibilityChanged() {
     dismissTooltips();
     for (const controller of requestControllers) controller.abort();
     closeSettings();
+    if (viewportFrame !== undefined) cancelAnimationFrame(viewportFrame);
+    viewportFrame = undefined;
   }
 }
 document.addEventListener("visibilitychange", visibilityChanged);
@@ -1173,6 +1386,8 @@ window.addEventListener("pagehide", () => {
   clearTimeout(copyFeedbackTimer);
   if (overlayFrame !== undefined) cancelAnimationFrame(overlayFrame);
   overlayFrame = undefined;
+  if (viewportFrame !== undefined) cancelAnimationFrame(viewportFrame);
+  viewportFrame = undefined;
   for (const controller of requestControllers) controller.abort();
   observer.disconnect();
   themeObserver.disconnect();

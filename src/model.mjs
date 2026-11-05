@@ -83,6 +83,25 @@ function parsedURL(value, origin) {
   }
 }
 
+export function reportedWorkflow(title) {
+  if (typeof title !== "string") return null;
+  const match = /^(.+?) workflow run(?:, Attempt #([1-9]\d*))? (succeeded|failed at startup|failed|cancelled|timed out|skipped) for (.+)$/.exec(title);
+  if (!match) return null;
+  const [, name, attempt, outcome, ref] = match;
+  const branch = ref.endsWith(" branch") ? ref.slice(0, -" branch".length) : null;
+  const attemptNumber = Number(attempt ?? 1);
+  return {
+    name,
+    attempt: attemptNumber,
+    state: { succeeded: "success", failed: "failure", cancelled: "cancelled",
+      "timed out": "timed_out", skipped: "skipped", "failed at startup": "startup_failure" }[outcome],
+    // Unknown title formats and search syntax characters must not broaden a fallback search.
+    branch: branch && branch.length <= 255 && name.length <= 256 &&
+      !/[\p{Cc}"\\]/u.test(name) && !/[\s\p{Cc}"\\]/u.test(branch) &&
+      Number.isSafeInteger(attemptNumber) ? branch : null,
+  };
+}
+
 export function notificationLink(subject, repository, target = apiTarget()) {
   const fallback = { url: `${target.webOrigin}/notifications`, label: "Open GitHub inbox", direct: false, number: null };
   if (!repoName(repository)) return fallback;
@@ -108,7 +127,20 @@ export function notificationLink(subject, repository, target = apiTarget()) {
     return { url: `${base}/releases`, label: "Open repository releases", direct: false, number: null };
   }
   if (subject.type === "CheckSuite") {
-    return { url: `${base}/actions`, label: "Open repository Actions", direct: false, number: null };
+    const runId = path.match(/^actions\/runs\/([1-9]\d*)$/)?.[1];
+    if (runId) return {
+      url: `${base}/actions/runs/${runId}`, label: "Open workflow run results", direct: true, number: null,
+      checkSuiteId: null, runId,
+    };
+    const workflow = reportedWorkflow(subject.title);
+    const query = workflow?.branch ? new URLSearchParams({
+      query: `workflow:"${workflow.name}" branch:"${workflow.branch}" is:${workflow.state === "startup_failure" ? "failure" : workflow.state}`,
+    }) : null;
+    return {
+      url: `${base}/actions${query ? `?${query}` : ""}`,
+      label: query ? "Open filtered repository Actions" : "Open repository Actions", direct: false, number: null,
+      checkSuiteId: path.match(/^check-suites\/([1-9]\d*)$/)?.[1] ?? null,
+    };
   }
   return fallback;
 }

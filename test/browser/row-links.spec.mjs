@@ -114,7 +114,9 @@ for (const packaged of [false, true]) {
         await expect(link).toHaveAttribute("href", "https://github.com/example/widgets/issues/42");
         await expect(link).toHaveAttribute("target", "_blank");
         await expect(link).toHaveAttribute("rel", "noopener noreferrer");
+        await expect(link).not.toHaveAttribute("title");
         await expect(link.locator("button, a")).toHaveCount(0);
+        await expect(link.locator(".subject-open")).toHaveCount(1);
         const box = await row.boundingBox();
         const linkBox = await link.boundingBox();
         expect(linkBox.x).toBeCloseTo(box.x);
@@ -129,13 +131,31 @@ for (const packaged of [false, true]) {
         await page.context().route(destination, route => route.fulfill({
           contentType: "text/html", body: "<!doctype html><title>Synthetic destination</title><p>Opened locally.</p>",
         }));
-        await link.evaluate((node, url) => { node.href = url; }, destination);
+        // Keep the synthetic destination when status hydration replaces the row.
+        await page.route(/\/api\/(?:state|refresh|more|read|done|filters)$/, async route => {
+          const response = await route.fetch();
+          const state = await response.json();
+          for (const group of state.groups ?? []) {
+            for (const item of group.items) {
+              if (item.id === "1") item.url = destination;
+            }
+          }
+          await route.fulfill({ response, json: state });
+        });
+        const checkedAt = await link.locator(".subject-icon").getAttribute("data-checked-at");
+        const original = await link.elementHandle();
+        canvas.rows[0].updated_at = "2026-01-11T12:00:00Z";
+        await page.locator("#force-refresh").click();
+        await expect(link.locator("time")).toHaveAttribute("datetime", "2026-01-11T12:00:00.000Z");
+        await expect(link.locator(".subject-icon")).not.toHaveAttribute("data-checked-at", checkedAt);
+        await expect(link).toHaveAttribute("href", destination);
+        expect(await original.evaluate(node => node.isConnected)).toBe(false);
         const open = async activate => {
           const opened = page.context().waitForEvent("page");
           await activate();
           const popup = await opened;
+          await expect(popup).toHaveURL(destination);
           await popup.waitForLoadState();
-          expect(popup.url()).toBe(destination);
           await popup.close();
           await page.bringToFront();
           expect(canvas.writes).toEqual([]);
@@ -146,9 +166,15 @@ for (const packaged of [false, true]) {
         await expect(link).toHaveCSS("outline-style", "solid");
         await expect(link).toHaveCSS("outline-offset", "-3px");
         await open(() => link.press("Enter"));
-        await open(() => page.mouse.click(box.x + 4, box.y + 4));
+        await open(async () => {
+          const bounds = await row.boundingBox();
+          await page.mouse.click(bounds.x + 4, bounds.y + 4);
+        });
         await open(() => link.locator(".metadata").click());
-        await open(() => page.mouse.click(box.x + box.width - 4, box.y + box.height - 4, { button: "middle" }));
+        await open(async () => {
+          const bounds = await row.boundingBox();
+          await page.mouse.click(bounds.x + bounds.width - 4, bounds.y + bounds.height - 4, { button: "middle" });
+        });
         await open(() => link.locator(".title").click({ modifiers: ["ControlOrMeta"] }));
 
         let unexpectedPages = 0;

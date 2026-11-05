@@ -1,10 +1,168 @@
 import { execFile } from "node:child_process";
 import { setTimeout as wait } from "node:timers/promises";
-import { apiTarget, DEFAULT_API_BASE_URL, InboxError, normalizeThreads } from "./model.mjs";
+import { apiTarget, DEFAULT_API_BASE_URL, InboxError, normalizeThreads, notificationLink, reportedWorkflow } from "./model.mjs";
 
 export const POLL_MS = 60_000;
 export const RETRY_MS = 120_000;
+export const SUBJECT_POLL_MS = 5 * 60_000;
 const API_ORIGIN = DEFAULT_API_BASE_URL;
+const MERGE_QUEUE_QUERY = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){isInMergeQueue}}}";
+const RUN_MATCH_WINDOW_MS = 2 * 60_000;
+const RUN_SEARCH_LOOKBACK_MS = 7 * 24 * 60 * 60_000;
+const FAILED_CHECK_STATES = ["failure", "timed_out", "startup_failure"];
+const SECONDARY_LIMIT = /secondary(?: rate)? limit|abuse detection/i;
+
+function subjectEndpoint(item, target) {
+  const checkSuite = item.type === "CheckSuite";
+  const id = checkSuite ? item.runId ?? item.checkSuiteId : item.number;
+  if (!["Issue", "PullRequest", "CheckSuite"].includes(item.type) || !id) return null;
+  const resource = checkSuite ? item.runId ? "actions/runs" : "check-suites" : item.type === "Issue" ? "issues" : "pulls";
+  const endpoint = `/repos/${item.repository}/${resource}/${id}`;
+  const link = notificationLink({ type: item.type, url: `${target.baseUrl}${endpoint}` }, item.repository, target);
+  return (checkSuite ? link.runId ?? link.checkSuiteId : link.number) === id ? endpoint : null;
+}
+
+function workflowRunSearch(item, target) {
+  if (item.type !== "CheckSuite" || item.runId || item.checkSuiteId) return null;
+  const workflow = reportedWorkflow(item.title);
+  const time = Date.parse(item.updatedAt);
+  if (!workflow?.branch || !Number.isFinite(time)) return null;
+  const base = `/repos/${item.repository}/actions/runs`;
+  if (notificationLink({ type: "CheckSuite", url: `${target.baseUrl}${base}/1` }, item.repository, target).runId !== "1") return null;
+  const since = time - RUN_SEARCH_LOOKBACK_MS;
+  const until = time + RUN_MATCH_WINDOW_MS;
+  if (!Number.isFinite(new Date(since).getTime()) || !Number.isFinite(new Date(until).getTime())) return null;
+  const query = new URLSearchParams({
+    branch: workflow.branch, created: `${new Date(since).toISOString()}..${new Date(until).toISOString()}`, per_page: "100",
+  });
+  const path = `${base}?${query}`;
+  return { ...workflow, path, time, since, until, repository: item.repository,
+    key: JSON.stringify([path, workflow.name, workflow.attempt, workflow.state]) };
+}
+
+function subjectKey(item, target) {
+  return subjectEndpoint(item, target) ?? workflowRunSearch(item, target)?.key;
+}
+
+function workflowRunURL(run, repository, target) {
+  const url = `${target.webOrigin}/${repository}/actions/runs/${run.id}`;
+  if (!(typeof run.id === "string" || Number.isSafeInteger(run.id)) || !/^[1-9]\d*$/.test(String(run.id)) ||
+      run.html_url !== url) {
+    throw new InboxError("run_results_unavailable", "GitHub did not provide an unambiguous workflow run for this check suite.");
+  }
+  return url;
+}
+
+function checkRunLink(body, endpoint, target) {
+  const match = /^\/repos\/([A-Za-z0-9-]+)\/([A-Za-z0-9_.-]+)\/check-suites\/([1-9]\d*)$/.exec(endpoint);
+  const invalid = () => new InboxError("run_results_unavailable", "GitHub did not provide an unambiguous workflow run for this check suite.");
+  if (!match || !Array.isArray(body?.workflow_runs)) throw invalid();
+  if (body.total_count === 0 && body.workflow_runs.length === 0) return null;
+  const run = body.workflow_runs[0];
+  if (body.total_count !== 1 || body.workflow_runs.length !== 1 || !run ||
+      !(typeof run.check_suite_id === "string" || Number.isSafeInteger(run.check_suite_id)) ||
+      String(run.check_suite_id) !== match[3]) throw invalid();
+  return workflowRunURL(run, `${match[1]}/${match[2]}`, target);
+}
+
+function inferredRunLink(body, search, target, link) {
+  const invalid = () => new InboxError("run_match_unavailable",
+    "GitHub did not provide a complete, valid set of workflow runs for matching. Use filtered Actions instead.");
+  if (!Number.isSafeInteger(body?.total_count) || body.total_count < 0 || !Array.isArray(body.workflow_runs) ||
+      body.total_count > 100 || body.workflow_runs.length !== body.total_count || /rel="next"/.test(link ?? "")) throw invalid();
+  const candidates = [];
+  for (const run of body.workflow_runs) {
+    if (!run || !(typeof run.name === "string" || run.name === null) ||
+        !(typeof run.head_branch === "string" || run.head_branch === null)) throw invalid();
+    if (run.name !== search.name || run.head_branch !== search.branch) continue;
+    const updated = typeof run.updated_at === "string" ? Date.parse(run.updated_at) : NaN;
+    const created = typeof run.created_at === "string" ? Date.parse(run.created_at) : NaN;
+    if (!Number.isFinite(updated) || !Number.isFinite(created) || created > updated ||
+        created < search.since || created > search.until) throw invalid();
+    if (Math.abs(updated - search.time) <= RUN_MATCH_WINDOW_MS) candidates.push(run);
+  }
+  // A conflicting nearby run is ambiguous even if its result or attempt differs.
+  if (candidates.length !== 1) return null;
+  const run = candidates[0];
+  if (run.status !== "completed" || run.conclusion !== search.state || run.run_attempt !== search.attempt) return null;
+  return `${workflowRunURL(run, search.repository, target)}/attempts/${search.attempt}`;
+}
+
+function failedJobLink(body, search, target, link) {
+  const invalid = () => new InboxError("job_logs_unavailable",
+    "GitHub did not provide a complete, valid job list for this run. Open the run summary instead.");
+  if (!Number.isSafeInteger(body?.total_count) || body.total_count < 0 || !Array.isArray(body.jobs) ||
+      body.total_count > 100 || body.jobs.length !== body.total_count || /rel="next"/.test(link ?? "")) throw invalid();
+  const ids = new Set();
+  const failed = [];
+  let pending = false;
+  for (const job of body.jobs) {
+    if (!job || !(typeof job.id === "string" || Number.isSafeInteger(job.id)) || !/^[1-9]\d*$/.test(String(job.id)) ||
+        !(typeof job.run_id === "string" || Number.isSafeInteger(job.run_id)) || String(job.run_id) !== search.runId ||
+        !Number.isSafeInteger(job.run_attempt) || job.run_attempt < 1 ||
+        search.attempt && String(job.run_attempt) !== search.attempt || ids.has(String(job.id))) throw invalid();
+    ids.add(String(job.id));
+    const state = subjectState(job, "CheckSuite");
+    pending ||= job.status !== "completed";
+    if (FAILED_CHECK_STATES.includes(state)) failed.push(job);
+  }
+  if (pending || failed.length !== 1) return null;
+  const job = failed[0];
+  const url = `${target.webOrigin}/${search.repository}/actions/runs/${search.runId}/job/${job.id}`;
+  if (job.html_url !== url) throw invalid();
+  return url;
+}
+
+function runSnapshot(run, inferred = false, jobs) {
+  return {
+    ...(run?.state ? {
+      url: jobs?.state ?? run.state,
+      label: jobs?.state ? inferred ? "Open failed job logs for inferred workflow run" : "Open failed job logs"
+        : inferred ? "Open inferred workflow run results" : "Open workflow run results",
+      direct: true,
+      ...(inferred ? { subjectLinkSource: "inferred" } : {}),
+      ...(jobs?.state ? { subjectLinkTarget: "job" } : {}),
+    } : {}),
+    ...(run?.error ? { subjectLinkError: `Run results link unavailable. ${run.error.message}` } : {}),
+    ...(jobs?.error ? { subjectLinkError: `Job logs link unavailable. ${jobs.error.message}` } : {}),
+  };
+}
+
+function rateLimitError(graphql = false) {
+  return new InboxError(graphql ? "graphql_rate_limited" : "rate_limited", graphql
+    ? "GitHub GraphQL rate limit reached. Merge queue checks are paused; inbox requests remain available."
+    : "GitHub rate limit reached. Requests are paused; wait for the retry time.", 429);
+}
+
+function mergeQueueState(body, secondaryLimit = false) {
+  if (Array.isArray(body?.errors)) {
+    const secondary = secondaryLimit || body.errors.some(error => typeof error?.message === "string" && SECONDARY_LIMIT.test(error.message));
+    if (secondary || body.errors.some(error => error?.type === "RATE_LIMITED")) throw rateLimitError(!secondary);
+  }
+  const state = body?.data?.repository?.pullRequest?.isInMergeQueue;
+  if (body?.errors || typeof state !== "boolean") {
+    throw new InboxError("merge_queue_unavailable", "Merge queue status is unavailable. Check repository access and organization SSO.");
+  }
+  return state;
+}
+
+function subjectState(body, type) {
+  if (type === "CheckSuite") {
+    if (!["queued", "in_progress", "completed", "waiting", "requested", "pending"].includes(body?.status) ||
+        body.status === "completed" && !["success", "failure", "neutral", "cancelled", "skipped",
+          "timed_out", "action_required", "startup_failure", "stale"].includes(body.conclusion)) {
+      throw new InboxError("invalid_response", "GitHub did not provide a supported check suite status or result.");
+    }
+    return body.status === "completed" ? body.conclusion : body.status;
+  }
+  if (!body || !["open", "closed"].includes(body.state) ||
+      (type === "PullRequest" && (typeof body.merged !== "boolean" || typeof body.draft !== "boolean" ||
+        body.merged && body.state !== "closed"))) {
+    throw new InboxError("invalid_response", "GitHub returned an invalid issue or pull request status.");
+  }
+  if (type === "PullRequest") return body.merged ? "merged" : body.state === "closed" ? "closed" : body.draft ? "draft" : "open";
+  return body.state === "closed" && ["not_planned", "duplicate"].includes(body.state_reason) ? body.state_reason : body.state;
+}
 
 export function firstPage({ mode = "unread", matchGitHubInbox = true } = {}) {
   const inbox = mode === "inbox" && matchGitHubInbox;
@@ -112,9 +270,16 @@ export class GitHubClient {
     this.run = run;
     this.now = now;
     this.cache = new Map();
+    this.subjectCache = new Map();
+    this.mergeQueueCache = new Map();
+    this.checkRunCache = new Map();
+    this.jobCache = new Map();
+    this.subjectLinksReady = new Set();
     this.sequence = 0;
     this.queue = Promise.resolve();
     this.blockedUntil = 0;
+    this.graphqlBlockedUntil = 0;
+    this.graphqlLastError = null;
     this.failures = new Map();
     this.lastError = null;
     this.sleep = sleep;
@@ -123,6 +288,174 @@ export class GitHubClient {
     this.threadReservations = new Map();
     this.threadListeners = new Set();
     this.revision = 0;
+  }
+
+  subjectSnapshot(item) {
+    if (!["Issue", "PullRequest", "CheckSuite"].includes(item.type)) return {};
+    const endpoint = subjectEndpoint(item, this.target);
+    const cached = this.subjectCache.get(endpoint);
+    const jobSearch = this.#jobSearch(item);
+    const jobs = jobSearch?.eligible ? this.jobCache.get(jobSearch.endpoint) : null;
+    if (item.type === "CheckSuite" && !endpoint) {
+      const state = reportedWorkflow(item.title)?.state;
+      if (state) return {
+        subjectState: state, subjectStateError: null, subjectStateSource: "notification",
+        ...runSnapshot(this.checkRunCache.get(workflowRunSearch(item, this.target)?.key), true, jobs),
+      };
+    }
+    const queue = item.type === "PullRequest" && cached?.state === "open" ? this.mergeQueueCache.get(endpoint) : null;
+    const queueError = item.type === "PullRequest" && cached?.state === "open" && this.target.custom
+      ? "Merge queue status is unavailable for custom development APIs." : queue?.error?.message ??
+        (this.now() < this.graphqlBlockedUntil && item.type === "PullRequest" && cached?.state === "open"
+          ? this.graphqlLastError?.message : undefined);
+    const checkedAt = cached?.checkedAt;
+    const queueCheckedAt = typeof queue?.state === "boolean" ? queue.checkedAt : undefined;
+    const run = item.type === "CheckSuite" ? item.runId && endpoint ? { state: item.url } : this.checkRunCache.get(endpoint) : null;
+    return {
+      subjectState: queue?.state === true ? "merge_queued" : cached?.state ?? null,
+      subjectStateError: cached?.error?.message ?? queueError ?? (endpoint ? null : "GitHub did not provide a supported link for this item's status."),
+      ...(checkedAt !== undefined ? {
+        subjectCheckedAt: queueCheckedAt === undefined ? checkedAt : Math.min(checkedAt, queueCheckedAt),
+        subjectStateStale: Boolean(cached.error || queue?.error && queueCheckedAt !== undefined),
+      } : {}),
+      ...runSnapshot(run, false, jobs),
+    };
+  }
+
+  #jobSearch(item) {
+    if (item.type !== "CheckSuite") return null;
+    const endpoint = subjectEndpoint(item, this.target);
+    const inferred = !endpoint;
+    const state = inferred ? { state: reportedWorkflow(item.title)?.state } : this.subjectCache.get(endpoint);
+    const run = item.runId && endpoint ? { state: item.url } :
+      this.checkRunCache.get(endpoint ?? workflowRunSearch(item, this.target)?.key);
+    const base = `${this.target.webOrigin}/${item.repository}/actions/runs/`;
+    const match = run?.state?.startsWith(base) && /^([1-9]\d*)(?:\/attempts\/([1-9]\d*))?$/.exec(run.state.slice(base.length));
+    if (!match) return null;
+    const [, runId, attempt] = match;
+    return {
+      repository: item.repository, runId, attempt,
+      endpoint: `/repos/${item.repository}/actions/runs/${runId}${attempt ? `/attempts/${attempt}` : ""}/jobs?${attempt ? "" : "filter=latest&"}per_page=100`,
+      eligible: !state?.error && !run.error && FAILED_CHECK_STATES.includes(state?.state),
+    };
+  }
+
+  subjectLinkPending(item) {
+    if (item.type !== "CheckSuite") return false;
+    const key = subjectKey(item, this.target);
+    if (!key || this.subjectLinksReady.has(key)) return false;
+    const endpoint = subjectEndpoint(item, this.target);
+    const jobs = this.#jobSearch(item);
+    if ((!endpoint || this.subjectCache.has(endpoint)) &&
+        (item.runId || this.checkRunCache.has(key)) &&
+        (!jobs?.eligible || this.jobCache.has(jobs.endpoint))) {
+      this.subjectLinksReady.add(key);
+      return false;
+    }
+    return this.now() >= this.blockedUntil;
+  }
+
+  invalidateSubjects(items) {
+    for (const item of items) {
+      for (const cache of [this.subjectCache, this.mergeQueueCache, this.checkRunCache]) {
+        const cached = cache.get(subjectKey(item, this.target));
+        if (cached && !cached.error) cached.nextRefreshAt = 0;
+      }
+      const jobs = this.jobCache.get(this.#jobSearch(item)?.endpoint);
+      if (jobs && !jobs.error) jobs.nextRefreshAt = 0;
+    }
+  }
+
+  subjectsNeedRefresh(items) {
+    const now = this.now();
+    if (now < this.blockedUntil) return false;
+    const due = (cache, endpoint, item) => {
+      const cached = cache.get(endpoint);
+      return !cached || now >= cached.nextRefreshAt ||
+        !cached.error && item.updatedAt > (cached.updatedAt ?? "");
+    };
+    return items.some(item => {
+      const endpoint = subjectEndpoint(item, this.target);
+      const jobs = this.#jobSearch(item);
+      if (jobs?.eligible && due(this.jobCache, jobs.endpoint, item)) return true;
+      if (!endpoint) {
+        const search = workflowRunSearch(item, this.target);
+        return search && due(this.checkRunCache, search.key, item);
+      }
+      return endpoint && (due(this.subjectCache, endpoint, item) ||
+        item.type === "PullRequest" && !this.target.custom && now >= this.graphqlBlockedUntil &&
+        !this.subjectCache.get(endpoint).error && this.subjectCache.get(endpoint).state === "open" &&
+        due(this.mergeQueueCache, endpoint, item) ||
+        item.type === "CheckSuite" && item.checkSuiteId && due(this.checkRunCache, endpoint, item));
+    });
+  }
+
+  async refreshSubjects(items, signal) {
+    let previousItems;
+    let subjects;
+    const processed = new Set();
+    for (;;) {
+      const currentItems = typeof items === "function" ? items() : items;
+      if (currentItems !== previousItems) {
+        previousItems = currentItems;
+        subjects = new Map();
+        for (const item of currentItems) {
+          const endpoint = subjectKey(item, this.target);
+          if (endpoint && !processed.has(endpoint) && (!subjects.has(endpoint) || item.updatedAt > subjects.get(endpoint).updatedAt)) {
+            subjects.set(endpoint, item);
+          }
+        }
+      }
+      const next = subjects.entries().next().value;
+      if (!next) return;
+      const [endpoint, item] = next;
+      subjects.delete(endpoint);
+      processed.add(endpoint);
+      const selected = () => typeof items !== "function" || items().some(item => subjectKey(item, this.target) === endpoint);
+      for (const kind of subjectEndpoint(item, this.target) ? ["state", "queue", "run", "jobs"] : ["match", "jobs"]) {
+        if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
+        if (!selected()) break;
+        if (kind === "queue" && (item.type !== "PullRequest" || this.subjectCache.get(endpoint).error ||
+            this.subjectCache.get(endpoint).state !== "open" || this.target.custom || this.now() < this.graphqlBlockedUntil)) continue;
+        if (kind === "run" && (item.type !== "CheckSuite" || !item.checkSuiteId)) continue;
+        if (kind === "jobs" && !this.#jobSearch(item)?.eligible) continue;
+        const pending = this.queue.then(async () => {
+          if (!selected()) return false;
+          await this.#refreshSubject(endpoint, item, signal, kind);
+          return true;
+        });
+        this.queue = pending.catch(() => {});
+        if (!await pending) break;
+      }
+    }
+  }
+
+  async #refreshSubject(endpoint, item, signal, kind) {
+    const mergeQueue = kind === "queue";
+    const checkRun = kind === "run";
+    const runMatch = kind === "match" ? workflowRunSearch(item, this.target) : null;
+    const runJobs = kind === "jobs" ? this.#jobSearch(item) : null;
+    if (kind === "jobs") {
+      if (!runJobs?.eligible) return;
+      endpoint = runJobs.endpoint;
+    }
+    const cache = runJobs ? this.jobCache : checkRun || runMatch ? this.checkRunCache : mergeQueue ? this.mergeQueueCache : this.subjectCache;
+    const cached = cache.get(endpoint);
+    try {
+      const result = await this.request(endpoint, signal, "GET", {
+        subjectType: item.type, mergeQueue, checkRun, runMatch, runJobs, force: item.updatedAt > (cached?.updatedAt ?? ""),
+      });
+      cache.set(endpoint, {
+        ...result, updatedAt: cached?.updatedAt > item.updatedAt ? cached.updatedAt : item.updatedAt,
+      });
+    } catch (error) {
+      if (!(error instanceof InboxError) || error.code === "closed") throw error;
+      cache.set(endpoint, {
+        state: runMatch || runJobs ? null : cached?.state ?? null, checkedAt: cached?.checkedAt,
+        error: { code: error.code, message: error.message },
+        nextRefreshAt: Math.max(this.blockedUntil, error.retryAt ?? 0, this.now() + RETRY_MS),
+      });
+    }
   }
 
   page(endpoint, signal, { force = false, minSequence = 0, allowCachedDuringBackoff = false } = {}) {
@@ -212,27 +545,50 @@ export class GitHubClient {
     return pending;
   }
 
-  async request(endpoint, signal, method = "GET", { force = false, minSequence = 0, allowCachedDuringBackoff = false } = {}) {
+  async request(endpoint, signal, method = "GET", { force = false, minSequence = 0, allowCachedDuringBackoff = false, subjectType, mergeQueue = false, checkRun = false, runMatch = null, runJobs = null } = {}) {
     if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
     const now = this.now();
-    const cached = method === "GET" ? this.cache.get(endpoint) : undefined;
+    const cache = runJobs ? this.jobCache : checkRun || runMatch ? this.checkRunCache : mergeQueue ? this.mergeQueueCache : subjectType ? this.subjectCache : this.cache;
+    const cached = method === "GET" ? cache.get(endpoint) : undefined;
+    if (cached?.error && now < cached.nextRefreshAt) return cached;
     if (allowCachedDuringBackoff && !force && cached && !cached.invalidated &&
         cached.sequence >= minSequence && now < cached.nextRefreshAt) return cached;
     if (now < this.blockedUntil) throw this.lastError ??
       new InboxError("rate_limited", "GitHub requests are paused until the rate limit resets.", 429);
+    if (mergeQueue && now < this.graphqlBlockedUntil) {
+      const error = this.graphqlLastError ?? rateLimitError(true);
+      error.retryAt = this.graphqlBlockedUntil;
+      throw error;
+    }
     if (!force && cached && !cached.invalidated && now < cached.nextRefreshAt) return cached;
-    const requestKey = `${method} ${endpoint}`;
+    const requestKey = `${checkRun || runMatch ? "RUN" : mergeQueue ? "GRAPHQL" : method} ${endpoint}`;
     const clearFailure = () => {
       this.failures.delete(requestKey);
-      this.lastError = null;
+      if (!subjectType) this.lastError = null;
+      if (mergeQueue && this.now() >= this.graphqlBlockedUntil) this.graphqlLastError = null;
     };
-    const args = ["api", "--hostname", this.target.hostname, "--method", method, "--include",
+    const args = ["api", "--hostname", this.target.hostname, "--method", mergeQueue ? "POST" : method, "--include",
       "-H", "Accept: application/vnd.github+json",
       "-H", "X-GitHub-Api-Version: 2022-11-28"];
-    if (cached?.etag) args.push("-H", `If-None-Match: ${cached.etag}`);
-    else if (cached?.modified) args.push("-H", `If-Modified-Since: ${cached.modified}`);
-    args.push(this.target.custom ? `${this.target.baseUrl}${endpoint}` : endpoint);
-    const sequence = method === "GET" ? ++this.sequence : undefined;
+    if (mergeQueue) {
+      const match = /^\/repos\/([A-Za-z0-9-]+)\/([A-Za-z0-9_.-]+)\/pulls\/([1-9]\d*)$/.exec(endpoint);
+      if (this.target.custom || !match || Number(match[3]) > 2147483647) {
+        throw new InboxError("merge_queue_unavailable", "Merge queue status is unavailable for this API or pull request number.");
+      }
+      // gh groups fields into GraphQL variables only for this exact endpoint, without a leading slash.
+      args.push("-f", `query=${MERGE_QUEUE_QUERY}`, "-f", `owner=${match[1]}`, "-f", `name=${match[2]}`, "-F", `number=${match[3]}`, "graphql");
+    } else {
+      if (cached?.etag) args.push("-H", `If-None-Match: ${cached.etag}`);
+      else if (cached?.modified) args.push("-H", `If-Modified-Since: ${cached.modified}`);
+      let path = runMatch ? runMatch.path : endpoint;
+      if (checkRun) {
+        const match = /^(\/repos\/[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+)\/check-suites\/([1-9]\d*)$/.exec(endpoint);
+        if (!match) throw new InboxError("run_results_unavailable", "Use a supported check suite to find workflow run results.", 400);
+        path = `${match[1]}/actions/runs?check_suite_id=${match[2]}&per_page=2`;
+      }
+      args.push(this.target.custom ? `${this.target.baseUrl}${path}` : path);
+    }
+    const sequence = method === "GET" && !subjectType ? ++this.sequence : undefined;
     let response;
     try {
       response = parseResponse(await this.run(args, { signal }));
@@ -240,34 +596,49 @@ export class GitHubClient {
       const { status, headers } = response;
       const fetchedAt = this.now();
       const serverTime = Date.parse(headers.date ?? "");
-      const poll = Math.max(POLL_MS, seconds(headers["x-poll-interval"]));
+      const poll = Math.max(subjectType ? SUBJECT_POLL_MS : POLL_MS, seconds(headers["x-poll-interval"]));
       const retryPoll = Math.max(RETRY_MS, poll);
       const reset = seconds(headers["x-ratelimit-reset"]);
       const retry = seconds(headers["retry-after"]) ||
         Math.max(0, Date.parse(headers["retry-after"]) - fetchedAt) || 0;
       const exhausted = headers["x-ratelimit-remaining"] === "0";
+      const graphqlPrimary = mergeQueue && exhausted && !retry && status !== 429 && !SECONDARY_LIMIT.test(response.text);
       if (retry) this.blockedUntil = Math.max(this.blockedUntil, fetchedAt + retry);
-      if (exhausted) this.blockedUntil = Math.max(this.blockedUntil, reset + 1000, fetchedAt + retryPoll);
+      if (exhausted) {
+        if (graphqlPrimary) {
+          this.graphqlBlockedUntil = Math.max(this.graphqlBlockedUntil, reset + 1000, fetchedAt + retryPoll);
+          this.graphqlLastError = rateLimitError(true);
+        } else {
+          this.blockedUntil = Math.max(this.blockedUntil, reset + 1000, fetchedAt + retryPoll);
+        }
+      }
       if (status === 429 || (status === 403 && (exhausted || retry ||
           /rate limit|abuse detection|secondary limit/i.test(response.text)))) {
+        if (graphqlPrimary) throw rateLimitError(true);
         this.blockedUntil = Math.max(this.blockedUntil, fetchedAt + retry, fetchedAt + retryPoll);
-        throw new InboxError("rate_limited", "GitHub rate limit reached. Requests are paused; wait for the retry time.", 429);
+        throw rateLimitError();
       }
       if (status === 401) throw new InboxError("authentication",
         this.target.custom
           ? "API sign-in expired. Run gh auth login --hostname <host> for the selected development API host. This view retries automatically while visible."
           : "GitHub sign-in expired. Run gh auth login --hostname github.com. This view retries automatically while visible.", 401);
+      if (subjectType && (status === 403 || status === 404)) throw new InboxError("subject_unavailable",
+        mergeQueue ? "GitHub denied access to merge queue status. Check repository access and organization SSO."
+          : runJobs ? "GitHub denied access to job details. Check repository access and organization SSO."
+          : checkRun || runMatch ? "GitHub denied access to workflow runs. Check repository access and organization SSO."
+          : "GitHub denied access to this item's status. Check repository access and organization SSO.", status);
       if (status === 403 || status === 404) throw new InboxError("permission",
         this.target.custom
           ? "The selected API denied notifications access. Check its URL, network access and gh authentication for that host, including notifications scope. Fine-grained tokens are unsupported."
           : "GitHub denied notifications access. Check gh auth status; grant notifications scope with gh auth refresh --hostname github.com --scopes notifications. Check organization SSO if applicable. Fine-grained tokens are unsupported.", 403);
-      if (!(method === "DELETE" ? [204] : method === "PATCH" ? [205, 304] : [200, 304]).includes(status)) throw new InboxError("github_http",
+      if (!(mergeQueue ? [200] : method === "DELETE" ? [204] : method === "PATCH" ? [205, 304] : [200, 304]).includes(status)) throw new InboxError("github_http",
         `GitHub returned HTTP ${status}. Check GitHub status and try again.`, 502);
       if (method !== "GET") {
         clearFailure();
         return;
       }
-      if (status === 304 && !cached) throw new InboxError("invalid_response", "GitHub returned 304 without a cached inbox.");
+      if (status === 304 && (!cached || cached.error)) throw new InboxError("invalid_response",
+        subjectType ? "GitHub returned 304 without a cached subject status." : "GitHub returned 304 without a cached inbox.");
       let items = cached?.items;
       let next = cached?.next;
       if (status === 200) {
@@ -275,10 +646,25 @@ export class GitHubClient {
         try {
           body = JSON.parse(response.text);
         } catch {
-          throw new InboxError("invalid_response", "GitHub returned invalid JSON; the previous inbox was kept.");
+          throw new InboxError("invalid_response", subjectType
+            ? "GitHub returned invalid JSON for this item's status." : "GitHub returned invalid JSON; the previous inbox was kept.");
         }
-        items = normalizeThreads(body, this.target);
-        next = nextPage(headers.link, endpoint, this.target);
+        items = runJobs ? failedJobLink(body, runJobs, this.target, headers.link) :
+          runMatch ? inferredRunLink(body, runMatch, this.target, headers.link) : checkRun ? checkRunLink(body, endpoint, this.target) :
+          mergeQueue ? mergeQueueState(body, retry > 0) : subjectType ? subjectState(body, subjectType) : normalizeThreads(body, this.target);
+        if (!subjectType) next = nextPage(headers.link, endpoint, this.target);
+      }
+      if (subjectType) {
+        const subject = {
+          state: status === 304 ? cached.state : items,
+          checkedAt: fetchedAt,
+          nextRefreshAt: Math.max(fetchedAt + poll, this.blockedUntil, mergeQueue ? this.graphqlBlockedUntil : 0),
+          etag: headers.etag ?? (status === 304 ? cached.etag : undefined),
+          modified: headers["last-modified"] ?? (status === 304 ? cached.modified : undefined),
+        };
+        cache.set(endpoint, subject);
+        clearFailure();
+        return subject;
       }
       const invalidated = status === 304 && Boolean(cached?.invalidated);
       const page = {
@@ -297,10 +683,18 @@ export class GitHubClient {
       if (error.code !== "closed") {
         const failureCount = (this.failures.get(requestKey) ?? 0) + 1;
         this.failures.set(requestKey, failureCount);
-        this.blockedUntil = Math.max(this.blockedUntil,
+        const retryAt = Math.max(
           this.now() + Math.min(30 * 60_000, RETRY_MS * 2 ** Math.min(failureCount - 1, 4)),
           this.now() + seconds(response?.headers["x-poll-interval"]));
-        this.lastError = error;
+        if (subjectType) error.retryAt = retryAt;
+        if (error.code === "graphql_rate_limited") {
+          this.graphqlBlockedUntil = Math.max(this.graphqlBlockedUntil, retryAt);
+          this.graphqlLastError = error;
+          error.retryAt = this.graphqlBlockedUntil;
+        } else if (!subjectType || ["rate_limited", "authentication"].includes(error.code)) {
+          this.blockedUntil = Math.max(this.blockedUntil, retryAt);
+          this.lastError = error;
+        }
       }
       throw error;
     }
@@ -308,5 +702,10 @@ export class GitHubClient {
 
   clear() {
     this.cache.clear();
+    this.subjectCache.clear();
+    this.mergeQueueCache.clear();
+    this.checkRunCache.clear();
+    this.jobCache.clear();
+    this.subjectLinksReady.clear();
   }
 }

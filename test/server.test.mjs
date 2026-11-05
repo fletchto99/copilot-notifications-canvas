@@ -12,7 +12,10 @@ import { Preferences } from "../src/settings.mjs";
 import { http, thread } from "./fixtures.mjs";
 
 async function setup(t, run = async () => http([thread()]), options = {}) {
-  const client = new GitHubClient({ run });
+  const client = new GitHubClient({ run: args => args.at(-1) === "graphql"
+    ? http({ data: { repository: { pullRequest: { isInMergeQueue: false } } } })
+    : /^\/repos\/[^/]+\/[^/]+\/(?:issues|pulls)\/\d+$/.test(args.at(-1))
+    ? http({ state: "open", merged: false, draft: false }) : run(args) });
   const inbox = new Inbox(client);
   const server = await startServer(inbox, options);
   t.after(() => server.close());
