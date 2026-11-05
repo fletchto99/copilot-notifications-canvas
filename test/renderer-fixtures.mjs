@@ -97,15 +97,6 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       this.children = fragment.children;
       for (const child of this.children) child.parentNode = this;
     }
-    replaceChild(replacement, previous) {
-      const index = this.children.indexOf(previous);
-      assert.notEqual(index, -1, "The replaced node must belong to this parent");
-      if (previous.contains(document.activeElement)) document.activeElement = document.body;
-      previous.parentNode = null;
-      replacement.parentNode = this;
-      this.children[index] = replacement;
-      return previous;
-    }
     addEventListener(name, handler) { this.events[name] = handler; }
     removeEventListener(name) { delete this.events[name]; }
     select() { this.selected = true; }

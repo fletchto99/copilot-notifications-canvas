@@ -452,6 +452,56 @@ test("silent baselines include later-page boundary fingerprints despite older ro
   assert.deepEqual(f.deliveries.map(alert => alert.body), ["#42 Synthetic notification 4"]);
 });
 
+test("silent baselines include newer pre-snapshot activity on later unordered pages", async t => {
+  for (const skew of [-3_600_000, 0, 3_600_000]) {
+    const f = await fixture(t);
+    f.advance(skew);
+    const first = [updated("1", epoch - 120_000), updated("2", epoch - 180_000)];
+    const second = [updated("3", epoch - 60_000)];
+    f.response(args => args.at(-1).includes("page=1")
+      ? http(first, { link: next, date: new Date(epoch).toUTCString() }) : http(second));
+    const watcher = f.make();
+    await watcher.check();
+    assert.equal((await f.state()).watermark, epoch - 60_000);
+    assert.equal((await f.state()).fingerprints.length, 1);
+    f.advance();
+    await watcher.check();
+    assert.deepEqual(f.deliveries, [], "unchanged later-page backlog remains silent on the next poll");
+    first.unshift(updated("4", epoch + 1000));
+    second.push(updated("5", epoch - 60_000));
+    f.advance();
+    await watcher.check();
+    assert.deepEqual(f.deliveries.map(alert => alert.body), ["#42 Synthetic notification 4", "#42 Synthetic notification 5"]);
+  }
+});
+
+test("newer later-page baseline activity requires the first response's valid API Date", async t => {
+  for (const date of [undefined, "invalid"]) {
+    const f = await fixture(t);
+    const first = [updated("1", epoch - 120_000), updated("2", epoch - 180_000)];
+    const second = [updated("3", epoch - 60_000)];
+    let firstDate = date;
+    f.response(args => args.at(-1).includes("page=1")
+      ? http(first, { link: next, ...(firstDate === undefined ? {} : { date: firstDate }) })
+      : http(second, { date: new Date(epoch).toUTCString() }));
+    const watcher = f.make();
+    await watcher.check();
+    assert.equal((await f.state()).watermark, null);
+    assert.deepEqual((await f.state()).fingerprints, []);
+    assert.equal(watcher.snapshot().state, "error");
+    assert.match(watcher.snapshot().message, /valid snapshot timestamp/);
+    assert.deepEqual(f.deliveries, []);
+    firstDate = new Date(epoch).toUTCString();
+    f.advance();
+    await watcher.check();
+    assert.equal(watcher.snapshot().state, "watching");
+    assert.equal((await f.state()).watermark, epoch - 60_000);
+    f.advance();
+    await watcher.check();
+    assert.deepEqual(f.deliveries, []);
+  }
+});
+
 test("a fresh first page cannot advance the watermark past arrivals hidden by an older cached continuation", async t => {
   const f = await fixture(t);
   const watcher = f.make();
@@ -919,7 +969,8 @@ test("activity seen on a later initial page does not advance the first snapshot'
   const baseline = Array.from({ length: 50 }, (_, index) => updated(String(index + 1), epoch));
   let later = false;
   f.response(args => args.at(-1).includes("page=1") ?
-    http(later ? [updated("51", epoch + 2000), updated("52", epoch + 1000), ...baseline] : baseline, { link: next }) :
+    http(later ? [updated("51", epoch + 2000), updated("52", epoch + 1000), ...baseline] : baseline,
+      { link: next, date: new Date(epoch).toUTCString() }) :
     http([updated("51", epoch + 2000), updated("99", epoch - 1000)]));
   const watcher = f.make();
   await watcher.check();

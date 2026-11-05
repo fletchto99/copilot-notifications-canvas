@@ -100,8 +100,13 @@ continuation leaves the activity checkpoint unchanged and sends no partial alert
 Reusing cached results does not postpone the next background polling deadline.
 The first successful baseline uses a response started after the current desktop
 notification activation and remains silent, even if alerts are enabled during an
-in-flight foreground refresh. If a baseline or continuation page is still cached
-from an earlier check, the watcher waits for GitHub's polling interval before
+in-flight foreground refresh. Later-page backlog can extend the baseline up to
+the first response's API `Date`, but activity newer than that snapshot remains
+eligible for the next poll. When later pages have newer timestamps than the first
+page, a missing or invalid first-response `Date` prevents checkpointing rather
+than guessing from the local clock or a later response. If a baseline or
+continuation page is still cached from an earlier check, the watcher waits for
+GitHub's polling interval before
 revalidating it. OS settings control
 the exact alert timing. Rate-limit backoff pauses upstream requests, but the
 watcher can still process sufficiently fresh results already in its cache.

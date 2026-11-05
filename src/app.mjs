@@ -130,17 +130,27 @@ function svgIcon(d, size) {
   return svg;
 }
 
-function subjectMetadata(item) {
+function subjectMetadata(item, field = element("span")) {
   const type = item.type.replace(/([a-z])([A-Z])/g, "$1 $2");
-  const label = element("span", "notification-type", item.number ? `${type} #${item.number}` : type);
-  if (!Object.hasOwn(subjectIcons, item.type)) return label;
+  const labelText = item.number ? `${type} #${item.number}` : type;
+  if (!Object.hasOwn(subjectIcons, item.type)) {
+    field.className = "notification-type";
+    setControlText(field, labelText);
+    return field;
+  }
+  if (!field.children.length) {
+    const icon = element("span", "subject-icon");
+    icon.append(svgIcon("", 16));
+    field.append(icon, element("span", "notification-type"));
+  }
+  const [icon, label] = field.children;
+  setControlText(label, labelText);
   const status = Object.hasOwn(subjectIcons[item.type], item.subjectState) ? item.subjectState : "unknown";
   const linkLoading = item.subjectLinkLoading === true;
   const loading = linkLoading || item.subjectLoading === true && status === "unknown" && !item.subjectStateError;
-  const field = element("span", `notification-subject subject-${loading ? "loading" : status.replaceAll("_", "-")}`);
+  field.className = `notification-subject subject-${loading ? "loading" : status.replaceAll("_", "-")}`;
   field.dataset.subjectType = item.type;
-  const icon = element("span", "subject-icon");
-  icon.append(svgIcon(loading ? "M21 12a9 9 0 1 1-9-9" : subjectIcons[item.type][status], 16));
+  icon.querySelectorAll("path")[0].setAttribute("d", loading ? "M21 12a9 9 0 1 1-9-9" : subjectIcons[item.type][status]);
   const stateLabel = subjectLabels[status] ?? (linkLoading ? "Loading run destination" : item.subjectStateError ? "Status unavailable" : loading ? "Loading status" : "Status not loaded yet");
   const description = `${type}: ${stateLabel}${linkLoading && status !== "unknown" ? ". Loading run destination" : ""}${item.subjectStateSource === "notification"
     ? ". Reported by this notification; may not reflect a later rerun." : ""}${item.subjectStateStale
@@ -149,9 +159,9 @@ function subjectMetadata(item) {
     ? ". Opens the only failed job's log viewer." : ""}${item.subjectLinkError ? `. ${item.subjectLinkError}` : ""}`;
   icon.dataset.description = description;
   if (Number.isFinite(item.subjectCheckedAt) && item.subjectCheckedAt >= 0) icon.dataset.checkedAt = String(item.subjectCheckedAt);
+  else delete icon.dataset.checkedAt;
   icon.setAttribute("role", "img");
   updateSubjectDescription(icon);
-  field.append(icon, label);
   return field;
 }
 
@@ -925,9 +935,7 @@ function renderRowSubject(view, item) {
     view.destination.hidden = loading || item.direct && item.subjectLinkSource !== "inferred" && item.subjectLinkTarget !== "job";
     view.destination.textContent = view.destination.hidden ? "" : item.label;
   }
-  const subject = subjectMetadata(item);
-  if (view.subject) view.subject.parentNode.replaceChild(subject, view.subject);
-  view.subject = subject;
+  view.subject = subjectMetadata(item, view.subject);
 }
 
 function renderGroups(groups, fallbackFocusKey) {

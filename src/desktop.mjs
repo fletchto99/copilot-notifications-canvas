@@ -69,14 +69,16 @@ async function saveDocument(path, data, temporaryDirectory = dirname(path)) {
   }
 }
 
-function initialBoundary(page) {
+function initialBoundary(page, items) {
   const times = page.items.filter(item => item.unread).map(item => Date.parse(item.updatedAt));
   const boundary = times.length ? Math.max(...times) : page.serverTime;
-  if (!timestamp(boundary)) {
+  const allTimes = items.filter(item => item.unread).map(item => Date.parse(item.updatedAt));
+  if (!timestamp(boundary) || !timestamp(page.serverTime) && allTimes.some(time => time > boundary)) {
     throw new InboxError("desktop_baseline",
       "GitHub did not provide a valid snapshot timestamp for the inbox. Desktop alerts will retry before establishing a baseline.", 502);
   }
-  return boundary;
+  // Include unordered backlog, but leave arrivals after the first response for the next poll.
+  return allTimes.reduce((latest, time) => time <= page.serverTime ? Math.max(latest, time) : latest, boundary);
 }
 
 function recordActivity(state, items, baseline, initial) {
@@ -364,7 +366,7 @@ export class DesktopNotifications {
       try {
         let next = firstPage();
         let minSequence = initial ? activation.sequence + 1 : 0;
-        let boundary = initial ? null : state.watermark;
+        let initialPage;
         const items = [];
         while (next) {
           const page = await this.client.page(next, signal, { minSequence, allowCachedDuringBackoff: true });
@@ -372,12 +374,12 @@ export class DesktopNotifications {
           minSequence = page.sequence;
           items.push(...page.items);
           nextPollAt = Math.max(nextPollAt, page.nextRefreshAt);
-          if (boundary === null) boundary = initialBoundary(page);
+          if (initial && !initialPage) initialPage = page;
           // API order is not updated_at order; older rows cannot bound the remaining activity.
           next = page.next;
         }
         signal.throwIfAborted();
-        const arrivals = recordActivity(state, items, boundary, initial);
+        const arrivals = recordActivity(state, items, initial ? initialBoundary(initialPage, items) : state.watermark, initial);
         state.cohort = this.cohort;
         state.generation = generation(settings);
         state.watchers = (await this.activeWatchers()).map(watcher => watcher.owner);

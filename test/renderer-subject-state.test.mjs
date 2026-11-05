@@ -205,7 +205,7 @@ test("CI rows wait for their initial destination even with a known result and th
   }
 });
 
-test("one subject update preserves every row control and only creates its metadata in a large loaded inbox", async () => {
+test("subject updates preserve controls and metadata descendants without creating nodes in a large loaded inbox", async () => {
   for (const groupBy of ["repo", "none", "date"]) {
     const subjectStates = {};
     const ui = await renderer({
@@ -216,6 +216,11 @@ test("one subject update preserves every row control and only creates its metada
       const groups = ui.ids.get("groups");
       const controls = groups.querySelectorAll("[data-focus-key]");
       const icons = groups.querySelectorAll(".subject-icon");
+      const fields = groups.querySelectorAll(".notification-subject");
+      const labels = groups.querySelectorAll(".notification-type");
+      const svg = icons[0].querySelectorAll("svg")[0];
+      const path = svg.querySelectorAll("path")[0];
+      const shape = path.attributes.d;
       const read = groups.querySelectorAll(".mark-read")[0];
       read.focus();
       read.parentNode.dataset.tooltipDismissed = "true";
@@ -225,14 +230,25 @@ test("one subject update preserves every row control and only creates its metada
       subjectStates[1] = { subjectState: "merged", subjectCheckedAt: Date.now() };
       await ui.fireTimer();
       assert.ok(groups.querySelectorAll("[data-focus-key]").every((node, index) => node === controls[index]));
-      assert.ok(groups.querySelectorAll(".subject-icon").slice(1).every((node, index) => node === icons[index + 1]));
-      assert.ok(created < 10, `created ${created} elements for one subject result`);
+      assert.ok(groups.querySelectorAll(".subject-icon").every((node, index) => node === icons[index]));
+      assert.ok(groups.querySelectorAll(".notification-subject").every((node, index) => node === fields[index]));
+      assert.ok(groups.querySelectorAll(".notification-type").every((node, index) => node === labels[index]));
+      assert.equal(icons[0].querySelectorAll("svg")[0], svg);
+      assert.equal(svg.querySelectorAll("path")[0], path);
+      assert.notEqual(path.attributes.d, shape);
+      assert.equal(created, 0, "a status result updates existing metadata nodes");
       assert.match(groups.querySelectorAll(".subject-icon")[0].attributes["aria-label"], /Pull Request: Merged\. Checked/);
       assert.equal(ui.document.activeElement, read);
       assert.equal(read.parentNode.dataset.tooltipDismissed, "true");
       created = 0;
       await ui.fireTimer();
       assert.equal(created, 0, "an unchanged poll does not replace metadata");
+      subjectStates[1] = { subjectState: null, subjectStateError: "Synthetic status unavailable." };
+      await ui.fireTimer();
+      assert.equal(groups.querySelectorAll(".subject-icon")[0], icons[0]);
+      assert.equal(icons[0].dataset.checkedAt, undefined);
+      assert.equal(icons[0].attributes["aria-label"], "Pull Request: Status unavailable. Synthetic status unavailable.");
+      assert.equal(created, 0);
     } finally {
       ui.window.events.pagehide();
       ui.inbox.close();
