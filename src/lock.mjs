@@ -30,6 +30,13 @@ export async function acquireLock(path, { label = "notification", alive = proces
     await writeFile(`${candidate}/${owner}`, "", { flag: "wx", mode: 0o600 });
     for (let attempt = 0; attempt < 5; attempt++) {
       try {
+        // Windows can replace a regular file with the candidate directory.
+        const stat = await lstat(path);
+        if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`Refusing an unrecognized ${label} lock.`);
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+      try {
         // A nonempty directory publishes ownership atomically, even if the process crashes.
         await rename(candidate, path);
         acquired = true;
