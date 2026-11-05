@@ -5,6 +5,32 @@ for (const packaged of [false, true]) {
   test.describe(`viewport, freshness and focus (${packaged ? "packaged" : "source"})`, () => {
     test.use({ packaged });
 
+    test("unchanged scroll and resize events scan the loaded rows only once", async ({ page, canvas }) => {
+      const viewportReady = page.waitForResponse(response => new URL(response.url()).pathname === "/api/state");
+      await page.goto(canvas.url);
+      await expect(page.locator(".row")).toHaveCount(50);
+      await viewportReady;
+      const results = await page.evaluate(() => {
+        const links = [...document.querySelectorAll(".row-link")];
+        const originals = links.map(link => link.getBoundingClientRect);
+        let measurements = 0;
+        links.forEach((link, index) => {
+          link.getBoundingClientRect = function() { measurements++; return originals[index].call(this); };
+        });
+        try {
+          return ["scroll", "resize"].map(event => {
+            measurements = 0;
+            window.dispatchEvent(new Event(event));
+            return { event, measurements };
+          });
+        } finally {
+          links.forEach((link, index) => { link.getBoundingClientRect = originals[index]; });
+        }
+      });
+      expect(results).toEqual([{ event: "scroll", measurements: 50 }, { event: "resize", measurements: 50 }]);
+      expect(canvas.writes).toEqual([]);
+    });
+
     test("only expanded on-screen rows fetch status, including after scrolling and force refresh", async ({ page, canvas }) => {
       canvas.rows.splice(0, canvas.rows.length, ...Array.from({ length: 40 }, (_, index) => thread(String(index + 1), {
         subject: { type: "Issue", title: `Synthetic viewport issue ${index + 1}`,

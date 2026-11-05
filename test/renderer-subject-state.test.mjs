@@ -304,6 +304,35 @@ test("viewport reports exclude collapsed and off-screen rows and update after re
   assert.equal(ui.animationFrames.size, 0);
 });
 
+test("unchanged scroll and resize events measure loaded rows once, not once per tooltip", async () => {
+  for (const count of [50, 100, 500]) {
+    const ui = await renderer({ initialRows: Array.from({ length: count }, (_, index) => thread(String(index + 1))) });
+    try {
+      const links = ui.ids.get("groups").querySelectorAll(".row-link");
+      links.forEach((link, index) => { link.bounds = { top: index * 60, bottom: index * 60 + 60 }; });
+      ui.window.events.scroll();
+      ui.fireAnimationFrame();
+      await settle();
+      let measurements = 0;
+      for (const link of links) {
+        const bounds = link.getBoundingClientRect.bind(link);
+        link.getBoundingClientRect = () => { measurements++; return bounds(); };
+      }
+      const calls = ui.calls.length;
+      for (const event of ["scroll", "resize"]) {
+        measurements = 0;
+        ui.window.events[event]();
+        assert.equal(measurements, count, `${event} scans ${count} loaded rows exactly once`);
+        assert.equal(ui.animationFrames.size, 0);
+      }
+      assert.equal(ui.calls.length, calls);
+    } finally {
+      ui.window.events.pagehide();
+      ui.inbox.close();
+    }
+  }
+});
+
 test("refreshes restore focus only while the canvas document owns focus", async () => {
   for (const active of [false, true]) {
     const ui = await renderer({ initialRows: [thread()] });

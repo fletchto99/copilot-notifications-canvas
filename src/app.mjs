@@ -756,8 +756,8 @@ function positionOverlays() {
     if (!anchor.dataset.tooltipDismissed && (anchor.dataset.tooltipKeyboard === "true" && anchor.contains(document.activeElement) || anchor.matches(":hover"))) {
       positionTooltip(anchor);
     }
-    scheduleViewportSync();
   }
+  scheduleViewportSync();
 }
 
 function bindTooltip(control, anchor) {

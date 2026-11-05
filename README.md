@@ -49,11 +49,12 @@ full procedure, verification requirements, and troubleshooting.
 - Set **Show notifications** in **Settings** to **All** for read and unread inbox
   items, or **Unread only** to narrow the view.
 - Icons show issue/PR states, including merge queue membership, and check-suite
-  results. Hover text and screen-reader labels describe the status without
-  extra text in the row, including when it was checked and whether a refresh
-  failed. Status loads for on-screen, expanded rows without delaying the inbox.
-- Check-suite rows open run results when GitHub provides a verifiable run link;
-  otherwise they keep the repository Actions fallback.
+  results. Screen-reader descriptions include status, freshness, and failures;
+  icons have no hover tooltips. Status loads for on-screen, expanded rows
+  without delaying the inbox.
+- Check-suite rows open resolved or conservatively matched runs, or the sole
+  failed job's logs. Unresolved rows fall back to filtered Actions when possible,
+  or the repository Actions page otherwise.
 - Use the envelope to mark a row **read**, or the checkmark to mark it **done**.
   Each group header offers the same bulk actions.
 - Use **Load more** for older notifications. Search, counts, and bulk actions
