@@ -179,6 +179,69 @@ test("a PR filtered out during its REST lookup does not start a new merge queue 
   assert.equal(calls, 1);
 });
 
+test("re-expanding a PR resumes skipped phases while another subject remains in flight", async t => {
+  for (const phase of ["state", "queued phase"]) {
+    await t.test(phase, async subtest => {
+      let releasePR;
+      const heldPR = new Promise(resolve => { releasePR = resolve; });
+      let releaseSlow;
+      const heldSlow = new Promise(resolve => { releaseSlow = resolve; });
+      let releasePage;
+      const heldPage = new Promise(resolve => { releasePage = resolve; });
+      const all = normalizeThreads([thread(), thread("2", {
+        subject: { type: "Issue", title: "Synthetic slow issue", url: "https://api.github.com/repos/example/widgets/issues/2" },
+      })]);
+      let items = all;
+      const calls = [];
+      const client = new GitHubClient({ run: async args => {
+        const path = args.at(-1);
+        calls.push(path);
+        if (path === "graphql") return http({ data: { repository: { pullRequest: { isInMergeQueue: true } } } });
+        if (path.startsWith("/notifications?")) { await heldPage; return http([]); }
+        await (path.endsWith("/pulls/42") ? heldPR : heldSlow);
+        return http({ state: "open", merged: false, draft: false });
+      } });
+      const loading = client.refreshSubjects(() => items);
+      let foreground;
+      subtest.after(async () => { releasePR(); releaseSlow(); releasePage(); await Promise.all([loading, foreground]); });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(calls, ["/repos/example/widgets/pulls/42", "/repos/example/widgets/issues/2"]);
+      items = [all[1]];
+      client.wakeSubjects();
+      items = all;
+      client.wakeSubjects();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(calls.filter(path => path.endsWith("/pulls/42")).length, 1,
+        "Re-expansion must not duplicate a REST lookup still in flight");
+      if (phase === "queued phase") {
+        foreground = client.page(firstPage());
+        releasePR();
+        await new Promise(resolve => setImmediate(resolve));
+      }
+      items = [all[1]];
+      client.wakeSubjects();
+      releasePR();
+      releasePage();
+      await foreground;
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(calls.includes("graphql"), false);
+      assert.equal(client.subjectSnapshot(all[0]).subjectState, "open");
+      assert.equal(client.subjectWorkers.size, 1, "The unrelated request keeps this refresh pass alive");
+      items = [all[0], all[0], all[1]];
+      client.wakeSubjects();
+      client.wakeSubjects();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(calls.filter(path => path === "graphql").length, 1,
+        "The skipped phase resumes before the unrelated request finishes");
+      assert.equal(calls.filter(path => path.endsWith("/pulls/42")).length, 1, "The cached REST result is reused");
+      assert.equal(client.subjectSnapshot(all[0]).subjectState, "merge_queued");
+      releaseSlow();
+      await loading;
+      assert.equal(client.subjectRefreshes.size, 0);
+    });
+  }
+});
+
 test("rows dropped while their first lookup waits in the shared queue are not fetched", async () => {
   let release;
   const held = new Promise(resolve => { release = resolve; });

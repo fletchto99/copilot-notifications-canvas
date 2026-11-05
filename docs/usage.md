@@ -145,14 +145,17 @@ If an inbox action or refresh changes the snapshot while a chunk is in flight,
 the provider reports that the selection is stale and the panel reloads the
 current snapshot immediately. This normal race does not show an outage warning
 or delay the inbox action.
-Status-selection failures are reported in the panel and retried automatically
-without disabling inbox actions.
+Status-selection failures appear as a status-loading notice and retry
+automatically without disabling inbox actions, marking loaded notifications as
+stale, or replacing the normal empty-inbox guidance and refresh control.
 Up to twenty status lookups run concurrently across panels sharing the provider;
 waiting callers receive slots in first-in, first-out order, and newly expanded
 groups can use idle slots without waiting for an existing slow lookup.
 Icons appear as their lookups finish, so completion order can differ from row
 order. Changes to the view reprioritize remaining rows as slots become available.
-Already dispatched requests may finish after a group is collapsed. Duplicate
+Already dispatched requests may finish after a group is collapsed. Re-expanding
+the group resumes any skipped status or destination lookups without duplicating
+requests still in flight or waiting for unrelated slow rows. Duplicate
 lookups share the cache, rate-limit backoff still applies, and inbox reads and
 Read/Done actions do not wait for outstanding status lookups.
 Cached results can appear immediately. A small spinner fills the icon slot while an initial status is

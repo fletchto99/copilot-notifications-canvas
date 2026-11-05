@@ -488,14 +488,26 @@ export class GitHubClient {
               updateSelection();
               return !failed && selectedKeys.has(endpoint);
             };
+            let completed = true;
             for (const kind of subjectEndpoint(item, this.target) ? ["state", "queue", "run", "jobs"] : ["match", "jobs"]) {
               if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
-              if (!selected()) break;
+              if (!selected()) {
+                completed = false;
+                break;
+              }
               if (kind === "queue" && (item.type !== "PullRequest" || this.subjectCache.get(endpoint).error ||
                   this.subjectCache.get(endpoint).state !== "open" || this.target.custom || this.now() < this.graphqlBlockedUntil)) continue;
               if (kind === "run" && (item.type !== "CheckSuite" || !item.checkSuiteId)) continue;
               if (kind === "jobs" && !this.#jobSearch(item)?.eligible) continue;
-              await this.#refreshSubject(endpoint, item, signal, kind, selected);
+              if (await this.#refreshSubject(endpoint, item, signal, kind, selected) === false) {
+                completed = false;
+                break;
+              }
+            }
+            if (!completed) {
+              // Release the reservation only after in-flight work finishes; re-expansion can resume skipped phases.
+              processed.delete(endpoint);
+              previousItems = undefined;
             }
             return true;
           }, signal);
@@ -590,7 +602,7 @@ export class GitHubClient {
     const pending = previous.catch(() => {}).then(async () => {
       await waitForSubjectWork(this.queue, signal);
       if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
-      if (!selected()) return;
+      if (!selected()) return false;
       if ((mergeQueue || item.type === "Discussion") && this.now() < this.graphqlBlockedUntil) return;
       const cached = cache.get(endpoint);
       const invalidationKey = runJobs ? endpoint : subjectKey(item, this.target);
@@ -619,7 +631,7 @@ export class GitHubClient {
     });
     this.subjectRequests.set(key, pending);
     try {
-      await waitForSubjectWork(pending, signal);
+      return await waitForSubjectWork(pending, signal);
     } catch (error) {
       // Keep the slot occupied until an already-dispatched request has stopped.
       if (started) await pending;

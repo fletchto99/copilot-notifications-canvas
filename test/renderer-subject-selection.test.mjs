@@ -98,6 +98,7 @@ test("status upload failures are explicit, retry on polling, and never block ord
       await sync(ui);
       assert.match(ui.ids.get("notice").textContent, /Notification status loading paused/);
       assert.match(ui.ids.get("notice").textContent, /Retrying automatically/);
+      assert.doesNotMatch(ui.ids.get("notice").textContent, /Showing previously loaded notifications/);
       assert.equal(ui.animationFrames.size, 0, "Failures must not cause an immediate retry loop");
       await ui.ids.get("force-refresh").events.click();
       await ui.ids.get("groups").querySelectorAll(".mark-done")[0].events.click();
@@ -109,6 +110,47 @@ test("status upload failures are explicit, retry on polling, and never block ord
       await sync(ui);
       assert.equal(ui.ids.get("notice").hidden, true);
       assert.deepEqual(ui.subjectSelections.at(-1), initialRows.slice(1).map(row => row.id));
+    } finally {
+      ui.window.events.pagehide();
+      ui.inbox.close();
+    }
+  }
+});
+
+test("status selection failures preserve empty, filtered and cleared inbox presentation", async () => {
+  for (const mode of ["empty", "filtered", "cleared"]) {
+    let fail = true;
+    const ui = await renderer({
+      initialRows: mode === "empty" ? [] : rows(1),
+      onSubjects: async () => { if (fail) throw new Error("Synthetic selection failure"); },
+    });
+    try {
+      if (mode === "filtered") {
+        ui.ids.get("search").value = "no matching notifications";
+        ui.ids.get("search").events.input({});
+        await ui.fireTimer(250);
+      } else if (mode === "cleared") {
+        await ui.ids.get("groups").querySelectorAll(".mark-done")[0].events.click();
+      }
+      const description = ui.ids.get("empty-description").textContent;
+      await sync(ui);
+      assert.match(ui.ids.get("notice").textContent, /^Notification status loading paused\./);
+      assert.equal(ui.ids.get("empty-title").textContent, mode === "empty" ? "All caught up \u{1F389}" :
+        mode === "filtered" ? "No matches in loaded notifications" : "Loaded notifications cleared");
+      assert.equal(ui.ids.get("empty-description").textContent, description);
+      assert.equal(ui.ids.get("count").hidden, mode === "empty");
+      assert.equal(ui.ids.get("empty-symbol").hidden, mode === "empty");
+      assert.equal(ui.ids.get("empty-refresh").hidden, mode !== "cleared");
+      assert.equal(ui.ids.get("force-refresh").attributes["aria-disabled"], "false");
+      if (mode === "cleared") {
+        await ui.ids.get("empty-refresh").events.click();
+        assert.ok(ui.calls.some(call => call.path === "/api/refresh" && JSON.parse(call.options.body).force));
+      }
+      fail = false;
+      ui.advance(5000);
+      await ui.fireTimer();
+      await sync(ui);
+      assert.equal(ui.ids.get("notice").hidden, true);
     } finally {
       ui.window.events.pagehide();
       ui.inbox.close();

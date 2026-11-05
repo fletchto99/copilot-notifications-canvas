@@ -1170,7 +1170,7 @@ function render(fallbackFocusKey) {
     ? `Development API: ${activeAPI.baseUrl}. Read/done actions affect this API, which may share production data. Desktop alerts are disabled.`
     : "";
   renderControls();
-  const error = actionError || state?.error?.message || connectionError || subjectSelectionError;
+  const error = actionError || state?.error?.message || connectionError;
   const loading = state?.status === "idle" || state?.status === "loading";
   const filtered = Boolean(state?.filters.query || (state && state.filters.attention !== "all"));
   const cleared = Boolean(state && !state.loaded && (state.hasMore || state.needsRefresh));
@@ -1205,8 +1205,8 @@ function render(fallbackFocusKey) {
   panel.tabIndex = state?.groups.length ? -1 : 0;
   $("empty-symbol").hidden = caughtUp;
   $("count").hidden = caughtUp;
-  $("notice").hidden = !error;
-  $("notice").textContent = error ? `${state?.loaded ? "Showing previously loaded notifications. " : ""}${error}` : "";
+  $("notice").hidden = !error && !subjectSelectionError;
+  $("notice").textContent = error ? `${state?.loaded ? "Showing previously loaded notifications. " : ""}${error}` : subjectSelectionError;
   if (!state) {
     if (error) {
       $("empty-title").textContent = "Your inbox is unavailable";
