@@ -4,6 +4,8 @@
 [![CI status](https://img.shields.io/github/actions/workflow/status/fletchto99/copilot-notifications-canvas/tests.yml?branch=main&style=flat&label=CI)](https://github.com/fletchto99/copilot-notifications-canvas/actions/workflows/tests.yml)
 [![Line coverage](https://raw.githubusercontent.com/fletchto99/copilot-notifications-canvas/badges/coverage.svg)](https://github.com/fletchto99/copilot-notifications-canvas/actions/workflows/tests.yml)
 [![GitHub Copilot: Canvas extension](https://img.shields.io/badge/GitHub%20Copilot-Canvas%20extension-8250df?style=flat&logo=githubcopilot&logoColor=white)](#prerequisites)
+[![Node.js runtime: >=22](https://img.shields.io/badge/Node.js%20runtime-%3E%3D22-339933?style=flat&logo=nodedotjs&logoColor=white)](#prerequisites)
+[![Release provenance: Attested](https://img.shields.io/badge/Release%20provenance-Attested-2da44e?style=flat&logo=github&logoColor=white)](docs/installation.md#manual-installation-and-updates)
 [![Telemetry: None](https://img.shields.io/badge/Telemetry-None-2da44e?style=flat)](#privacy)
 
 Your GitHub inbox in the GitHub Copilot app, grouped by repository or date, or
