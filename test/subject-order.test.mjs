@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { GitHubClient } from "../src/github.mjs";
+import { GitHubClient, firstPage } from "../src/github.mjs";
 import { Inbox } from "../src/inbox.mjs";
 import { normalizeThreads } from "../src/model.mjs";
 import { startServer } from "../src/server.mjs";
@@ -165,6 +165,68 @@ test("a PR filtered out during its REST lookup does not start a new merge queue 
   release();
   await loading;
   assert.equal(calls, 1);
+});
+
+test("rows dropped while their first lookup waits in the shared queue are not fetched", async () => {
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  let entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const calls = [];
+  const client = new GitHubClient({ run: async args => {
+    const path = args.at(-1);
+    calls.push(path);
+    if (path.startsWith("/notifications")) {
+      entered();
+      await held;
+      return http(rows());
+    }
+    return http({ state: "closed" });
+  } });
+  const foreground = client.page(firstPage());
+  await started;
+  const all = normalizeThreads(rows());
+  let items = all.slice(0, 2);
+  const loading = client.refreshSubjects(() => items);
+  items = [all[3], all[2]];
+  release();
+  await Promise.all([foreground, loading]);
+  assert.deepEqual(calls.slice(1), ["/repos/example/alpha/issues/4", "/repos/example/zulu/issues/3"]);
+});
+
+test("related phases recheck selection after waiting behind a foreground request", async () => {
+  let releaseState;
+  const heldState = new Promise(resolve => { releaseState = resolve; });
+  let stateEntered;
+  const stateStarted = new Promise(resolve => { stateEntered = resolve; });
+  let releasePage;
+  const heldPage = new Promise(resolve => { releasePage = resolve; });
+  let pageEntered;
+  const pageStarted = new Promise(resolve => { pageEntered = resolve; });
+  const calls = [];
+  const client = new GitHubClient({ run: async args => {
+    const path = args.at(-1);
+    calls.push(path);
+    if (path.startsWith("/notifications")) {
+      pageEntered();
+      await heldPage;
+      return http([thread()]);
+    }
+    assert.notEqual(path, "graphql", "An obsolete queued phase must not make a request");
+    stateEntered();
+    await heldState;
+    return http({ state: "open", merged: false, draft: false });
+  } });
+  let items = normalizeThreads([thread()]);
+  const loading = client.refreshSubjects(() => items);
+  await stateStarted;
+  const foreground = client.page(firstPage());
+  releaseState();
+  await pageStarted;
+  items = [];
+  releasePage();
+  await Promise.all([foreground, loading]);
+  assert.equal(calls.length, 2);
 });
 
 test("viewport reports defer all lookups until rows enter view and ignore unknown IDs", { timeout: 5000 }, async t => {

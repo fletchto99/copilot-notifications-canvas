@@ -119,9 +119,9 @@ test("queue access errors and malformed GraphQL data keep the known REST state a
   }
 });
 
-test("GraphQL rate limiting and cancellation preserve shared backoff and abort behavior", async () => {
+test("GraphQL secondary limits and cancellation preserve shared backoff and abort behavior", async () => {
   for (const response of [
-    http({ errors: [{ type: "RATE_LIMITED", message: "Private rate detail" }] }),
+    http({ errors: [{ type: "RATE_LIMITED", message: "Secondary rate limit: private detail" }] }),
     http({}, { "retry-after": "700" }, 429),
   ]) {
     let now = 0;
@@ -147,6 +147,96 @@ test("GraphQL rate limiting and cancellation preserve shared backoff and abort b
   } });
   await assert.rejects(client.refreshSubjects([item()], controller.signal), { code: "closed" });
   assert.equal(client.mergeQueueCache.size, 0);
+});
+
+test("primary GraphQL limits pause queue checks without blocking REST polling or read/done writes", async () => {
+  for (const response of [
+    http({ errors: [{ type: "RATE_LIMITED", message: "Private primary limit detail" }] }),
+    http({ errors: [{ type: "RATE_LIMITED" }] }, { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "900" }),
+    http({}, { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "900" }, 403),
+  ]) {
+    let now = 0;
+    let graphCalls = 0;
+    const writes = [];
+    const client = new GitHubClient({ now: () => now, sleep: async ms => { now += ms; }, run: async args => {
+      if (args.at(-1) === "graphql") return ++graphCalls === 1 ? response : queueResponse(true);
+      if (args.includes("PATCH") || args.includes("DELETE")) {
+        writes.push(args.at(-1));
+        return `HTTP/2 ${args.includes("PATCH") ? 205 : 204} Synthetic\r\n\r\n`;
+      }
+      return args.at(-1).startsWith("/notifications") ? http([thread()]) : http(openPR);
+    } });
+    const first = item();
+    const second = { ...first, id: "2", number: "43" };
+    await client.refreshSubjects([first]);
+    assert.equal(client.blockedUntil, 0);
+    assert.ok(client.graphqlBlockedUntil >= RETRY_MS);
+    assert.match(client.subjectSnapshot(first).subjectStateError, /GraphQL rate limit/);
+    assert.doesNotMatch(JSON.stringify(client.subjectSnapshot(first)), /Private/);
+    await client.refreshSubjects([second]);
+    assert.equal(graphCalls, 1);
+    assert.equal(client.subjectSnapshot(second).subjectState, "open");
+    assert.match(client.subjectSnapshot(second).subjectStateError, /GraphQL rate limit/);
+    assert.equal(client.subjectsNeedRefresh([first, second]), false);
+    assert.equal((await client.page(firstPage(), undefined, { force: true })).items.length, 1);
+    await client.markRead("1");
+    await client.markDone("2");
+    assert.deepEqual(writes, ["/notifications/threads/1", "/notifications/threads/2"]);
+    await assert.rejects(client.request("/repos/example/widgets/pulls/99", undefined, "GET",
+      { subjectType: "PullRequest", mergeQueue: true }), { code: "graphql_rate_limited", retryAt: client.graphqlBlockedUntil });
+    client.invalidateSubjects([first, second]);
+    await client.refreshSubjects([first, second]);
+    assert.equal(graphCalls, 1);
+    now = client.graphqlBlockedUntil;
+    await client.refreshSubjects([first, second]);
+    assert.equal(graphCalls, 3);
+    assert.equal(client.subjectSnapshot(first).subjectState, "merge_queued");
+    assert.equal(client.subjectSnapshot(second).subjectStateError, null);
+    assert.equal(client.graphqlLastError, null);
+  }
+});
+
+test("a successful GraphQL response exhausting its primary quota keeps REST available", async () => {
+  let graphCalls = 0;
+  const client = new GitHubClient({ now: () => 0, run: async args => {
+    if (args.at(-1) === "graphql") {
+      graphCalls++;
+      return http({ data: { repository: { pullRequest: { isInMergeQueue: true } } } },
+        { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "900" });
+    }
+    return args.at(-1).startsWith("/notifications") ? http([thread()]) : http(openPR);
+  } });
+  const first = item();
+  await client.refreshSubjects([first, { ...first, number: "43" }]);
+  assert.equal(graphCalls, 1);
+  assert.equal(client.blockedUntil, 0);
+  assert.equal(client.graphqlBlockedUntil, 901_000);
+  assert.equal(client.subjectSnapshot(first).subjectState, "merge_queued");
+  assert.equal(client.subjectSnapshot(first).subjectStateStale, false);
+  assert.equal(client.subjectsNeedRefresh([first]), false);
+  assert.equal((await client.page(firstPage())).items.length, 1);
+});
+
+test("GraphQL authentication and secondary limits still block REST, even with exhausted primary headers", async () => {
+  for (const [response, code] of [
+    [http({}, {}, 401), "authentication"],
+    [http({ message: "secondary rate limit" }, {}, 403), "rate_limited"],
+    [http({ errors: [{ type: "RATE_LIMITED" }] }, { "retry-after": "700" }), "rate_limited"],
+    [http({ errors: [{ message: "secondary rate limit" }] }), "rate_limited"],
+    [http({ message: "secondary rate limit" }, { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "900" }, 403), "rate_limited"],
+  ]) {
+    let calls = 0;
+    const client = new GitHubClient({ now: () => 0, run: async args => {
+      calls++;
+      return args.at(-1) === "graphql" ? response : http(openPR);
+    } });
+    await client.refreshSubjects([item()]);
+    assert.ok(client.blockedUntil >= RETRY_MS);
+    assert.equal(client.graphqlBlockedUntil, 0);
+    await assert.rejects(client.page(firstPage()), { code });
+    await assert.rejects(client.markRead("1"), { code });
+    assert.equal(calls, 2);
+  }
 });
 
 test("merge queue lookups cannot escape custom REST APIs or coerce oversized PR numbers", async () => {

@@ -193,13 +193,18 @@ async function api(path, input) {
     const viewport = visibleSubjectIds();
     if (viewport.length > 8192) throw new Error("Too many visible notifications to load status. Narrow the view and try again.");
     lastViewport = viewport;
+    const groupBy = path === "settings" ? input?.groupBy ?? preferences?.groupBy : preferences?.groupBy;
+    const timeZone = groupBy === "date" ? Intl.DateTimeFormat().resolvedOptions().timeZone : undefined;
+    if (groupBy === "date" && (typeof timeZone !== "string" || !timeZone)) {
+      throw new Error("Date grouping requires a supported browser time zone. Choose another grouping in Settings.");
+    }
     const response = await fetch(`/api/${path}`, {
       method: input === undefined ? "GET" : "POST",
       headers: {
         Authorization: `Bearer ${token}`,
         ...(input === undefined ? {} : { "Content-Type": "application/json" }),
-        ...(preferences ? { "X-Notification-Group-By": preferences.groupBy ?? "repo" } : {}),
-        "X-Notification-Time-Zone": Intl.DateTimeFormat().resolvedOptions().timeZone,
+        ...(groupBy ? { "X-Notification-Group-By": groupBy } : {}),
+        ...(timeZone ? { "X-Notification-Time-Zone": timeZone } : {}),
         "X-Notification-Visible-Ids": viewport,
       },
       body: input === undefined ? undefined : JSON.stringify(input),

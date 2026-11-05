@@ -345,3 +345,52 @@ test("closing the panel cancels background subject work and unexpected failures 
     if (!unexpected) assert.deepEqual(logs, []);
   }
 });
+
+test("unexpected hydration failures preserve cached API states and reported workflow results", async t => {
+  let now = 1000;
+  let failing = false;
+  const logs = [];
+  const raw = [thread(), thread("2", { subject: {
+    type: "Issue", title: "Synthetic failing lookup", url: "https://api.github.com/repos/example/widgets/issues/43",
+  } }), thread("3", { subject: { type: "CheckSuite", title: "Synthetic build workflow run failed for main", url: null } })];
+  const items = normalizeThreads(raw);
+  const client = new GitHubClient({ now: () => now, run: async args => {
+    if (args.at(-1).startsWith("/notifications")) return http(raw);
+    if (failing) throw new Error("Private upstream detail");
+    return http(args.at(-1).endsWith("/pulls/42")
+      ? { state: "closed", merged: true, draft: false } : { state: "closed" });
+  } });
+  await client.refreshSubjects([items[0]]);
+  const inbox = new Inbox(client);
+  await inbox.refresh();
+  const server = await startServer(inbox, { development: null, log: message => logs.push(message) });
+  t.after(() => server.close());
+  const url = new URL(server.url);
+  const headers = { Authorization: `Bearer ${url.hash.slice(1)}` };
+  const snapshot = async () => (await fetch(`${url.origin}/api/state`, { headers })).json();
+  failing = true;
+  await snapshot();
+  await client.queue;
+  const failed = await snapshot();
+  const [cached, unknown, reported] = failed.groups[0].items;
+  assert.equal(cached.subjectState, "merged");
+  assert.equal(cached.subjectCheckedAt, 1000);
+  assert.equal(cached.subjectStateStale, true);
+  assert.equal(unknown.subjectState, null);
+  assert.equal(reported.subjectState, "failure");
+  assert.equal(reported.subjectStateSource, "notification");
+  assert.equal(reported.subjectCheckedAt, undefined);
+  assert.equal(reported.subjectStateStale, undefined);
+  for (const row of [cached, unknown, reported]) assert.match(row.subjectStateError, /Inspect the extension log/);
+  assert.equal(logs.length, 1);
+  assert.doesNotMatch(JSON.stringify(logs), /Private/);
+  failing = false;
+  now += RETRY_MS;
+  await snapshot();
+  await client.queue;
+  const recovered = await snapshot();
+  assert.equal(recovered.groups[0].items[0].subjectState, "merged");
+  assert.equal(recovered.groups[0].items[0].subjectStateStale, false);
+  assert.equal(recovered.groups[0].items[0].subjectCheckedAt, 1000);
+  assert.equal(recovered.groups[0].items[2].subjectStateError, null);
+});

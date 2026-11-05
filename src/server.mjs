@@ -167,7 +167,10 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
           const failed = subjectFailure && Object.hasOwn(subject, "subjectState");
           return {
             ...item, ...subject,
-            ...(failed ? { subjectState: null, subjectStateError: subjectFailure } : {}),
+            ...(failed ? {
+              subjectStateError: subject.subjectStateError ? `${subject.subjectStateError} ${subjectFailure}` : subjectFailure,
+              ...(subject.subjectCheckedAt !== undefined ? { subjectStateStale: true } : {}),
+            } : {}),
             subjectLinkLoading: !failed && inbox.client.subjectLinkPending(item),
             subjectLoading: selected.has(item.id) && Boolean(subjectRefresh) && !failed && subject.subjectState === null &&
               !subject.subjectStateError && inbox.client.subjectsNeedRefresh([item]),

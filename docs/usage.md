@@ -12,6 +12,7 @@ to include older notifications.
 
 Search by title, issue/PR number, or repository. Each row shows its type, number
 when available, notification reason, and last-updated time.
+Date grouping requires a supported browser time zone; the other groupings do not.
 Issues and pull requests also have state-aware icons: open
 items are green, completed issues and merged pull requests are purple, closed
 unmerged pull requests are red, and draft pull requests and issues closed as
@@ -76,6 +77,9 @@ Open PRs
 also use a read-only GraphQL query for merge queue membership. Queue access
 failures preserve the known REST state and add an explanatory screen-reader
 description; custom development REST APIs do not query github.com for queue data.
+Exhausting GraphQL's primary quota pauses merge-queue checks without blocking
+REST inbox polling or Read/Done actions. Authentication failures and secondary
+rate limits still pause shared requests.
 Lookups are shared across
 panels in the provider and cached in memory for five minutes (or longer if
 GitHub requests it). Changed notification timestamps and **Force refresh**
@@ -98,6 +102,8 @@ permanently disabled. Refreshes of an already resolved destination leave it
 clickable without replacing its known icon with a spinner. A changed workflow
 notification can require resolving a new destination.
 Desktop polling does not fetch these details.
+Unexpected lookup failures preserve known statuses and check times, identify
+previously checked API results as stale, and report a sanitized error.
 A neutral icon with a **Status not loaded yet** or **Status unavailable** description is shown when
 the status is not known; unavailable status does not hide the notification.
 Repository access or organization SSO restrictions can prevent status lookups

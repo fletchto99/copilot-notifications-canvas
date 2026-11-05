@@ -278,6 +278,33 @@ test("renderer requests send the displayed grouping and browser time zone as eph
   }
 });
 
+test("non-date groupings work without a browser time zone and date changes fail before saving", async () => {
+  for (const groupBy of ["repo", "none"]) {
+    const ui = await renderer({ initialRows: [thread("1"), thread("2")], storedSettings: { groupBy } });
+    try {
+      ui.context.Intl = Object.create(Intl);
+      ui.context.Intl.DateTimeFormat = () => ({ resolvedOptions: () => ({ timeZone: undefined }) });
+      await ui.fireTimer();
+      await ui.ids.get("force-refresh").events.click();
+      await ui.ids.get("groups").querySelectorAll(".mark-read")[0].events.click();
+      await ui.ids.get("groups").querySelectorAll(".mark-done")[1].events.click();
+      assert.deepEqual(ui.patches, ["/notifications/threads/1"]);
+      assert.deepEqual(ui.deletions, ["/notifications/threads/2"]);
+      assert.ok(ui.calls.every(call => !Object.hasOwn(call.options.headers, "X-Notification-Time-Zone")));
+      const saves = ui.calls.filter(call => call.path === "/api/settings" && call.options.body).length;
+      ui.ids.get("group-by").value = "date";
+      ui.ids.get("group-by").events.change();
+      await settle();
+      assert.match(ui.ids.get("settings-error").textContent, /supported browser time zone/);
+      assert.equal(ui.ids.get("group-by").value, groupBy);
+      assert.equal(ui.calls.filter(call => call.path === "/api/settings" && call.options.body).length, saves);
+    } finally {
+      ui.window.events.pagehide();
+      ui.inbox.close();
+    }
+  }
+});
+
 test("viewport reports exclude collapsed and off-screen rows and update after resizing", async () => {
   const ui = await renderer({ initialRows: [thread("1"), thread("2")] });
   try {

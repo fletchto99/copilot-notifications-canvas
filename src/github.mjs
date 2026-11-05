@@ -10,6 +10,7 @@ const MERGE_QUEUE_QUERY = "query($owner:String!,$name:String!,$number:Int!){repo
 const RUN_MATCH_WINDOW_MS = 2 * 60_000;
 const RUN_SEARCH_LOOKBACK_MS = 7 * 24 * 60 * 60_000;
 const FAILED_CHECK_STATES = ["failure", "timed_out", "startup_failure"];
+const SECONDARY_LIMIT = /secondary(?: rate)? limit|abuse detection/i;
 
 function subjectEndpoint(item, target) {
   const checkSuite = item.type === "CheckSuite";
@@ -127,9 +128,16 @@ function runSnapshot(run, inferred = false, jobs) {
   };
 }
 
-function mergeQueueState(body) {
-  if (Array.isArray(body?.errors) && body.errors.some(error => error?.type === "RATE_LIMITED")) {
-    throw new InboxError("rate_limited", "GitHub rate limit reached. Requests are paused; wait for the retry time.", 429);
+function rateLimitError(graphql = false) {
+  return new InboxError(graphql ? "graphql_rate_limited" : "rate_limited", graphql
+    ? "GitHub GraphQL rate limit reached. Merge queue checks are paused; inbox requests remain available."
+    : "GitHub rate limit reached. Requests are paused; wait for the retry time.", 429);
+}
+
+function mergeQueueState(body, secondaryLimit = false) {
+  if (Array.isArray(body?.errors)) {
+    const secondary = secondaryLimit || body.errors.some(error => typeof error?.message === "string" && SECONDARY_LIMIT.test(error.message));
+    if (secondary || body.errors.some(error => error?.type === "RATE_LIMITED")) throw rateLimitError(!secondary);
   }
   const state = body?.data?.repository?.pullRequest?.isInMergeQueue;
   if (body?.errors || typeof state !== "boolean") {
@@ -270,6 +278,8 @@ export class GitHubClient {
     this.sequence = 0;
     this.queue = Promise.resolve();
     this.blockedUntil = 0;
+    this.graphqlBlockedUntil = 0;
+    this.graphqlLastError = null;
     this.failures = new Map();
     this.lastError = null;
     this.sleep = sleep;
@@ -295,7 +305,9 @@ export class GitHubClient {
     }
     const queue = item.type === "PullRequest" && cached?.state === "open" ? this.mergeQueueCache.get(endpoint) : null;
     const queueError = item.type === "PullRequest" && cached?.state === "open" && this.target.custom
-      ? "Merge queue status is unavailable for custom development APIs." : queue?.error?.message;
+      ? "Merge queue status is unavailable for custom development APIs." : queue?.error?.message ??
+        (this.now() < this.graphqlBlockedUntil && item.type === "PullRequest" && cached?.state === "open"
+          ? this.graphqlLastError?.message : undefined);
     const checkedAt = cached?.checkedAt;
     const queueCheckedAt = typeof queue?.state === "boolean" ? queue.checkedAt : undefined;
     const run = item.type === "CheckSuite" ? item.runId && endpoint ? { state: item.url } : this.checkRunCache.get(endpoint) : null;
@@ -371,7 +383,8 @@ export class GitHubClient {
         return search && due(this.checkRunCache, search.key, item);
       }
       return endpoint && (due(this.subjectCache, endpoint, item) ||
-        item.type === "PullRequest" && !this.target.custom && !this.subjectCache.get(endpoint).error && this.subjectCache.get(endpoint).state === "open" &&
+        item.type === "PullRequest" && !this.target.custom && now >= this.graphqlBlockedUntil &&
+        !this.subjectCache.get(endpoint).error && this.subjectCache.get(endpoint).state === "open" &&
         due(this.mergeQueueCache, endpoint, item) ||
         item.type === "CheckSuite" && item.checkSuiteId && due(this.checkRunCache, endpoint, item));
     });
@@ -398,15 +411,21 @@ export class GitHubClient {
       const [endpoint, item] = next;
       subjects.delete(endpoint);
       processed.add(endpoint);
+      const selected = () => typeof items !== "function" || items().some(item => subjectKey(item, this.target) === endpoint);
       for (const kind of subjectEndpoint(item, this.target) ? ["state", "queue", "run", "jobs"] : ["match", "jobs"]) {
         if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
-        if (kind === "queue" && (item.type !== "PullRequest" || this.subjectCache.get(endpoint).error || this.subjectCache.get(endpoint).state !== "open" || this.target.custom)) continue;
+        if (!selected()) break;
+        if (kind === "queue" && (item.type !== "PullRequest" || this.subjectCache.get(endpoint).error ||
+            this.subjectCache.get(endpoint).state !== "open" || this.target.custom || this.now() < this.graphqlBlockedUntil)) continue;
         if (kind === "run" && (item.type !== "CheckSuite" || !item.checkSuiteId)) continue;
         if (kind === "jobs" && !this.#jobSearch(item)?.eligible) continue;
-        if (kind !== "state" && typeof items === "function" && !items().some(item => subjectKey(item, this.target) === endpoint)) continue;
-        const pending = this.queue.then(() => this.#refreshSubject(endpoint, item, signal, kind));
+        const pending = this.queue.then(async () => {
+          if (!selected()) return false;
+          await this.#refreshSubject(endpoint, item, signal, kind);
+          return true;
+        });
         this.queue = pending.catch(() => {});
-        await pending;
+        if (!await pending) break;
       }
     }
   }
@@ -536,11 +555,17 @@ export class GitHubClient {
         cached.sequence >= minSequence && now < cached.nextRefreshAt) return cached;
     if (now < this.blockedUntil) throw this.lastError ??
       new InboxError("rate_limited", "GitHub requests are paused until the rate limit resets.", 429);
+    if (mergeQueue && now < this.graphqlBlockedUntil) {
+      const error = this.graphqlLastError ?? rateLimitError(true);
+      error.retryAt = this.graphqlBlockedUntil;
+      throw error;
+    }
     if (!force && cached && !cached.invalidated && now < cached.nextRefreshAt) return cached;
     const requestKey = `${checkRun || runMatch ? "RUN" : mergeQueue ? "GRAPHQL" : method} ${endpoint}`;
     const clearFailure = () => {
       this.failures.delete(requestKey);
       if (!subjectType) this.lastError = null;
+      if (mergeQueue && this.now() >= this.graphqlBlockedUntil) this.graphqlLastError = null;
     };
     const args = ["api", "--hostname", this.target.hostname, "--method", mergeQueue ? "POST" : method, "--include",
       "-H", "Accept: application/vnd.github+json",
@@ -577,12 +602,21 @@ export class GitHubClient {
       const retry = seconds(headers["retry-after"]) ||
         Math.max(0, Date.parse(headers["retry-after"]) - fetchedAt) || 0;
       const exhausted = headers["x-ratelimit-remaining"] === "0";
+      const graphqlPrimary = mergeQueue && exhausted && !retry && status !== 429 && !SECONDARY_LIMIT.test(response.text);
       if (retry) this.blockedUntil = Math.max(this.blockedUntil, fetchedAt + retry);
-      if (exhausted) this.blockedUntil = Math.max(this.blockedUntil, reset + 1000, fetchedAt + retryPoll);
+      if (exhausted) {
+        if (graphqlPrimary) {
+          this.graphqlBlockedUntil = Math.max(this.graphqlBlockedUntil, reset + 1000, fetchedAt + retryPoll);
+          this.graphqlLastError = rateLimitError(true);
+        } else {
+          this.blockedUntil = Math.max(this.blockedUntil, reset + 1000, fetchedAt + retryPoll);
+        }
+      }
       if (status === 429 || (status === 403 && (exhausted || retry ||
           /rate limit|abuse detection|secondary limit/i.test(response.text)))) {
+        if (graphqlPrimary) throw rateLimitError(true);
         this.blockedUntil = Math.max(this.blockedUntil, fetchedAt + retry, fetchedAt + retryPoll);
-        throw new InboxError("rate_limited", "GitHub rate limit reached. Requests are paused; wait for the retry time.", 429);
+        throw rateLimitError();
       }
       if (status === 401) throw new InboxError("authentication",
         this.target.custom
@@ -617,14 +651,14 @@ export class GitHubClient {
         }
         items = runJobs ? failedJobLink(body, runJobs, this.target, headers.link) :
           runMatch ? inferredRunLink(body, runMatch, this.target, headers.link) : checkRun ? checkRunLink(body, endpoint, this.target) :
-          mergeQueue ? mergeQueueState(body) : subjectType ? subjectState(body, subjectType) : normalizeThreads(body, this.target);
+          mergeQueue ? mergeQueueState(body, retry > 0) : subjectType ? subjectState(body, subjectType) : normalizeThreads(body, this.target);
         if (!subjectType) next = nextPage(headers.link, endpoint, this.target);
       }
       if (subjectType) {
         const subject = {
           state: status === 304 ? cached.state : items,
           checkedAt: fetchedAt,
-          nextRefreshAt: Math.max(fetchedAt + poll, this.blockedUntil),
+          nextRefreshAt: Math.max(fetchedAt + poll, this.blockedUntil, mergeQueue ? this.graphqlBlockedUntil : 0),
           etag: headers.etag ?? (status === 304 ? cached.etag : undefined),
           modified: headers["last-modified"] ?? (status === 304 ? cached.modified : undefined),
         };
@@ -653,7 +687,11 @@ export class GitHubClient {
           this.now() + Math.min(30 * 60_000, RETRY_MS * 2 ** Math.min(failureCount - 1, 4)),
           this.now() + seconds(response?.headers["x-poll-interval"]));
         if (subjectType) error.retryAt = retryAt;
-        if (!subjectType || ["rate_limited", "authentication"].includes(error.code)) {
+        if (error.code === "graphql_rate_limited") {
+          this.graphqlBlockedUntil = Math.max(this.graphqlBlockedUntil, retryAt);
+          this.graphqlLastError = error;
+          error.retryAt = this.graphqlBlockedUntil;
+        } else if (!subjectType || ["rate_limited", "authentication"].includes(error.code)) {
           this.blockedUntil = Math.max(this.blockedUntil, retryAt);
           this.lastError = error;
         }

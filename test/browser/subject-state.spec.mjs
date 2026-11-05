@@ -146,6 +146,31 @@ for (const packaged of [false, true]) {
       expect(canvas.deliveries).toEqual([]);
     });
 
+    test("a primary GraphQL limit leaves inbox refresh and Read/Done available", async ({ page, canvas }) => {
+      canvas.rows.splice(1);
+      canvas.rows[0].subject = {
+        type: "PullRequest", title: "Synthetic rate-limited queue check",
+        url: "https://api.github.com/repos/example/widgets/pulls/42",
+      };
+      canvas.rows[0].subjectDetails = { state: "open", merged: false, draft: false };
+      canvas.setRequestHook(args => args.at(-1) === "graphql"
+        ? http({ errors: [{ type: "RATE_LIMITED", message: "Synthetic primary quota exhaustion" }] },
+          { "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(Math.floor(Date.now() / 1000) + 3600) })
+        : undefined);
+      await page.goto(canvas.url);
+      await expect(page.locator(".subject-icon")).toHaveAttribute("aria-label", /GraphQL rate limit/);
+      await expect(page.locator("#retry-status")).toBeHidden();
+      await expect(page.locator("#notice")).toBeHidden();
+      await expect(page.locator("#force-refresh")).toHaveAttribute("aria-disabled", "false");
+      await page.locator("#force-refresh").click();
+      await page.locator(".mark-read").click();
+      await expect.poll(() => canvas.writes).toEqual(["1"]);
+      await page.locator(".mark-done").click();
+      await expect.poll(() => canvas.doneWrites).toEqual(["1"]);
+      await expect(page.locator(".row")).toHaveCount(0);
+      expect(canvas.requests.filter(path => path === "graphql")).toHaveLength(1);
+    });
+
     test("completed icons render on the one-second local poll without extra GitHub requests", async ({ page, canvas }) => {
       canvas.rows.splice(1);
       canvas.rows[0].subject = {

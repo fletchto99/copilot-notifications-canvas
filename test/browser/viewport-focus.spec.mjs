@@ -5,6 +5,37 @@ for (const packaged of [false, true]) {
   test.describe(`viewport, freshness and focus (${packaged ? "packaged" : "source"})`, () => {
     test.use({ packaged });
 
+    for (const groupBy of ["repo", "none"]) {
+      test(`${groupBy} grouping can load, refresh and triage without a browser time zone`, async ({ page, canvas }) => {
+        canvas.rows.splice(2);
+        await canvas.preferences.update({ groupBy });
+        await page.addInitScript(() => {
+          const original = Intl.DateTimeFormat.prototype.resolvedOptions;
+          Intl.DateTimeFormat.prototype.resolvedOptions = function() {
+            const options = original.call(this);
+            delete options.timeZone;
+            return options;
+          };
+        });
+        const zones = [];
+        page.on("request", request => {
+          if (new URL(request.url()).pathname.startsWith("/api/")) zones.push(request.headers()["x-notification-time-zone"]);
+        });
+        await page.goto(canvas.url);
+        await expect(page.locator(".row")).toHaveCount(2);
+        await page.locator("#force-refresh").click();
+        await expect(page.locator("#notice")).toBeHidden();
+        await page.locator('[data-focus-key="read:1"]').click();
+        await expect.poll(() => canvas.writes).toEqual(["1"]);
+        await page.locator('[data-focus-key="done:2"]').click();
+        await expect.poll(() => canvas.writes).toEqual(["1", "2"]);
+        await expect(page.locator(".row")).toHaveCount(1);
+        expect(zones.length).toBeGreaterThan(0);
+        expect(zones.every(zone => zone === undefined)).toBe(true);
+        await expect(page.locator("#notice")).toBeHidden();
+      });
+    }
+
     test("unchanged scroll and resize events scan the loaded rows only once", async ({ page, canvas }) => {
       const viewportReady = page.waitForResponse(response => new URL(response.url()).pathname === "/api/state");
       await page.goto(canvas.url);
