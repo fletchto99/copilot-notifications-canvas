@@ -429,12 +429,14 @@ for (const width of [320, 480, 960]) {
     await expect(page.locator(".row > time")).toHaveCount(0);
     await expect(page.locator(".row .metadata time")).toHaveCount(3);
     await expect(page.locator(".metadata").getByText("Unread", { exact: true })).toHaveCount(0);
-    await expect(page.locator(".metadata-separator")).toHaveCount(9);
     for (const separator of await page.locator(".metadata-separator").all()) {
       await expect(separator).toHaveText("\u00b7");
       await expect(separator).toHaveAttribute("aria-hidden", "true");
     }
     for (const metadata of await page.locator(".metadata").all()) {
+      await expect(metadata.locator(".metadata-item")).toHaveCount(3);
+      await expect(metadata.locator(".metadata-separator")).toHaveCount(2);
+      await expect(metadata).not.toContainText(/Open (?:GitHub|repository)/);
       const fields = await metadata.evaluate(node => [...node.querySelectorAll(".metadata-item")].map(part => {
         const rect = [...part.children].find(child => !child.classList.contains("metadata-separator")).getBoundingClientRect();
         return { x: rect.x, y: rect.y };
