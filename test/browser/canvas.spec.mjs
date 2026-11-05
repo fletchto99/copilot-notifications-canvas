@@ -885,7 +885,10 @@ test.describe("synchronized desktop alerts", () => {
     await canvas.desktop.sync();
     expect(canvas.deliveries).toEqual([]);
     const notificationRequests = () => canvas.requests.filter(path => path.startsWith("/notifications")).length;
-    expect(notificationRequests()).toBe(2);
+    const unreadPages = () => canvas.requests.filter(path => path.startsWith("/notifications") && path.includes("all=false"))
+      .map(path => Number(new URL(path, "https://api.github.com").searchParams.get("page")));
+    expect(notificationRequests()).toBe(3);
+    expect(unreadPages()).toEqual([1, 2]);
 
     const time = canvas.advance(61_000);
     canvas.rows[0].updated_at = new Date(time).toISOString();
@@ -893,21 +896,23 @@ test.describe("synchronized desktop alerts", () => {
     await page.clock.setFixedTime(new Date(time));
     await expect(page.getByRole("link", { name: "Synchronized foreground notification" })).toBeVisible({ timeout: 10_000 });
     await expect.poll(() => canvas.deliveries.map(alert => alert.body)).toEqual(["Synchronized foreground notification"]);
-    expect(notificationRequests()).toBe(4);
+    expect(notificationRequests()).toBe(6);
+    expect(unreadPages()).toEqual([1, 2, 1, 2]);
 
     await page.evaluate(() => { document.documentElement.style.display = "none"; });
     await expect(page.locator("html")).toBeHidden();
-    canvas.rows[0].updated_at = new Date(canvas.advance(30_000)).toISOString();
-    canvas.rows[0].subject.title = "Background notification";
+    canvas.rows.at(-1).updated_at = new Date(canvas.advance(30_000)).toISOString();
+    canvas.rows.at(-1).subject.title = "Background notification";
     await canvas.desktop.check();
     expect(canvas.deliveries).toHaveLength(1);
-    expect(notificationRequests()).toBe(4);
+    expect(notificationRequests()).toBe(6);
     canvas.advance(31_000);
     await canvas.desktop.check();
     expect(canvas.deliveries.map(alert => alert.body)).toEqual([
       "Synchronized foreground notification", "Background notification",
     ]);
-    expect(notificationRequests()).toBe(5);
+    expect(notificationRequests()).toBe(8);
+    expect(unreadPages()).toEqual([1, 2, 1, 2, 1, 2]);
     expect(canvas.writes).toEqual([]);
   });
 });

@@ -34,14 +34,18 @@ for (const width of [320, 960]) {
 
     for (const control of [controls[1], controls[3], controls[5]]) {
       await page.mouse.move(0, 0);
-      await page.getByRole("searchbox").evaluate(node => node.focus({ preventScroll: true }));
+      await page.evaluate(() => document.activeElement?.blur());
       await control.evaluate(node => window.scrollTo(0, window.scrollY + node.getBoundingClientRect().top - 12));
       await expect.poll(async () => (await control.boundingBox()).y).toBeCloseTo(12);
-      await control.hover();
+      // Locator hover can auto-scroll again in WebKit, invalidating the edge placement.
+      const target = await control.boundingBox();
+      await page.mouse.move(target.x + target.width / 2, target.y + target.height / 2);
+      await expect(control.locator("..")).toHaveAttribute("data-tooltip-placement", "below");
       const tooltip = page.locator(`#${await control.getAttribute("aria-describedby")}`);
       await expect(tooltip).toBeVisible();
       const bounds = await tooltip.boundingBox();
       const button = await control.boundingBox();
+      expect(button.y).toBeCloseTo(12);
       expect(bounds.y).toBeCloseTo(button.y + button.height);
       const content = await tooltip.locator(".tooltip-content").boundingBox();
       expect(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('[role="tooltip"]')?.id,
