@@ -36,7 +36,7 @@ for (const packaged of [false, true]) {
       });
     }
 
-    test("unchanged scroll and resize events scan the loaded rows only once", async ({ page, canvas }) => {
+    test("scroll and resize events do not measure loaded rows for status", async ({ page, canvas }) => {
       const viewportReady = page.waitForResponse(response => new URL(response.url()).pathname === "/api/state");
       await page.goto(canvas.url);
       await expect(page.locator(".row")).toHaveCount(50);
@@ -58,38 +58,78 @@ for (const packaged of [false, true]) {
           links.forEach((link, index) => { link.getBoundingClientRect = originals[index]; });
         }
       });
-      expect(results).toEqual([{ event: "scroll", measurements: 50 }, { event: "resize", measurements: 50 }]);
+      expect(results).toEqual([{ event: "scroll", measurements: 0 }, { event: "resize", measurements: 0 }]);
       expect(canvas.writes).toEqual([]);
     });
 
-    test("only expanded on-screen rows fetch status, including after scrolling and force refresh", async ({ page, canvas }) => {
-      canvas.rows.splice(0, canvas.rows.length, ...Array.from({ length: 40 }, (_, index) => thread(String(index + 1), {
-        subject: { type: "Issue", title: `Synthetic viewport issue ${index + 1}`,
-          url: `https://api.github.com/repos/example/widgets/issues/${index + 1}` },
-        subjectDetails: { state: "closed" },
-      })));
+    for (const groupBy of ["repo", "none", "date"]) {
+      test(`${groupBy} loads all expanded statuses without scrolling, including loaded pages and force refresh`, async ({ page, canvas }) => {
+        canvas.rows.splice(0, canvas.rows.length, ...Array.from({ length: 60 }, (_, index) => thread(String(index + 1), {
+          subject: { type: "Issue", title: `Synthetic expanded issue ${index + 1}`,
+            url: `https://api.github.com/repos/example/widgets/issues/${index + 1}` },
+          subjectDetails: { state: "closed" },
+        })));
+        await canvas.preferences.update({ groupBy });
+        const requested = () => canvas.requests.filter(path => /\/issues\/\d+$/.test(path));
+        await page.setViewportSize({ width: 640, height: 600 });
+        await page.goto(canvas.url);
+        await expect(page.locator(".subject-closed")).toHaveCount(50);
+        expect(requested().sort()).toEqual(canvas.rows.slice(0, 50).map((_, index) => `/repos/example/widgets/issues/${index + 1}`).sort());
+        expect(await page.evaluate(() => window.scrollY)).toBe(0);
+        expect(await page.locator('[data-focus-key="thread:50"]').evaluate(node =>
+          node.getBoundingClientRect().top > window.innerHeight)).toBe(true);
+
+        await page.locator("#more").click();
+        await expect(page.locator(".subject-closed")).toHaveCount(60);
+        expect(requested()).toHaveLength(60);
+        await page.locator("#collapse").click();
+        await expect(page.locator(".repo-items")).toBeHidden();
+        await page.locator("#force-refresh").click();
+        await expect(page.locator("#force-refresh")).toHaveAttribute("aria-busy", "false");
+        await expect(page.locator(".repo-items")).toBeHidden();
+        expect(requested()).toHaveLength(60);
+        await page.locator("#collapse").click();
+        await expect.poll(() => requested().length).toBe(120);
+        await expect(page.locator(".subject-loading")).toHaveCount(0);
+        expect(canvas.writes).toEqual([]);
+      });
+    }
+
+    test("collapsing a group drops its pending off-screen statuses until expanded", async ({ page, canvas }) => {
+      canvas.rows.splice(0, canvas.rows.length, ...Array.from({ length: 40 }, (_, index) => {
+        const repository = index < 20 ? "example/widgets" : "example/tools";
+        return thread(String(index + 1), {
+          repository: { full_name: repository },
+          subject: { type: "Issue", title: `Synthetic expanded issue ${index + 1}`,
+            url: `https://api.github.com/repos/${repository}/issues/${index + 1}` },
+          subjectDetails: { state: "closed" },
+        });
+      }));
+      let release;
+      const held = new Promise(resolve => { release = resolve; });
       const requested = () => canvas.requests.filter(path => /\/issues\/\d+$/.test(path));
-      await page.setViewportSize({ width: 640, height: 600 });
-      await page.goto(canvas.url);
-      await expect(page.locator('[data-focus-key="thread:1"] .subject-closed')).toBeVisible();
-      expect(requested().length).toBeLessThan(12);
-      await expect(page.locator('[data-focus-key="thread:40"] .subject-unknown')).toHaveCount(1);
-      const later = page.locator('[data-focus-key="thread:30"]');
-      await later.scrollIntoViewIfNeeded();
-      await expect(later.locator(".subject-closed")).toBeVisible();
-      expect(requested()).not.toContain("/repos/example/widgets/issues/15");
-      await page.locator(".repo-toggle").scrollIntoViewIfNeeded();
-      await page.locator(".repo-toggle").click();
-      await expect(page.locator(".repo-items")).toBeHidden();
-      const before = requested().length;
-      await page.locator("#force-refresh").click();
-      await expect(page.locator(".repo-items")).toBeHidden();
-      expect(requested()).toHaveLength(before);
-      await page.locator(".repo-toggle").click();
-      await expect(page.locator('[data-focus-key="thread:1"] .subject-closed')).toBeVisible();
-      await expect.poll(() => requested().length).toBeGreaterThan(before);
-      expect(requested()).not.toContain("/repos/example/widgets/issues/15");
-      expect(canvas.writes).toEqual([]);
+      canvas.setRequestHook(async args => {
+        if (args.at(-1).startsWith("/repos/example/widgets/issues/")) await held;
+      });
+      try {
+        await page.goto(canvas.url);
+        await expect(page.locator(".subject-loading")).toHaveCount(40);
+        await expect.poll(() => requested().sort()).toEqual(Array.from({ length: 20 }, (_, index) => `/repos/example/widgets/issues/${index + 1}`).sort());
+        const selected = page.waitForResponse(response => new URL(response.url()).pathname === "/api/subjects" &&
+          response.request().postDataJSON().complete && response.request().postDataJSON().positions.length === 20);
+        await page.getByRole("button", { name: /example\/tools.*total/ }).click();
+        await selected;
+        release();
+        await expect(page.locator(".subject-closed")).toHaveCount(20);
+        await expect(page.locator(".subject-loading")).toHaveCount(0);
+        expect(requested()).toHaveLength(20);
+        await page.getByRole("button", { name: /example\/tools.*total/ }).click();
+        await expect(page.locator(".subject-closed")).toHaveCount(40);
+        expect(requested()).toHaveLength(40);
+        expect(canvas.writes).toEqual([]);
+      } finally {
+        release();
+      }
     });
 
     test("freshness describes cached failures without replacing the last known icon", async ({ page, canvas }) => {

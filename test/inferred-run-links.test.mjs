@@ -288,16 +288,18 @@ test("development matching remains on its selected API and web origin", async ()
   assert.equal(new URL(item.url).origin, "https://api.example.test");
 });
 
-test("viewport changes can drop pending run matches and preserve top-to-bottom order", async () => {
+test("selection changes drop pending run matches after in-flight lookups finish", async () => {
   let entered;
   const started = new Promise(resolve => { entered = resolve; });
   let release;
   const held = new Promise(resolve => { release = resolve; });
   const calls = [];
-  let items = [notification(), { ...notification(), id: "18", title: title.replace("Synthetic build", "Different build") }];
+  let items = Array.from({ length: 25 }, (_, index) => ({
+    ...notification(), id: String(index + 1), title: title.replace("Synthetic build", `Synthetic build ${index}`),
+  }));
   const client = matchingClient({ run: async args => {
     calls.push(args.at(-1));
-    entered();
+    if (calls.length === 20) entered();
     await held;
     return http(results([workflowRun()]));
   } });
@@ -306,5 +308,5 @@ test("viewport changes can drop pending run matches and preserve top-to-bottom o
   items = [];
   release();
   await loading;
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 20);
 });

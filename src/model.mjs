@@ -120,6 +120,7 @@ export function notificationLink(subject, repository, target = apiTarget()) {
   if (match) return {
     url: `${base}/${route[1]}/${match[1]}`, label: "Open on GitHub", direct: true,
     number: ["Issue", "PullRequest"].includes(subject.type) ? match[1] : null,
+    ...(subject.type === "Discussion" ? { discussionNumber: match[1] } : {}),
   };
 
   // Release IDs are not tags; check-suite IDs are not Actions run IDs.

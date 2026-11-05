@@ -12,7 +12,7 @@ showing read and unread inbox items; choose **Unread only** to narrow the view. 
 stay hidden in both views. Search, mark rows
 or groups as read or done, and opt into desktop notifications or auto-open.
 
-![GitHub Notifications canvas with a compact title toolbar, full-width search, and attention tabs above nine synthetic notifications, six unread, across three example repositories with pull request status icons, a release tag, a failed check run, and read/done controls](docs/images/github-notifications.png)
+![GitHub Notifications canvas with a compact title toolbar, full-width search, and attention tabs above nine synthetic notifications, six unread, across three example repositories with pull request status icons including a yellow merge-queue icon, distinct purple closed-discussion and green answered-discussion icons, a release tag, a failed check run, and read/done controls](docs/images/github-notifications.png)
 
 ## Prerequisites
 
@@ -54,10 +54,12 @@ full procedure, verification requirements, and troubleshooting.
 - Choose **All notifications**, **Repository**, or **Date** in **Settings**.
 - Set **Show notifications** in **Settings** to **All** for read and unread inbox
   items, or **Unread only** to narrow the view.
-- Icons show issue/PR states, including merge queue membership, and check-suite
-  results. Screen-reader descriptions include status, freshness, and failures;
-  icons have no hover tooltips. Status loads for on-screen, expanded rows
-  without delaying the inbox. Releases, commits, discussions, security alerts,
+- Icons show issue/PR states, including a yellow dotted merge icon for queued PRs,
+  discussion states, and check-suite results. Screen-reader descriptions include
+  status, freshness, and failures; icons have no hover tooltips. Status loads for
+  all loaded rows in expanded groups, with up to 20 lookups running concurrently
+  across panels sharing the provider, without delaying the inbox.
+  Releases, commits, security alerts,
   invitations, workflow runs, and agent sessions have static type icons;
   unknown types fall back to a bell without additional status lookups.
 - Check-suite rows open resolved or conservatively matched runs, or the sole
@@ -86,8 +88,8 @@ The local `artifacts/` directory stores settings and desktop coordination data:
 timestamps, hashed activity/thread IDs, watcher/process markers and sanitized
 errors. GitHub CLI handles credentials; they never enter the canvas renderer.
 
-GitHub CLI fetches notifications, the status of loaded issues, pull requests and
-check suites, merge queue membership, bounded workflow-run matches for missing
+GitHub CLI fetches notifications, the status of loaded issues, pull requests,
+discussions and check suites, merge queue membership, bounded workflow-run matches for missing
 links (including new individual Windows check alerts), and public release
 metadata. Inferred run links are identified in screen-reader descriptions and fall back
 to filtered Actions when matching is inconclusive. Failed runs open the job log

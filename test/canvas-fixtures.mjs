@@ -52,9 +52,12 @@ export async function createCanvasFixture({
     if (endpoint === "graphql") {
       assert.ok(args.includes("POST") && !target.custom);
       const value = name => args.find(arg => arg.startsWith(`${name}=`))?.slice(name.length + 1);
+      const discussion = value("query").includes("discussion(number:");
       const row = rows.find(row => row.subject.url ===
-        `https://api.github.com/repos/${value("owner")}/${value("name")}/pulls/${value("number")}`);
-      assert.ok(row, "Unexpected synthetic merge queue lookup");
+        `https://api.github.com/repos/${value("owner")}/${value("name")}/${discussion ? "discussions" : "pulls"}/${value("number")}`);
+      assert.ok(row, "Unexpected synthetic GraphQL lookup");
+      if (discussion) return http({ data: { repository: { discussion: row.subjectDetails ??
+        { closed: false, isAnswered: false, stateReason: null } } } });
       return http({ data: { repository: { pullRequest: { isInMergeQueue: row.mergeQueued ?? false } } } });
     }
     if (args.includes("PATCH") || args.includes("DELETE")) {

@@ -209,8 +209,8 @@ test("a successful GraphQL response exhausting its primary quota keeps REST avai
     return args.at(-1).startsWith("/notifications") ? http([thread()]) : http(openPR);
   } });
   const first = item();
-  await client.refreshSubjects([first, { ...first, number: "43" }]);
-  assert.equal(graphCalls, 1);
+  await client.refreshSubjects(Array.from({ length: 25 }, (_, index) => ({ ...first, number: String(index + 42) })));
+  assert.equal(graphCalls, 20, "Already in-flight GraphQL queries finish, but no new queries start");
   assert.equal(client.blockedUntil, 0);
   assert.equal(client.serverBlockedUntil, 0);
   assert.equal(client.graphqlBlockedUntil, 901_000);

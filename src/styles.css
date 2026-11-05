@@ -909,15 +909,23 @@ a:hover {
 }
 
 .subject-open .subject-icon,
+.subject-answered .subject-icon,
 .subject-success .subject-icon {
   color: var(--subject-open);
 }
 
 .subject-merged .subject-icon,
-.subject-merge-queued .subject-icon,
 .subject-closed .subject-icon,
 .subject-duplicate .subject-icon {
   color: var(--subject-completed);
+}
+
+.notification-subject[data-subject-type="Discussion"]:is(
+    .subject-open,
+    .subject-duplicate
+  )
+  .subject-icon {
+  color: var(--muted);
 }
 
 .notification-subject[data-subject-type="PullRequest"].subject-closed
@@ -928,6 +936,7 @@ a:hover {
   color: var(--danger);
 }
 
+.subject-merge-queued .subject-icon,
 .subject-queued .subject-icon,
 .subject-in-progress .subject-icon,
 .subject-waiting .subject-icon,

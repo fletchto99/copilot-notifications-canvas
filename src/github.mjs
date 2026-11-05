@@ -7,19 +7,23 @@ export const RETRY_MS = 120_000;
 export const SUBJECT_POLL_MS = 5 * 60_000;
 const API_ORIGIN = DEFAULT_API_BASE_URL;
 const MERGE_QUEUE_QUERY = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){isInMergeQueue}}}";
+const DISCUSSION_QUERY = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){discussion(number:$number){closed isAnswered stateReason}}}";
 const RUN_MATCH_WINDOW_MS = 2 * 60_000;
 const RUN_SEARCH_LOOKBACK_MS = 7 * 24 * 60 * 60_000;
 const FAILED_CHECK_STATES = ["failure", "timed_out", "startup_failure"];
+const SUBJECT_CONCURRENCY = 20;
 const SECONDARY_LIMIT = /secondary(?: rate)? limit|abuse detection/i;
 
 function subjectEndpoint(item, target) {
   const checkSuite = item.type === "CheckSuite";
-  const id = checkSuite ? item.runId ?? item.checkSuiteId : item.number;
-  if (!["Issue", "PullRequest", "CheckSuite"].includes(item.type) || !id) return null;
-  const resource = checkSuite ? item.runId ? "actions/runs" : "check-suites" : item.type === "Issue" ? "issues" : "pulls";
+  const discussion = item.type === "Discussion";
+  const id = checkSuite ? item.runId ?? item.checkSuiteId : discussion ? item.discussionNumber : item.number;
+  if (!["Issue", "PullRequest", "CheckSuite", "Discussion"].includes(item.type) || !id || discussion && target.custom) return null;
+  const resource = checkSuite ? item.runId ? "actions/runs" : "check-suites" :
+    discussion ? "discussions" : item.type === "Issue" ? "issues" : "pulls";
   const endpoint = `/repos/${item.repository}/${resource}/${id}`;
   const link = notificationLink({ type: item.type, url: `${target.baseUrl}${endpoint}` }, item.repository, target);
-  return (checkSuite ? link.runId ?? link.checkSuiteId : link.number) === id ? endpoint : null;
+  return (checkSuite ? link.runId ?? link.checkSuiteId : discussion ? link.discussionNumber : link.number) === id ? endpoint : null;
 }
 
 function workflowRunSearch(item, target) {
@@ -130,20 +134,38 @@ function runSnapshot(run, inferred = false, jobs) {
 
 function rateLimitError(graphql = false) {
   return new InboxError(graphql ? "graphql_rate_limited" : "rate_limited", graphql
-    ? "GitHub GraphQL rate limit reached. Merge queue checks are paused; inbox requests remain available."
+    ? "GitHub GraphQL rate limit reached. Discussion and merge queue checks are paused; inbox requests remain available."
     : "GitHub rate limit reached. Requests are paused; wait for the retry time.", 429);
 }
 
-function mergeQueueState(body, secondaryLimit = false) {
+function checkGraphQLRateLimit(body, secondaryLimit) {
   if (Array.isArray(body?.errors)) {
     const secondary = secondaryLimit || body.errors.some(error => typeof error?.message === "string" && SECONDARY_LIMIT.test(error.message));
     if (secondary || body.errors.some(error => error?.type === "RATE_LIMITED")) throw rateLimitError(!secondary);
   }
+}
+
+function mergeQueueState(body, secondaryLimit = false) {
+  checkGraphQLRateLimit(body, secondaryLimit);
   const state = body?.data?.repository?.pullRequest?.isInMergeQueue;
   if (body?.errors || typeof state !== "boolean") {
     throw new InboxError("merge_queue_unavailable", "Merge queue status is unavailable. Check repository access and organization SSO.");
   }
   return state;
+}
+
+function discussionState(body, secondaryLimit) {
+  checkGraphQLRateLimit(body, secondaryLimit);
+  const discussion = body?.data?.repository?.discussion;
+  if (body?.errors || typeof discussion?.closed !== "boolean" ||
+      !(typeof discussion.isAnswered === "boolean" || discussion.isAnswered === null) ||
+      ![null, "RESOLVED", "DUPLICATE", "OUTDATED", "REOPENED"].includes(discussion.stateReason) ||
+      discussion.closed && discussion.stateReason === "REOPENED" ||
+      !discussion.closed && ![null, "REOPENED"].includes(discussion.stateReason)) {
+    throw new InboxError("discussion_unavailable", "Discussion status is unavailable. Check repository access and organization SSO.");
+  }
+  if (!discussion.closed) return discussion.isAnswered ? "answered" : "open";
+  return discussion.stateReason === "DUPLICATE" ? "duplicate" : discussion.stateReason === "OUTDATED" ? "outdated" : "closed";
 }
 
 function subjectState(body, type) {
@@ -264,6 +286,21 @@ function seconds(value) {
   return /^\d+$/.test(value ?? "") ? Number(value) * 1000 : 0;
 }
 
+async function waitForSubjectWork(pending, signal) {
+  if (!signal) return pending;
+  let aborted;
+  const interrupted = new Promise((resolve, reject) => {
+    aborted = () => reject(new InboxError("closed", "The canvas was closed.", 410));
+    if (signal.aborted) aborted();
+    else signal.addEventListener("abort", aborted, { once: true });
+  });
+  try {
+    return await Promise.race([pending, interrupted]);
+  } finally {
+    signal.removeEventListener("abort", aborted);
+  }
+}
+
 export class GitHubClient {
   constructor({ run = runGh, now = Date.now, sleep = wait, apiBaseUrl = API_ORIGIN, beforeRequest } = {}) {
     this.target = apiTarget(apiBaseUrl);
@@ -276,6 +313,11 @@ export class GitHubClient {
     this.checkRunCache = new Map();
     this.jobCache = new Map();
     this.subjectLinksReady = new Set();
+    this.subjectWorkers = new Set();
+    this.subjectWaiters = new Set();
+    this.subjectRefreshes = new Set();
+    this.subjectRequests = new Map();
+    this.subjectInvalidations = new Map();
     this.sequence = 0;
     this.queue = Promise.resolve();
     this.blockedUntil = 0;
@@ -294,7 +336,7 @@ export class GitHubClient {
   }
 
   subjectSnapshot(item) {
-    if (!["Issue", "PullRequest", "CheckSuite"].includes(item.type)) return {};
+    if (!["Issue", "PullRequest", "CheckSuite", "Discussion"].includes(item.type)) return {};
     const endpoint = subjectEndpoint(item, this.target);
     const cached = this.subjectCache.get(endpoint);
     const jobSearch = this.#jobSearch(item);
@@ -311,12 +353,15 @@ export class GitHubClient {
       ? "Merge queue status is unavailable for custom development APIs." : queue?.error?.message ??
         (this.now() < this.graphqlBlockedUntil && item.type === "PullRequest" && cached?.state === "open"
           ? this.graphqlLastError?.message : undefined);
+    const discussionError = item.type === "Discussion" ? this.target.custom
+      ? "Discussion status is unavailable for custom development APIs."
+      : this.now() < this.graphqlBlockedUntil ? this.graphqlLastError?.message : undefined : undefined;
     const checkedAt = cached?.checkedAt;
     const queueCheckedAt = typeof queue?.state === "boolean" ? queue.checkedAt : undefined;
     const run = item.type === "CheckSuite" ? item.runId && endpoint ? { state: item.url } : this.checkRunCache.get(endpoint) : null;
     return {
       subjectState: queue?.state === true ? "merge_queued" : cached?.state ?? null,
-      subjectStateError: cached?.error?.message ?? queueError ?? (endpoint ? null : "GitHub did not provide a supported link for this item's status."),
+      subjectStateError: cached?.error?.message ?? queueError ?? discussionError ?? (endpoint ? null : "GitHub did not provide a supported link for this item's status."),
       ...(checkedAt !== undefined ? {
         subjectCheckedAt: queueCheckedAt === undefined ? checkedAt : Math.min(checkedAt, queueCheckedAt),
         subjectStateStale: Boolean(cached.error || queue?.error && queueCheckedAt !== undefined),
@@ -360,11 +405,15 @@ export class GitHubClient {
 
   invalidateSubjects(items) {
     for (const item of items) {
+      const key = subjectKey(item, this.target);
+      if (key) this.subjectInvalidations.set(key, (this.subjectInvalidations.get(key) ?? 0) + 1);
       for (const cache of [this.subjectCache, this.mergeQueueCache, this.checkRunCache]) {
-        const cached = cache.get(subjectKey(item, this.target));
+        const cached = cache.get(key);
         if (cached && !cached.error) cached.nextRefreshAt = 0;
       }
-      const jobs = this.jobCache.get(this.#jobSearch(item)?.endpoint);
+      const jobKey = this.#jobSearch(item)?.endpoint;
+      if (jobKey) this.subjectInvalidations.set(jobKey, (this.subjectInvalidations.get(jobKey) ?? 0) + 1);
+      const jobs = this.jobCache.get(jobKey);
       if (jobs && !jobs.error) jobs.nextRefreshAt = 0;
     }
   }
@@ -378,6 +427,7 @@ export class GitHubClient {
         !cached.error && item.updatedAt > (cached.updatedAt ?? "");
     };
     return items.some(item => {
+      if (item.type === "Discussion" && now < this.graphqlBlockedUntil) return false;
       const endpoint = subjectEndpoint(item, this.target);
       const jobs = this.#jobSearch(item);
       if (jobs?.eligible && due(this.jobCache, jobs.endpoint, item)) return true;
@@ -396,44 +446,146 @@ export class GitHubClient {
   async refreshSubjects(items, signal) {
     let previousItems;
     let subjects;
+    let selectedKeys;
+    let failed = false;
+    let failure;
     const processed = new Set();
-    for (;;) {
+    const updateSelection = () => {
       const currentItems = typeof items === "function" ? items() : items;
       if (currentItems !== previousItems) {
         previousItems = currentItems;
         subjects = new Map();
+        selectedKeys = new Set();
         for (const item of currentItems) {
           const endpoint = subjectKey(item, this.target);
+          if (endpoint) selectedKeys.add(endpoint);
           if (endpoint && !processed.has(endpoint) && (!subjects.has(endpoint) || item.updatedAt > subjects.get(endpoint).updatedAt)) {
             subjects.set(endpoint, item);
           }
         }
       }
+    };
+    const nextSubject = () => {
+      updateSelection();
       const next = subjects.entries().next().value;
-      if (!next) return;
+      if (!next) return null;
       const [endpoint, item] = next;
       subjects.delete(endpoint);
       processed.add(endpoint);
-      const selected = () => typeof items !== "function" || items().some(item => subjectKey(item, this.target) === endpoint);
-      for (const kind of subjectEndpoint(item, this.target) ? ["state", "queue", "run", "jobs"] : ["match", "jobs"]) {
-        if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
-        if (!selected()) break;
-        if (kind === "queue" && (item.type !== "PullRequest" || this.subjectCache.get(endpoint).error ||
-            this.subjectCache.get(endpoint).state !== "open" || this.target.custom || this.now() < this.graphqlBlockedUntil)) continue;
-        if (kind === "run" && (item.type !== "CheckSuite" || !item.checkSuiteId)) continue;
-        if (kind === "jobs" && !this.#jobSearch(item)?.eligible) continue;
-        const pending = this.queue.then(async () => {
-          if (!selected()) return false;
-          await this.#refreshSubject(endpoint, item, signal, kind);
-          return true;
-        });
-        this.queue = pending.catch(() => {});
-        if (!await pending) break;
+      return [endpoint, item];
+    };
+    const worker = async () => {
+      try {
+        while (!failed) {
+          const worked = await this.#withSubjectSlot(async () => {
+            await waitForSubjectWork(this.queue, signal);
+            if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
+            if (failed) return false;
+            const next = nextSubject();
+            if (!next) return false;
+            const [endpoint, item] = next;
+            const selected = () => {
+              updateSelection();
+              return !failed && selectedKeys.has(endpoint);
+            };
+            let completed = true;
+            for (const kind of subjectEndpoint(item, this.target) ? ["state", "queue", "run", "jobs"] : ["match", "jobs"]) {
+              if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
+              if (!selected()) {
+                completed = false;
+                break;
+              }
+              if (kind === "queue" && (item.type !== "PullRequest" || this.subjectCache.get(endpoint).error ||
+                  this.subjectCache.get(endpoint).state !== "open" || this.target.custom || this.now() < this.graphqlBlockedUntil)) continue;
+              if (kind === "run" && (item.type !== "CheckSuite" || !item.checkSuiteId)) continue;
+              if (kind === "jobs" && !this.#jobSearch(item)?.eligible) continue;
+              if (await this.#refreshSubject(endpoint, item, signal, kind, selected) === false) {
+                completed = false;
+                break;
+              }
+            }
+            if (!completed) {
+              // Release the reservation only after in-flight work finishes; re-expansion can resume skipped phases.
+              processed.delete(endpoint);
+              previousItems = undefined;
+            }
+            return true;
+          }, signal);
+          if (!worked) return;
+        }
+      } catch (error) {
+        failed = true;
+        throw error;
       }
+    };
+    const workers = new Set();
+    let finish;
+    const finished = new Promise(resolve => { finish = resolve; });
+    const wake = () => {
+      try {
+        if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
+        if (!failed) {
+          updateSelection();
+          const count = Math.min(SUBJECT_CONCURRENCY - workers.size, subjects.size);
+          for (let index = 0; index < count; index++) {
+            const pending = worker().catch(error => {
+              failed = true;
+              failure ??= error;
+            }).finally(() => {
+              workers.delete(pending);
+              wake();
+            });
+            workers.add(pending);
+          }
+        }
+      } catch (error) {
+        failed = true;
+        failure ??= error;
+      }
+      if (!workers.size) finish();
+    };
+    if (typeof items === "function") this.subjectRefreshes.add(wake);
+    try {
+      wake();
+      await finished;
+      if (failure) throw failure;
+    } finally {
+      this.subjectRefreshes.delete(wake);
     }
   }
 
-  async #refreshSubject(endpoint, item, signal, kind) {
+  wakeSubjects() {
+    for (const wake of this.subjectRefreshes) wake();
+  }
+
+  #withSubjectSlot(work, signal) {
+    return new Promise((resolve, reject) => {
+      const aborted = () => {
+        this.subjectWaiters.delete(start);
+        reject(new InboxError("closed", "The canvas was closed.", 410));
+      };
+      const start = () => {
+        this.subjectWaiters.delete(start);
+        signal?.removeEventListener("abort", aborted);
+        if (signal?.aborted) return aborted();
+        const pending = work();
+        const settled = pending.catch(() => {}).finally(() => {
+          this.subjectWorkers.delete(settled);
+          this.subjectWaiters.values().next().value?.();
+        });
+        this.subjectWorkers.add(settled);
+        pending.then(resolve, reject);
+      };
+      if (signal?.aborted) return aborted();
+      if (this.subjectWorkers.size < SUBJECT_CONCURRENCY && !this.subjectWaiters.size) start();
+      else {
+        this.subjectWaiters.add(start);
+        signal?.addEventListener("abort", aborted, { once: true });
+      }
+    });
+  }
+
+  async #refreshSubject(endpoint, item, signal, kind, selected) {
     const mergeQueue = kind === "queue";
     const checkRun = kind === "run";
     const runMatch = kind === "match" ? workflowRunSearch(item, this.target) : null;
@@ -443,22 +595,47 @@ export class GitHubClient {
       endpoint = runJobs.endpoint;
     }
     const cache = runJobs ? this.jobCache : checkRun || runMatch ? this.checkRunCache : mergeQueue ? this.mergeQueueCache : this.subjectCache;
-    const cached = cache.get(endpoint);
+    const key = `${kind} ${endpoint}`;
+    // Serialize the same lookup across panels; distinct subjects share the bounded pool.
+    const previous = this.subjectRequests.get(key) ?? Promise.resolve();
+    let started = false;
+    const pending = previous.catch(() => {}).then(async () => {
+      await waitForSubjectWork(this.queue, signal);
+      if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
+      if (!selected()) return false;
+      if ((mergeQueue || item.type === "Discussion") && this.now() < this.graphqlBlockedUntil) return;
+      const cached = cache.get(endpoint);
+      const invalidationKey = runJobs ? endpoint : subjectKey(item, this.target);
+      const generation = this.subjectInvalidations.get(invalidationKey) ?? 0;
+      try {
+        started = true;
+        const result = await this.request(endpoint, signal, "GET", {
+          subjectType: item.type, mergeQueue, checkRun, runMatch, runJobs, force: item.updatedAt > (cached?.updatedAt ?? ""),
+          allowCachedDuringBackoff: item.type === "CheckSuite",
+        });
+        cache.set(endpoint, {
+          ...result, updatedAt: cached?.updatedAt > item.updatedAt ? cached.updatedAt : item.updatedAt,
+          ...(!result.error && generation !== (this.subjectInvalidations.get(invalidationKey) ?? 0) ? { nextRefreshAt: 0 } : {}),
+        });
+      } catch (error) {
+        if (!(error instanceof InboxError) || error.code === "closed") throw error;
+        if (error.code === "graphql_rate_limited" && error.requestDeferred) return;
+        cache.set(endpoint, {
+          state: runMatch || runJobs ? null : cached?.state ?? null, checkedAt: cached?.checkedAt,
+          error: { code: error.code, message: error.message },
+          nextRefreshAt: Math.max(this.blockedUntil, error.retryAt ?? 0, this.now() + RETRY_MS),
+        });
+      }
+    }).finally(() => {
+      if (this.subjectRequests.get(key) === pending) this.subjectRequests.delete(key);
+    });
+    this.subjectRequests.set(key, pending);
     try {
-      const result = await this.request(endpoint, signal, "GET", {
-        subjectType: item.type, mergeQueue, checkRun, runMatch, runJobs, force: item.updatedAt > (cached?.updatedAt ?? ""),
-        allowCachedDuringBackoff: item.type === "CheckSuite",
-      });
-      cache.set(endpoint, {
-        ...result, updatedAt: cached?.updatedAt > item.updatedAt ? cached.updatedAt : item.updatedAt,
-      });
+      return await waitForSubjectWork(pending, signal);
     } catch (error) {
-      if (!(error instanceof InboxError) || error.code === "closed") throw error;
-      cache.set(endpoint, {
-        state: runMatch || runJobs ? null : cached?.state ?? null, checkedAt: cached?.checkedAt,
-        error: { code: error.code, message: error.message },
-        nextRefreshAt: Math.max(this.blockedUntil, error.retryAt ?? 0, this.now() + RETRY_MS),
-      });
+      // Keep the slot occupied until an already-dispatched request has stopped.
+      if (started) await pending;
+      throw error;
     }
   }
 
@@ -552,6 +729,8 @@ export class GitHubClient {
 
   async request(endpoint, signal, method = "GET", { force = false, minSequence = 0, allowCachedDuringBackoff = false, subjectType, mergeQueue = false, checkRun = false, runMatch = null, runJobs = null, beforeWrite } = {}) {
     if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
+    const discussion = subjectType === "Discussion";
+    const graphql = mergeQueue || discussion;
     let now = this.now();
     const cache = runJobs ? this.jobCache : checkRun || runMatch ? this.checkRunCache : mergeQueue ? this.mergeQueueCache : subjectType ? this.subjectCache : this.cache;
     const cached = method === "GET" ? cache.get(endpoint) : undefined;
@@ -570,28 +749,32 @@ export class GitHubClient {
       error.requestDeferred = true;
       throw error;
     }
-    if (mergeQueue && now < this.graphqlBlockedUntil) {
-      const error = this.graphqlLastError ?? rateLimitError(true);
+    if (graphql && now < this.graphqlBlockedUntil) {
+      const cause = this.graphqlLastError ?? rateLimitError(true);
+      const error = new InboxError(cause.code, cause.message, cause.status);
       error.retryAt = this.graphqlBlockedUntil;
+      error.requestDeferred = true;
       throw error;
     }
     if (!force && cached && !cached.invalidated && now < cached.nextRefreshAt) return cached;
-    const requestKey = `${checkRun || runMatch ? "RUN" : mergeQueue ? "GRAPHQL" : method} ${endpoint}`;
+    const requestKey = `${checkRun || runMatch ? "RUN" : graphql ? "GRAPHQL" : method} ${endpoint}`;
     const clearFailure = () => {
       this.failures.delete(requestKey);
       if (!subjectType) this.lastError = null;
-      if (mergeQueue && this.now() >= this.graphqlBlockedUntil) this.graphqlLastError = null;
+      if (graphql && this.now() >= this.graphqlBlockedUntil) this.graphqlLastError = null;
     };
-    const args = ["api", "--hostname", this.target.hostname, "--method", mergeQueue ? "POST" : method, "--include",
+    const args = ["api", "--hostname", this.target.hostname, "--method", graphql ? "POST" : method, "--include",
       "-H", "Accept: application/vnd.github+json",
       "-H", "X-GitHub-Api-Version: 2022-11-28"];
-    if (mergeQueue) {
-      const match = /^\/repos\/([A-Za-z0-9-]+)\/([A-Za-z0-9_.-]+)\/pulls\/([1-9]\d*)$/.exec(endpoint);
-      if (this.target.custom || !match || Number(match[3]) > 2147483647) {
-        throw new InboxError("merge_queue_unavailable", "Merge queue status is unavailable for this API or pull request number.");
+    if (graphql) {
+      const match = /^\/repos\/([A-Za-z0-9-]+)\/([A-Za-z0-9_.-]+)\/(pulls|discussions)\/([1-9]\d*)$/.exec(endpoint);
+      if (this.target.custom || !match || match[3] !== (discussion ? "discussions" : "pulls") || Number(match[4]) > 2147483647) {
+        throw new InboxError(discussion ? "discussion_unavailable" : "merge_queue_unavailable", discussion
+          ? "Discussion status is unavailable for this API or discussion number."
+          : "Merge queue status is unavailable for this API or pull request number.");
       }
       // gh groups fields into GraphQL variables only for this exact endpoint, without a leading slash.
-      args.push("-f", `query=${MERGE_QUEUE_QUERY}`, "-f", `owner=${match[1]}`, "-f", `name=${match[2]}`, "-F", `number=${match[3]}`, "graphql");
+      args.push("-f", `query=${discussion ? DISCUSSION_QUERY : MERGE_QUEUE_QUERY}`, "-f", `owner=${match[1]}`, "-f", `name=${match[2]}`, "-F", `number=${match[4]}`, "graphql");
     } else {
       if (cached?.etag) args.push("-H", `If-None-Match: ${cached.etag}`);
       else if (cached?.modified) args.push("-H", `If-Modified-Since: ${cached.modified}`);
@@ -618,7 +801,7 @@ export class GitHubClient {
       const retry = seconds(headers["retry-after"]) ||
         Math.max(0, Date.parse(headers["retry-after"]) - fetchedAt) || 0;
       const exhausted = headers["x-ratelimit-remaining"] === "0";
-      const graphqlPrimary = mergeQueue && exhausted && !retry && status !== 429 && !SECONDARY_LIMIT.test(response.text);
+      const graphqlPrimary = graphql && exhausted && !retry && status !== 429 && !SECONDARY_LIMIT.test(response.text);
       if (retry) this.serverBlockedUntil = Math.max(this.serverBlockedUntil, fetchedAt + retry);
       if (exhausted) {
         if (graphqlPrimary) {
@@ -649,7 +832,7 @@ export class GitHubClient {
         this.target.custom
           ? "The selected API denied notifications access. Check its URL, network access and gh authentication for that host, including notifications scope. Fine-grained tokens are unsupported."
           : "GitHub denied notifications access. Check gh auth status; grant notifications scope with gh auth refresh --hostname github.com --scopes notifications. Check organization SSO if applicable. Fine-grained tokens are unsupported.", 403);
-      if (!(mergeQueue ? [200] : method === "DELETE" ? [204] : method === "PATCH" ? [205, 304] : [200, 304]).includes(status)) throw new InboxError("github_http",
+      if (!(graphql ? [200] : method === "DELETE" ? [204] : method === "PATCH" ? [205, 304] : [200, 304]).includes(status)) throw new InboxError("github_http",
         `GitHub returned HTTP ${status}. Check GitHub status and try again.`, 502);
       if (method !== "GET") {
         clearFailure();
@@ -669,14 +852,15 @@ export class GitHubClient {
         }
         items = runJobs ? failedJobLink(body, runJobs, this.target, headers.link) :
           runMatch ? inferredRunLink(body, runMatch, this.target, headers.link) : checkRun ? checkRunLink(body, endpoint, this.target) :
-          mergeQueue ? mergeQueueState(body, retry > 0) : subjectType ? subjectState(body, subjectType) : normalizeThreads(body, this.target);
+          mergeQueue ? mergeQueueState(body, retry > 0) : discussion ? discussionState(body, retry > 0) :
+          subjectType ? subjectState(body, subjectType) : normalizeThreads(body, this.target);
         if (!subjectType) next = nextPage(headers.link, endpoint, this.target);
       }
       if (subjectType) {
         const subject = {
           state: status === 304 ? cached.state : items,
           checkedAt: fetchedAt,
-          nextRefreshAt: Math.max(fetchedAt + poll, this.blockedUntil, mergeQueue ? this.graphqlBlockedUntil : 0),
+          nextRefreshAt: Math.max(fetchedAt + poll, this.blockedUntil, graphql ? this.graphqlBlockedUntil : 0),
           etag: headers.etag ?? (status === 304 ? cached.etag : undefined),
           modified: headers["last-modified"] ?? (status === 304 ? cached.modified : undefined),
         };
@@ -726,5 +910,6 @@ export class GitHubClient {
     this.checkRunCache.clear();
     this.jobCache.clear();
     this.subjectLinksReady.clear();
+    this.subjectInvalidations.clear();
   }
 }

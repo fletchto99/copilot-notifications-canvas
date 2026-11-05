@@ -297,6 +297,44 @@ test("a row removed during run resolution never starts a job lookup", async () =
   assert.equal(client.subjectLinkPending(item), false);
 });
 
+test("re-expanding a workflow notification resumes its skipped jobs lookup during the same refresh", async t => {
+  for (const kind of ["inferred", "suite"]) {
+    await t.test(kind, async subtest => {
+      let releaseRun;
+      const heldRun = new Promise(resolve => { releaseRun = resolve; });
+      let releaseSlow;
+      const heldSlow = new Promise(resolve => { releaseSlow = resolve; });
+      const { client, item, jobCalls } = fixture({ kind });
+      const run = client.run;
+      client.run = async args => {
+        const path = args.at(-1);
+        if (path.endsWith("/issues/2")) { await heldSlow; return http({ state: "open" }); }
+        if (path.includes("/actions/runs?")) await heldRun;
+        return run(args);
+      };
+      const slow = normalizeThreads([thread("2", {
+        subject: { type: "Issue", title: "Synthetic slow issue", url: "https://api.github.com/repos/example/widgets/issues/2" },
+      })])[0];
+      let items = [item, slow];
+      const loading = client.refreshSubjects(() => items);
+      subtest.after(async () => { releaseRun(); releaseSlow(); await loading; });
+      await new Promise(resolve => setImmediate(resolve));
+      items = [slow];
+      client.wakeSubjects();
+      releaseRun();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(jobCalls.length, 0);
+      items = [item, slow];
+      client.wakeSubjects();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(jobCalls.length, 1);
+      assert.equal(client.subjectLinkPending(item), false);
+      assert.equal(client.subjectSnapshot(item).url, jobURL);
+      assert.equal(client.subjectWorkers.size, 1, "The unrelated request is still in flight");
+    });
+  }
+});
+
 test("initial CI navigation waits through both run and job resolution but cached refreshes stay ready", async () => {
   for (const kind of ["inferred", "suite", "direct"]) {
     let entered;

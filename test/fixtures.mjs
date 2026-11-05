@@ -11,7 +11,7 @@ export function thread(id = "1", overrides = {}) {
 }
 
 export const staticSubjectTypes = [
-  "Release", "Commit", "Discussion", "RepositoryAdvisory", "RepositoryVulnerabilityAlert",
+  "Release", "Commit", "RepositoryAdvisory", "RepositoryVulnerabilityAlert",
   "RepositoryDependabotAlertsThread", "RepositoryInvitation", "WorkflowRun", "AgentSessionThread",
 ];
 
