@@ -18,10 +18,13 @@ export const groupActionText = button => button.parentNode.querySelectorAll(".to
 // Minimal DOM/event/timer doubles exercise the actual renderer without a browser dependency.
 export async function renderer({ hidden = false, token = "a".repeat(64), readFailure = false,
   initialRows, subjectStates = {}, subjectsLoading = false, onWrite, onFetch, onState, onFilters, initialOffline = false, release, development = null,
-  onUpdates, clipboardFailure = false, onSettings, developmentApi, onDevelopment, retainDisabledFocus = false, desktopPlatform = "darwin", desktopStatus = {},
+  onUpdates, clipboardFailure = false, onSettings, onSubjects, developmentApi, onDevelopment, retainDisabledFocus = false, desktopPlatform = "darwin", desktopStatus = {},
   storedSettings = { autoOpen: false, darkMode: null, desktopNotifications: false, desktopSound: "default" },
   appColorMode = "light", systemDark = false, navigatorPlatform, userAgentData } = {}) {
   const calls = [];
+  const subjectSelections = [];
+  let subjectSelectionVersion = 0;
+  let subjectPositions = [];
   let documentFocused = true;
   const timers = new Map();
   const animationFrames = new Map();
@@ -222,7 +225,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
   } }));
   const snapshot = () => {
     const state = inbox.snapshot();
-    return { ...state, subjectsLoading, updates: releaseMetadata, development, ...apiState(),
+    return { ...state, subjectSelectionVersion, subjectsLoading, updates: releaseMetadata, development, ...apiState(),
       groups: state.groups.map(group => ({ ...group, items: group.items.map(item => {
         const subject = { ...inbox.client.subjectSnapshot(item), ...subjectStates[item.id] };
         return { ...item, ...subject,
@@ -265,6 +268,21 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     fetch: async (path, options) => {
       if (offline) throw new Error("Synthetic connection failure");
       calls.push({ path, options });
+      if (path === "/api/subjects") {
+        const input = JSON.parse(options.body);
+        if (onSubjects) await onSubjects(input);
+        subjectSelectionVersion = input.version;
+        if (input.offset === 0) subjectPositions = [];
+        assert.equal(input.offset, subjectPositions.length);
+        assert.ok(input.positions.length <= 100);
+        assert.ok(Buffer.byteLength(options.body) <= 4096);
+        subjectPositions.push(...input.positions);
+        if (input.complete) {
+          const shown = inbox.shownSelection().items;
+          subjectSelections.push(subjectPositions.map(position => shown[position]?.id));
+        }
+        return { ok: true, json: async () => ({ version: subjectSelectionVersion }) };
+      }
       if (path === "/api/settings" || path === "/api/development") {
         const input = options.body ? JSON.parse(options.body) : undefined;
         if (path === "/api/development") {
@@ -312,7 +330,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
   });
   await settle();
   return {
-    calls, document, window, ids, timers, animationFrames, context, inbox, patches, deletions, githubCalls, copied, media,
+    calls, subjectSelections, document, window, ids, timers, animationFrames, context, inbox, patches, deletions, githubCalls, copied, media,
     get themeDisconnected() { return themeDisconnected; },
     attentionObserved,
     resizeAttention: () => attentionResized(),

@@ -175,6 +175,8 @@ test("Settings fits the available viewport and moves above only when that provid
 test("resize observations coalesce overflow and overlay writes into the next animation frame", async t => {
   const ui = await renderer();
   t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  ui.fireAnimationFrame();
+  await settle();
   const panel = ui.ids.get("settings-panel");
   const previous = ui.ids.get("attention-previous");
   const next = ui.ids.get("attention-next");
@@ -218,6 +220,8 @@ test("resize observations coalesce overflow and overlay writes into the next ani
 test("pagehide cancels pending overlay frames and prevents observer rescheduling", async t => {
   const ui = await renderer();
   t.after(() => ui.inbox.close());
+  ui.fireAnimationFrame();
+  await settle();
   ui.ids.get("settings").open = true;
   ui.resizeAttention();
   assert.equal(ui.animationFrames.size, 1);

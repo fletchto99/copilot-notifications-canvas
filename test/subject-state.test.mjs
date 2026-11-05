@@ -225,14 +225,14 @@ test("subject rate limits and authentication failures pause other GitHub request
       calls++;
       return http({}, headers, status);
     } });
-    const subjects = [item(), { ...item(), number: "43" }];
+    const subjects = Array.from({ length: 25 }, (_, index) => ({ ...item(), number: String(index + 42) }));
     await client.refreshSubjects(subjects);
-    assert.equal(calls, 1);
+    assert.equal(calls, 20, "Only the in-flight requests may finish after backoff starts");
     assert.ok(client.blockedUntil >= RETRY_MS);
     await assert.rejects(client.page(firstPage(), undefined, { force: true }), { code });
     client.invalidateSubjects(subjects);
     await client.refreshSubjects(subjects);
-    assert.equal(calls, 1);
+    assert.equal(calls, 20);
     now = client.blockedUntil;
     client.run = async () => http({ state: "open", merged: false, draft: false });
     await client.refreshSubjects(subjects);

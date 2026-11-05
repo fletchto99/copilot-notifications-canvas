@@ -34,14 +34,14 @@ for (const packaged of [false, true]) {
           const id = args.at(-1).match(/\/issues\/(\d+)$/)?.[1];
           if (!id) return;
           calls.push(id);
-          if (id === expected[0]) await held;
+          await held;
           return http({ state: "closed", state_reason: "completed" });
         });
         try {
           await page.goto(canvas.url);
           await expect(page.locator(".subject-loading")).toHaveCount(5);
           await expect(page.locator(".row .title")).toHaveText(expected.map(id => canvas.rows.find(row => row.id === id).subject.title));
-          expect(calls).toEqual(expected.slice(0, 1));
+          await expect.poll(() => calls.toSorted()).toEqual(expected.toSorted());
           const icon = page.locator(".subject-loading .subject-icon").first();
           await expect(icon).toHaveAttribute("aria-label", "Issue: Loading status");
           await expect(icon.locator("svg")).toHaveAttribute("width", "16");
@@ -52,17 +52,17 @@ for (const packaged of [false, true]) {
           expect((await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze()).violations).toEqual([]);
           if (groupBy === "repo") await page.screenshot({ path: testInfo.outputPath("initial-status-loading.png"), fullPage: true });
           release();
-          await expect.poll(() => calls).toEqual(expected);
+          await expect.poll(() => calls.toSorted()).toEqual(expected.toSorted());
           await expect(page.locator(".subject-loading")).toHaveCount(0);
           await expect(page.locator(".subject-closed")).toHaveCount(5);
 
           held = new Promise(resolve => { release = resolve; });
           await page.locator("#force-refresh").click();
-          await expect.poll(() => calls.length).toBe(6);
+          await expect.poll(() => calls.length).toBe(10);
           await expect(page.locator(".subject-loading")).toHaveCount(0);
           await expect(page.locator(".subject-closed")).toHaveCount(5);
           release();
-          await expect.poll(() => calls).toEqual([...expected, ...expected]);
+          await expect.poll(() => calls.toSorted()).toEqual([...expected, ...expected].sort());
           expect(canvas.writes).toEqual([]);
           expect(canvas.deliveries).toEqual([]);
         } finally {
@@ -73,6 +73,12 @@ for (const packaged of [false, true]) {
 
     test("grouping and search changes reprioritize pending rows without fetching excluded matches", async ({ page, canvas }) => {
       populate(canvas);
+      const first = Array.from({ length: 20 }, (_, index) => thread(String(index + 101), {
+        repository: { full_name: "example/first" },
+        subject: { type: "Issue", title: "Other synthetic issue",
+          url: `https://api.github.com/repos/example/first/issues/${index + 101}` },
+      }));
+      canvas.rows.unshift(...first);
       const calls = [];
       let release;
       const held = new Promise(resolve => { release = resolve; });
@@ -80,13 +86,13 @@ for (const packaged of [false, true]) {
         const id = args.at(-1).match(/\/issues\/(\d+)$/)?.[1];
         if (!id) return;
         calls.push(id);
-        if (calls.length === 1) await held;
+        if (calls.length <= 20) await held;
         return http({ state: "closed", state_reason: "completed" });
       });
       try {
         await page.goto(canvas.url);
-        await expect(page.locator(".subject-loading")).toHaveCount(5);
-        expect(calls).toEqual(["1"]);
+        await expect(page.locator(".subject-loading")).toHaveCount(25);
+        await expect.poll(() => calls.toSorted()).toEqual(first.map(row => row.id).sort());
         await page.locator("#settings-toggle").click();
         await page.locator("#group-by").selectOption("none");
         await page.keyboard.press("Escape");
@@ -94,7 +100,7 @@ for (const packaged of [false, true]) {
         await expect(page.locator(".row")).toHaveCount(3);
         await expect(page.locator(".row .title")).toHaveText(["2", "3", "4"].map(id => canvas.rows.find(row => row.id === id).subject.title));
         release();
-        await expect.poll(() => calls).toEqual(["1", "2", "3", "4"]);
+        await expect.poll(() => calls.toSorted()).toEqual([...first.map(row => row.id), "2", "3", "4"].sort());
         await expect(page.locator(".subject-loading")).toHaveCount(0);
         await expect(page.locator(".subject-closed")).toHaveCount(3);
         expect(canvas.writes).toEqual([]);

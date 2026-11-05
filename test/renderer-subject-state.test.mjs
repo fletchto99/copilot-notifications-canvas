@@ -16,10 +16,14 @@ test("state icons have accessible names without hover tooltips or visible status
       ["cancelled", "Cancelled"], ["skipped", "Skipped"], ["timed_out", "Timed out"],
       ["action_required", "Action required"], ["startup_failure", "Startup failure"], ["stale", "Stale"]]
       .map(([state, label]) => ["CheckSuite", state, label]),
+    ...[["open", "Open"], ["answered", "Answered"], ["closed", "Closed"],
+      ["duplicate", "Closed (duplicate)"], ["outdated", "Closed (outdated)"]]
+      .map(([state, label]) => ["Discussion", state, label]),
   ];
   const rows = cases.map(([type], index) => thread(String(index + 1), { subject: {
     type, title: `Synthetic state ${index}`,
-    url: `https://api.github.com/repos/example/widgets/${type === "Issue" ? "issues" : type === "CheckSuite" ? "check-suites" : "pulls"}/${index + 1}`,
+    url: `https://api.github.com/repos/example/widgets/${type === "Issue" ? "issues" : type === "CheckSuite" ? "check-suites" :
+      type === "Discussion" ? "discussions" : "pulls"}/${index + 1}`,
   } }));
   const subjectStates = Object.fromEntries(cases.map(([, subjectState], index) => [String(index + 1), { subjectState }]));
   const ui = await renderer({ initialRows: rows, subjectStates });
@@ -48,6 +52,10 @@ test("state icons have accessible names without hover tooltips or visible status
         "queued PRs show two dots leading into merge nodes");
       const shapes = fields.slice(4, 8).map(field => field.querySelectorAll("path")[0].attributes.d);
       assert.equal(new Set([...shapes, queuedShape]).size, 5, "open, draft, closed, merged, and queued PRs have different shapes");
+      const discussions = fields.filter(field => field.dataset.subjectType === "Discussion")
+        .map(field => field.querySelectorAll("path")[0].attributes.d);
+      assert.equal(new Set(discussions).size, 4, "closed, duplicate and outdated discussions have distinct shapes");
+      assert.match(discussions[2], /M6 9l2 2 5-5$/, "closed discussions have a checkmark");
     }
     assert.deepEqual(ui.patches, []);
     assert.deepEqual(ui.deletions, []);
@@ -143,9 +151,9 @@ test("known types get static icons and unknown or untrusted types get an accessi
       }
       assert.ok(paths.slice(0, staticSubjectTypes.length).every(path => path && path !== bell));
       assert.ok(paths.slice(staticSubjectTypes.length).every(path => path === bell));
-      assert.equal(new Set(paths.slice(0, staticSubjectTypes.length)).size, 7);
-      assert.equal(paths[3], paths[4], "security-related types share a shield");
-      assert.equal(paths[4], paths[5]);
+      assert.equal(new Set(paths.slice(0, staticSubjectTypes.length)).size, 6);
+      assert.equal(paths[2], paths[3], "security-related types share a shield");
+      assert.equal(paths[3], paths[4]);
       assert.equal(groups.querySelectorAll("img").length, 0);
       assert.equal(groups.querySelectorAll(".subject-loading").length, 0);
       await ui.fireTimer(1000);
@@ -162,7 +170,7 @@ test("known types get static icons and unknown or untrusted types get an accessi
 });
 
 test("row metadata never includes custom destination hints for any notification type", async () => {
-  const types = ["Issue", "PullRequest", "CheckSuite", ...staticSubjectTypes, "FutureSubject"];
+  const types = ["Issue", "PullRequest", "CheckSuite", "Discussion", ...staticSubjectTypes, "FutureSubject"];
   const ui = await renderer({
     initialRows: types.map((type, index) => thread(String(index + 1), {
       subject: { type, title: `Synthetic type ${index}`, url: null },
@@ -512,39 +520,58 @@ test("non-date groupings work without a browser time zone and date changes fail 
   }
 });
 
-test("viewport reports exclude collapsed and off-screen rows and update after resizing", async () => {
-  const ui = await renderer({ initialRows: [thread("1"), thread("2")] });
-  try {
-    const links = ui.ids.get("groups").querySelectorAll(".row-link");
-    links[0].bounds = { top: 950, bottom: 1010 };
-    links[1].bounds = { top: 100, bottom: 160 };
-    ui.window.events.scroll();
-    ui.fireAnimationFrame();
-    await settle();
-    assert.equal(ui.calls.at(-1).options.headers["X-Notification-Visible-Ids"], "2");
-    ui.ids.get("groups").querySelectorAll(".repo-toggle")[0].events.click();
-    ui.fireAnimationFrame();
-    await settle();
-    assert.equal(ui.calls.at(-1).options.headers["X-Notification-Visible-Ids"], "");
-    ui.ids.get("groups").querySelectorAll(".repo-toggle")[0].events.click();
-    ui.window.innerHeight = 1100;
-    ui.window.events.resize();
-    ui.fireAnimationFrame();
-    await settle();
-    assert.equal(ui.calls.at(-1).options.headers["X-Notification-Visible-Ids"], "1,2");
-  } finally {
-    ui.window.events.pagehide();
+test("status selection includes off-screen rows in display order and excludes collapsed groups in every view", async () => {
+  for (const [groupBy, expected, remaining] of [
+    ["repo", "1,3,2", "2"],
+    ["none", "1,2,3", ""],
+    ["date", "2,1,3", "1,3"],
+  ]) {
+    const ui = await renderer({
+      initialRows: [
+        thread("1", { updated_at: "2026-01-01T12:00:00Z" }),
+        thread("2", { repository: { full_name: "example/tools" }, updated_at: "2026-01-02T12:00:00Z" }),
+        thread("3", { updated_at: "2026-01-01T12:00:00Z" }),
+      ],
+      storedSettings: { groupBy },
+    });
+    try {
+      const links = ui.ids.get("groups").querySelectorAll(".row-link");
+      links[0].bounds = { top: -100, bottom: -40 };
+      links[1].bounds = { top: 100, bottom: 160 };
+      links[2].bounds = { top: 950, bottom: 1010 };
+      ui.fireAnimationFrame();
+      await settle();
+      assert.equal(ui.subjectSelections.at(-1).join(","), expected, groupBy);
+      ui.ids.get("groups").querySelectorAll(".repo-toggle")[0].events.click();
+      ui.fireAnimationFrame();
+      await settle();
+      assert.equal(ui.subjectSelections.at(-1).join(","), remaining, groupBy);
+      ui.ids.get("groups").querySelectorAll(".repo-toggle")[0].events.click();
+      ui.fireAnimationFrame();
+      await settle();
+      assert.equal(ui.subjectSelections.at(-1).join(","), expected, groupBy);
+      ui.ids.get("collapse").events.click();
+      ui.fireAnimationFrame();
+      await settle();
+      assert.equal(ui.subjectSelections.at(-1).join(","), "");
+      ui.ids.get("collapse").events.click();
+      ui.fireAnimationFrame();
+      await settle();
+      assert.equal(ui.subjectSelections.at(-1).join(","), expected, groupBy);
+    } finally {
+      ui.window.events.pagehide();
+      ui.inbox.close();
+    }
+    assert.equal(ui.animationFrames.size, 0);
   }
-  assert.equal(ui.animationFrames.size, 0);
 });
 
-test("unchanged scroll and resize events measure loaded rows once, not once per tooltip", async () => {
+test("scroll and resize events do not measure rows or request status", async () => {
   for (const count of [50, 100, 500]) {
     const ui = await renderer({ initialRows: Array.from({ length: count }, (_, index) => thread(String(index + 1))) });
     try {
       const links = ui.ids.get("groups").querySelectorAll(".row-link");
       links.forEach((link, index) => { link.bounds = { top: index * 60, bottom: index * 60 + 60 }; });
-      ui.window.events.scroll();
       ui.fireAnimationFrame();
       await settle();
       let measurements = 0;
@@ -556,7 +583,7 @@ test("unchanged scroll and resize events measure loaded rows once, not once per 
       for (const event of ["scroll", "resize"]) {
         measurements = 0;
         ui.window.events[event]();
-        assert.equal(measurements, count, `${event} scans ${count} loaded rows exactly once`);
+        assert.equal(measurements, 0, `${event} does not measure ${count} loaded rows`);
         assert.equal(ui.animationFrames.size, 0);
       }
       assert.equal(ui.calls.length, calls);

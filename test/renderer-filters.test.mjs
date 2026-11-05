@@ -625,6 +625,7 @@ test("overflow arrows reveal tabs without requests, retain focus at the ends, an
   Object.assign(strip, { clientWidth: 236, scrollWidth: 600 });
   ui.resizeAttention();
   ui.fireAnimationFrame();
+  await settle();
   assert.equal(previous.hidden, false);
   assert.equal(next.hidden, false);
   assert.equal(previous.attributes["aria-disabled"], "true");

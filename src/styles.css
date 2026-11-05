@@ -909,6 +909,7 @@ a:hover {
 }
 
 .subject-open .subject-icon,
+.subject-answered .subject-icon,
 .subject-success .subject-icon {
   color: var(--subject-open);
 }
@@ -917,6 +918,14 @@ a:hover {
 .subject-closed .subject-icon,
 .subject-duplicate .subject-icon {
   color: var(--subject-completed);
+}
+
+.notification-subject[data-subject-type="Discussion"]:is(
+    .subject-open,
+    .subject-duplicate
+  )
+  .subject-icon {
+  color: var(--muted);
 }
 
 .notification-subject[data-subject-type="PullRequest"].subject-closed

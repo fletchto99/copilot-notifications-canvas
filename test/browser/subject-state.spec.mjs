@@ -9,7 +9,7 @@ for (const packaged of [false, true]) {
     test("static type icons and fallback bells stay accessible without status lookups", async ({ page, canvas }, testInfo) => {
       const types = ["Release", ...staticSubjectTypes, "FutureSubject", "__proto__", ""];
       const labels = types.map(type => type.replace(/([a-z])([A-Z])/g, "$1 $2") || "Notification");
-      const paths = { Commit: "commits/abcdef0123456", Discussion: "discussions/7" };
+      const paths = { Commit: "commits/abcdef0123456" };
       canvas.rows.splice(0, canvas.rows.length, ...types.map((type, index) => thread(String(index + 1), {
         unread: index % 2 === 0,
         subject: {
@@ -60,11 +60,10 @@ for (const packaged of [false, true]) {
       expect(shapes.slice(staticSubjectTypes.length + 1).every(shape => shape === bell)).toBe(true);
       for (const [index, link] of (await page.locator(".row-link").all()).entries()) {
         const type = types[index];
-        const suffix = type === "Release" ? "example/widgets/releases" : type === "Commit" ? "example/widgets/commit/abcdef0123456" :
-          type === "Discussion" ? "example/widgets/discussions/7" : "notifications";
+        const suffix = type === "Release" ? "example/widgets/releases" : type === "Commit" ? "example/widgets/commit/abcdef0123456" : "notifications";
         await expect(link).toHaveAttribute("href", `https://github.com/${suffix}`);
         if (type === "Release") await expect(link).toHaveAccessibleName(/Open repository releases/);
-        else if (!["Commit", "Discussion"].includes(type)) await expect(link).toHaveAccessibleName(/Open GitHub inbox/);
+        else if (type !== "Commit") await expect(link).toHaveAccessibleName(/Open GitHub inbox/);
       }
       await page.locator("#force-refresh").click();
       await expect(page.locator(".subject-icon")).toHaveCount(types.length);
@@ -167,11 +166,12 @@ for (const packaged of [false, true]) {
       let release;
       const held = new Promise(resolve => { release = resolve; });
       let requests = 0;
+      let firstRequests = 0;
       canvas.setRequestHook(async args => {
         if (!args.at(-1).startsWith("/repos/example/widgets/pulls/")) return;
         requests++;
         if (args.at(-1).endsWith("/2")) return http({}, {}, 404);
-        if (requests === 1) {
+        if (++firstRequests === 1) {
           await held;
           return http({ state: "open", merged: false, draft: true });
         }
@@ -262,26 +262,25 @@ for (const packaged of [false, true]) {
       });
       let polls = 0;
       page.on("request", request => { if (request.url().endsWith("/api/state")) polls++; });
-      let releaseViewport;
-      const heldViewport = new Promise(resolve => { releaseViewport = resolve; });
-      let viewportStarted = false;
-      await page.route("**/api/state", async route => {
-        if (!viewportStarted) {
-          viewportStarted = true;
-          await heldViewport;
+      let releaseSelection;
+      const heldSelection = new Promise(resolve => { releaseSelection = resolve; });
+      let selectionStarted = false;
+      await page.route("**/api/subjects", async route => {
+        if (!selectionStarted) {
+          selectionStarted = true;
+          await heldSelection;
         }
         await route.continue();
       });
       await page.clock.install();
-      await page.clock.pauseAt(new Date(Date.now() + 1000));
       try {
         await page.goto(canvas.url);
         const icon = page.locator(".subject-icon");
         await expect(page.locator(".row")).toHaveCount(1);
-        await page.clock.runFor(50);
-        await expect.poll(() => viewportStarted).toBe(true);
+        await expect.poll(() => selectionStarted).toBe(true);
+        await page.clock.pauseAt(new Date(Date.now() + 1000));
         // Start the polling interval after the setup clock stops advancing.
-        releaseViewport();
+        releaseSelection();
         await expect(page.locator(".subject-loading")).toHaveCount(1);
         await expect(icon).toHaveAttribute("aria-label", "Pull Request: Loading status");
         release();
@@ -306,7 +305,7 @@ for (const packaged of [false, true]) {
         expect(canvas.requests.filter(path => path === "/repos/example/widgets/pulls/42")).toHaveLength(1);
         expect(canvas.writes).toEqual([]);
       } finally {
-        releaseViewport();
+        releaseSelection();
         release();
       }
     });
