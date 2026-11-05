@@ -22,6 +22,34 @@ test("process probes distinguish missing and inaccessible owners and propagate u
   assert.throws(() => processAlive(12345), value => value === error);
 });
 
+test("publishing a lock preserves existing regular files and directory links", async t => {
+  for (const kind of ["file", "junction"]) {
+    await t.test(kind, async t => {
+      const directory = await home(t);
+      const path = join(directory, "lock");
+      const content = "Unrecognized lock data must be preserved.";
+      if (kind === "file") {
+        await fs.writeFile(path, content);
+      } else {
+        await fs.mkdir(join(directory, "target"));
+        await fs.writeFile(join(directory, "target", "keep.txt"), content);
+        await fs.symlink(join(directory, "target"), path, "junction");
+      }
+      await assert.rejects(acquireLock(path, { label: "test" }),
+        { message: "Refusing an unrecognized test lock." });
+      if (kind === "file") {
+        assert.equal((await fs.lstat(path)).isFile(), true);
+        assert.equal(await fs.readFile(path, "utf8"), content);
+        assert.deepEqual(await fs.readdir(directory), ["lock"]);
+      } else {
+        assert.equal((await fs.lstat(path)).isSymbolicLink(), true);
+        assert.equal(await fs.readFile(join(directory, "target", "keep.txt"), "utf8"), content);
+        assert.deepEqual((await fs.readdir(directory)).sort(), ["lock", "target"]);
+      }
+    });
+  }
+});
+
 test("a lock disappearing during inspection is retried without leaving a candidate behind", async t => {
   for (const operation of ["lstat", "readdir"]) {
     await t.test(operation, async t => {
