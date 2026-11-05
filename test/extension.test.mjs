@@ -11,6 +11,8 @@ import { http, thread } from "./fixtures.mjs";
 import { apiTarget, filterSchema, emptySchema, InboxError } from "../src/model.mjs";
 import { Inbox } from "../src/inbox.mjs";
 import { DesktopNotifications } from "../src/desktop.mjs";
+import { GitHubClient, firstPage, POLL_MS } from "../src/github.mjs";
+import { Preferences } from "../src/settings.mjs";
 import { CURRENT_VERSION } from "../src/updates.mjs";
 
 test("the extension entry point wires an isolated session through its complete lifecycle", async t => {
@@ -329,7 +331,7 @@ test("the extension entry point wires an isolated session through its complete l
 
 const source = await fs.readFile(new URL("../src/extension.mjs", import.meta.url), "utf8");
 
-async function fixture(apiBaseUrl) {
+async function fixture(apiBaseUrl, overrides = {}) {
   let canvas;
   let desktop;
   const servers = [];
@@ -358,15 +360,74 @@ async function fixture(apiBaseUrl) {
       async remove(id) { this.panels.delete(id); }
     },
     Startup: class { async start() {} },
-    startServer: () => new Promise((resolve, reject) => {
-      const server = { url: `http://127.0.0.1:${1000 + servers.length}/`, closed: false, ready: Promise.resolve(true),
+    startServer: inbox => new Promise((resolve, reject) => {
+      const server = { inbox, url: `http://127.0.0.1:${1000 + servers.length}/`, closed: false, ready: Promise.resolve(true),
         async close() { this.closed = true; } };
       servers.push({ server, ready: () => resolve(server), reject });
     }),
     process: { once() {} },
+    ...overrides,
   });
   return { canvas, desktop, servers, inboxes, logs, clientOptions };
 }
+
+test("SDK notification reads inherit another client's server deadline before a watcher tick", async t => {
+  for (const action of ["refresh", "load_more", "set_filters"]) {
+    const directory = await fs.mkdtemp(join(tmpdir(), "notification-sdk-backoff-"));
+    const preferences = new Preferences({ directory });
+    await preferences.update({ desktopNotifications: true });
+    let now = Date.parse("2026-01-10T12:00:00Z");
+    let limited = false;
+    const calls = [];
+    const response = args => {
+      const url = new URL(args.at(-1), "https://api.github.com");
+      const page = Number(url.searchParams.get("page"));
+      url.searchParams.set("page", "2");
+      return http([thread(String(page))], page === 1 ? { link: `<${url.href}>; rel="next"` } : {});
+    };
+    const writerClient = new GitHubClient({ now: () => now,
+      run: async args => limited ? http({}, { "retry-after": "600" }, 429) : response(args) });
+    const readerClient = new GitHubClient({ now: () => now, run: async args => { calls.push(args); return response(args); } });
+    const options = { preferences, now: () => now, schedule: () => 0, cancel: () => {},
+      notify: async () => assert.fail("This scenario must not deliver notifications") };
+    const writer = new DesktopNotifications({ ...options, client: writerClient });
+    const reader = new DesktopNotifications({ ...options, client: readerClient });
+    const f = await fixture(undefined, {
+      Preferences: class { constructor() { return preferences; } },
+      GitHubClient: class { constructor() { return readerClient; } },
+      DesktopNotifications: class { constructor() { return reader; } },
+      Inbox,
+    });
+    const opening = f.canvas.open({ instanceId: "reader" });
+    f.servers[0].ready();
+    await opening;
+    t.after(async () => {
+      await f.canvas.onClose({ instanceId: "reader" });
+      await writer.close();
+      await reader.close();
+      await fs.rm(directory, { recursive: true, force: true });
+    });
+    writer.add("writer");
+    await writer.check();
+    await reader.check();
+    const invoke = (name, input = {}) => f.canvas.actions.find(action => action.name === name)
+      .handler({ instanceId: "reader", input });
+    await invoke("refresh");
+    now += POLL_MS;
+    limited = true;
+    await assert.rejects(writerClient.page(firstPage(), undefined, { force: true }), { code: "rate_limited" });
+    await writer.check();
+    assert.equal(readerClient.blockedUntil, 0);
+    const before = calls.length;
+    const input = action === "set_filters" ? { mode: "unread" } : {};
+    await assert.rejects(invoke(action, input), { code: "rate_limited" });
+    assert.equal(calls.length, before, `${action} must not start an uncached request`);
+    now = writerClient.serverBlockedUntil;
+    const resumed = await invoke(action, input);
+    assert.equal(resumed.loaded, action === "load_more" ? 2 : 1);
+    assert.doesNotMatch(JSON.stringify(resumed), /Synthetic|example\/widgets/);
+  }
+});
 
 test("custom development APIs never construct or register a desktop watcher", async () => {
   const f = await fixture("https://git.example.com/api/v3");

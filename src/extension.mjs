@@ -23,7 +23,10 @@ async function action(ctx, run, syncSettings = false) {
   try {
     const entry = await instances.get(ctx.instanceId)?.pending;
     if (!entry) throw new InboxError("not_open", "Open the notifications canvas first.", 404);
-    if (syncSettings) await entry.inbox.syncSettings(preferences);
+    if (syncSettings) {
+      await entry.inbox.syncSettings(preferences);
+      await desktop?.prepareForeground();
+    }
     return await run(entry.inbox);
   } catch (error) {
     if (error instanceof InboxError) throw new CanvasError(error.code, error.message);

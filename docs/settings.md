@@ -167,6 +167,12 @@ permission, and read/done failure delays stay local to the failing client.
 A watcher can still deliver from a sufficiently fresh cached page. A check
 deferred before reading any page leaves the polling reservation unchanged,
 without reporting a new poll error or extending the server's deadline.
+That watcher also remembers the deferral locally, so background ticks do not
+repeatedly reserve and restore the same checkpoint while it waits. Foreground
+cache reuse remains available. Panel and agent refresh, load-more, and filter
+actions inherit shared deadlines before fetching; a longer inherited rate-limit
+wait replaces stale local error messages, but a longer local failure retains
+its own message.
 See [Privacy](../README.md#privacy).
 
 ## Troubleshooting

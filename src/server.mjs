@@ -320,8 +320,10 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
           await developmentAPI.update(input);
           return json(200, await settingsSnapshot(await preferences.read()));
         }
-        if (path === "/api/refresh") {
+        if (["/api/refresh", "/api/more", "/api/filters"].includes(path)) {
           await desktop?.prepareForeground();
+        }
+        if (path === "/api/refresh") {
           await inbox.refresh(input);
           if (input.force) inbox.client.invalidateSubjects(inbox.loadedItems());
         }

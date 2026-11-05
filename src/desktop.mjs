@@ -131,6 +131,7 @@ export class DesktopNotifications {
     this.watchersPath = join(this.directory, "desktop-watchers");
     this.markerPath = join(this.watchersPath, this.owner);
     this.statePath = join(this.directory, "desktop-state.json");
+    this.deferredUntil = 0;
     this.status = { supported: this.supported, state: "off", message: "Desktop notifications are off." };
   }
 
@@ -217,6 +218,7 @@ export class DesktopNotifications {
     const blockedUntil = Math.max(state.blockedUntil ?? 0, this.client.serverBlockedUntil);
     const nextPollAt = Math.max(state.nextPollAt, blockedUntil);
     const changed = state.blockedUntil !== blockedUntil || state.nextPollAt !== nextPollAt;
+    if (blockedUntil > this.client.blockedUntil) this.client.lastError = null;
     this.client.serverBlockedUntil = blockedUntil;
     this.client.blockedUntil = Math.max(this.client.blockedUntil, blockedUntil);
     state.blockedUntil = blockedUntil;
@@ -373,7 +375,7 @@ export class DesktopNotifications {
       signal.throwIfAborted();
       // Foreground reads already refreshed the shared cache. Failed or interrupted
       // polls still retain their durable retry reservation, including older checkpoints.
-      if (this.now() < (foreground ? reservedUntil : state.nextPollAt)) {
+      if (this.now() < (foreground ? reservedUntil : Math.max(state.nextPollAt, this.deferredUntil))) {
         if (JSON.stringify(state) !== previous) await saveDocument(this.statePath, state);
         this.setStatus(state.error ? "error" : "watching", state.error || watchingMessage);
         return;
@@ -442,6 +444,7 @@ export class DesktopNotifications {
         }
         if (error.requestDeferred && !scannedPage) {
           // No poll ran, so keep its prior reservation rather than recording a new failure.
+          this.deferredUntil = error.retryAt;
           Object.assign(state, reservation);
           this.syncBackoff(state);
           await saveDocument(this.statePath, state);

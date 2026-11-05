@@ -1227,6 +1227,92 @@ test("Windows polling failures retain the shared reservation without rate-limiti
   assert.equal((await f.state()).error, state.error);
 });
 
+test("Windows local deferrals stop repeated background checkpoint writes without postponing other clients", async t => {
+  const f = await fixture(t);
+  const watcher = f.make({ platform: "win32" });
+  const healthy = f.make({ platform: "win32" });
+  await watcher.check();
+  await healthy.check();
+  f.advance(POLL_MS);
+  f.response(() => http({}, {}, 503));
+  await assert.rejects(watcher.client.page(firstPage(), undefined, { force: true }), { code: "github_http" });
+  const deadline = watcher.client.blockedUntil;
+  const reservation = await f.state();
+  const calls = f.calls.length;
+  let writes = 0;
+  const rename = fs.rename;
+  fs.rename = async (from, to) => {
+    if (to === watcher.statePath) writes++;
+    return rename(from, to);
+  };
+  syncBuiltinESMExports();
+  try {
+    await watcher.check();
+    assert.equal(writes, 2, "the initial deferral reserves then restores the checkpoint");
+    const deferred = writes;
+    for (let count = 0; count < 4; count++) {
+      f.advance(5000);
+      await watcher.check();
+      assert.equal(writes, deferred, "background ticks must not reserve another blocked request");
+    }
+    assert.equal(f.calls.length, calls);
+    assert.equal((await f.state()).nextPollAt, reservation.nextPollAt);
+    assert.equal((await f.state()).blockedUntil, 0);
+
+    f.response(undefined);
+    f.rows([updated("2", f.advance(0)), thread()]);
+    await healthy.client.page(firstPage());
+    // A newly available cache must remain usable by foreground synchronization.
+    watcher.client.cache = new Map(healthy.client.cache);
+    await watcher.sync();
+    assert.equal(f.deliveries.length, 1);
+    assert.equal(f.deliveries[0].body, "#42 Synthetic notification 2");
+    const afterForeground = writes;
+    f.advance(POLL_MS);
+    await watcher.check();
+    assert.equal(writes, afterForeground, "the local deferral still gates background cache misses");
+    assert.equal(f.calls.length, calls + 1);
+
+    f.rows([updated("3", f.advance(deadline - f.advance(0))), thread()]);
+    await watcher.check();
+    assert.equal(f.calls.length, calls + 2);
+    assert.equal(f.deliveries.at(-1).body, "#42 Synthetic notification 3");
+  } finally {
+    fs.rename = rename;
+    syncBuiltinESMExports();
+  }
+});
+
+test("Windows longer shared deadlines replace stale client errors but preserve a longer local failure", async t => {
+  for (const localSeconds of [120, 600, 900]) {
+    const f = await fixture(t);
+    const one = f.make({ platform: "win32" });
+    const two = f.make({ platform: "win32" });
+    await one.check();
+    await two.check();
+    f.advance(1000);
+    f.response(() => http({}, { "x-poll-interval": String(localSeconds) }, 403));
+    await assert.rejects(two.client.page(firstPage(), undefined, { force: true }), { code: "permission" });
+    const localError = two.client.lastError;
+    f.response(() => http({}, { "retry-after": "600" }, 429));
+    await assert.rejects(one.client.page(firstPage(), undefined, { force: true }), { code: "rate_limited" });
+    await one.check();
+    await two.prepareForeground();
+    const sharedWins = localSeconds < 600;
+    assert.equal(two.client.lastError, sharedWins ? null : localError);
+    const calls = f.calls.length;
+    for (const request of [
+      () => two.client.page(firstPage(), undefined, { force: true }),
+      () => two.client.markRead("1"),
+      () => two.client.markDone("2"),
+    ]) {
+      await assert.rejects(request(), { code: sharedWins ? "rate_limited" : "permission" });
+    }
+    assert.equal(f.calls.length, calls);
+    assert.equal(two.client.blockedUntil, f.advance(0) + Math.max(localSeconds, 600) * 1000);
+  }
+});
+
 test("Windows shared backoff accepts older checkpoints but rejects malformed deadlines without overwriting", async t => {
   for (const blockedUntil of [undefined, null, -1, "600000", {}]) {
     const f = await fixture(t);

@@ -4,7 +4,7 @@ import { request } from "node:http";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { GitHubClient } from "../src/github.mjs";
+import { GitHubClient, firstPage, POLL_MS } from "../src/github.mjs";
 import { Inbox } from "../src/inbox.mjs";
 import { startServer } from "../src/server.mjs";
 import { DesktopNotifications } from "../src/desktop.mjs";
@@ -238,6 +238,67 @@ test("only successful foreground refreshes feed the desktop watcher, after updat
   fail = true;
   assert.equal((await refresh({ force: true })).status, 502);
   assert.equal(syncs, 1);
+});
+
+test("HTTP notification reads inherit another client's server deadline before a watcher tick", async t => {
+  for (const [path, input] of [["refresh", { force: true }], ["more", {}], ["filters", { mode: "unread" }]]) {
+    const directory = await mkdtemp(join(tmpdir(), "notification-http-backoff-"));
+    const preferences = new Preferences({ directory });
+    await preferences.update({ desktopNotifications: true });
+    let now = Date.parse("2026-01-10T12:00:00Z");
+    let limited = false;
+    const calls = [];
+    const response = args => {
+      const url = new URL(args.at(-1), "https://api.github.com");
+      const page = Number(url.searchParams.get("page"));
+      url.searchParams.set("page", "2");
+      return http([thread(String(page), { subject: { type: "Unknown", title: "Synthetic", url: null } })],
+        page === 1 ? { link: `<${url.href}>; rel="next"` } : {});
+    };
+    const writerClient = new GitHubClient({ now: () => now,
+      run: async args => limited ? http({}, { "retry-after": "600" }, 429) : response(args) });
+    const readerClient = new GitHubClient({ now: () => now, run: async args => { calls.push(args); return response(args); } });
+    const watcher = client => new DesktopNotifications({
+      preferences, client, now: () => now, schedule: () => 0, cancel: () => {},
+      notify: async () => assert.fail("This scenario must not deliver notifications"),
+    });
+    const writer = watcher(writerClient);
+    const reader = watcher(readerClient);
+    writer.add("writer");
+    reader.add("reader");
+    await writer.check();
+    await reader.check();
+    const inbox = new Inbox(readerClient);
+    await inbox.refresh();
+    const server = await startServer(inbox, { preferences, desktop: reader });
+    t.after(async () => {
+      await server.close();
+      await writer.close();
+      await reader.close();
+      await rm(directory, { recursive: true, force: true });
+    });
+    now += POLL_MS;
+    limited = true;
+    await assert.rejects(writerClient.page(firstPage(), undefined, { force: true }), { code: "rate_limited" });
+    await writer.check();
+    assert.equal(readerClient.blockedUntil, 0, "the reader has not observed the new deadline yet");
+    const url = new URL(server.url);
+    const call = () => fetch(new URL(`/api/${path}`, url), {
+      method: "POST",
+      headers: { Authorization: `Bearer ${url.hash.slice(1)}`, Origin: url.origin, "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    const before = calls.length;
+    const blocked = await call();
+    assert.equal(blocked.status, 429);
+    assert.equal((await blocked.json()).error.code, "rate_limited");
+    assert.equal(calls.length, before, `${path} must not start an uncached request`);
+    now = writerClient.serverBlockedUntil;
+    const resumed = await call();
+    assert.equal(resumed.status, 200);
+    assert.equal((await resumed.json()).loaded, path === "more" ? 2 : 1);
+    await reader.foregroundPending;
+  }
 });
 
 test("activation during an in-flight foreground request establishes a fresh generation-scoped baseline", async t => {
