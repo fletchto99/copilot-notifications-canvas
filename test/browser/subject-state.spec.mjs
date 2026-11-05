@@ -186,6 +186,16 @@ for (const packaged of [false, true]) {
       });
       let polls = 0;
       page.on("request", request => { if (request.url().endsWith("/api/state")) polls++; });
+      let releaseViewport;
+      const heldViewport = new Promise(resolve => { releaseViewport = resolve; });
+      let viewportStarted = false;
+      await page.route("**/api/state", async route => {
+        if (!viewportStarted) {
+          viewportStarted = true;
+          await heldViewport;
+        }
+        await route.continue();
+      });
       await page.clock.install();
       await page.clock.pauseAt(new Date(Date.now() + 1000));
       try {
@@ -193,6 +203,9 @@ for (const packaged of [false, true]) {
         const icon = page.locator(".subject-icon");
         await expect(page.locator(".row")).toHaveCount(1);
         await page.clock.runFor(50);
+        await expect.poll(() => viewportStarted).toBe(true);
+        // Start the polling interval after the setup clock stops advancing.
+        releaseViewport();
         await expect(page.locator(".subject-loading")).toHaveCount(1);
         await expect(icon).toHaveAttribute("aria-label", "Pull Request: Loading status");
         release();
@@ -202,10 +215,13 @@ for (const packaged of [false, true]) {
           });
           return (await response.json()).subjectsLoading;
         })).toBe(false);
+        const pendingPolls = polls;
         await page.clock.runFor(999);
         await expect(icon).toHaveAttribute("aria-label", "Pull Request: Loading status");
+        expect(polls).toBe(pendingPolls);
         await page.clock.runFor(1);
         await expect(icon).toHaveAttribute("aria-label", /^Pull Request: Merged\. Checked /);
+        expect(polls).toBe(pendingPolls + 1);
         const completedPolls = polls;
         const nextPoll = page.waitForResponse(response => response.url().endsWith("/api/state"));
         await page.clock.runFor(5000);
@@ -214,6 +230,7 @@ for (const packaged of [false, true]) {
         expect(canvas.requests.filter(path => path === "/repos/example/widgets/pulls/42")).toHaveLength(1);
         expect(canvas.writes).toEqual([]);
       } finally {
+        releaseViewport();
         release();
       }
     });
