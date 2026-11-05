@@ -5,6 +5,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { firstPage, GitHubClient, nextPage, parseResponse, POLL_MS, RETRY_MS, runGh } from "../src/github.mjs";
 import { http, next, thread } from "./fixtures.mjs";
 import { Inbox } from "../src/inbox.mjs";
+import { InboxError } from "../src/model.mjs";
 
 test("gh calls use explicit GET, fixed host, safe argument arrays and no auth token extraction", async () => {
   const calls = [];
@@ -294,6 +295,52 @@ test("forced reads cannot bypass GitHub retry waits, exhausted quota or error ba
   }
 });
 
+test("only server retry and rate-limit responses set the shareable backoff deadline", async () => {
+  for (const { response, serverDeadline } of [
+    { response: http({}, { "retry-after": "600" }, 429), serverDeadline: 600_000 },
+    { response: http({}, {}, 429), serverDeadline: RETRY_MS },
+    { response: http({ message: "secondary rate limit" }, {}, 403), serverDeadline: RETRY_MS },
+    { response: http({}, { "retry-after": new Date(600_000).toUTCString() }, 503), serverDeadline: 600_000 },
+    { response: http([thread()], { "retry-after": "600" }), serverDeadline: 600_000 },
+    { response: http([thread()], { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "900" }), serverDeadline: 901_000 },
+    ...[401, 403, 404, 500].map(status => ({ response: http({}, { "x-poll-interval": "300" }, status), serverDeadline: 0 })),
+    { response: new InboxError("gh_failed", "Synthetic network error", 502), serverDeadline: 0 },
+  ]) {
+    const client = new GitHubClient({ now: () => 0, run: async () => {
+      if (response instanceof Error) throw response;
+      return response;
+    } });
+    try { await client.page(firstPage()); } catch (error) { assert.ok(error instanceof InboxError); }
+    assert.equal(client.serverBlockedUntil, serverDeadline);
+    assert.ok(client.blockedUntil >= RETRY_MS);
+    client.clear();
+    assert.equal(client.serverBlockedUntil, serverDeadline, "clearing caches must not reset a server deadline");
+  }
+});
+
+test("pre-request backoff rejections identify deferral without changing the original error or retry delay", async () => {
+  for (const response of [http({}, { "retry-after": "600" }, 429), http({}, {}, 500)]) {
+    let now = 0;
+    let calls = 0;
+    const client = new GitHubClient({ now: () => now, run: async () => { calls++; return response; } });
+    let original;
+    await assert.rejects(client.page(firstPage()), error => {
+      original = error;
+      assert.equal(error.requestDeferred, undefined);
+      return true;
+    });
+    const deadline = client.blockedUntil;
+    const failures = [...client.failures];
+    now = deadline - 1;
+    await assert.rejects(client.page(firstPage(), undefined, { force: true }), error =>
+      error !== original && error.requestDeferred === true && error.retryAt === deadline &&
+      error.code === original.code && error.message === original.message && error.status === original.status);
+    assert.equal(original.requestDeferred, undefined);
+    assert.equal(client.blockedUntil, deadline);
+    assert.deepEqual([...client.failures], failures);
+    assert.equal(calls, 1);
+  }
+});
 test("pagination follows and validates Link rather than guessing page count", () => {
   assert.match(nextPage(next, firstPage()), /page=2/);
   assert.equal(nextPage(undefined, firstPage()), null);

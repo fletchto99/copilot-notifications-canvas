@@ -160,10 +160,13 @@ Windows alerts also include the GitHub destination URL; it is not saved in the
 extension's coordination state or logs. Resolving individual Windows check
 links may fetch workflow-run and job metadata, respecting the shared cache and
 rate limits; it does not fetch log contents or resolve links for burst summaries.
-Lookup backoff deadlines are saved in the shared checkpoint, including when a
-lookup is interrupted. Other watchers and foreground refreshes inherit the
-deadline instead of starting upstream requests early. A watcher can still
-deliver from a sufficiently fresh cached page, without shortening that deadline.
+Server retry/rate-limit deadlines from lookups are saved in the shared
+checkpoint, including when a lookup is interrupted. Enabled, supported watchers
+and their foreground refreshes inherit those deadlines; ordinary network,
+permission, and read/done failure delays stay local to the failing client.
+A watcher can still deliver from a sufficiently fresh cached page. A check
+deferred before reading any page leaves the polling reservation unchanged,
+without reporting a new poll error or extending the server's deadline.
 See [Privacy](../README.md#privacy).
 
 ## Troubleshooting

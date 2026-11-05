@@ -204,7 +204,9 @@ export class DesktopNotifications {
 
   async prepareForeground() {
     try {
-      this.observeActivation(await this.preferences.document());
+      const settings = await this.preferences.document();
+      if (!settings.desktopNotifications || !this.supported) return;
+      this.observeActivation(settings);
       this.syncBackoff(await readState(this.statePath));
     } catch (error) {
       this.setStatus("error", errorMessage(error));
@@ -212,10 +214,11 @@ export class DesktopNotifications {
   }
 
   syncBackoff(state) {
-    const blockedUntil = Math.max(state.blockedUntil ?? 0, this.client.blockedUntil);
+    const blockedUntil = Math.max(state.blockedUntil ?? 0, this.client.serverBlockedUntil);
     const nextPollAt = Math.max(state.nextPollAt, blockedUntil);
     const changed = state.blockedUntil !== blockedUntil || state.nextPollAt !== nextPollAt;
-    this.client.blockedUntil = blockedUntil;
+    this.client.serverBlockedUntil = blockedUntil;
+    this.client.blockedUntil = Math.max(this.client.blockedUntil, blockedUntil);
     state.blockedUntil = blockedUntil;
     state.nextPollAt = nextPollAt;
     return changed;
@@ -376,7 +379,9 @@ export class DesktopNotifications {
         return;
       }
       // Reserve the next poll before network I/O so a crashed poller cannot cause a retry storm.
+      const reservation = { nextPollAt: state.nextPollAt, polling: state.polling };
       let nextPollAt = state.nextPollAt;
+      let scannedPage = false;
       state.nextPollAt = Math.max(state.nextPollAt, this.now() + POLL_MS);
       state.polling = true;
       await saveDocument(this.statePath, state);
@@ -387,6 +392,7 @@ export class DesktopNotifications {
         const items = [];
         while (next) {
           const page = await this.client.page(next, signal, { minSequence, allowCachedDuringBackoff: true });
+          scannedPage = true;
           signal.throwIfAborted();
           minSequence = page.sequence;
           items.push(...page.items);
@@ -433,6 +439,14 @@ export class DesktopNotifications {
         if (signal.aborted) {
           if (backoffChanged) await saveDocument(this.statePath, state);
           throw error;
+        }
+        if (error.requestDeferred && !scannedPage) {
+          // No poll ran, so keep its prior reservation rather than recording a new failure.
+          Object.assign(state, reservation);
+          this.syncBackoff(state);
+          await saveDocument(this.statePath, state);
+          this.setStatus(state.error ? "error" : "watching", state.error || watchingMessage);
+          return;
         }
         state.nextPollAt = Math.max(state.nextPollAt, nextPollAt, this.now() + RETRY_MS, this.client.blockedUntil);
         state.error = errorMessage(error);

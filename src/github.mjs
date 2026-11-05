@@ -278,6 +278,8 @@ export class GitHubClient {
     this.sequence = 0;
     this.queue = Promise.resolve();
     this.blockedUntil = 0;
+    // Only server retry/rate-limit delays may be inherited by another client.
+    this.serverBlockedUntil = 0;
     this.graphqlBlockedUntil = 0;
     this.graphqlLastError = null;
     this.failures = new Map();
@@ -553,8 +555,13 @@ export class GitHubClient {
     if (cached?.error && now < cached.nextRefreshAt) return cached;
     if (allowCachedDuringBackoff && !force && cached && !cached.invalidated &&
         cached.sequence >= minSequence && now < cached.nextRefreshAt) return cached;
-    if (now < this.blockedUntil) throw this.lastError ??
-      new InboxError("rate_limited", "GitHub requests are paused until the rate limit resets.", 429);
+    if (now < this.blockedUntil) {
+      const cause = this.lastError ?? rateLimitError();
+      const error = new InboxError(cause.code, cause.message, cause.status);
+      error.retryAt = this.blockedUntil;
+      error.requestDeferred = true;
+      throw error;
+    }
     if (mergeQueue && now < this.graphqlBlockedUntil) {
       const error = this.graphqlLastError ?? rateLimitError(true);
       error.retryAt = this.graphqlBlockedUntil;
@@ -603,19 +610,21 @@ export class GitHubClient {
         Math.max(0, Date.parse(headers["retry-after"]) - fetchedAt) || 0;
       const exhausted = headers["x-ratelimit-remaining"] === "0";
       const graphqlPrimary = mergeQueue && exhausted && !retry && status !== 429 && !SECONDARY_LIMIT.test(response.text);
-      if (retry) this.blockedUntil = Math.max(this.blockedUntil, fetchedAt + retry);
+      if (retry) this.serverBlockedUntil = Math.max(this.serverBlockedUntil, fetchedAt + retry);
       if (exhausted) {
         if (graphqlPrimary) {
           this.graphqlBlockedUntil = Math.max(this.graphqlBlockedUntil, reset + 1000, fetchedAt + retryPoll);
           this.graphqlLastError = rateLimitError(true);
         } else {
-          this.blockedUntil = Math.max(this.blockedUntil, reset + 1000, fetchedAt + retryPoll);
+          this.serverBlockedUntil = Math.max(this.serverBlockedUntil, reset + 1000, fetchedAt + retryPoll);
         }
       }
+      this.blockedUntil = Math.max(this.blockedUntil, this.serverBlockedUntil);
       if (status === 429 || (status === 403 && (exhausted || retry ||
           /rate limit|abuse detection|secondary limit/i.test(response.text)))) {
         if (graphqlPrimary) throw rateLimitError(true);
-        this.blockedUntil = Math.max(this.blockedUntil, fetchedAt + retry, fetchedAt + retryPoll);
+        this.serverBlockedUntil = Math.max(this.serverBlockedUntil, fetchedAt + retry, fetchedAt + retryPoll);
+        this.blockedUntil = Math.max(this.blockedUntil, this.serverBlockedUntil);
         throw rateLimitError();
       }
       if (status === 401) throw new InboxError("authentication",
@@ -694,6 +703,7 @@ export class GitHubClient {
         } else if (!subjectType || ["rate_limited", "authentication"].includes(error.code)) {
           this.blockedUntil = Math.max(this.blockedUntil, retryAt);
           this.lastError = error;
+          if (error.code === "rate_limited") this.serverBlockedUntil = Math.max(this.serverBlockedUntil, retryAt);
         }
       }
       throw error;

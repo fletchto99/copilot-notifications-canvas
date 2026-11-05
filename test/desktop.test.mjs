@@ -89,6 +89,30 @@ test("desktop watching is opt-in and never invokes GitHub or the sender when dis
   assert.equal(f.calls.length, 0);
 });
 
+test("foreground preparation ignores desktop checkpoints when alerts are disabled or unsupported", async t => {
+  for (const enabled of [false, true]) {
+    for (const checkpoint of ["malformed", "unsupported", "blocked"]) {
+      const f = await fixture(t, { enabled });
+      const watcher = f.make({ platform: enabled ? "freebsd" : "win32" });
+      const content = checkpoint === "malformed" ? "not JSON" : JSON.stringify({
+        version: checkpoint === "unsupported" ? 1 : 2, watchers: [], cohort: null, generation: null,
+        watermark: null, fingerprints: [], nextPollAt: epoch + 600_000, blockedUntil: epoch + 600_000, error: null,
+      });
+      await writeFile(watcher.statePath, content);
+      for (let count = 0; count < 2; count++) {
+        await watcher.prepareForeground();
+        await watcher.check();
+      }
+      assert.equal(watcher.snapshot().state, "off");
+      assert.equal(watcher.client.blockedUntil, 0);
+      assert.deepEqual(f.logs, []);
+      assert.deepEqual(f.calls, []);
+      assert.deepEqual(f.deliveries, []);
+      assert.equal(await readFile(watcher.statePath, "utf8"), content);
+    }
+  }
+});
+
 test("initial backlog is silent and small batches retain each thread's title and body", async t => {
   const f = await fixture(t);
   const watcher = f.make();
@@ -1063,6 +1087,7 @@ test("Windows shared lookup backoff permits fresh-cache delivery without shorten
   const f = await fixture(t);
   const one = f.make({ platform: "win32" });
   const two = f.make({ platform: "win32" });
+  const noCache = f.make({ platform: "win32" });
   await one.check();
   await two.check();
   const time = f.advance();
@@ -1078,6 +1103,8 @@ test("Windows shared lookup backoff permits fresh-cache delivery without shorten
   await one.check();
   const deadline = one.client.blockedUntil;
   const calls = f.calls.length;
+  await noCache.sync();
+  assert.equal((await f.state()).error, null, "a watcher without a cache must not poison fresh-cache reuse");
   await two.sync();
   assert.equal(f.calls.length, calls, "a valid cached page is still usable during shared backoff");
   assert.equal(two.client.blockedUntil, deadline);
@@ -1089,6 +1116,115 @@ test("Windows shared lookup backoff permits fresh-cache delivery without shorten
   ]);
   await assert.rejects(two.client.page(firstPage(), undefined, { force: true }), { code: "rate_limited" });
   assert.equal(f.calls.length, calls);
+});
+
+test("Windows lookup backoff without a fresh unread cache stays quiet and resumes at the original deadline", async t => {
+  for (const cache of ["missing", "stale", "invalidated"]) {
+    const f = await fixture(t);
+    const one = f.make({ platform: "win32" });
+    const two = f.make({ platform: "win32" });
+    await one.check();
+    await two.check();
+    if (cache !== "missing") {
+      await two.client.page(firstPage());
+      if (cache === "invalidated") {
+        for (const page of two.client.cache.values()) page.invalidated = true;
+      }
+    }
+    const time = f.advance();
+    const row = thread("2", {
+      updated_at: new Date(time).toISOString(),
+      subject: { type: "CheckSuite", title: "Synthetic build workflow run failed for main branch", url: null },
+    });
+    f.response(args => args.at(-1).startsWith("/notifications?") ? http([row, thread()])
+      : http({}, { "retry-after": "600" }, 429));
+    await one.check();
+    const checkpoint = await f.state();
+    assert.equal(checkpoint.nextPollAt, time + 600_000);
+    const calls = f.calls.length;
+    f.advance(600_000 - 1);
+    await two.sync();
+    await two.sync();
+    const skipped = await f.state();
+    assert.equal(f.calls.length, calls);
+    assert.equal(skipped.error, null);
+    assert.equal(skipped.polling, checkpoint.polling);
+    assert.equal(skipped.nextPollAt, checkpoint.nextPollAt);
+    assert.equal(skipped.watermark, checkpoint.watermark);
+    assert.deepEqual(skipped.fingerprints, checkpoint.fingerprints);
+    assert.equal(two.snapshot().state, "watching");
+    assert.equal(f.logs.some(([, options]) => options.level === "error"), false);
+    const resumedAt = f.advance(1);
+    f.response(undefined);
+    f.rows([updated("3", resumedAt), row, thread()]);
+    await two.check();
+    assert.equal(f.calls.length, calls + 1);
+    assert.equal(f.deliveries.length, 2);
+    assert.equal(f.deliveries.at(-1).body, "#42 Synthetic notification 3");
+  }
+});
+
+test("Windows client-local read and write failures never become another client's rate limit", async t => {
+  for (const operation of ["page", "markRead", "markDone"]) {
+    for (const failure of ["network", "permission", "authentication", "http"]) {
+      const f = await fixture(t);
+      const one = f.make({ platform: "win32" });
+      const two = f.make({ platform: "win32" });
+      await one.check();
+      await two.check();
+      const reservation = (await f.state()).nextPollAt;
+      f.advance(1000);
+      f.response(() => {
+        if (failure === "network") throw new InboxError("gh_failed", "Synthetic network failure", 502);
+        return http({}, {}, { permission: 403, authentication: 401, http: 500 }[failure]);
+      });
+      const failed = () => operation === "page" ? one.client.page(firstPage(), undefined, { force: true })
+        : one.client[operation]("1");
+      await assert.rejects(failed());
+      assert.ok(one.client.blockedUntil > f.advance(0));
+      const calls = f.calls.length;
+      await assert.rejects(failed());
+      assert.equal(f.calls.length, calls, "the failed client retains its own retry delay");
+      await one.check();
+      await one.sync();
+      const state = await f.state();
+      assert.equal(state.blockedUntil, 0);
+      assert.equal(state.nextPollAt, reservation);
+      assert.equal(state.error, null);
+      await two.prepareForeground();
+      assert.equal(two.client.blockedUntil, 0);
+      f.response(args => args.includes("GET") ? http([thread()]) : http(null, {}, args.includes("DELETE") ? 204 : 205));
+      await two.client.page(firstPage(), undefined, { force: true });
+      await two.client.markRead("1");
+      await two.client.markDone("2");
+      assert.equal(f.calls.length, calls + 3);
+    }
+  }
+});
+
+test("Windows polling failures retain the shared reservation without rate-limiting healthy clients", async t => {
+  const f = await fixture(t);
+  const one = f.make({ platform: "win32" });
+  const two = f.make({ platform: "win32" });
+  await one.check();
+  await two.check();
+  const time = f.advance(POLL_MS);
+  f.response(() => http({}, {}, 500));
+  await one.check();
+  const state = await f.state();
+  assert.equal(state.nextPollAt, time + RETRY_MS);
+  assert.equal(state.blockedUntil, 0);
+  assert.match(state.error, /HTTP 500/);
+  const calls = f.calls.length;
+  f.response(undefined);
+  await two.prepareForeground();
+  assert.equal(two.client.blockedUntil, 0);
+  await two.client.page(firstPage(), undefined, { force: true });
+  await two.check();
+  await two.sync();
+  assert.equal(f.calls.length, calls + 1);
+  assert.equal((await f.state()).nextPollAt, state.nextPollAt);
+  assert.equal((await f.state()).error, state.error);
 });
 
 test("Windows shared backoff accepts older checkpoints but rejects malformed deadlines without overwriting", async t => {
@@ -1963,7 +2099,7 @@ async function childWatcher(t, directory) {
     const watcher = new DesktopNotifications({
       preferences: new Preferences({ directory: process.argv[1] }),
       platform: "darwin", now: () => now, schedule: () => 0, cancel: () => {},
-      client: { clear() {}, blockedUntil: 0, async page() {
+      client: { clear() {}, blockedUntil: 0, serverBlockedUntil: 0, async page() {
         process.send({ type: "poll" });
         if (pause) await new Promise(resolve => { finish = resolve; });
         return {
