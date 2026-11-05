@@ -215,6 +215,36 @@ only warning. Release bundles still target Node.js 22; the development
 requirement does not raise the runtime minimum. CI does not separately test the
 initial 24.0.0 release.
 
+### Native notification coverage
+
+CI checks native notification contracts without sending real desktop alerts:
+
+- Windows runs the real Windows PowerShell XML/WinRT construction with delivery
+  removed, verifies protocol click destinations, and exercises permission and
+  sender failures with synthetic objects. It also checks issue/PR destinations,
+  check-run resolution, cancellation, and at-most-once behavior.
+- macOS compiles and decompiles the actual AppleScript using `osacompile` and
+  `osadecompile`, without executing `display notification`.
+- The Node.js 24 Linux job uses `ubuntu-latest` to install `dbus-daemon`,
+  `libnotify-bin`, `python3-dbus`, and `python3-gi`. It runs real `notify-send`
+  against a fake notification service on a private `dbus-run-session`, checking
+  text escaping, Unicode, and sound hints. No graphical desktop is involved.
+  Node.js 22 coverage and source lint retain the lightweight `ubuntu-slim` runner.
+
+On Linux with those system packages installed, run
+`npm run test:notifications:linux`. The test creates and tears down its own bus,
+requires exclusive ownership of the fake notification service before sending,
+and does not use a user's desktop notification service. Missing tools fail this
+integration check rather than silently skipping it. It remains separate from
+the dependency-free Node suite.
+
+These checks do **not** prove visible banners, OS permissions, Focus/Do Not
+Disturb behavior, or browser activation on an actual desktop. Windows click
+targets are validated in the toast payload; Linux and macOS click navigation
+are not implemented. Those end-to-end behaviors require manual testing.
+
+### Coverage badge
+
 The README coverage badge shows measured aggregate **line coverage** from the
 Node.js 22 run, rounded to two decimal places, not the 95% minimum. The existing
 reporter writes a standalone SVG when `COVERAGE_BADGE_PATH` is set; normal local
@@ -238,6 +268,8 @@ No external coverage service, additional secret, or source-branch commit is
 required. Repository rules must allow the Actions token to create and update
 `badges`; publication failures appear in the workflow rather than silently
 replacing the measurement.
+
+### Tooling and browser coverage
 
 The recovery lint check starts an isolated loopback server with synthetic
 missing renderer assets and lints the fallback content it serves. It makes no
@@ -292,8 +324,9 @@ final error count even on successful runs. It needs no Node setup or npm
 installation. The Docker action needs a full Linux
 VM: [`ubuntu-slim`](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#single-cpu-runners)
 is an unprivileged container and does not support Docker-in-Docker.
-Docker-based jobs and Copilot setup use `ubuntu-latest`; lightweight Linux tests,
-source lint, and release jobs use `ubuntu-slim`. The container digests pin the
+Docker-based jobs, native Linux notification tests, and Copilot setup use
+`ubuntu-latest`; Node.js 22 coverage, source lint, and release jobs use
+`ubuntu-slim`. The container digests pin the
 tool environments independently of the host Ubuntu release.
 
 The weekly `docker` entry in [Dependabot configuration](../.github/dependabot.yml)

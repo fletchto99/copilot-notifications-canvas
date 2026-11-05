@@ -132,6 +132,7 @@ test("GraphQL secondary limits and cancellation preserve shared backoff and abor
     } });
     await client.refreshSubjects([item()]);
     assert.equal(client.subjectSnapshot(item()).subjectState, "open");
+    assert.equal(client.serverBlockedUntil, client.blockedUntil);
     await assert.rejects(client.page(firstPage(), undefined, { force: true }), { code: "rate_limited" });
     assert.equal(calls, 2);
     now = client.blockedUntil;
@@ -170,6 +171,7 @@ test("primary GraphQL limits pause queue checks without blocking REST polling or
     const second = { ...first, id: "2", number: "43" };
     await client.refreshSubjects([first]);
     assert.equal(client.blockedUntil, 0);
+    assert.equal(client.serverBlockedUntil, 0);
     assert.ok(client.graphqlBlockedUntil >= RETRY_MS);
     assert.match(client.subjectSnapshot(first).subjectStateError, /GraphQL rate limit/);
     assert.doesNotMatch(JSON.stringify(client.subjectSnapshot(first)), /Private/);
@@ -210,6 +212,7 @@ test("a successful GraphQL response exhausting its primary quota keeps REST avai
   await client.refreshSubjects([first, { ...first, number: "43" }]);
   assert.equal(graphCalls, 1);
   assert.equal(client.blockedUntil, 0);
+  assert.equal(client.serverBlockedUntil, 0);
   assert.equal(client.graphqlBlockedUntil, 901_000);
   assert.equal(client.subjectSnapshot(first).subjectState, "merge_queued");
   assert.equal(client.subjectSnapshot(first).subjectStateStale, false);
@@ -232,6 +235,7 @@ test("GraphQL authentication and secondary limits still block REST, even with ex
     } });
     await client.refreshSubjects([item()]);
     assert.ok(client.blockedUntil >= RETRY_MS);
+    assert.equal(client.serverBlockedUntil, code === "authentication" ? 0 : client.blockedUntil);
     assert.equal(client.graphqlBlockedUntil, 0);
     await assert.rejects(client.page(firstPage()), { code });
     await assert.rejects(client.markRead("1"), { code });

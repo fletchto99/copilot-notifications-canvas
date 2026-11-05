@@ -83,6 +83,19 @@ stops them. No extra software is installed automatically.
 
 Windows and Linux support is experimental. Alerts run on the **extension host**;
 remote sessions do not automatically notify your local computer.
+Windows alerts use the existing Windows PowerShell sender, including its
+path-based Start menu registration; they do not register a new sender or use
+PowerShell 7 or ISE.
+
+Clicking a Windows alert opens its GitHub destination in your default browser:
+the issue or pull request, or the resolved workflow run (the sole failed job's
+logs when available). Check notifications use the same conservative run matching
+as the canvas and fall back to filtered repository Actions when possible, or
+the repository Actions page otherwise. Missing or unsupported item links open
+the GitHub inbox. Repository burst summaries open the inbox filtered to that
+repository. Links are limited to HTTPS github.com URLs and passed to Windows as
+data, not commands; no browser is opened until you click. Existing alerts are
+unchanged. macOS and Linux click behavior is unchanged.
 
 ### Polling and delivery
 
@@ -143,6 +156,29 @@ for recovery.
 
 Desktop alerts send repository names and titles to the OS, which may retain
 them in notification history or show them on the lock screen.
+Windows alerts also include the GitHub destination URL; it is not saved in the
+extension's coordination state or logs. Resolving individual Windows check
+links may fetch workflow-run and job metadata, respecting the shared cache and
+rate limits; it does not fetch log contents or resolve links for burst summaries.
+Server retry/rate-limit deadlines from lookups are saved in the shared
+checkpoint, including when a lookup is interrupted. Enabled, supported watchers
+and their foreground refreshes inherit those deadlines; ordinary network,
+permission, and read/done failure delays stay local to the failing client.
+A watcher can still deliver from a sufficiently fresh cached page. A check
+deferred before reading any page leaves the polling reservation unchanged,
+without reporting a new poll error or extending the server's deadline.
+That watcher also remembers the deferral locally, so background ticks do not
+repeatedly reserve and restore the same checkpoint while it waits. Foreground
+cache reuse remains available. With alerts enabled and supported, shared
+deadlines are checked in the API client before dispatch, covering panel and
+agent reads, Read/Done writes, each queued batch item, and subject-status
+lookups. Writes recheck after their spacing delay and are only marked in flight
+once preparation succeeds. A longer inherited rate-limit wait replaces stale
+local error messages, but a longer local failure retains its own message.
+Fresh cached check status, run matches, and failed-job links remain usable for
+the same notification activity during backoff, without extending their freshness.
+Expired or invalidated metadata, newer activity, and actual lookup failures
+still use the conservative fallback destinations.
 See [Privacy](../README.md#privacy).
 
 ## Troubleshooting
@@ -150,6 +186,19 @@ See [Privacy](../README.md#privacy).
 - **No alerts or sound:** OS permissions, sound settings, and Focus/Do Not
   Disturb can suppress delivery, which the extension cannot confirm. Detected
   errors appear in Settings and the extension log.
+- **Windows alerts:** turn on the system-wide **Notifications** switch in
+  **Settings > System > Notifications** (Windows 10: **Notifications & actions**).
+  Also allow **Windows PowerShell** if it appears in the sender list; these
+  alerts do not use Copilot's notification permission. The sender may not appear
+  until its first alert; a missing per-sender settings profile does not block
+  that first attempt. Windows reports
+  `DisabledForUser` when notifications are disabled for the whole account, even
+  if the PowerShell sender is registered. The extension does not change Windows
+  settings. After correcting a delivery problem, only new activity can alert;
+  failed alerts are not replayed.
+  Detected PowerShell failures include a fixed stage (sender lookup, toast setup,
+  permission check, or toast delivery) and a numeric HRESULT when available.
+  These diagnostics exclude notification content and raw subprocess errors.
 - **Desktop coordination error after an upgrade:** preserve the artifacts and
   inspect the error before changing anything. If you explicitly choose to reset
   an unsupported or malformed `desktop-state.json`, first stop all extension
@@ -158,6 +207,8 @@ See [Privacy](../README.md#privacy).
   establish a fresh silent baseline; activity received before that baseline
   will not produce alerts.
 - **Sender icon and clicks:** the OS controls the sender icon; clicking an alert
-  cannot focus the canvas.
+  cannot focus the canvas. Windows alerts open their GitHub destination in the
+  default browser instead. Visiting GitHub may mark the notification read there;
+  the extension does not send a read/done update when an alert is clicked.
 - **The canvas will not load:** see
   [installation troubleshooting](installation.md#upgrades-and-troubleshooting).

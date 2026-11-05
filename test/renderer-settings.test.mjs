@@ -172,10 +172,15 @@ test("Settings fits the available viewport and moves above only when that provid
   assert.equal(settings.open, false);
 });
 
-test("resize observations coalesce overlay writes into the next animation frame", async t => {
+test("resize observations coalesce overflow and overlay writes into the next animation frame", async t => {
   const ui = await renderer();
   t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
   const panel = ui.ids.get("settings-panel");
+  const previous = ui.ids.get("attention-previous");
+  const next = ui.ids.get("attention-next");
+  const navigation = ui.ids.get("attention-navigation");
+  navigation.clientWidth = 300;
+  Object.assign(ui.ids.get("attention-tabs"), { clientWidth: 236, scrollWidth: 600 });
   ui.ids.get("settings").open = true;
   ui.window.innerHeight = 480;
   const anchor = ui.ids.get("refresh-control");
@@ -183,19 +188,29 @@ test("resize observations coalesce overlay writes into the next animation frame"
   anchor.bounds = { top: 100 };
   ui.ids.get("refresh-tooltip").bounds = { height: 40 };
   for (let index = 0; index < 3; index++) ui.resizeAttention();
+  assert.equal(previous.hidden, true);
+  assert.equal(next.hidden, true);
+  assert.equal(next.getAttribute("aria-disabled"), "true");
   assert.equal(panel.style.maxHeight, undefined);
   assert.equal(anchor.dataset.tooltipPlacement, undefined);
   assert.equal(ui.animationFrames.size, 1);
   ui.fireAnimationFrame();
   assert.equal(ui.animationFrames.size, 0);
+  assert.equal(previous.hidden, false);
+  assert.equal(next.hidden, false);
+  assert.equal(next.getAttribute("aria-disabled"), "false");
   assert.equal(panel.style.maxHeight, "251px");
   assert.equal(anchor.dataset.tooltipPlacement, "above");
   ui.ids.get("settings-toggle").bounds = { top: 207, bottom: 245 };
   anchor.bounds = { top: 20 };
+  navigation.clientWidth = 700;
   ui.resizeAttention();
   assert.equal(ui.animationFrames.size, 1);
   assert.equal(panel.style.maxHeight, "251px");
+  assert.equal(next.hidden, false);
   ui.fireAnimationFrame();
+  assert.equal(previous.hidden, true);
+  assert.equal(next.hidden, true);
   assert.equal(panel.style.maxHeight, "219px");
   assert.equal(anchor.dataset.tooltipPlacement, "below");
 });
@@ -206,9 +221,11 @@ test("pagehide cancels pending overlay frames and prevents observer rescheduling
   ui.ids.get("settings").open = true;
   ui.resizeAttention();
   assert.equal(ui.animationFrames.size, 1);
+  const pendingFrame = [...ui.animationFrames.values()][0];
   ui.window.events.pagehide();
   assert.equal(ui.animationFrames.size, 0);
   assert.equal(ui.attentionDisconnected, true);
+  pendingFrame();
   ui.resizeAttention();
   ui.fireAnimationFrame();
   assert.equal(ui.animationFrames.size, 0);

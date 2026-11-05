@@ -50,7 +50,7 @@ async function fixture({ rows = [thread("1"), thread("2"), thread("3")], run, sl
   });
   const inbox = new Inbox(client);
   await inbox.refresh();
-  return { inbox, client, writes, methods, waits, advance: () => { now += POLL_MS; } };
+  return { inbox, client, writes, methods, waits, advance: (milliseconds = POLL_MS) => { now += milliseconds; } };
 }
 
 function selection(inbox, repository = "example/widgets") {
@@ -572,7 +572,7 @@ test("auth/rate/network failures stop the batch with exact partial counts and re
     new InboxError("gh_failed", "Synthetic connection failure")]) {
     let count = 0;
     let failing = true;
-    const { inbox, client, writes } = await fixture({
+    const { inbox, client, writes, advance } = await fixture({
       run: async args => {
         if (!args.includes("PATCH")) return http([thread("1"), thread("2"), thread("3")]);
         if (++count === 2 && failing) {
@@ -591,7 +591,7 @@ test("auth/rate/network failures stop the batch with exact partial counts and re
     assert.equal(inbox.summary().loaded, 3);
     assert.equal(inbox.summary().unread, 2);
     failing = false;
-    client.blockedUntil = 0;
+    advance(client.blockedUntil - client.now());
     inbox.batch.retry(token);
     assert.equal(inbox.batch.snapshot().status, "running");
     assert.equal(inbox.batch.snapshot().total, 2);

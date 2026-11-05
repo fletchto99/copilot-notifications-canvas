@@ -321,7 +321,6 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
           return json(200, await settingsSnapshot(await preferences.read()));
         }
         if (path === "/api/refresh") {
-          await desktop?.prepareForeground();
           await inbox.refresh(input);
           if (input.force) inbox.client.invalidateSubjects(inbox.loadedItems());
         }

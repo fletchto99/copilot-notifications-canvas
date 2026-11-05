@@ -624,6 +624,7 @@ test("overflow arrows reveal tabs without requests, retain focus at the ends, an
   navigation.clientWidth = 300;
   Object.assign(strip, { clientWidth: 236, scrollWidth: 600 });
   ui.resizeAttention();
+  ui.fireAnimationFrame();
   assert.equal(previous.hidden, false);
   assert.equal(next.hidden, false);
   assert.equal(previous.attributes["aria-disabled"], "true");
@@ -661,6 +662,7 @@ test("arrows disappear when tabs fit the full strip, respond to count widths, an
   navigation.clientWidth = 600;
   Object.assign(strip, { clientWidth: 536, scrollWidth: 650 });
   ui.resizeAttention();
+  ui.fireAnimationFrame();
   assert.equal(next.hidden, false);
   next.focus();
   // The content still overflows the reduced viewport, but fits without arrows.
@@ -670,9 +672,11 @@ test("arrows disappear when tabs fit the full strip, respond to count widths, an
   assert.equal(ui.document.activeElement, tab(ui, "all"));
   strip.scrollWidth = 650;
   ui.resizeAttention();
+  ui.fireAnimationFrame();
   assert.equal(next.hidden, false);
   navigation.clientWidth = 700;
   ui.resizeAttention();
+  ui.fireAnimationFrame();
   assert.equal(next.hidden, true);
   assert.equal(ui.attentionObserved.length, 9);
   assert.equal(ui.attentionObserved[0], navigation);

@@ -81,6 +81,28 @@ test("CI uses the preferred Node version for tooling while preserving Node 22 ru
   assert.match(build, /target: "node22"/);
 });
 
+test("native notification CI exercises each platform without a real desktop notification service", async () => {
+  const [source, { scripts }] = await Promise.all([
+    readFile(new URL("../.github/workflows/tests.yml", import.meta.url), "utf8"),
+    readFile(new URL("../package.json", import.meta.url), "utf8").then(JSON.parse),
+  ]);
+  const workflow = source.replaceAll("\r\n", "\n");
+  const runtime = workflow.match(/\n {2}test:\n([\s\S]*?)(?=\n {2}[a-z][\w-]*:|$)/)?.[1];
+  const windows = workflow.match(/\n {2}windows:\n([\s\S]*?)(?=\n {2}[a-z][\w-]*:|$)/)?.[1];
+  assert.ok(runtime);
+  assert.ok(windows);
+  assert.match(runtime, /os: ubuntu-slim\n\s+node: "22"/);
+  assert.match(runtime, /os: ubuntu-latest\n\s+node: "24"/);
+  assert.match(runtime, /os: macos-latest\n\s+node: "24"/);
+  assert.match(runtime, /if: matrix\.node != '22'\n\s+run: npm test/);
+  assert.match(runtime, /if: matrix\.os == 'ubuntu-latest'\n\s+run: \|\n\s+sudo apt-get update -qq/);
+  assert.match(runtime, /apt-get install -y --no-install-recommends dbus-daemon libnotify-bin python3-dbus python3-gi/);
+  assert.match(runtime, /if: matrix\.os == 'ubuntu-latest'\n\s+run: npm run test:notifications:linux/);
+  assert.equal(scripts["test:notifications:linux"], "node --test test/notifier-linux.integration.mjs");
+  assert.match(windows, /run: node --test .*test\/notifier\.test\.mjs/);
+  assert.match(windows, /run: node --test --test-name-pattern="Windows\|individual desktop alerts" test\/desktop\.test\.mjs/);
+});
+
 test("Copilot cloud sessions and reviews share lightweight setup without browser provisioning", async () => {
   const setup = await readFile(new URL("../.github/workflows/copilot-setup-steps.yml", import.meta.url), "utf8");
   assert.match(setup, /\njobs:\n {2}copilot-setup-steps:/);

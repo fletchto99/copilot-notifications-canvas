@@ -5,6 +5,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { firstPage, GitHubClient, nextPage, parseResponse, POLL_MS, RETRY_MS, runGh } from "../src/github.mjs";
 import { http, next, thread } from "./fixtures.mjs";
 import { Inbox } from "../src/inbox.mjs";
+import { InboxError } from "../src/model.mjs";
 
 test("gh calls use explicit GET, fixed host, safe argument arrays and no auth token extraction", async () => {
   const calls = [];
@@ -294,6 +295,52 @@ test("forced reads cannot bypass GitHub retry waits, exhausted quota or error ba
   }
 });
 
+test("only server retry and rate-limit responses set the shareable backoff deadline", async () => {
+  for (const { response, serverDeadline } of [
+    { response: http({}, { "retry-after": "600" }, 429), serverDeadline: 600_000 },
+    { response: http({}, {}, 429), serverDeadline: RETRY_MS },
+    { response: http({ message: "secondary rate limit" }, {}, 403), serverDeadline: RETRY_MS },
+    { response: http({}, { "retry-after": new Date(600_000).toUTCString() }, 503), serverDeadline: 600_000 },
+    { response: http([thread()], { "retry-after": "600" }), serverDeadline: 600_000 },
+    { response: http([thread()], { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "900" }), serverDeadline: 901_000 },
+    ...[401, 403, 404, 500].map(status => ({ response: http({}, { "x-poll-interval": "300" }, status), serverDeadline: 0 })),
+    { response: new InboxError("gh_failed", "Synthetic network error", 502), serverDeadline: 0 },
+  ]) {
+    const client = new GitHubClient({ now: () => 0, run: async () => {
+      if (response instanceof Error) throw response;
+      return response;
+    } });
+    try { await client.page(firstPage()); } catch (error) { assert.ok(error instanceof InboxError); }
+    assert.equal(client.serverBlockedUntil, serverDeadline);
+    assert.ok(client.blockedUntil >= RETRY_MS);
+    client.clear();
+    assert.equal(client.serverBlockedUntil, serverDeadline, "clearing caches must not reset a server deadline");
+  }
+});
+
+test("pre-request backoff rejections identify deferral without changing the original error or retry delay", async () => {
+  for (const response of [http({}, { "retry-after": "600" }, 429), http({}, {}, 500)]) {
+    let now = 0;
+    let calls = 0;
+    const client = new GitHubClient({ now: () => now, run: async () => { calls++; return response; } });
+    let original;
+    await assert.rejects(client.page(firstPage()), error => {
+      original = error;
+      assert.equal(error.requestDeferred, undefined);
+      return true;
+    });
+    const deadline = client.blockedUntil;
+    const failures = [...client.failures];
+    now = deadline - 1;
+    await assert.rejects(client.page(firstPage(), undefined, { force: true }), error =>
+      error !== original && error.requestDeferred === true && error.retryAt === deadline &&
+      error.code === original.code && error.message === original.message && error.status === original.status);
+    assert.equal(original.requestDeferred, undefined);
+    assert.equal(client.blockedUntil, deadline);
+    assert.deepEqual([...client.failures], failures);
+    assert.equal(calls, 1);
+  }
+});
 test("pagination follows and validates Link rather than guessing page count", () => {
   assert.match(nextPage(next, firstPage()), /page=2/);
   assert.equal(nextPage(undefined, firstPage()), null);
@@ -304,6 +351,84 @@ test("pagination follows and validates Link rather than guessing page count", ()
     `${next}, ${next}`, "broken header", next.replace("https:", "http:")]) {
     assert.throws(() => nextPage(header, firstPage()), { code: "invalid_pagination" });
   }
+});
+
+test("request preparation gates reads and writes without counting blocked writes as dispatched", async () => {
+  for (const method of ["GET", "PATCH", "DELETE"]) {
+    let prepared = 0;
+    let dispatched = 0;
+    let calls = 0;
+    const client = new GitHubClient({
+      now: () => 0, beforeRequest: async () => { prepared++; client.blockedUntil = 600_000; },
+      run: async () => { calls++; return http([]); },
+    });
+    const options = { beforeWrite: () => { dispatched++; } };
+    const request = method === "GET" ? client.page(firstPage()) :
+      method === "PATCH" ? client.markRead("1", undefined, options) : client.markDone("1", undefined, options);
+    await assert.rejects(request, { code: "rate_limited", requestDeferred: true });
+    assert.equal(prepared, 1);
+    assert.equal(dispatched, 0);
+    assert.equal(calls, 0);
+    assert.equal(client.writeAvailableAt, 0);
+    assert.equal(client.pendingThreads.size, 0);
+    assert.equal(client.failures.size, 0);
+  }
+});
+
+test("cancellation during asynchronous request preparation prevents reads and writes", async () => {
+  for (const method of ["GET", "PATCH", "DELETE"]) {
+    const controller = new AbortController();
+    const client = new GitHubClient({
+      beforeRequest: async () => { await Promise.resolve(); controller.abort(); },
+      run: async () => assert.fail("Cancelled preparation must not dispatch"),
+    });
+    const options = { beforeWrite: () => assert.fail("Cancelled preparation must not mark a write in flight") };
+    await assert.rejects(method === "GET" ? client.page(firstPage(), controller.signal) :
+      method === "PATCH" ? client.markRead("1", controller.signal, options) : client.markDone("1", controller.signal, options),
+    { code: "closed" });
+    assert.equal(client.sequence, 0);
+    assert.equal(client.writeAvailableAt, 0);
+    assert.equal(client.failures.size, 0);
+    assert.equal(client.pendingThreads.size, 0);
+  }
+});
+
+test("eligible desktop cache reads remain available without asynchronous request preparation", async () => {
+  let calls = 0;
+  const client = new GitHubClient({ now: () => 0, run: async () => { calls++; return http([thread()]); } });
+  const page = await client.page(firstPage());
+  client.beforeRequest = async () => assert.fail("A valid desktop cache needs no outbound preparation");
+  assert.equal(await client.page(firstPage(), undefined, { allowCachedDuringBackoff: true }), page);
+  assert.equal(calls, 1);
+});
+
+test("write eligibility is rechecked after preparation without reserving spacing for an unsent write", async () => {
+  const events = [];
+  const client = new GitHubClient({
+    now: () => 0,
+    beforeRequest: async () => { await Promise.resolve(); events.push("prepared"); },
+    run: async () => assert.fail("An ineligible write must not be sent"),
+  });
+  await assert.rejects(client.markDone("1", undefined, { beforeWrite: () => {
+    events.push("rechecked");
+    throw new InboxError("selection_changed", "Synthetic selection changed", 409);
+  } }), { code: "selection_changed" });
+  assert.deepEqual(events, ["prepared", "rechecked"]);
+  assert.equal(client.writeAvailableAt, 0);
+  assert.equal(client.revision, 0);
+  assert.equal(client.pendingThreads.size, 0);
+  assert.equal(client.failures.size, 0);
+});
+
+test("cache freshness is checked again after asynchronous preparation", async () => {
+  let now = 0;
+  let calls = 0;
+  const client = new GitHubClient({ now: () => now, run: async () => { calls++; return http([thread()]); } });
+  await client.page(firstPage());
+  now = POLL_MS - 1;
+  client.beforeRequest = async () => { await Promise.resolve(); now++; };
+  await client.page(firstPage());
+  assert.equal(calls, 2, "a cache that expired during preparation must be revalidated");
 });
 
 test("auth, permission, malformed JSON, malformed HTTP and upstream failures are sanitized", async () => {

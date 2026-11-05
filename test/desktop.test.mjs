@@ -12,7 +12,7 @@ import { firstPage, GitHubClient, POLL_MS, RETRY_MS } from "../src/github.mjs";
 import { Inbox } from "../src/inbox.mjs";
 import { InboxError } from "../src/model.mjs";
 import { acquireLock } from "../src/lock.mjs";
-import { http, thread, next } from "./fixtures.mjs";
+import { http, thread, next, workflowRun, workflowJob } from "./fixtures.mjs";
 
 const epoch = Date.parse("2026-01-10T12:00:00Z");
 const updated = (id, time) => thread(id, { updated_at: new Date(time).toISOString() });
@@ -89,6 +89,33 @@ test("desktop watching is opt-in and never invokes GitHub or the sender when dis
   assert.equal(f.calls.length, 0);
 });
 
+test("foreground preparation ignores desktop checkpoints when alerts are disabled or unsupported", async t => {
+  for (const enabled of [false, true]) {
+    for (const checkpoint of ["malformed", "unsupported", "blocked"]) {
+      const f = await fixture(t, { enabled });
+      const watcher = f.make({ platform: enabled ? "freebsd" : "win32" });
+      const content = checkpoint === "malformed" ? "not JSON" : JSON.stringify({
+        version: checkpoint === "unsupported" ? 1 : 2, watchers: [], cohort: null, generation: null,
+        watermark: null, fingerprints: [], nextPollAt: epoch + 600_000, blockedUntil: epoch + 600_000, error: null,
+      });
+      await writeFile(watcher.statePath, content);
+      for (let count = 0; count < 2; count++) {
+        await watcher.prepareForeground();
+        await watcher.check();
+      }
+      assert.equal(watcher.snapshot().state, "off");
+      assert.equal(watcher.client.blockedUntil, 0);
+      assert.deepEqual(f.logs, []);
+      assert.deepEqual(f.calls, []);
+      assert.deepEqual(f.deliveries, []);
+      await watcher.client.page(firstPage(), undefined, { force: true });
+      assert.equal(f.calls.length, 1, "the centralized request hook must leave disabled/unsupported clients alone");
+      assert.deepEqual(f.logs, []);
+      assert.equal(await readFile(watcher.statePath, "utf8"), content);
+    }
+  }
+});
+
 test("initial backlog is silent and small batches retain each thread's title and body", async t => {
   const f = await fixture(t);
   const watcher = f.make();
@@ -100,11 +127,12 @@ test("initial backlog is silent and small batches retain each thread's title and
   f.rows([updated("2", time), updated("3", time - 1000), thread()]);
   await watcher.check();
   assert.equal(f.deliveries.length, 2);
-  assert.deepEqual(Object.keys(f.deliveries[0]).sort(), ["body", "platform", "signal", "sound", "title"]);
+  assert.deepEqual(Object.keys(f.deliveries[0]).sort(), ["body", "platform", "signal", "sound", "title", "url"]);
   assert.equal(f.deliveries[0].sound, "default");
   assert.equal(f.deliveries[0].title, "example/widgets");
   assert.equal(f.deliveries[0].body, "#42 Synthetic notification 2");
   assert.equal(f.deliveries[1].body, "#42 Synthetic notification 3");
+  assert.equal(f.deliveries[0].url, "https://github.com/example/widgets/pull/42");
   f.advance();
   await watcher.check();
   assert.equal(f.deliveries.length, 2);
@@ -555,10 +583,11 @@ test("enabling desktop alerts silently baselines activity missing from a pre-act
   assert.equal(f.deliveries.length, 0);
 });
 
-test("closing the final panel cancels an outstanding baseline cache wait without delivering or retrying", async t => {
-  const f = await fixture(t);
+test("closing the final panel cancels an outstanding baseline cache wait without delivering or retrying", { timeout: 10_000 }, async t => {
+  const f = await fixture(t, { enabled: false });
   const watcher = f.make();
   await watcher.client.page(firstPage());
+  await f.preferences.update({ desktopNotifications: true });
   let waiting;
   const started = new Promise(resolve => { waiting = resolve; });
   watcher.client.sleep = (_delay, _value, { signal }) => new Promise((_resolve, reject) => {
@@ -859,6 +888,517 @@ test("individual desktop alerts include issue and PR numbers but not unrelated I
       { title: "example/widgets", body: "New release" },
     ]);
     assert.ok(f.deliveries.every(alert => alert.platform === platform));
+    assert.deepEqual(f.deliveries.map(alert => alert.url), [
+      "https://github.com/example/widgets/issues/7",
+      "https://github.com/example/widgets/pull/8",
+      "https://github.com/notifications",
+      "https://github.com/example/widgets/releases",
+    ]);
+    assert.equal(f.calls.length, 2, "issue and PR links need no extra API requests");
+  }
+});
+
+test("Windows check alerts resolve direct, suite and inferred destinations after checkpointing", async t => {
+  for (const kind of ["direct", "suite", "inferred"]) {
+    const f = await fixture(t);
+    const watcher = f.make({ platform: "win32" });
+    await watcher.check();
+    const time = f.advance();
+    const row = updated("2", time);
+    row.subject = {
+      type: "CheckSuite", title: "Synthetic build workflow run failed for main branch",
+      url: kind === "direct" ? "https://api.github.com/repos/example/widgets/actions/runs/123"
+        : kind === "suite" ? "https://api.github.com/repos/example/widgets/check-suites/7" : null,
+    };
+    f.response(async args => {
+      const endpoint = args.at(-1);
+      if (endpoint.startsWith("/notifications?")) return http([row, thread()]);
+      assert.equal((await f.state()).watermark, time, "claim precedes optional link lookups");
+      assert.doesNotMatch(endpoint, /\/logs/);
+      if (endpoint.includes("/jobs?")) return http({ total_count: 1, jobs: [workflowJob()] });
+      if (endpoint.includes("/actions/runs?")) return http({
+        total_count: 1, workflow_runs: [workflowRun({ check_suite_id: 7, updated_at: new Date(time).toISOString() })],
+      });
+      return http({ status: "completed", conclusion: "failure" });
+    });
+    await watcher.check();
+    assert.equal(watcher.snapshot().state, "watching");
+    assert.equal(f.deliveries.length, 1);
+    assert.equal(f.deliveries[0].url, "https://github.com/example/widgets/actions/runs/123/job/456");
+    assert.equal(Object.hasOwn(f.deliveries[0], "item"), false);
+    assert.deepEqual(f.logs, []);
+    assert.doesNotMatch(JSON.stringify(await f.state()), /github\.com|Synthetic|example\/widgets|url|\/job\//);
+    f.advance();
+    await watcher.check();
+    assert.equal(f.deliveries.length, 1, "resolved alerts are not replayed");
+  }
+});
+
+test("Windows check alerts retain fresh failed-job destinations during inherited backoff", async t => {
+  for (const kind of ["direct", "suite", "inferred"]) {
+    const f = await fixture(t);
+    const reader = f.make({ platform: "win32" });
+    const writer = f.make({ platform: "win32" });
+    await reader.check();
+    await writer.check();
+    const time = f.advance();
+    const row = updated("2", time);
+    row.subject = {
+      type: "CheckSuite", title: "Synthetic build workflow run failed for main branch",
+      url: kind === "direct" ? "https://api.github.com/repos/example/widgets/actions/runs/123"
+        : kind === "suite" ? "https://api.github.com/repos/example/widgets/check-suites/7" : null,
+    };
+    f.response(args => {
+      const endpoint = args.at(-1);
+      if (endpoint.startsWith("/notifications?")) {
+        return endpoint.includes("all=true") ? http({}, { "retry-after": "600" }, 429) : http([row, thread()]);
+      }
+      if (endpoint.includes("/jobs?")) return http({ total_count: 1, jobs: [workflowJob()] });
+      if (endpoint.includes("/actions/runs?")) return http({
+        total_count: 1, workflow_runs: [workflowRun({ check_suite_id: 7, updated_at: new Date(time).toISOString() })],
+      });
+      return http({ status: "completed", conclusion: "failure" });
+    });
+    const page = await reader.client.page(firstPage(), undefined, { force: true });
+    const item = page.items[0];
+    await reader.client.refreshSubjects([item]);
+    const before = reader.client.subjectSnapshot(item);
+    assert.equal(before.subjectLinkTarget, "job");
+    await assert.rejects(writer.client.page(firstPage({ mode: "inbox" }), undefined, { force: true }),
+      { code: "rate_limited" });
+    await writer.check();
+    assert.equal(reader.client.blockedUntil, 0, "backoff will be inherited when the cached arrival is processed");
+    const calls = f.calls.length;
+    await reader.sync();
+    assert.equal(f.calls.length, calls);
+    assert.equal(f.deliveries.length, 1);
+    assert.equal(f.deliveries[0].url, before.url);
+    assert.deepEqual(reader.client.subjectSnapshot(item), before);
+    assert.deepEqual(f.logs, []);
+    assert.equal((await f.state()).blockedUntil, writer.client.serverBlockedUntil);
+    assert.equal((await f.state()).nextPollAt, writer.client.serverBlockedUntil);
+    await reader.sync();
+    assert.equal(f.calls.length, calls);
+    assert.equal(f.deliveries.length, 1, "cached link reuse must not replay activity");
+  }
+});
+
+test("Windows check alerts preserve safe fallbacks and report metadata failures without content", async t => {
+  for (const kind of ["run", "ambiguous", "denied", "unsafe", "jobs-denied"]) {
+    const f = await fixture(t);
+    const watcher = f.make({ platform: "win32" });
+    await watcher.check();
+    const time = f.advance();
+    const row = updated("2", time);
+    row.subject = {
+      type: "CheckSuite", title: "Synthetic build workflow run failed for main branch",
+      url: "https://api.github.com/repos/example/widgets/check-suites/7",
+    };
+    f.response(args => {
+      const endpoint = args.at(-1);
+      if (endpoint.startsWith("/notifications?")) return http([row, thread()]);
+      if (endpoint.includes("/actions/runs?")) {
+        if (kind === "denied") return http({ message: "private upstream response" }, {}, 403);
+        if (kind === "ambiguous") return http({ total_count: 0, workflow_runs: [] });
+        return http({ total_count: 1, workflow_runs: [workflowRun({
+          check_suite_id: 7,
+          html_url: kind === "unsafe" ? "https://untrusted.invalid/" : "https://github.com/example/widgets/actions/runs/123",
+        })] });
+      }
+      if (endpoint.includes("/jobs?")) return kind === "jobs-denied"
+        ? http({ message: "private upstream response" }, {}, 403) : http({ total_count: 0, jobs: [] });
+      return http({ status: "completed", conclusion: "failure" });
+    });
+    await watcher.check();
+    assert.equal(watcher.snapshot().state, "watching");
+    assert.equal(f.deliveries.length, 1);
+    const expected = ["run", "jobs-denied"].includes(kind) ? "https://github.com/example/widgets/actions/runs/123"
+      : `https://github.com/example/widgets/actions?${new URLSearchParams({ query: 'workflow:"Synthetic build" branch:"main" is:failure' })}`;
+    assert.equal(f.deliveries[0].url, expected);
+    assert.equal(f.logs.length, ["denied", "unsafe", "jobs-denied"].includes(kind) ? 1 : 0);
+    if (f.logs.length) assert.equal(f.logs[0][1].level, "warning");
+    assert.doesNotMatch(JSON.stringify(f.logs), /private|Synthetic|example\/widgets|https:/);
+  }
+});
+
+test("Windows check link lookups respect backoff and cancellation without replay or opt-out delivery", async t => {
+  for (const kind of ["rate-limited", "disabled", "closed"]) {
+    const f = await fixture(t);
+    const watcher = f.make({ platform: "win32" });
+    await watcher.check();
+    const time = f.advance();
+    const row = updated("2", time);
+    row.subject = {
+      type: "CheckSuite", title: "Synthetic build workflow run failed for main branch",
+      url: "https://api.github.com/repos/example/widgets/check-suites/7",
+    };
+    let changed = false;
+    f.response(async args => {
+      const endpoint = args.at(-1);
+      if (endpoint.startsWith("/notifications?")) return http([row, thread()]);
+      if (endpoint.includes("/actions/runs?")) {
+        if (!changed) {
+          changed = true;
+          if (kind === "disabled") await f.preferences.update({ desktopNotifications: false });
+          if (kind === "closed") watcher.controller.abort();
+        }
+        return kind === "rate-limited" ? http({}, { "retry-after": "600" }, 429)
+          : http({ total_count: 1, workflow_runs: [workflowRun({ check_suite_id: 7 })] });
+      }
+      if (endpoint.includes("/jobs?")) return http({ total_count: 0, jobs: [] });
+      return http({ status: "completed", conclusion: "failure" });
+    });
+    await watcher.check();
+    assert.equal((await f.state()).watermark, time);
+    if (kind === "rate-limited") {
+      assert.equal(f.deliveries.length, 1);
+      assert.match(f.deliveries[0].url, /\/actions\?query=/);
+      const calls = f.calls.length;
+      f.advance();
+      await watcher.check();
+      assert.equal(f.calls.length, calls, "link lookup backoff also pauses later inbox requests");
+      assert.equal(f.deliveries.length, 1);
+    } else {
+      assert.equal(f.deliveries.length, 0);
+      if (kind === "closed") {
+        f.advance();
+        await watcher.check();
+        assert.equal(f.deliveries.length, 0, "an interrupted lookup does not replay the claimed alert");
+      }
+    }
+  }
+});
+
+test("Windows burst clicks open the repository inbox without resolving individual check links", async t => {
+  const f = await fixture(t);
+  const watcher = f.make({ platform: "win32" });
+  await watcher.check();
+  const time = f.advance();
+  f.rows(Array.from({ length: 5 }, (_, i) => thread(String(i + 2), {
+    updated_at: new Date(time).toISOString(),
+    subject: { type: "CheckSuite", title: "Synthetic build workflow run failed for main branch", url: null },
+  })));
+  await watcher.check();
+  assert.equal(f.deliveries.length, 1);
+  assert.equal(f.deliveries[0].body, "5 new notifications");
+  assert.equal(f.deliveries[0].url, "https://github.com/notifications?query=repo%3Aexample%2Fwidgets");
+  assert.equal(f.calls.length, 2);
+});
+
+test("Windows lookup backoff survives interruption and blocks separate watcher clients until its deadline", async t => {
+  for (const interrupted of [false, true]) {
+    const f = await fixture(t);
+    const one = f.make({ platform: "win32" });
+    const two = f.make({ platform: "win32" });
+    await one.check();
+    await two.check();
+    const time = f.advance();
+    const row = thread("2", {
+      updated_at: new Date(time).toISOString(),
+      subject: { type: "CheckSuite", title: "Synthetic build workflow run failed for main branch", url: null },
+    });
+    f.response(args => args.at(-1).startsWith("/notifications?") ? http([row, thread()])
+      : http({}, { "retry-after": "600" }, 429));
+    if (interrupted) {
+      const refreshSubjects = one.client.refreshSubjects.bind(one.client);
+      one.client.refreshSubjects = async (...args) => {
+        await refreshSubjects(...args);
+        one.controller.abort();
+        throw new InboxError("closed", "Synthetic interrupted lookup", 410);
+      };
+    }
+    await one.check();
+    const deadline = time + 600_000;
+    assert.equal(one.client.blockedUntil, deadline);
+    assert.equal((await f.state()).blockedUntil, deadline);
+    assert.equal((await f.state()).nextPollAt, deadline);
+    assert.equal((await f.state()).error, null, "a fallback alert is not a failed inbox poll");
+    assert.equal(f.deliveries.length, interrupted ? 0 : 1);
+    if (!interrupted) assert.match(f.deliveries[0].url, /\/actions\?query=/);
+    await one.close();
+    const calls = f.calls.length;
+    await two.prepareForeground();
+    await assert.rejects(two.client.page(firstPage(), undefined, { force: true }), { code: "rate_limited" });
+    for (const delay of [0, POLL_MS, 600_000 - POLL_MS - 1]) {
+      f.advance(delay);
+      await two.check();
+      await two.sync();
+      assert.equal(f.calls.length, calls, "neither background nor foreground checks may contact GitHub early");
+      assert.equal((await f.state()).nextPollAt, deadline);
+    }
+    f.advance(1);
+    f.response(undefined);
+    f.rows([updated("3", deadline), row, thread()]);
+    await two.check();
+    assert.equal(f.calls.length, calls + 1);
+    assert.equal(f.deliveries.length, interrupted ? 1 : 2);
+    assert.equal(f.deliveries.at(-1).body, "#42 Synthetic notification 3", "claimed activity is never replayed");
+  }
+});
+
+test("Windows shared lookup backoff permits fresh-cache delivery without shortening the shared deadline", async t => {
+  const f = await fixture(t);
+  const one = f.make({ platform: "win32" });
+  const two = f.make({ platform: "win32" });
+  const noCache = f.make({ platform: "win32" });
+  await one.check();
+  await two.check();
+  const time = f.advance();
+  const row = thread("2", {
+    updated_at: new Date(time).toISOString(),
+    subject: { type: "CheckSuite", title: "Synthetic build workflow run failed for main branch", url: null },
+  });
+  const later = updated("3", f.advance(1000));
+  f.rows([later, row, thread()]);
+  await two.client.page(firstPage(), undefined, { force: true });
+  f.response(args => args.at(-1).startsWith("/notifications?") ? http([row, thread()])
+    : http({}, { "retry-after": "600" }, 429));
+  await one.check();
+  const deadline = one.client.blockedUntil;
+  const calls = f.calls.length;
+  await noCache.sync();
+  assert.equal((await f.state()).error, null, "a watcher without a cache must not poison fresh-cache reuse");
+  await two.sync();
+  assert.equal(f.calls.length, calls, "a valid cached page is still usable during shared backoff");
+  assert.equal(two.client.blockedUntil, deadline);
+  assert.equal((await f.state()).blockedUntil, deadline);
+  assert.equal((await f.state()).nextPollAt, deadline);
+  assert.equal((await f.state()).error, null);
+  assert.deepEqual(f.deliveries.map(alert => alert.body), [
+    "Synthetic build workflow run failed for main branch", "#42 Synthetic notification 3",
+  ]);
+  await assert.rejects(two.client.page(firstPage(), undefined, { force: true }), { code: "rate_limited" });
+  assert.equal(f.calls.length, calls);
+});
+
+test("Windows lookup backoff without a fresh unread cache stays quiet and resumes at the original deadline", async t => {
+  for (const cache of ["missing", "stale", "invalidated"]) {
+    const f = await fixture(t);
+    const one = f.make({ platform: "win32" });
+    const two = f.make({ platform: "win32" });
+    await one.check();
+    await two.check();
+    if (cache !== "missing") {
+      await two.client.page(firstPage());
+      if (cache === "invalidated") {
+        for (const page of two.client.cache.values()) page.invalidated = true;
+      }
+    }
+    const time = f.advance();
+    const row = thread("2", {
+      updated_at: new Date(time).toISOString(),
+      subject: { type: "CheckSuite", title: "Synthetic build workflow run failed for main branch", url: null },
+    });
+    f.response(args => args.at(-1).startsWith("/notifications?") ? http([row, thread()])
+      : http({}, { "retry-after": "600" }, 429));
+    await one.check();
+    const checkpoint = await f.state();
+    assert.equal(checkpoint.nextPollAt, time + 600_000);
+    const calls = f.calls.length;
+    f.advance(600_000 - 1);
+    await two.sync();
+    await two.sync();
+    const skipped = await f.state();
+    assert.equal(f.calls.length, calls);
+    assert.equal(skipped.error, null);
+    assert.equal(skipped.polling, checkpoint.polling);
+    assert.equal(skipped.nextPollAt, checkpoint.nextPollAt);
+    assert.equal(skipped.watermark, checkpoint.watermark);
+    assert.deepEqual(skipped.fingerprints, checkpoint.fingerprints);
+    assert.equal(two.snapshot().state, "watching");
+    assert.equal(f.logs.some(([, options]) => options.level === "error"), false);
+    const resumedAt = f.advance(1);
+    f.response(undefined);
+    f.rows([updated("3", resumedAt), row, thread()]);
+    await two.check();
+    assert.equal(f.calls.length, calls + 1);
+    assert.equal(f.deliveries.length, 2);
+    assert.equal(f.deliveries.at(-1).body, "#42 Synthetic notification 3");
+  }
+});
+
+test("Windows client-local read and write failures never become another client's rate limit", async t => {
+  for (const operation of ["page", "markRead", "markDone"]) {
+    for (const failure of ["network", "permission", "authentication", "http"]) {
+      const f = await fixture(t);
+      const one = f.make({ platform: "win32" });
+      const two = f.make({ platform: "win32" });
+      await one.check();
+      await two.check();
+      const reservation = (await f.state()).nextPollAt;
+      f.advance(1000);
+      f.response(() => {
+        if (failure === "network") throw new InboxError("gh_failed", "Synthetic network failure", 502);
+        return http({}, {}, { permission: 403, authentication: 401, http: 500 }[failure]);
+      });
+      const failed = () => operation === "page" ? one.client.page(firstPage(), undefined, { force: true })
+        : one.client[operation]("1");
+      await assert.rejects(failed());
+      assert.ok(one.client.blockedUntil > f.advance(0));
+      const calls = f.calls.length;
+      await assert.rejects(failed());
+      assert.equal(f.calls.length, calls, "the failed client retains its own retry delay");
+      await one.check();
+      await one.sync();
+      const state = await f.state();
+      assert.equal(state.blockedUntil, 0);
+      assert.equal(state.nextPollAt, reservation);
+      assert.equal(state.error, null);
+      await two.prepareForeground();
+      assert.equal(two.client.blockedUntil, 0);
+      f.response(args => args.includes("GET") ? http([thread()]) : http(null, {}, args.includes("DELETE") ? 204 : 205));
+      await two.client.page(firstPage(), undefined, { force: true });
+      await two.client.markRead("1");
+      await two.client.markDone("2");
+      assert.equal(f.calls.length, calls + 3);
+    }
+  }
+});
+
+test("Windows polling failures retain the shared reservation without rate-limiting healthy clients", async t => {
+  const f = await fixture(t);
+  const one = f.make({ platform: "win32" });
+  const two = f.make({ platform: "win32" });
+  await one.check();
+  await two.check();
+  const time = f.advance(POLL_MS);
+  f.response(() => http({}, {}, 500));
+  await one.check();
+  const state = await f.state();
+  assert.equal(state.nextPollAt, time + RETRY_MS);
+  assert.equal(state.blockedUntil, 0);
+  assert.match(state.error, /HTTP 500/);
+  const calls = f.calls.length;
+  f.response(undefined);
+  await two.prepareForeground();
+  assert.equal(two.client.blockedUntil, 0);
+  await two.client.page(firstPage(), undefined, { force: true });
+  await two.check();
+  await two.sync();
+  assert.equal(f.calls.length, calls + 1);
+  assert.equal((await f.state()).nextPollAt, state.nextPollAt);
+  assert.equal((await f.state()).error, state.error);
+});
+
+test("Windows local deferrals stop repeated background checkpoint writes without postponing other clients", async t => {
+  const f = await fixture(t);
+  const watcher = f.make({ platform: "win32" });
+  const healthy = f.make({ platform: "win32" });
+  await watcher.check();
+  await healthy.check();
+  f.advance(POLL_MS);
+  f.response(() => http({}, {}, 503));
+  await assert.rejects(watcher.client.page(firstPage(), undefined, { force: true }), { code: "github_http" });
+  const deadline = watcher.client.blockedUntil;
+  const reservation = await f.state();
+  const calls = f.calls.length;
+  let writes = 0;
+  const rename = fs.rename;
+  fs.rename = async (from, to) => {
+    if (to === watcher.statePath) writes++;
+    return rename(from, to);
+  };
+  syncBuiltinESMExports();
+  try {
+    await watcher.check();
+    assert.equal(writes, 2, "the initial deferral reserves then restores the checkpoint");
+    const deferred = writes;
+    for (let count = 0; count < 4; count++) {
+      f.advance(5000);
+      await watcher.check();
+      assert.equal(writes, deferred, "background ticks must not reserve another blocked request");
+    }
+    assert.equal(f.calls.length, calls);
+    assert.equal((await f.state()).nextPollAt, reservation.nextPollAt);
+    assert.equal((await f.state()).blockedUntil, 0);
+
+    f.response(undefined);
+    f.rows([updated("2", f.advance(0)), thread()]);
+    await healthy.client.page(firstPage());
+    // A newly available cache must remain usable by foreground synchronization.
+    watcher.client.cache = new Map(healthy.client.cache);
+    await watcher.sync();
+    assert.equal(f.deliveries.length, 1);
+    assert.equal(f.deliveries[0].body, "#42 Synthetic notification 2");
+    const afterForeground = writes;
+    f.advance(POLL_MS);
+    await watcher.check();
+    assert.equal(writes, afterForeground, "the local deferral still gates background cache misses");
+    assert.equal(f.calls.length, calls + 1);
+
+    f.rows([updated("3", f.advance(deadline - f.advance(0))), thread()]);
+    await watcher.check();
+    assert.equal(f.calls.length, calls + 2);
+    assert.equal(f.deliveries.at(-1).body, "#42 Synthetic notification 3");
+  } finally {
+    fs.rename = rename;
+    syncBuiltinESMExports();
+  }
+});
+
+test("Windows longer shared deadlines replace stale client errors but preserve a longer local failure", async t => {
+  for (const localSeconds of [120, 600, 900]) {
+    const f = await fixture(t);
+    const one = f.make({ platform: "win32" });
+    const two = f.make({ platform: "win32" });
+    await one.check();
+    await two.check();
+    f.advance(1000);
+    f.response(() => http({}, { "x-poll-interval": String(localSeconds) }, 403));
+    await assert.rejects(two.client.page(firstPage(), undefined, { force: true }), { code: "permission" });
+    const localError = two.client.lastError;
+    f.response(() => http({}, { "retry-after": "600" }, 429));
+    await assert.rejects(one.client.page(firstPage(), undefined, { force: true }), { code: "rate_limited" });
+    await one.check();
+    await two.prepareForeground();
+    const sharedWins = localSeconds < 600;
+    assert.equal(two.client.lastError, sharedWins ? null : localError);
+    const calls = f.calls.length;
+    for (const request of [
+      () => two.client.page(firstPage(), undefined, { force: true }),
+      () => two.client.markRead("1"),
+      () => two.client.markDone("2"),
+    ]) {
+      await assert.rejects(request(), { code: sharedWins ? "rate_limited" : "permission" });
+    }
+    assert.equal(f.calls.length, calls);
+    assert.equal(two.client.blockedUntil, f.advance(0) + Math.max(localSeconds, 600) * 1000);
+  }
+});
+
+test("Windows shared backoff accepts older checkpoints but rejects malformed deadlines without overwriting", async t => {
+  for (const blockedUntil of [undefined, null, -1, "600000", {}]) {
+    const f = await fixture(t);
+    const watcher = f.make({ platform: "win32" });
+    await watcher.check();
+    const state = { ...await f.state(), blockedUntil };
+    const content = JSON.stringify(state);
+    await writeFile(watcher.statePath, content);
+    f.rows([updated("2", f.advance()), thread()]);
+    await watcher.check();
+    if (blockedUntil === undefined) {
+      assert.equal(watcher.snapshot().state, "watching");
+      assert.equal(f.deliveries.length, 1, "an older checkpoint must not reset the activity baseline");
+    } else {
+      assert.equal(watcher.snapshot().state, "error");
+      assert.equal(f.calls.length, 1);
+      assert.equal(f.deliveries.length, 0);
+      assert.equal(await readFile(watcher.statePath, "utf8"), content);
+    }
+  }
+});
+
+test("macOS and Linux check alerts do not fetch Windows click metadata", async t => {
+  for (const platform of ["darwin", "linux"]) {
+    const f = await fixture(t);
+    const watcher = f.make({ platform });
+    await watcher.check();
+    const row = updated("2", f.advance());
+    row.subject = { type: "CheckSuite", title: "Synthetic build workflow run failed for main branch", url: null };
+    f.rows([row, thread()]);
+    await watcher.check();
+    assert.equal(f.deliveries.length, 1);
+    assert.equal(f.calls.length, 2);
   }
 });
 
@@ -1698,7 +2238,7 @@ async function childWatcher(t, directory) {
     const watcher = new DesktopNotifications({
       preferences: new Preferences({ directory: process.argv[1] }),
       platform: "darwin", now: () => now, schedule: () => 0, cancel: () => {},
-      client: { clear() {}, blockedUntil: 0, async page() {
+      client: { clear() {}, blockedUntil: 0, serverBlockedUntil: 0, async page() {
         process.send({ type: "poll" });
         if (pause) await new Promise(resolve => { finish = resolve; });
         return {
