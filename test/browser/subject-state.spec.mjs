@@ -129,6 +129,8 @@ for (const packaged of [false, true]) {
           await page.locator("#group-by").selectOption(groupBy);
           await page.keyboard.press("Escape");
           await expect.poll(labels).toEqual(expectedLabels);
+          const queuedIcon = page.locator(".subject-merge-queued .subject-icon");
+          await expect(queuedIcon).toHaveCSS("color", theme === "light" ? "rgb(154, 103, 0)" : "rgb(210, 153, 34)");
           for (const width of [320, 960]) {
             await page.setViewportSize({ width, height: 900 });
             expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
@@ -143,7 +145,8 @@ for (const packaged of [false, true]) {
       expect(colors[1]).toBe(colors[7]);
       expect(colors[2]).toBe(colors[5]);
       expect(new Set([colors[0], colors[1], colors[2], colors[6]]).size).toBe(4);
-      expect(colors[8]).toBe(colors[7]);
+      expect(colors[8]).toBe(colors[11]);
+      expect(colors[8]).not.toBe(colors[7]);
       expect(colors[9]).toBe(colors[0]);
       expect(colors[10]).toBe(colors[6]);
       expect(colors[13]).toBe(colors[10]);
@@ -203,9 +206,13 @@ for (const packaged of [false, true]) {
       await page.goto(canvas.url);
       const icon = page.locator(".subject-icon");
       await expect(icon).toHaveAttribute("aria-label", /^Pull Request: In merge queue\. Checked /, { timeout: 15_000 });
+      const queuedShape = await icon.locator("path").getAttribute("d");
+      await expect(icon).toHaveCSS("color", "rgb(154, 103, 0)");
       canvas.rows[0].mergeQueued = false;
       await page.locator("#force-refresh").click();
       await expect(icon).toHaveAttribute("aria-label", /^Pull Request: Open\. Checked /, { timeout: 15_000 });
+      await expect(icon.locator("path")).not.toHaveAttribute("d", queuedShape);
+      await expect(icon).toHaveCSS("color", "rgb(26, 127, 55)");
       canvas.setRequestHook(args => args.at(-1) === "graphql"
         ? http({ errors: [{ message: "Synthetic SSO error" }] }) : undefined);
       await page.locator("#force-refresh").click();

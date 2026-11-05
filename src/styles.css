@@ -914,7 +914,6 @@ a:hover {
 }
 
 .subject-merged .subject-icon,
-.subject-merge-queued .subject-icon,
 .subject-closed .subject-icon,
 .subject-duplicate .subject-icon {
   color: var(--subject-completed);
@@ -928,6 +927,7 @@ a:hover {
   color: var(--danger);
 }
 
+.subject-merge-queued .subject-icon,
 .subject-queued .subject-icon,
 .subject-in-progress .subject-icon,
 .subject-waiting .subject-icon,
