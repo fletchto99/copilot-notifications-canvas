@@ -147,6 +147,45 @@ for (const packaged of [false, true]) {
       expect(canvas.writes).toEqual([]);
     });
 
+    test("hiding an empty tab cannot steal focus from the host composer", async ({ page, canvas }) => {
+      canvas.rows.splice(1);
+      canvas.rows[0].reason = "mention";
+      const host = new URL("/synthetic-host", canvas.url).href;
+      await page.route(host, route => route.fulfill({
+        contentType: "text/html",
+        body: `<html lang="en"><title>Synthetic Copilot host</title><body>
+          <label>Copilot composer<input id="composer"></label>
+          <iframe title="Notifications" src="${canvas.url}" style="width:960px;height:720px"></iframe>
+        </body></html>`,
+      }));
+      await page.clock.install();
+      await page.clock.pauseAt(new Date(Date.now() + 1000));
+      await page.goto(host);
+      const frame = page.frameLocator("iframe");
+      const mentioned = frame.getByRole("tab", { name: "Mentioned (1)", exact: true });
+      await expect(mentioned).toHaveAttribute("aria-selected", "false");
+      await mentioned.focus();
+      const composer = page.getByRole("textbox", { name: "Copilot composer" });
+      await composer.fill("Continue typing in Copilot");
+      canvas.rows[0].reason = "subscribed";
+      const status = await frame.locator("body").evaluate(async () => {
+        const response = await fetch("/api/refresh", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${location.hash.slice(1)}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ force: true }),
+        });
+        return response.status;
+      });
+      expect(status).toBe(200);
+      await page.clock.runFor(5000);
+      await expect(frame.locator("#attention-mentioned")).toBeHidden();
+      await expect(frame.getByRole("tab", { name: "All (1)", exact: true })).toHaveAttribute("tabindex", "0");
+      await expect(composer).toBeFocused();
+      await expect(composer).toHaveValue("Continue typing in Copilot");
+      expect(await frame.locator("body").evaluate(() => document.hasFocus())).toBe(false);
+      expect(canvas.writes).toEqual([]);
+    });
+
     for (const manual of [false, true]) {
       test(`${manual ? "manual" : "automatic"} refresh cannot steal focus from the host composer`, async ({ page, canvas }) => {
         canvas.rows.splice(1);

@@ -10,7 +10,7 @@ import { startServer } from "../src/server.mjs";
 import { Inbox } from "../src/inbox.mjs";
 import { GitHubClient } from "../src/github.mjs";
 
-const defaults = { matchGitHubInbox: true, autoOpen: false, darkMode: null, desktopNotifications: false, desktopSound: "default", groupBy: "repo" };
+const defaults = { matchGitHubInbox: true, autoOpen: false, darkMode: null, desktopNotifications: false, desktopSound: "default", groupBy: "repo", hideEmptyTabs: true };
 
 async function setup(t, io) {
   const directory = await fs.mkdtemp(join(tmpdir(), "notification-settings-test-"));
@@ -72,10 +72,24 @@ test("all grouping choices persist across instances and survive unrelated settin
   }
 });
 
+test("hiding empty tabs defaults on and persists without replacing unrelated or unknown settings", async t => {
+  const preferences = await setup(t);
+  await fs.writeFile(preferences.path, '{"groupBy":"date","future":42}');
+  assert.equal((await preferences.read()).hideEmptyTabs, true);
+  const other = new Preferences({ directory: preferences.directory });
+  for (const hideEmptyTabs of [false, true]) {
+    assert.deepEqual(await preferences.update({ hideEmptyTabs }), { ...defaults, groupBy: "date", hideEmptyTabs });
+    assert.equal((await other.read()).hideEmptyTabs, hideEmptyTabs);
+    await other.update({ darkMode: null });
+    assert.deepEqual(await preferences.document(), { groupBy: "date", future: 42, hideEmptyTabs, darkMode: null });
+  }
+});
+
 test("malformed stored settings and invalid updates fail explicitly without overwriting data", async t => {
   const preferences = await setup(t);
   for (const data of ["{", "[]", "null", '{"autoOpen":"yes"}', '{"desktopNotifications":1}',
     '{"matchGitHubInbox":null}', '{"matchGitHubInbox":"true"}', '{"matchGitHubInbox":0}',
+    '{"hideEmptyTabs":null}', '{"hideEmptyTabs":"true"}', '{"hideEmptyTabs":0}',
     '{"desktopSound":null}', '{"desktopGeneration":false}', '{"darkMode":"dark"}', '{"darkMode":0}',
     '{"groupBy":null}', '{"groupBy":"unknown"}', '{"groupBy":false}', '{"groupBy":[]}', " ".repeat(17000)]) {
     await fs.writeFile(preferences.path, data);
@@ -85,6 +99,7 @@ test("malformed stored settings and invalid updates fail explicitly without over
   }
   for (const input of [null, [], {}, { autoOpen: "yes" }, { darkMode: "dark" }, { darkMode: 0 },
     { matchGitHubInbox: null }, { matchGitHubInbox: "true" }, { matchGitHubInbox: 0 },
+    { hideEmptyTabs: null }, { hideEmptyTabs: "true" }, { hideEmptyTabs: 0 },
     { darkMode: undefined }, { autoOpen: null }, { autoOpen: true, token: "not accepted" },
     { groupBy: undefined }, { groupBy: null }, { groupBy: "unknown" }, { groupBy: "Repo" },
     { groupBy: false }, { groupBy: [] }, { groupBy: { value: "date" } }]) {
@@ -223,6 +238,8 @@ test("settings HTTP routes require capability/origin and persist only permitted 
     desktopStatus: { supported: false, state: "off", message: "Desktop notifications are unavailable." },
   });
   for (const [input, status] of [[{ autoOpen: true }, 200], [{ darkMode: true }, 200],
+    [{ hideEmptyTabs: false }, 200], [{ hideEmptyTabs: true }, 200],
+    [{ hideEmptyTabs: "true" }, 400], [{ hideEmptyTabs: null }, 400], [{ hideEmptyTabs: 0 }, 400],
     [{ groupBy: "none" }, 200], [{ groupBy: "repo" }, 200], [{ groupBy: "date" }, 200],
     [{ groupBy: "unknown" }, 400], [{ groupBy: null }, 400],
     [{ autoOpen: "yes" }, 400], [{ darkMode: "dark" }, 400], [{ sound: true }, 400]]) {

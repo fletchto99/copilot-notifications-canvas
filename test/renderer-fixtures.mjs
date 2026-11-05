@@ -162,7 +162,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     ["batch-progress", "batch-stop", "batch-retry", "batch-dismiss"].some(id => ids.get(id) === node);
   ids.get("settings").contains = node =>
     node === ids.get("settings") ||
-    ["settings-toggle", "settings-panel", "show-notifications", "auto-open", "theme", "group-by", "check-updates", "desktop-notifications", "desktop-sound",
+    ["settings-toggle", "settings-panel", "show-notifications", "auto-open", "theme", "group-by", "hide-empty-tabs", "check-updates", "desktop-notifications", "desktop-sound",
       "development-api", "development-api-url", "development-api-save"].some(id => ids.get(id).contains(node));
   const document = {
     hidden,
@@ -277,7 +277,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
         }
         const capabilities = desktopCapabilities(desktopPlatform);
         inbox.setMatchGitHubInbox(storedSettings.matchGitHubInbox ?? true);
-        return { ok: true, json: async () => ({ matchGitHubInbox: true, desktopNotifications: false, desktopSound: "default", ...storedSettings,
+        return { ok: true, json: async () => ({ matchGitHubInbox: true, hideEmptyTabs: true, desktopNotifications: false, desktopSound: "default", ...storedSettings,
           developmentApi, desktopStatus: { ...capabilities, state: "watching",
             message: capabilities.supported ? "Watching in the background." : capabilities.help, ...desktopStatus },
         }) };

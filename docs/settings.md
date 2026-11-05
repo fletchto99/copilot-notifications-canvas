@@ -9,6 +9,7 @@ across sessions and preserved during packaged upgrades.
 | --- | --- | --- |
 | Show notifications | All | **All** shows read and unread inbox items, excluding Done. **Unread only** shows unread items. Switching reloads the first page. No per-notification state is saved locally. |
 | Group By | Repository | **Repository**: preserve GitHub's API order, grouping repositories by first appearance. **All notifications**: one collapsible group in API order. **Date**: newest local calendar day first, using REST update times for buckets and API order for rows. |
+| Hide empty tabs | On | Hides attention tabs with zero loaded notifications. **All** and the selected tab always stay visible. Counts ignore search; tabs reappear when matching notifications are loaded. Saved choices are preserved. |
 | Theme | Match Copilot | **Match Copilot** uses Copilot's theme colors, falling back to the OS theme when opened outside Copilot. **Dark** and **Light** use fixed palettes. |
 | Auto-open | Off | Opens a missing Notifications panel when its provider attaches to a new or resumed session, unless you previously closed it in that session. Existing panels are left alone. |
 | Desktop notifications | Off | Enables native alerts while a Notifications canvas is open and its extension process is running. |

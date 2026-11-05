@@ -9,7 +9,7 @@ for (const packaged of [false, true]) {
       await page.goto(canvas.url);
       const settings = page.getByLabel("Settings", { exact: true });
       const select = page.getByRole("combobox", { name: "Show notifications", exact: true });
-      const autoOpen = page.getByRole("switch", { name: "Auto-open", exact: true });
+      const hideEmptyTabs = page.getByRole("switch", { name: "Hide empty tabs", exact: true });
       for (const width of [320, 960]) {
         await page.setViewportSize({ width, height: 640 });
         for (const colorScheme of ["light", "dark"]) {
@@ -23,7 +23,7 @@ for (const packaged of [false, true]) {
           await expect(select).not.toHaveAttribute("title");
           await expect(page.locator("#show-notifications-help, #show-notifications-tooltip")).toHaveCount(0);
           const controlBounds = await select.locator("..").boundingBox();
-          const nextBounds = await autoOpen.boundingBox();
+          const nextBounds = await hideEmptyTabs.boundingBox();
           expect(nextBounds.y - controlBounds.y - controlBounds.height).toBeCloseTo(8, 1);
           await select.selectOption("unread");
           await expect(select).toBeEnabled();
@@ -37,18 +37,18 @@ for (const packaged of [false, true]) {
           await select.selectOption("all");
           await expect(select).toBeEnabled();
           await select.hover();
-          expect(await autoOpen.evaluate(node => {
+          expect(await hideEmptyTabs.evaluate(node => {
             const bounds = node.getBoundingClientRect();
             return node.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2));
           })).toBe(true);
           expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
           await select.focus();
           await select.press("Tab");
-          await expect(autoOpen).toBeFocused();
-          await autoOpen.click();
-          await expect(autoOpen).toHaveAttribute("aria-checked", "true");
-          await autoOpen.click();
-          await expect(autoOpen).toHaveAttribute("aria-checked", "false");
+          await expect(hideEmptyTabs).toBeFocused();
+          await hideEmptyTabs.click();
+          await expect(hideEmptyTabs).toHaveAttribute("aria-checked", "false");
+          await hideEmptyTabs.click();
+          await expect(hideEmptyTabs).toHaveAttribute("aria-checked", "true");
           await page.keyboard.press("Escape");
           await expect(settings).toBeFocused();
         }

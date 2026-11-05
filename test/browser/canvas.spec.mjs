@@ -21,6 +21,7 @@ for (const packaged of [false, true]) {
       ["Review Requested", "review_requested", "right"],
     ]) {
       test(`preserve page scroll and reveal a focused tab hidden to the ${hiddenSide}`, async ({ page, canvas }) => {
+        await canvas.preferences.update({ hideEmptyTabs: false });
         canvas.rows.splice(50);
         for (const row of canvas.rows) row.reason = reason;
         await page.setViewportSize({ width: 320, height: 640 });
@@ -148,6 +149,7 @@ test("real assets load under CSP, render titles as text, and support search and 
 });
 
 test("clearing search leaves the selected attention tab unchanged", async ({ page, canvas }) => {
+  await canvas.preferences.update({ hideEmptyTabs: false });
   await page.setViewportSize({ width: 320, height: 800 });
   await page.goto(canvas.url);
   await expect(page.locator(".row")).toHaveCount(50);
@@ -192,6 +194,7 @@ test("issue and PR numbers render in metadata and search selects the notificatio
 });
 
 test("attention tabs combine with search and constrain repository reads to matching loaded reasons", async ({ page, canvas }) => {
+  await canvas.preferences.update({ hideEmptyTabs: false });
   for (const row of canvas.rows) row.reason = "subscribed";
   canvas.rows[0].reason = "review_requested";
   canvas.rows[2].reason = "review_requested";
@@ -272,6 +275,7 @@ test("attention tabs are keyboard accessible and fit narrow light and dark panel
 });
 
 test("overflow arrows scroll without filtering and stay accessible at both ends", async ({ page, canvas }, testInfo) => {
+  await canvas.preferences.update({ hideEmptyTabs: false });
   canvas.rows.splice(2);
   await page.setViewportSize({ width: 320, height: 800 });
   const filters = [];
@@ -329,6 +333,7 @@ test("overflow arrows scroll without filtering and stay accessible at both ends"
 });
 
 test("search preserves total tab counts and overflow controls without resizing", async ({ page, canvas }) => {
+  await canvas.preferences.update({ hideEmptyTabs: false });
   await page.goto(canvas.url);
   const strip = page.getByRole("tablist", { name: "Attention filters" });
   const next = page.getByRole("button", { name: "Scroll attention tabs right", exact: true });
@@ -909,7 +914,7 @@ test("Settings supports keyboard dismissal and persists theme and auto-open acro
   await expect(page.getByRole("switch", { name: "Desktop notifications", exact: true })).toHaveAttribute("aria-checked", "false");
   await expect(page.getByRole("combobox", { name: "Sound", exact: true })).toHaveValue("default");
   expect(await canvas.preferences.read()).toEqual({
-    matchGitHubInbox: true, autoOpen: true, darkMode: true, desktopNotifications: false, desktopSound: "default", groupBy: "repo",
+    matchGitHubInbox: true, autoOpen: true, darkMode: true, desktopNotifications: false, desktopSound: "default", groupBy: "repo", hideEmptyTabs: true,
   });
   await theme.selectOption("system");
   await expect.poll(async () => (await canvas.preferences.read()).darkMode).toBeNull();

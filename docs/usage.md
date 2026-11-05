@@ -155,6 +155,10 @@ history. Participating includes `comment`, `mention`, `author`, `team_mention`,
 comments and authorship. Their counts ignore search; the status line shows matches
 for both the selected tab and search. Refreshing, loading more, or clearing search
 keeps the selected tab.
+**Settings > Hide empty tabs** is on by default and hides tabs with zero loaded notifications.
+**All** and the selected tab always stay visible, even when empty. Tabs reappear
+when matching notifications are loaded. Search does not affect tab visibility,
+and keyboard navigation skips hidden tabs.
 Read rows have no unread dot and use lighter-weight titles with a tone between
 the foreground and muted metadata colors. Group badges and the overall counter
 consistently show **N total · M unread**, even when all items are unread or none
