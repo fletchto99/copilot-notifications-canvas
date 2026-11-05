@@ -1,0 +1,74 @@
+name: Coverage badge
+
+on:
+  workflow_run:
+    workflows: [Tests]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coverage-badge
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download the successful run's measured badge
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: coverage-badge
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/coverage-badge
+          digest-mismatch: error
+      - name: Publish without changing source history
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+        shell: bash
+        run: |
+          require_current_main() {
+            local current_sha
+            current_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
+            if [[ "$current_sha" != "$SOURCE_SHA" ]]; then
+              echo "Skipping coverage from a superseded main commit."
+              exit 0
+            fi
+          }
+          require_current_main
+
+          gh auth setup-git --hostname github.com
+          directory="$(mktemp -d)"
+          git init --initial-branch=badges "$directory"
+          cd "$directory"
+          git remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
+          existing_ref="$(git ls-remote --heads origin refs/heads/badges)"
+          if [[ -n "$existing_ref" ]]; then
+            git fetch --depth=1 origin refs/heads/badges
+            git checkout -B badges FETCH_HEAD
+          fi
+
+          cp "$RUNNER_TEMP/coverage-badge/coverage.svg" coverage.svg
+          git add coverage.svg
+          if git diff --cached --quiet; then
+            echo "Coverage badge is unchanged."
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "Update coverage badge for $SOURCE_SHA"
+          require_current_main
+          git push origin HEAD:refs/heads/badges

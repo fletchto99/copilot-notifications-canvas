@@ -42,6 +42,8 @@ for (const packaged of [false, true]) {
       const toggle = page.locator("#settings-toggle");
       const panel = page.locator("#settings-panel");
       await toggle.click();
+      // Layout changes can queue a new WebKit hover over a stationary pointer.
+      await page.mouse.move(0, 0);
       await expect(page.locator("#theme")).toBeEnabled();
       for (const [width, height] of [[320, 480], [320, 320], [480, 640]]) {
         await page.setViewportSize({ width, height });
@@ -78,6 +80,31 @@ for (const packaged of [false, true]) {
       await page.evaluate(() => window.scrollTo(0, 400));
       await expect(panel).toBeHidden();
       await expect(toggle).toHaveAttribute("aria-expanded", "false");
+      expect(canvas.writes).toEqual([]);
+      expect(canvas.deliveries).toEqual([]);
+    });
+
+    test("Escape closes Settings and dismisses its tooltip until a new hover", async ({ page, canvas }) => {
+      canvas.rows.splice(6);
+      await page.setViewportSize({ width: 320, height: 480 });
+      await page.goto(canvas.url);
+      await expect(page.locator(".row")).toHaveCount(6);
+      const toggle = page.locator("#settings-toggle");
+      const tooltip = page.locator("#settings-tooltip");
+      await toggle.focus();
+      await toggle.press("Enter");
+      await expect(page.locator("#theme")).toBeEnabled();
+      await page.locator("#check-updates").focus();
+      await page.keyboard.press("Escape");
+      await expect(page.locator("#settings-panel")).toBeHidden();
+      await expect(toggle).toHaveAttribute("aria-expanded", "false");
+      await expect(toggle).toBeFocused();
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      await expect(tooltip).toBeHidden();
+      await toggle.hover();
+      await expect(tooltip).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(tooltip).toBeHidden();
       expect(canvas.writes).toEqual([]);
       expect(canvas.deliveries).toEqual([]);
     });
