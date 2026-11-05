@@ -222,7 +222,9 @@ CI checks native notification contracts without sending real desktop alerts:
 - Windows runs the real Windows PowerShell XML/WinRT construction with delivery
   removed, verifies protocol click destinations, and exercises permission and
   sender failures with synthetic objects. It also checks issue/PR destinations,
-  check-run resolution, cancellation, and at-most-once behavior.
+  check-run resolution, cancellation, and at-most-once behavior. The XML round-trip
+  test allows 30 seconds per subprocess for cold PowerShell/WinRT startup on CI;
+  production delivery retains its 10-second timeout.
 - macOS compiles and decompiles the actual AppleScript using `osacompile` and
   `osadecompile`, without executing `display notification`.
 - The Node.js 24 Linux job uses `ubuntu-latest` to install `dbus-daemon`,
