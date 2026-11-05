@@ -42,10 +42,12 @@ for (const packaged of [false, true]) {
       const toggle = page.locator("#settings-toggle");
       const panel = page.locator("#settings-panel");
       await toggle.click();
+      // Layout changes can queue a new WebKit hover over a stationary pointer.
+      await page.mouse.move(0, 0);
       await expect(page.locator("#theme")).toBeEnabled();
-      for (const [width, height, placement] of [[320, 480, "below"], [320, 320, "above"], [480, 640, "below"]]) {
+      for (const [width, height] of [[320, 480], [320, 320], [480, 640]]) {
         await page.setViewportSize({ width, height });
-        await expect(panel).toHaveAttribute("data-placement", placement);
+        await expect(panel).toHaveAttribute("data-placement", "below");
         await expect.poll(async () => {
           const box = await panel.boundingBox();
           return box.y >= 8 && box.y + box.height <= height - 8 && box.x >= 0 && box.x + box.width <= width;
@@ -55,6 +57,11 @@ for (const packaged of [false, true]) {
         const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
         expect(results.violations).toEqual([]);
       }
+      const offset = await page.addStyleTag({ content: ".toolbar { margin-top: 160px; }" });
+      await page.setViewportSize({ width: 320, height: 320 });
+      await expect(panel).toHaveAttribute("data-placement", "above");
+      await expectPanelInViewport(page);
+      await offset.evaluate(node => node.remove());
       await page.setViewportSize({ width: 320, height: 480 });
       await expect(panel).toHaveAttribute("data-placement", "below");
       const scrollBefore = await page.evaluate(() => window.scrollY);
@@ -73,6 +80,31 @@ for (const packaged of [false, true]) {
       await page.evaluate(() => window.scrollTo(0, 400));
       await expect(panel).toBeHidden();
       await expect(toggle).toHaveAttribute("aria-expanded", "false");
+      expect(canvas.writes).toEqual([]);
+      expect(canvas.deliveries).toEqual([]);
+    });
+
+    test("Escape closes Settings and dismisses its tooltip until a new hover", async ({ page, canvas }) => {
+      canvas.rows.splice(6);
+      await page.setViewportSize({ width: 320, height: 480 });
+      await page.goto(canvas.url);
+      await expect(page.locator(".row")).toHaveCount(6);
+      const toggle = page.locator("#settings-toggle");
+      const tooltip = page.locator("#settings-tooltip");
+      await toggle.focus();
+      await toggle.press("Enter");
+      await expect(page.locator("#theme")).toBeEnabled();
+      await page.locator("#check-updates").focus();
+      await page.keyboard.press("Escape");
+      await expect(page.locator("#settings-panel")).toBeHidden();
+      await expect(toggle).toHaveAttribute("aria-expanded", "false");
+      await expect(toggle).toBeFocused();
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      await expect(tooltip).toBeHidden();
+      await toggle.hover();
+      await expect(tooltip).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(tooltip).toBeHidden();
       expect(canvas.writes).toEqual([]);
       expect(canvas.deliveries).toEqual([]);
     });
@@ -180,12 +212,16 @@ for (const packaged of [false, true]) {
       await expectPanelInViewport(page);
       const panel = page.locator("#settings-panel");
       await expect(panel).toHaveAttribute("data-placement", "below");
+      const initialTop = (await panel.boundingBox()).y;
       await page.addStyleTag({ content: "h1 { line-height: 64px; }" });
+      await expect.poll(async () => (await panel.boundingBox()).y).toBeGreaterThan(initialTop);
       await expectPanelInViewport(page);
+      const topAfterTypography = (await panel.boundingBox()).y;
       showUpdate = true;
       await page.clock.runFor(5000);
       await expect(page.locator("#update-banner")).toBeVisible();
-      await expect(panel).toHaveAttribute("data-placement", "above");
+      await expect(panel).toHaveAttribute("data-placement", "below");
+      expect((await panel.boundingBox()).y).toBe(topAfterTypography);
       await expectPanelInViewport(page);
       expect(canvas.writes).toEqual([]);
       expect(canvas.deliveries).toEqual([]);

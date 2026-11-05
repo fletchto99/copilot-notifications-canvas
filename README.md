@@ -1,12 +1,20 @@
 # GitHub Notifications
 
+[![Latest release](https://img.shields.io/github/v/release/fletchto99/copilot-notifications-canvas?style=flat)](https://github.com/fletchto99/copilot-notifications-canvas/releases/latest)
+[![CI status](https://img.shields.io/github/actions/workflow/status/fletchto99/copilot-notifications-canvas/tests.yml?branch=main&event=push&style=flat&label=CI)](https://github.com/fletchto99/copilot-notifications-canvas/actions/workflows/tests.yml)
+[![Line coverage](https://raw.githubusercontent.com/fletchto99/copilot-notifications-canvas/badges/coverage.svg)](https://github.com/fletchto99/copilot-notifications-canvas/actions/workflows/tests.yml)
+[![GitHub Copilot: Canvas extension](https://img.shields.io/badge/GitHub%20Copilot-Canvas%20extension-8250df?style=flat&logo=githubcopilot&logoColor=white)](#prerequisites)
+[![Node.js runtime: >=22](https://img.shields.io/badge/Node.js%20runtime-%3E%3D22-166534?style=flat&logo=nodedotjs&logoColor=white)](#prerequisites)
+[![Release provenance: Attested](https://img.shields.io/badge/Release%20provenance-Attested-166534?style=flat&logo=github&logoColor=white)](docs/installation.md#manual-installation-and-updates)
+[![Telemetry: None](https://img.shields.io/badge/Telemetry-None-166534?style=flat)](#privacy)
+
 Your GitHub inbox in the GitHub Copilot app, grouped by repository or date, or
 shown as a single newest-first list. **Show notifications** defaults to **All**,
 showing read and unread inbox items; choose **Unread only** to narrow the view. Completed items
 stay hidden in both views. Search, mark rows
 or groups as read or done, and opt into desktop notifications or auto-open.
 
-![GitHub Notifications canvas showing eight synthetic notifications, five unread, across three example repositories with pull request status icons, a failed check run, and read/done controls](docs/images/github-notifications.png)
+![GitHub Notifications canvas with a compact title toolbar, full-width search, and attention tabs above eight synthetic notifications, five unread, across three example repositories with pull request status icons, a failed check run, and read/done controls](docs/images/github-notifications.png)
 
 ## Prerequisites
 

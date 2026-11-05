@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 test("CI runs ESLint, Stylelint and Prettier checks without allowing warnings", async () => {
   const [workflow, { scripts }] = await Promise.all([
@@ -108,6 +111,143 @@ test("Copilot cloud sessions and reviews share lightweight setup without browser
   assert.match(setup, /actionlint --version/);
   assert.doesNotMatch(setup, /playwright install|apt-get|npm run (?:test|build)/);
   await assert.rejects(readFile(new URL("../.github/workflows/copilot-code-review.yml", import.meta.url)), { code: "ENOENT" });
+});
+
+test("coverage publication uses only successful main-push artifacts in a separate least-privilege workflow", async () => {
+  const [tests, publisher, readme] = await Promise.all([
+    readFile(new URL("../.github/workflows/tests.yml", import.meta.url), "utf8"),
+    readFile(new URL("../.github/workflows/coverage-badge.yml", import.meta.url), "utf8"),
+    readFile(new URL("../README.md", import.meta.url), "utf8"),
+  ].map(promise => promise.then(text => text.replaceAll("\r\n", "\n"))));
+  assert.doesNotMatch(tests, /contents: write/);
+  assert.match(tests, /COVERAGE_BADGE_PATH: \$\{\{ runner\.temp \}\}\/coverage\.svg/);
+  assert.match(tests, /if: matrix\.node == '22' && github\.event_name == 'push' && github\.ref == 'refs\/heads\/main'/);
+  assert.match(tests, /name: coverage-badge\n\s+path: \$\{\{ runner\.temp \}\}\/coverage\.svg\n\s+if-no-files-found: error/);
+  assert.match(publisher, /workflow_run:\n\s+workflows: \[Tests\]\n\s+types: \[completed\]\n\s+branches: \[main\]/);
+  for (const condition of [
+    "github.event.workflow_run.conclusion == 'success'",
+    "github.event.workflow_run.event == 'push'",
+    "github.event.workflow_run.head_branch == 'main'",
+    "github.event.workflow_run.head_repository.full_name == github.repository",
+  ]) assert.ok(publisher.includes(condition));
+  assert.match(publisher, /permissions:\n {6}actions: read\n {6}contents: write/);
+  assert.match(publisher, /group: coverage-badge\n\s+cancel-in-progress: false/);
+  assert.match(publisher, /runs-on: ubuntu-slim/);
+  assert.match(publisher, /uses: actions\/download-artifact@[a-f0-9]{40}/);
+  assert.match(publisher, /run-id: \$\{\{ github\.event\.workflow_run\.id \}\}/);
+  assert.match(publisher, /digest-mismatch: error/);
+  assert.match(publisher, /SOURCE_SHA: \$\{\{ github\.event\.workflow_run\.head_sha \}\}/);
+  assert.match(publisher, /if \[\[ "\$current_sha" != "\$SOURCE_SHA" \]\]; then[\s\S]+?exit 0/);
+  assert.match(publisher, /git init --initial-branch=badges/);
+  assert.match(publisher, /git fetch --depth=1 origin refs\/heads\/badges/);
+  assert.match(publisher, /git diff --cached --quiet/);
+  assert.match(publisher, /require_current_main\n\s+git push origin HEAD:refs\/heads\/badges/);
+  assert.match(publisher, /git push origin HEAD:refs\/heads\/badges/);
+  assert.doesNotMatch(publisher, /actions\/checkout|--force|npm |node |pull_request_target/);
+  assert.match(readme, /\[!\[Line coverage\]\(https:\/\/raw\.githubusercontent\.com\/fletchto99\/copilot-notifications-canvas\/badges\/coverage\.svg\)\]/);
+  const ciBadge = new URL(readme.match(/\[!\[CI status\]\(([^)]+)\)/)[1]);
+  assert.equal(ciBadge.searchParams.get("branch"), "main");
+  assert.equal(ciBadge.searchParams.get("event"), "push");
+});
+
+test("the coverage publishing shell creates, updates, and skips badges without touching main or swallowing failures", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "coverage-publish-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const remote = join(directory, "remote.git");
+  const env = {
+    ...process.env,
+    GIT_CONFIG_GLOBAL: join(directory, "gitconfig"),
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_AUTHOR_NAME: "Test",
+    GIT_AUTHOR_EMAIL: "test@example.com",
+    GIT_COMMITTER_NAME: "Test",
+    GIT_COMMITTER_EMAIL: "test@example.com",
+    GITHUB_REPOSITORY: "test/coverage",
+    GH_TOKEN: "synthetic-token",
+    RUNNER_TEMP: directory,
+    TEST_REMOTE: remote,
+  };
+  const options = { cwd: directory, env, encoding: "utf8", stdio: "pipe" };
+  const git = (...args) => execFileSync("git", args, options).trim();
+  git("init", "--bare", "--initial-branch=main", remote);
+  git("init", "--initial-branch=main", join(directory, "source"));
+  await writeFile(join(directory, "source", "README.md"), "Synthetic source\n");
+  git("-C", "source", "add", "README.md");
+  git("-C", "source", "commit", "-m", "Synthetic source");
+  git("-C", "source", "push", remote, "main");
+  env.SOURCE_SHA = git("--git-dir", remote, "rev-parse", "main");
+  env.TEST_MAIN_SHA = env.SOURCE_SHA;
+  await mkdir(join(directory, "coverage-badge"));
+  const badgePath = join(directory, "coverage-badge", "coverage.svg");
+  await writeFile(badgePath, "<svg>98.12%</svg>\n");
+
+  const workflow = (await readFile(new URL("../.github/workflows/coverage-badge.yml", import.meta.url), "utf8")).replaceAll("\r\n", "\n");
+  const script = workflow.match(/ {8}run: \|\n([\s\S]+)$/)[1].replace(/^ {10}/gm, "");
+  const prelude = `
+    if command -v cygpath >/dev/null; then
+      RUNNER_TEMP="$(cygpath -u "$RUNNER_TEMP")"
+      TEST_REMOTE="$(cygpath -u "$TEST_REMOTE")"
+    fi
+    export TMPDIR="$RUNNER_TEMP"
+    gh() {
+      if [[ "$1" == api ]]; then
+        if [[ "\${TEST_MAIN_READ_FAILURE:-}" == 1 ]]; then return 43; fi
+        printf '%s\\n' "$TEST_MAIN_SHA"
+      else
+        [[ "$*" == "auth setup-git --hostname github.com" ]]
+      fi
+    }
+    git() {
+      if [[ "$1" == "\${TEST_GIT_FAILURE:-}" ]]; then return 42; fi
+      if [[ "$1" == remote && "$2" == add ]]; then
+        [[ "$3" == origin && "$4" == "https://github.com/test/coverage.git" ]] || return 1
+        command git remote add origin "$TEST_REMOTE"
+      else
+        command git "$@" || return $?
+        if [[ "$1" == fetch ]]; then
+          if [[ "\${TEST_ADVANCE_MAIN_DURING_FETCH:-}" == 1 ]]; then
+            TEST_MAIN_SHA="advanced-during-fetch"
+          fi
+          if [[ "\${TEST_FAIL_MAIN_DURING_FETCH:-}" == 1 ]]; then
+            TEST_MAIN_READ_FAILURE=1
+          fi
+        fi
+      fi
+    }
+  `;
+  const publish = () => execFileSync("bash", ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", prelude + script], options);
+  const badgeHead = () => git("--git-dir", remote, "rev-parse", "badges");
+  publish();
+  const first = badgeHead();
+  assert.equal(git("--git-dir", remote, "ls-tree", "--name-only", "badges"), "coverage.svg");
+  assert.equal(git("--git-dir", remote, "show", "badges:coverage.svg"), "<svg>98.12%</svg>");
+  assert.equal(git("--git-dir", remote, "show", "-s", "--format=%P", "badges"), "");
+  assert.match(publish(), /Coverage badge is unchanged/);
+  assert.equal(badgeHead(), first);
+  await writeFile(badgePath, "<svg>99.25%</svg>\n");
+  publish();
+  const second = badgeHead();
+  assert.notEqual(second, first);
+  assert.equal(git("--git-dir", remote, "show", "-s", "--format=%P", "badges"), first);
+  assert.equal(git("--git-dir", remote, "show", "badges:coverage.svg"), "<svg>99.25%</svg>");
+  env.TEST_MAIN_SHA = "superseded";
+  assert.match(publish(), /Skipping coverage from a superseded main commit/);
+  assert.equal(badgeHead(), second);
+  env.TEST_MAIN_SHA = env.SOURCE_SHA;
+  await writeFile(badgePath, "<svg>99.50%</svg>\n");
+  env.TEST_ADVANCE_MAIN_DURING_FETCH = "1";
+  assert.match(publish(), /Skipping coverage from a superseded main commit/);
+  assert.equal(badgeHead(), second);
+  assert.equal(git("--git-dir", remote, "show", "badges:coverage.svg"), "<svg>99.25%</svg>");
+  delete env.TEST_ADVANCE_MAIN_DURING_FETCH;
+  env.TEST_FAIL_MAIN_DURING_FETCH = "1";
+  assert.throws(publish, error => error.status === 43);
+  assert.equal(badgeHead(), second);
+  delete env.TEST_FAIL_MAIN_DURING_FETCH;
+  env.TEST_GIT_FAILURE = "ls-remote";
+  assert.throws(publish, error => error.status === 42);
+  assert.equal(badgeHead(), second);
+  assert.equal(git("--git-dir", remote, "rev-parse", "main"), env.SOURCE_SHA);
 });
 
 test("workflow lint uses a verbose Dependabot-managed local Docker action on a Docker-capable runner", async () => {

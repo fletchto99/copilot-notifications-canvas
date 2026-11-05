@@ -20,7 +20,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
   initialRows, subjectStates = {}, subjectsLoading = false, onWrite, onFetch, onState, onFilters, initialOffline = false, release, development = null,
   onUpdates, clipboardFailure = false, onSettings, developmentApi, onDevelopment, retainDisabledFocus = false, desktopPlatform = "darwin", desktopStatus = {},
   storedSettings = { autoOpen: false, darkMode: null, desktopNotifications: false, desktopSound: "default" },
-  appColorMode = "light", systemDark = false } = {}) {
+  appColorMode = "light", systemDark = false, navigatorPlatform, userAgentData } = {}) {
   const calls = [];
   let documentFocused = true;
   const timers = new Map();
@@ -234,7 +234,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
   const context = createContext({
     document, window, location: { hash: `#${token}` }, Intl, URL, AbortController,
     apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle,
-    navigator: { clipboard: { writeText: async text => {
+    navigator: { platform: navigatorPlatform, userAgentData, clipboard: { writeText: async text => {
       if (clipboardFailure) throw new Error("Clipboard denied");
       copied.push(text);
     } } },

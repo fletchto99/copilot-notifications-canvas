@@ -10,6 +10,11 @@ to include older notifications.
 
 ## Find notifications
 
+The compact title row keeps **Open GitHub inbox**, **Force refresh**, and
+**Settings** together. Full-width search and attention tabs stay visible below
+it, followed by loaded counts and **Collapse all**. The title wraps on narrow
+panels without shrinking the utility buttons.
+
 Search by title, issue/PR number, or repository. Each row shows its type, number
 when available, notification reason, and last-updated time.
 Date grouping requires a supported browser time zone; the other groupings do not.
@@ -122,6 +127,10 @@ a hover tooltip. Read and Done remain separate controls; opening a row
 does not send a read/done request from the extension.
 Background refreshes do not restore canvas focus after you move to the Copilot
 composer or another window. Focus restoration within an active canvas is preserved.
+Subject status, freshness, and destination updates preserve row links, their
+status icons and type/number labels, and action buttons in place, so they cannot
+cancel a pointer click already in progress or rebuild unrelated rows.
+Notification content or selection changes still reconcile the displayed list.
 Unchanged polling keeps button labels intact so clicks on Load more, Collapse,
 and attention tabs are not cancelled partway through a pointer press.
 Opening a row or the inbox toolbar link, including Cmd-click or middle-click,
