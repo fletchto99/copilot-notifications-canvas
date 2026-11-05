@@ -223,6 +223,7 @@ test("only successful foreground refreshes feed the desktop watcher, after updat
       assert.equal(inbox.snapshot().groups[0].items[0].id, "1");
     },
   };
+  inbox.client.beforeRequest = desktop.prepareForeground;
   const server = await startServer(inbox, { desktop });
   t.after(() => server.close());
   const url = new URL(server.url);
@@ -240,8 +241,11 @@ test("only successful foreground refreshes feed the desktop watcher, after updat
   assert.equal(syncs, 1);
 });
 
-test("HTTP notification reads inherit another client's server deadline before a watcher tick", async t => {
-  for (const [path, input] of [["refresh", { force: true }], ["more", {}], ["filters", { mode: "unread" }]]) {
+test("all HTTP notification request paths inherit another client's server deadline before a watcher tick", async t => {
+  for (const [path, input] of [
+    ["refresh", { force: true }], ["more", {}], ["filters", { mode: "unread" }],
+    ["read", { id: "1" }], ["done", { id: "1" }], ["batch/start", null], ["state", null],
+  ]) {
     const directory = await mkdtemp(join(tmpdir(), "notification-http-backoff-"));
     const preferences = new Preferences({ directory });
     await preferences.update({ desktopNotifications: true });
@@ -249,10 +253,15 @@ test("HTTP notification reads inherit another client's server deadline before a 
     let limited = false;
     const calls = [];
     const response = args => {
+      if (args.includes("PATCH") || args.includes("DELETE")) return http(null, {}, args.includes("PATCH") ? 205 : 204);
+      if (args.at(-1).startsWith("/repos/")) return http({ state: "open" });
       const url = new URL(args.at(-1), "https://api.github.com");
       const page = Number(url.searchParams.get("page"));
       url.searchParams.set("page", "2");
-      return http([thread(String(page), { subject: { type: "Unknown", title: "Synthetic", url: null } })],
+      return http([thread(String(page), { subject: {
+        type: path === "state" ? "Issue" : "Unknown", title: "Synthetic",
+        url: path === "state" ? `https://api.github.com/repos/example/widgets/issues/${page}` : null,
+      } })],
         page === 1 ? { link: `<${url.href}>; rel="next"` } : {});
     };
     const writerClient = new GitHubClient({ now: () => now,
@@ -283,22 +292,102 @@ test("HTTP notification reads inherit another client's server deadline before a 
     await writer.check();
     assert.equal(readerClient.blockedUntil, 0, "the reader has not observed the new deadline yet");
     const url = new URL(server.url);
-    const call = () => fetch(new URL(`/api/${path}`, url), {
-      method: "POST",
+    const group = inbox.groups()[0];
+    const selection = { repository: group.repository, selectionKey: group.selectionKey };
+    const call = (action = path, data = input ?? selection) => fetch(new URL(`/api/${action}`, url), {
+      method: action === "state" ? "GET" : "POST",
       headers: { Authorization: `Bearer ${url.hash.slice(1)}`, Origin: url.origin, "Content-Type": "application/json" },
-      body: JSON.stringify(input),
+      ...(action === "state" ? {} : { body: JSON.stringify(data) }),
     });
+    const finish = async () => {
+      await inbox.batch.done;
+      for (let count = 0; count < 3; count++) {
+        await readerClient.queue;
+        await new Promise(resolve => setImmediate(resolve));
+      }
+    };
     const before = calls.length;
     const blocked = await call();
-    assert.equal(blocked.status, 429);
-    assert.equal((await blocked.json()).error.code, "rate_limited");
+    const blockedState = await blocked.json();
+    await finish();
+    assert.equal(blocked.status, path === "state" ? 200 : path === "batch/start" ? 202 : 429, path);
+    if (path === "batch/start") {
+      const batch = inbox.batch.snapshot();
+      assert.equal(batch.error.code, "rate_limited");
+      assert.equal(batch.failed, 0);
+      assert.equal(batch.notAttempted, 1, "a blocked write was never in flight");
+    } else if (path === "state") {
+      assert.equal(readerClient.subjectSnapshot(inbox.loadedItems()[0]).subjectStateError.includes("rate limit"), true);
+    } else assert.equal(blockedState.error.code, "rate_limited");
     assert.equal(calls.length, before, `${path} must not start an uncached request`);
     now = writerClient.serverBlockedUntil;
-    const resumed = await call();
-    assert.equal(resumed.status, 200);
-    assert.equal((await resumed.json()).loaded, path === "more" ? 2 : 1);
+    const resumed = path === "batch/start"
+      ? await call("batch/retry", { token: inbox.batch.snapshot().token }) : await call();
+    const resumedState = await resumed.json();
+    await finish();
+    assert.equal(resumed.status, path === "batch/start" ? 202 : 200);
+    assert.equal(resumedState.loaded, path === "more" ? 2 : path === "done" ? 0 : 1);
+    if (path === "batch/start") assert.equal(inbox.batch.snapshot(), null);
+    if (path === "state") assert.equal(readerClient.subjectSnapshot(inbox.loadedItems()[0]).subjectState, "open");
+    assert.equal(calls.length, before + 1);
     await reader.foregroundPending;
   }
+});
+
+test("a server deadline published during batch spacing blocks the next write before it is in flight", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "notification-queued-backoff-"));
+  const preferences = new Preferences({ directory });
+  await preferences.update({ desktopNotifications: true });
+  let now = Date.parse("2026-01-10T12:00:00Z");
+  let limited = false;
+  const rows = [thread("1"), thread("2")];
+  const writerClient = new GitHubClient({ now: () => now,
+    run: async () => limited ? http({}, { "retry-after": "600" }, 429) : http(rows) });
+  const options = { preferences, now: () => now, schedule: () => 0, cancel: () => {},
+    notify: async () => assert.fail("This scenario must not deliver notifications") };
+  const writer = new DesktopNotifications({ ...options, client: writerClient });
+  const writes = [];
+  const readerClient = new GitHubClient({
+    now: () => now,
+    sleep: async delay => {
+      now += delay;
+      limited = true;
+      await assert.rejects(writerClient.page(firstPage(), undefined, { force: true }), { code: "rate_limited" });
+      await writer.check();
+    },
+    run: async args => {
+      if (args.includes("PATCH")) {
+        writes.push(args.at(-1));
+        return http(null, {}, 205);
+      }
+      return http(rows);
+    },
+  });
+  const reader = new DesktopNotifications({ ...options, client: readerClient });
+  const inbox = new Inbox(readerClient);
+  t.after(async () => {
+    inbox.close();
+    await writer.close();
+    await reader.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+  writer.add("writer");
+  reader.add("reader");
+  await writer.check();
+  await reader.check();
+  await inbox.refresh();
+  const group = inbox.groups()[0];
+  inbox.batch.start({ repository: group.repository, selectionKey: group.selectionKey });
+  await inbox.batch.done;
+  assert.deepEqual(writes, ["/notifications/threads/1"]);
+  const batch = inbox.batch.snapshot();
+  assert.equal(batch.succeeded, 1);
+  assert.equal(batch.failed, 0);
+  assert.equal(batch.notAttempted, 1);
+  assert.equal(batch.inFlight, false);
+  assert.equal(batch.error.code, "rate_limited");
+  assert.equal(readerClient.pendingThreads.size, 0);
+  assert.equal(readerClient.threadReservations.size, 0);
 });
 
 test("activation during an in-flight foreground request establishes a fresh generation-scoped baseline", async t => {

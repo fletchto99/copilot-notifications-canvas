@@ -108,6 +108,9 @@ test("foreground preparation ignores desktop checkpoints when alerts are disable
       assert.deepEqual(f.logs, []);
       assert.deepEqual(f.calls, []);
       assert.deepEqual(f.deliveries, []);
+      await watcher.client.page(firstPage(), undefined, { force: true });
+      assert.equal(f.calls.length, 1, "the centralized request hook must leave disabled/unsupported clients alone");
+      assert.deepEqual(f.logs, []);
       assert.equal(await readFile(watcher.statePath, "utf8"), content);
     }
   }
@@ -580,10 +583,11 @@ test("enabling desktop alerts silently baselines activity missing from a pre-act
   assert.equal(f.deliveries.length, 0);
 });
 
-test("closing the final panel cancels an outstanding baseline cache wait without delivering or retrying", async t => {
-  const f = await fixture(t);
+test("closing the final panel cancels an outstanding baseline cache wait without delivering or retrying", { timeout: 10_000 }, async t => {
+  const f = await fixture(t, { enabled: false });
   const watcher = f.make();
   await watcher.client.page(firstPage());
+  await f.preferences.update({ desktopNotifications: true });
   let waiting;
   const started = new Promise(resolve => { waiting = resolve; });
   watcher.client.sleep = (_delay, _value, { signal }) => new Promise((_resolve, reject) => {

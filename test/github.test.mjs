@@ -353,6 +353,84 @@ test("pagination follows and validates Link rather than guessing page count", ()
   }
 });
 
+test("request preparation gates reads and writes without counting blocked writes as dispatched", async () => {
+  for (const method of ["GET", "PATCH", "DELETE"]) {
+    let prepared = 0;
+    let dispatched = 0;
+    let calls = 0;
+    const client = new GitHubClient({
+      now: () => 0, beforeRequest: async () => { prepared++; client.blockedUntil = 600_000; },
+      run: async () => { calls++; return http([]); },
+    });
+    const options = { beforeWrite: () => { dispatched++; } };
+    const request = method === "GET" ? client.page(firstPage()) :
+      method === "PATCH" ? client.markRead("1", undefined, options) : client.markDone("1", undefined, options);
+    await assert.rejects(request, { code: "rate_limited", requestDeferred: true });
+    assert.equal(prepared, 1);
+    assert.equal(dispatched, 0);
+    assert.equal(calls, 0);
+    assert.equal(client.writeAvailableAt, 0);
+    assert.equal(client.pendingThreads.size, 0);
+    assert.equal(client.failures.size, 0);
+  }
+});
+
+test("cancellation during asynchronous request preparation prevents reads and writes", async () => {
+  for (const method of ["GET", "PATCH", "DELETE"]) {
+    const controller = new AbortController();
+    const client = new GitHubClient({
+      beforeRequest: async () => { await Promise.resolve(); controller.abort(); },
+      run: async () => assert.fail("Cancelled preparation must not dispatch"),
+    });
+    const options = { beforeWrite: () => assert.fail("Cancelled preparation must not mark a write in flight") };
+    await assert.rejects(method === "GET" ? client.page(firstPage(), controller.signal) :
+      method === "PATCH" ? client.markRead("1", controller.signal, options) : client.markDone("1", controller.signal, options),
+    { code: "closed" });
+    assert.equal(client.sequence, 0);
+    assert.equal(client.writeAvailableAt, 0);
+    assert.equal(client.failures.size, 0);
+    assert.equal(client.pendingThreads.size, 0);
+  }
+});
+
+test("eligible desktop cache reads remain available without asynchronous request preparation", async () => {
+  let calls = 0;
+  const client = new GitHubClient({ now: () => 0, run: async () => { calls++; return http([thread()]); } });
+  const page = await client.page(firstPage());
+  client.beforeRequest = async () => assert.fail("A valid desktop cache needs no outbound preparation");
+  assert.equal(await client.page(firstPage(), undefined, { allowCachedDuringBackoff: true }), page);
+  assert.equal(calls, 1);
+});
+
+test("write eligibility is rechecked after preparation without reserving spacing for an unsent write", async () => {
+  const events = [];
+  const client = new GitHubClient({
+    now: () => 0,
+    beforeRequest: async () => { await Promise.resolve(); events.push("prepared"); },
+    run: async () => assert.fail("An ineligible write must not be sent"),
+  });
+  await assert.rejects(client.markDone("1", undefined, { beforeWrite: () => {
+    events.push("rechecked");
+    throw new InboxError("selection_changed", "Synthetic selection changed", 409);
+  } }), { code: "selection_changed" });
+  assert.deepEqual(events, ["prepared", "rechecked"]);
+  assert.equal(client.writeAvailableAt, 0);
+  assert.equal(client.revision, 0);
+  assert.equal(client.pendingThreads.size, 0);
+  assert.equal(client.failures.size, 0);
+});
+
+test("cache freshness is checked again after asynchronous preparation", async () => {
+  let now = 0;
+  let calls = 0;
+  const client = new GitHubClient({ now: () => now, run: async () => { calls++; return http([thread()]); } });
+  await client.page(firstPage());
+  now = POLL_MS - 1;
+  client.beforeRequest = async () => { await Promise.resolve(); now++; };
+  await client.page(firstPage());
+  assert.equal(calls, 2, "a cache that expired during preparation must be revalidated");
+});
+
 test("auth, permission, malformed JSON, malformed HTTP and upstream failures are sanitized", async () => {
   for (const [output, code] of [
     [http({ message: "secret credential" }, {}, 401), "authentication"],

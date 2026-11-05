@@ -133,6 +133,7 @@ export class DesktopNotifications {
     this.statePath = join(this.directory, "desktop-state.json");
     this.deferredUntil = 0;
     this.status = { supported: this.supported, state: "off", message: "Desktop notifications are off." };
+    this.client.beforeRequest = () => this.prepareForeground();
   }
 
   snapshot() {

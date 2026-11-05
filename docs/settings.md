@@ -169,10 +169,12 @@ deferred before reading any page leaves the polling reservation unchanged,
 without reporting a new poll error or extending the server's deadline.
 That watcher also remembers the deferral locally, so background ticks do not
 repeatedly reserve and restore the same checkpoint while it waits. Foreground
-cache reuse remains available. Panel and agent refresh, load-more, and filter
-actions inherit shared deadlines before fetching; a longer inherited rate-limit
-wait replaces stale local error messages, but a longer local failure retains
-its own message.
+cache reuse remains available. With alerts enabled and supported, shared
+deadlines are checked in the API client before dispatch, covering panel and
+agent reads, Read/Done writes, each queued batch item, and subject-status
+lookups. Writes recheck after their spacing delay and are only marked in flight
+once preparation succeeds. A longer inherited rate-limit wait replaces stale
+local error messages, but a longer local failure retains its own message.
 See [Privacy](../README.md#privacy).
 
 ## Troubleshooting

@@ -265,10 +265,11 @@ function seconds(value) {
 }
 
 export class GitHubClient {
-  constructor({ run = runGh, now = Date.now, sleep = wait, apiBaseUrl = API_ORIGIN } = {}) {
+  constructor({ run = runGh, now = Date.now, sleep = wait, apiBaseUrl = API_ORIGIN, beforeRequest } = {}) {
     this.target = apiTarget(apiBaseUrl);
     this.run = run;
     this.now = now;
+    this.beforeRequest = beforeRequest;
     this.cache = new Map();
     this.subjectCache = new Map();
     this.mergeQueueCache = new Map();
@@ -520,13 +521,14 @@ export class GitHubClient {
         }
       }
       if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
-      if (this.now() < this.blockedUntil) throw this.lastError ??
-        new InboxError("rate_limited", "GitHub requests are paused until the rate limit resets.", 429);
-      beforeWrite?.();
+      let dispatched = false;
       try {
-        await this.request(`/notifications/threads/${id}`, signal, method);
+        await this.request(`/notifications/threads/${id}`, signal, method, { beforeWrite: () => {
+          beforeWrite?.();
+          dispatched = true;
+        } });
       } finally {
-        this.writeAvailableAt = this.now() + 1000;
+        if (dispatched) this.writeAvailableAt = this.now() + 1000;
       }
       this.revision++;
       const action = method === "DELETE" ? "done" : "read";
@@ -547,14 +549,19 @@ export class GitHubClient {
     return pending;
   }
 
-  async request(endpoint, signal, method = "GET", { force = false, minSequence = 0, allowCachedDuringBackoff = false, subjectType, mergeQueue = false, checkRun = false, runMatch = null, runJobs = null } = {}) {
+  async request(endpoint, signal, method = "GET", { force = false, minSequence = 0, allowCachedDuringBackoff = false, subjectType, mergeQueue = false, checkRun = false, runMatch = null, runJobs = null, beforeWrite } = {}) {
     if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
-    const now = this.now();
+    let now = this.now();
     const cache = runJobs ? this.jobCache : checkRun || runMatch ? this.checkRunCache : mergeQueue ? this.mergeQueueCache : subjectType ? this.subjectCache : this.cache;
     const cached = method === "GET" ? cache.get(endpoint) : undefined;
     if (cached?.error && now < cached.nextRefreshAt) return cached;
     if (allowCachedDuringBackoff && !force && cached && !cached.invalidated &&
         cached.sequence >= minSequence && now < cached.nextRefreshAt) return cached;
+    if (this.beforeRequest) {
+      await this.beforeRequest();
+      if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
+      now = this.now();
+    }
     if (now < this.blockedUntil) {
       const cause = this.lastError ?? rateLimitError();
       const error = new InboxError(cause.code, cause.message, cause.status);
@@ -595,6 +602,7 @@ export class GitHubClient {
       }
       args.push(this.target.custom ? `${this.target.baseUrl}${path}` : path);
     }
+    if (method !== "GET") beforeWrite?.();
     const sequence = method === "GET" && !subjectType ? ++this.sequence : undefined;
     let response;
     try {
