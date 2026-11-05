@@ -15,7 +15,8 @@ const MAX_STATE_BYTES = 262_144;
 const watchingMessage = "Watching in the background while a Notifications canvas is open. System notification settings control delivery.";
 const storageMessage = "Desktop notification coordination failed. Check permissions and the desktop-state.json, desktop-watchers, .desktop.lock and .desktop-watchers.lock entries in the extension artifacts directory.";
 const blankState = () => ({
-  version: STATE_VERSION, watchers: [], cohort: null, generation: null, watermark: null, fingerprints: [], nextPollAt: 0, error: null,
+  version: STATE_VERSION, watchers: [], cohort: null, generation: null, watermark: null, fingerprints: [],
+  nextPollAt: 0, blockedUntil: 0, error: null,
 });
 const timestamp = value => Number.isFinite(value) && value >= 0;
 const cohortID = value => typeof value === "string" && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
@@ -41,6 +42,7 @@ async function readState(path) {
         !Array.isArray(state.fingerprints) ||
         state.fingerprints.some(key => typeof key !== "string" || !/^[a-f0-9]{64}$/.test(key)) ||
         !timestamp(state.nextPollAt) || !(state.error === null || typeof state.error === "string") ||
+        (state.blockedUntil !== undefined && !timestamp(state.blockedUntil)) ||
         (state.polling !== undefined && typeof state.polling !== "boolean")) {
       throw new Error("Invalid desktop state");
     }
@@ -201,9 +203,20 @@ export class DesktopNotifications {
   async prepareForeground() {
     try {
       this.observeActivation(await this.preferences.document());
+      this.syncBackoff(await readState(this.statePath));
     } catch (error) {
       this.setStatus("error", errorMessage(error));
     }
+  }
+
+  syncBackoff(state) {
+    const blockedUntil = Math.max(state.blockedUntil ?? 0, this.client.blockedUntil);
+    const nextPollAt = Math.max(state.nextPollAt, blockedUntil);
+    const changed = state.blockedUntil !== blockedUntil || state.nextPollAt !== nextPollAt;
+    this.client.blockedUntil = blockedUntil;
+    state.blockedUntil = blockedUntil;
+    state.nextPollAt = nextPollAt;
+    return changed;
   }
 
   sync() {
@@ -340,19 +353,22 @@ export class DesktopNotifications {
     const release = await acquireLock(join(this.directory, ".desktop.lock"), { alive: this.alive });
     if (!release) {
       const state = await readState(this.statePath);
+      this.syncBackoff(state);
       this.setStatus(state.error ? "error" : "shared", state.error || "Another Notifications canvas is checking for desktop alerts.");
       return "contended";
     }
     try {
       const state = await readState(this.statePath);
       const previous = JSON.stringify(state);
+      const reservedUntil = state.polling !== false || state.error ? state.nextPollAt : 0;
+      this.syncBackoff(state);
       const initial = state.watermark === null ||
         state.cohort !== this.cohort || state.generation !== generation(settings);
       state.watchers = (await this.activeWatchers()).map(watcher => watcher.owner);
       signal.throwIfAborted();
       // Foreground reads already refreshed the shared cache. Failed or interrupted
       // polls still retain their durable retry reservation, including older checkpoints.
-      if (this.now() < state.nextPollAt && (!foreground || state.polling !== false || state.error)) {
+      if (this.now() < (foreground ? reservedUntil : state.nextPollAt)) {
         if (JSON.stringify(state) !== previous) await saveDocument(this.statePath, state);
         this.setStatus(state.error ? "error" : "watching", state.error || watchingMessage);
         return;
@@ -384,11 +400,17 @@ export class DesktopNotifications {
         state.error = null;
         state.polling = false;
         state.nextPollAt = nextPollAt;
+        this.syncBackoff(state);
         // Claim activity durably before delivery: a crash may lose an alert, but never replay it.
         await saveDocument(this.statePath, state);
         for (const { item, ...message } of notificationMessages(arrivals)) {
           if (this.platform === "win32" && item?.type === "CheckSuite") {
-            await this.client.refreshSubjects([item], signal);
+            try {
+              await this.client.refreshSubjects([item], signal);
+            } finally {
+              // Keep a known server deadline even if later lookup work is cancelled.
+              if (this.syncBackoff(state)) await saveDocument(this.statePath, state);
+            }
             const subject = this.client.subjectSnapshot(item);
             message.url = subject.url ?? item.url;
             if (subject.subjectLinkError || subject.subjectStateError) {
@@ -404,7 +426,11 @@ export class DesktopNotifications {
         }
         this.setStatus("watching", watchingMessage);
       } catch (error) {
-        if (signal.aborted) throw error;
+        const backoffChanged = this.syncBackoff(state);
+        if (signal.aborted) {
+          if (backoffChanged) await saveDocument(this.statePath, state);
+          throw error;
+        }
         state.nextPollAt = Math.max(state.nextPollAt, nextPollAt, this.now() + RETRY_MS, this.client.blockedUntil);
         state.error = errorMessage(error);
         await saveDocument(this.statePath, state);

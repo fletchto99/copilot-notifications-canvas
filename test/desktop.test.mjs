@@ -899,6 +899,111 @@ test("Windows burst clicks open the repository inbox without resolving individua
   assert.equal(f.calls.length, 2);
 });
 
+test("Windows lookup backoff survives interruption and blocks separate watcher clients until its deadline", async t => {
+  for (const interrupted of [false, true]) {
+    const f = await fixture(t);
+    const one = f.make({ platform: "win32" });
+    const two = f.make({ platform: "win32" });
+    await one.check();
+    await two.check();
+    const time = f.advance();
+    const row = thread("2", {
+      updated_at: new Date(time).toISOString(),
+      subject: { type: "CheckSuite", title: "Synthetic build workflow run failed for main branch", url: null },
+    });
+    f.response(args => args.at(-1).startsWith("/notifications?") ? http([row, thread()])
+      : http({}, { "retry-after": "600" }, 429));
+    if (interrupted) {
+      const refreshSubjects = one.client.refreshSubjects.bind(one.client);
+      one.client.refreshSubjects = async (...args) => {
+        await refreshSubjects(...args);
+        one.controller.abort();
+        throw new InboxError("closed", "Synthetic interrupted lookup", 410);
+      };
+    }
+    await one.check();
+    const deadline = time + 600_000;
+    assert.equal(one.client.blockedUntil, deadline);
+    assert.equal((await f.state()).blockedUntil, deadline);
+    assert.equal((await f.state()).nextPollAt, deadline);
+    assert.equal((await f.state()).error, null, "a fallback alert is not a failed inbox poll");
+    assert.equal(f.deliveries.length, interrupted ? 0 : 1);
+    if (!interrupted) assert.match(f.deliveries[0].url, /\/actions\?query=/);
+    await one.close();
+    const calls = f.calls.length;
+    await two.prepareForeground();
+    await assert.rejects(two.client.page(firstPage(), undefined, { force: true }), { code: "rate_limited" });
+    for (const delay of [0, POLL_MS, 600_000 - POLL_MS - 1]) {
+      f.advance(delay);
+      await two.check();
+      await two.sync();
+      assert.equal(f.calls.length, calls, "neither background nor foreground checks may contact GitHub early");
+      assert.equal((await f.state()).nextPollAt, deadline);
+    }
+    f.advance(1);
+    f.response(undefined);
+    f.rows([updated("3", deadline), row, thread()]);
+    await two.check();
+    assert.equal(f.calls.length, calls + 1);
+    assert.equal(f.deliveries.length, interrupted ? 1 : 2);
+    assert.equal(f.deliveries.at(-1).body, "#42 Synthetic notification 3", "claimed activity is never replayed");
+  }
+});
+
+test("Windows shared lookup backoff permits fresh-cache delivery without shortening the shared deadline", async t => {
+  const f = await fixture(t);
+  const one = f.make({ platform: "win32" });
+  const two = f.make({ platform: "win32" });
+  await one.check();
+  await two.check();
+  const time = f.advance();
+  const row = thread("2", {
+    updated_at: new Date(time).toISOString(),
+    subject: { type: "CheckSuite", title: "Synthetic build workflow run failed for main branch", url: null },
+  });
+  const later = updated("3", f.advance(1000));
+  f.rows([later, row, thread()]);
+  await two.client.page(firstPage(), undefined, { force: true });
+  f.response(args => args.at(-1).startsWith("/notifications?") ? http([row, thread()])
+    : http({}, { "retry-after": "600" }, 429));
+  await one.check();
+  const deadline = one.client.blockedUntil;
+  const calls = f.calls.length;
+  await two.sync();
+  assert.equal(f.calls.length, calls, "a valid cached page is still usable during shared backoff");
+  assert.equal(two.client.blockedUntil, deadline);
+  assert.equal((await f.state()).blockedUntil, deadline);
+  assert.equal((await f.state()).nextPollAt, deadline);
+  assert.equal((await f.state()).error, null);
+  assert.deepEqual(f.deliveries.map(alert => alert.body), [
+    "Synthetic build workflow run failed for main branch", "#42 Synthetic notification 3",
+  ]);
+  await assert.rejects(two.client.page(firstPage(), undefined, { force: true }), { code: "rate_limited" });
+  assert.equal(f.calls.length, calls);
+});
+
+test("Windows shared backoff accepts older checkpoints but rejects malformed deadlines without overwriting", async t => {
+  for (const blockedUntil of [undefined, null, -1, "600000", {}]) {
+    const f = await fixture(t);
+    const watcher = f.make({ platform: "win32" });
+    await watcher.check();
+    const state = { ...await f.state(), blockedUntil };
+    const content = JSON.stringify(state);
+    await writeFile(watcher.statePath, content);
+    f.rows([updated("2", f.advance()), thread()]);
+    await watcher.check();
+    if (blockedUntil === undefined) {
+      assert.equal(watcher.snapshot().state, "watching");
+      assert.equal(f.deliveries.length, 1, "an older checkpoint must not reset the activity baseline");
+    } else {
+      assert.equal(watcher.snapshot().state, "error");
+      assert.equal(f.calls.length, 1);
+      assert.equal(f.deliveries.length, 0);
+      assert.equal(await readFile(watcher.statePath, "utf8"), content);
+    }
+  }
+});
+
 test("macOS and Linux check alerts do not fetch Windows click metadata", async t => {
   for (const platform of ["darwin", "linux"]) {
     const f = await fixture(t);
