@@ -89,6 +89,75 @@ test("reverting a pending search re-enables actions without requesting an unchan
   assert.deepEqual(ui.deletions, []);
 });
 
+test("IME composition holds draft filters and writes until commit, including across polls and force refresh", async t => {
+  for (const startEvent of [false, true]) {
+    const ui = await renderer({ initialRows: rows });
+    t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+    const search = ui.ids.get("search");
+    const filters = () => ui.calls.filter(call => call.path === "/api/filters");
+    search.focus();
+    if (startEvent) search.events.compositionstart();
+    search.value = "notification 2";
+    search.events.input({ isComposing: true });
+    assert.equal([...ui.timers.values()].some(timer => timer.delay === 250), false);
+    await runInContext("flushPendingUpdates()", ui.context);
+    await ui.fireTimer();
+    await ui.ids.get("force-refresh").events.click();
+    assert.equal(filters().length, 0);
+    assert.equal(search.value, "notification 2");
+    assert.equal(ui.ids.get("groups").querySelectorAll(".mark-read").every(button => button.disabled), true);
+    search.value = "notification 3";
+    search.events.compositionend();
+    if (startEvent) search.events.input({ isComposing: false });
+    await ui.fireTimer(250);
+    assert.deepEqual(filters().map(call => JSON.parse(call.options.body)), [{ query: "notification 3" }]);
+    assert.deepEqual(shown(ui), ["3"]);
+    assert.equal(ui.ids.get("groups").querySelectorAll(".mark-read")[0].disabled, false);
+    search.events.compositionstart();
+    search.value = "cancelled draft";
+    search.events.input({ isComposing: true });
+    search.value = "notification 3";
+    search.events.compositionend();
+    await ui.fireTimer(250);
+    assert.equal(filters().length, 1);
+    assert.equal(ui.ids.get("groups").querySelectorAll(".mark-read")[0].disabled, false);
+    assert.deepEqual(ui.patches, []);
+    assert.deepEqual(ui.deletions, []);
+  }
+});
+
+test("composition begun while a filter awaits a local poll defers that filter until commit", async t => {
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  let hold = false;
+  const ui = await renderer({ initialRows: rows, onState: async () => { if (hold) await held; } });
+  t.after(() => { release(); ui.window.events.pagehide(); ui.inbox.close(); });
+  hold = true;
+  const polling = runInContext("update()", ui.context);
+  await settle();
+  const search = ui.ids.get("search");
+  search.focus();
+  search.value = "notification 2";
+  search.events.input();
+  const filtering = ui.fireTimer(250);
+  await settle();
+  search.events.compositionstart();
+  search.value = "unfinished draft";
+  search.events.input({ isComposing: true });
+  release();
+  await Promise.all([polling, filtering]);
+  assert.equal(ui.calls.some(call => call.path === "/api/filters"), false);
+  assert.equal(search.value, "unfinished draft");
+  search.value = "notification 3";
+  search.events.compositionend();
+  await ui.fireTimer(250);
+  assert.deepEqual(shown(ui), ["3"]);
+  assert.deepEqual(ui.calls.filter(call => call.path === "/api/filters").map(call => JSON.parse(call.options.body)),
+    [{ query: "notification 3" }]);
+  assert.deepEqual(ui.patches, []);
+  assert.deepEqual(ui.deletions, []);
+});
+
 test("failed filters keep mutation controls blocked until the pending search succeeds", async t => {
   let fail = true;
   const ui = await renderer({ initialRows: rows, onFilters: () => {
@@ -119,7 +188,8 @@ test("attention tabs default to All, combine with search in every grouping, and 
     assert.deepEqual(ui.ids.get("attention-tabs").children.map(button => button.textContent),
       ["All (7)", "Assigned (1)", "Participating (6)", "Mentioned (1)", "Team Mentioned (1)", "Review Requested (1)"]);
     const metadata = ui.ids.get("groups").querySelectorAll("div").filter(node => node.className === "metadata");
-    assert.deepEqual(metadata[0].children.map(node => node.children[0]).filter(node => node.tag !== "time").map(node => node.textContent),
+    assert.deepEqual(metadata[0].children.map(node => node.children[0]).filter(node => node.tag !== "time")
+      .map(node => node.querySelectorAll(".notification-type")[0]?.textContent ?? node.textContent),
       [...(groupBy === "repo" ? [] : ["example/widgets"]), "Pull Request #42", "review requested"]);
     assert.equal(metadata.some(node => node.querySelectorAll("span").some(child => child.textContent === "Unread")), false);
     for (const [value, ids] of [

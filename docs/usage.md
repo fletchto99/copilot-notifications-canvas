@@ -12,14 +12,124 @@ to include older notifications.
 
 Search by title, issue/PR number, or repository. Each row shows its type, number
 when available, notification reason, and last-updated time.
+Issues and pull requests also have state-aware icons: open
+items are green, completed issues and merged pull requests are purple, closed
+unmerged pull requests are red, and draft pull requests and issues closed as
+not planned are gray. A distinct purple queue icon identifies PRs in the merge
+queue. Icons have no hover tooltips or extra status text in the row; their
+state descriptions remain available to screen readers. Live descriptions include
+the time of the last successful check, such as **Checked 2 minutes ago**.
+The age advances locally without extra GitHub requests. A failed refresh keeps
+the last known icon and identifies it as a **cached result** with the failure
+reason; it does not pretend the old result was just rechecked.
+These are subject states, not the notification's Read/Done state.
+
+Check suites use a green checkmark for passing, a red cross for failure,
+timeout or startup failure, and an amber clock for pending work. Cancelled,
+skipped, neutral, stale, and action-required results retain distinct descriptions.
+When GitHub supplies a validated check-suite API link, the status comes from
+that suite. GitHub sometimes omits this link; in that case, recognized
+`workflow run succeeded/failed/... for ...` titles supply the **reported
+notification result**, not the current result of a later rerun. The icon's
+screen-reader description makes that distinction explicit. Unknown
+title formats remain unknown, and suite IDs are never treated as workflow run IDs.
+Rows link directly to workflow run results when GitHub supplies a validated run
+URL or the suite ID resolves to exactly one matching Actions run.
+For missing IDs, recognized titles ending in `for <branch> branch` can also
+identify an inferred run. Matching requires the same workflow name, branch,
+reported result, and attempt (attempt 1 unless the title explicitly names
+another). There must be exactly one nearby run of that workflow and branch,
+updated within two minutes of the notification. A conflicting nearby run rules
+out a match even if its result or attempt differs. The search covers runs created
+in the preceding seven days through two minutes after the notification, requires
+a complete result set of at most 100 runs, and never chooses the latest or
+nearest run merely because it exists. Inferred links open that specific attempt.
+They remain best-effort associations, not an authoritative notification-to-run
+mapping, and do not change the reported status icon into a live run status.
+
+Ambiguous, missing, inaccessible, or unsafe results fall back to Actions filtered
+by workflow, branch, and reported outcome when the title can be parsed safely,
+or the repository Actions page otherwise. A later rerun can change which runs
+appear under an outcome filter. The destination remains available to screen
+readers without a repeated **Open repository Actions** label in the metadata.
+Inferred links explain the best-effort match in their screen-reader descriptions,
+without an extra visible metadata label or icon tooltip.
+Failed matching refreshes remove the inferred link rather than
+retaining an unverified destination.
+
+For failed workflow notifications with a resolved run, the row opens the job log
+viewer if exactly one job failed (including a timeout or startup failure).
+Inferred runs use the matched attempt's jobs; direct run and suite links use
+the latest execution's jobs. Zero or multiple failed jobs, unfinished jobs,
+incomplete lists (including runs with more than 100 jobs), inaccessible details,
+or unsafe job links keep the run summary instead. Job lookup errors appear in
+the icon's screen-reader description. Screen-reader descriptions retain the
+matching caveat when opening an inferred run's job. The extension reads only job metadata, never
+downloads logs, and does not choose an arbitrary failed job.
+
+Status loads in the background through additional GitHub CLI REST requests,
+only for loaded items with validated issue, PR or check-suite links. Recognized
+unlinked workflow notifications also use bounded read-only Actions searches.
+Resolved failed runs use an additional bounded job-metadata request to find
+a unique log-viewer destination.
+Open PRs
+also use a read-only GraphQL query for merge queue membership. Queue access
+failures preserve the known REST state and add an explanatory screen-reader
+description; custom development REST APIs do not query github.com for queue data.
+Lookups are shared across
+panels in the provider and cached in memory for five minutes (or longer if
+GitHub requests it). Changed notification timestamps and **Force refresh**
+revalidate status sooner, without bypassing rate limits or failure backoff.
+Uncached lookups follow the on-screen, expanded rows from top to bottom in the current
+repository, flat, or browser-local date grouping. Search and attention filters
+exclude hidden matches from this work. Off-screen rows and collapsed groups wait
+until they enter view. Scrolling, resizing, and expanding a group update this
+transient viewport selection without persisting it. Changes to the view reprioritize the
+remaining rows after an in-flight lookup finishes; cached results can appear
+immediately. A small spinner fills the icon slot while an initial status is
+loading. It stays still when reduced motion is enabled, and known icons remain
+visible during background refreshes.
+For CI rows, the initial spinner lasts until the run and any failed-job lookup
+finish, even when the reported result is already known. Row navigation is
+temporarily unavailable during that initial lookup; Read and Done remain separate
+controls. Once resolution finishes, the row opens the logs, run summary, or
+Actions fallback. Unsupported titles and lookup failures do not leave rows
+permanently disabled. Refreshes of an already resolved destination leave it
+clickable without replacing its known icon with a spinner. A changed workflow
+notification can require resolving a new destination.
+Desktop polling does not fetch these details.
+A neutral icon with a **Status not loaded yet** or **Status unavailable** description is shown when
+the status is not known; unavailable status does not hide the notification.
+Repository access or organization SSO restrictions can prevent status lookups
+even when the notification itself is available. While status lookups are running,
+the visible panel checks the local provider every second so completed icons appear
+sooner. It returns to the normal five-second local poll when lookups finish and
+stops polling when hidden. This does not shorten GitHub's five-minute status cache
+or bypass request limits; failed lookups retry after their backoff.
+
 Click the title, metadata, or empty space outside the action column to open the
 row's GitHub destination.
 Rows use native links, including keyboard and modified-click behavior, without
-underlining their titles. Read and Done remain separate controls; opening a row
+underlining their titles or showing a generic destination tooltip over the row.
+Status/freshness details remain in the icon's screen-reader description, without
+a hover tooltip. Read and Done remain separate controls; opening a row
 does not send a read/done request from the extension.
+Background refreshes do not restore canvas focus after you move to the Copilot
+composer or another window. Focus restoration within an active canvas is preserved.
+Unchanged polling keeps button labels intact so clicks on Load more, Collapse,
+and attention tabs are not cancelled partway through a pointer press.
+Opening a row or the inbox toolbar link, including Cmd-click or middle-click,
+clears its hover highlight. Losing window focus clears hover highlights on rows
+and controls; they resume on fresh pointer input
+rather than reappearing just because the window regains focus.
+Read/Done hover tooltips close when the pointer leaves, including after a refresh.
+Keyboard-focused tooltips remain available, and Escape dismissal survives row updates.
 Read/Done actions and batch retries remain unavailable while a search change is
 pending, so they cannot act on the previous selection. You can keep editing the
 search; actions become available once the displayed results catch up.
+Search waits for input-method composition to finish before applying a draft.
+Holding Enter does not repeat Read, Done, or batch-control actions after focus
+moves; release and press it again to perform another action.
 
 Combine search with an attention tab:
 

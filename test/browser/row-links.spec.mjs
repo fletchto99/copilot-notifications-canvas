@@ -114,6 +114,7 @@ for (const packaged of [false, true]) {
         await expect(link).toHaveAttribute("href", "https://github.com/example/widgets/issues/42");
         await expect(link).toHaveAttribute("target", "_blank");
         await expect(link).toHaveAttribute("rel", "noopener noreferrer");
+        await expect(link).not.toHaveAttribute("title");
         await expect(link.locator("button, a")).toHaveCount(0);
         const box = await row.boundingBox();
         const linkBox = await link.boundingBox();

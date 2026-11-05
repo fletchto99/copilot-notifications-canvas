@@ -50,7 +50,9 @@ export class Inbox {
 
   async syncSettings(preferences) {
     try {
-      this.setMatchGitHubInbox((await preferences.read()).matchGitHubInbox);
+      const settings = await preferences.read();
+      this.setMatchGitHubInbox(settings.matchGitHubInbox);
+      return settings;
     } catch (error) {
       if (!(error instanceof InboxError) || error.code !== "settings_read") throw error;
       this.settingsError = { code: error.code, message: error.message };

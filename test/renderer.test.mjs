@@ -676,7 +676,7 @@ test("Force refresh is an accessible, always-enabled icon immediately before Set
   assert.match(button[2], /^\s*<svg\b[^>]*>\s*<path\b[^>]*\/>\s*<\/svg>\s*$/);
   assert.match(html, /<div id="refresh-control" class="tooltip-anchor">[\s\S]*?<\/div>\s*<details id="settings"/);
   assert.match(html, /id="refresh-tooltip"[^>]*role="tooltip"/);
-  assert.match(styles, /\.tooltip-anchor:not\(\[data-tooltip-dismissed\]\):is\(:hover, :focus-within\)\s+> \.tooltip \{\s+visibility: visible;\s+\}/);
+  assert.match(styles, /\.tooltip-anchor:not\(\[data-tooltip-dismissed\]\):is\(\s*:hover,\s*\[data-tooltip-keyboard="true"\]:focus-within\s*\)\s*> \.tooltip \{\s+visibility: visible;\s+\}/);
   assert.doesNotMatch(script, /\$\("force-refresh"\)\.(?:disabled|textContent)\s*=/);
   assert.match(styles, /@media \(prefers-reduced-motion: no-preference\) \{[\s\S]*#force-refresh\[aria-busy="true"\] svg \{\s+animation: refresh-spin/);
   const extension = await readFile(new URL("../src/extension.mjs", import.meta.url), "utf8");

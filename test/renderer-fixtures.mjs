@@ -17,11 +17,12 @@ export const groupActionText = button => button.parentNode.querySelectorAll(".to
 
 // Minimal DOM/event/timer doubles exercise the actual renderer without a browser dependency.
 export async function renderer({ hidden = false, token = "a".repeat(64), readFailure = false,
-  initialRows, onWrite, onFetch, onState, onFilters, initialOffline = false, release, development = null,
+  initialRows, subjectStates = {}, subjectsLoading = false, onWrite, onFetch, onState, onFilters, initialOffline = false, release, development = null,
   onUpdates, clipboardFailure = false, onSettings, developmentApi, onDevelopment, retainDisabledFocus = false, desktopPlatform = "darwin", desktopStatus = {},
   storedSettings = { autoOpen: false, darkMode: null, desktopNotifications: false, desktopSound: "default" },
   appColorMode = "light", systemDark = false } = {}) {
   const calls = [];
+  let documentFocused = true;
   const timers = new Map();
   const animationFrames = new Map();
   let timerId = 0;
@@ -99,7 +100,14 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     addEventListener(name, handler) { this.events[name] = handler; }
     removeEventListener(name) { delete this.events[name]; }
     select() { this.selected = true; }
-    getBoundingClientRect() { return this.bounds ?? { left: 0, right: 0, top: 0, bottom: 0, width: 0, height: 0 }; }
+    getBoundingClientRect() {
+      if (this.className === "row-link") {
+        for (let node = this; node; node = node.parentNode) {
+          if (node.hidden) return { left: 0, right: 0, top: 0, bottom: 0, width: 0, height: 0 };
+        }
+      }
+      return this.bounds ?? { left: 0, right: 0, top: 0, bottom: 0, width: 0, height: 0 };
+    }
     scrollIntoView(options) { this.lastScroll = options; }
     scrollBy({ left }) {
       this.scrollLeft = Math.max(0, Math.min(this.scrollWidth - this.clientWidth, this.scrollLeft + left));
@@ -116,7 +124,9 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       document.activeElement = this;
     }
     contains(node) { return this === node || this.children.some(child => child.contains(node)); }
-    matches(selector) { return selector === ":hover" && this.hovered === true; }
+    matches(selector) {
+      return selector === ":focus-visible" ? this.focusVisible !== false : selector === ":hover" && this.hovered === true;
+    }
     querySelectorAll(selector) {
       const result = [];
       for (const child of this.children) {
@@ -156,6 +166,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       "development-api", "development-api-url", "development-api-save"].some(id => ids.get(id).contains(node));
   const document = {
     hidden,
+    hasFocus: () => documentFocused,
     body: new Node("body"),
     documentElement: new Node("html"),
     events: {},
@@ -209,6 +220,17 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     return onFetch ? onFetch(args) : http(rows.filter(row => query.get("all") === "false" ? row.unread :
       query.get("is_done") !== "false" || !row.done));
   } }));
+  const snapshot = () => {
+    const state = inbox.snapshot();
+    return { ...state, subjectsLoading, updates: releaseMetadata, development, ...apiState(),
+      groups: state.groups.map(group => ({ ...group, items: group.items.map(item => {
+        const subject = { ...inbox.client.subjectSnapshot(item), ...subjectStates[item.id] };
+        return { ...item, ...subject,
+          subjectLoading: subjectsLoading && subject.subjectState === null && !subject.subjectStateError,
+        };
+      }) })),
+    };
+  };
   const context = createContext({
     document, window, location: { hash: `#${token}` }, Intl, URL, AbortController,
     apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle,
@@ -268,9 +290,9 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       if (path === "/api/refresh") await inbox.refresh(JSON.parse(options.body));
       if (path === "/api/more") await inbox.more();
       if (path === "/api/state") {
-        const snapshot = { ...inbox.snapshot(), updates: releaseMetadata, development, ...apiState() };
+        const state = snapshot();
         if (onState) await onState();
-        return { ok: true, json: async () => snapshot };
+        return { ok: true, json: async () => state };
       }
       if (path === "/api/filters") {
         const input = JSON.parse(options.body);
@@ -280,7 +302,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       if (path === "/api/read") await inbox.markRead(JSON.parse(options.body));
       if (path === "/api/done") await inbox.markDone(JSON.parse(options.body));
       if (path.startsWith("/api/batch/")) inbox.batch[path.slice("/api/batch/".length)](JSON.parse(options.body));
-      return { ok: true, json: async () => ({ ...inbox.snapshot(), updates: releaseMetadata, development, ...apiState() }) };
+      return { ok: true, json: async () => snapshot() };
     },
   });
   if (!process.env.NOTIFICATIONS_TEST_SCRIPT) assert.match(script, /^import \{ apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle \} from "\.\/model\.mjs";/);
@@ -318,6 +340,8 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       await settle();
     },
     setRows(value) { rows = value; },
+    setDocumentFocused(value) { documentFocused = value; },
+    setSubjectsLoading(value) { subjectsLoading = value; },
     setOffline(value) { offline = value; },
     setRelease(value) { releaseMetadata = { ...releaseMetadata, ...value }; },
     intersect: value => intersect([{ isIntersecting: value }]),

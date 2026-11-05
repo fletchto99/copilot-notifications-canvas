@@ -4,6 +4,15 @@ import { CURRENT_VERSION } from "../../src/updates.mjs";
 
 const searchName = "Search loaded notification titles, issue or PR numbers, and repositories";
 
+async function focusToolbarWithKeyboard(page, selector) {
+  await page.getByRole("searchbox").focus();
+  for (const target of ["#open-inbox", "#force-refresh", "#settings-toggle"]) {
+    await page.keyboard.press("Tab");
+    if (target === selector) break;
+  }
+  await expect(page.locator(selector)).toBeFocused();
+}
+
 for (const packaged of [false, true]) {
   test.describe(`passive tab updates (${packaged ? "packaged" : "source"})`, () => {
     test.use({ packaged });
@@ -717,7 +726,7 @@ test("opening and closing Settings dismisses its tooltip until a fresh hover or 
     await page.getByRole("heading", { name: "GitHub Notifications", exact: true }).hover();
     await page.getByRole("searchbox").focus();
     if (trigger === "pointer") await settings.hover();
-    else await settings.focus();
+    else await focusToolbarWithKeyboard(page, "#settings-toggle");
     await expect(tooltip).toBeVisible();
     if (trigger === "pointer") await settings.click();
     else await settings.press(trigger);
@@ -735,8 +744,7 @@ test("opening and closing Settings dismisses its tooltip until a fresh hover or 
     await expect(tooltip).toBeHidden();
     if (trigger === "pointer") await settings.hover();
     else {
-      await page.getByRole("searchbox").focus();
-      await settings.focus();
+      await focusToolbarWithKeyboard(page, "#settings-toggle");
     }
     await expect(tooltip).toBeVisible();
   }
@@ -757,7 +765,7 @@ test("activating Open inbox and losing canvas focus dismiss tooltips despite ret
     await page.getByRole("heading", { name: "GitHub Notifications", exact: true }).hover();
     await page.getByRole("searchbox").focus();
     if (trigger === "pointer") await inbox.hover();
-    else await inbox.focus();
+    else await focusToolbarWithKeyboard(page, "#open-inbox");
     await expect(inboxTooltip).toBeVisible();
     if (trigger === "pointer") await inbox.click();
     else await inbox.press("Enter");
@@ -771,8 +779,7 @@ test("activating Open inbox and losing canvas focus dismiss tooltips despite ret
     ["#force-refresh", "#refresh-tooltip"],
     ["#settings-toggle", "#settings-tooltip"],
   ]) {
-    await page.getByRole("searchbox").focus();
-    await page.locator(control).focus();
+    await focusToolbarWithKeyboard(page, control);
     await expect(page.locator(tooltip)).toBeVisible();
     await page.evaluate(() => window.dispatchEvent(new Event("blur")));
     await expect(page.locator(tooltip)).toBeHidden();

@@ -9,7 +9,7 @@ import { Preferences } from "../src/settings.mjs";
 import { startServer } from "../src/server.mjs";
 import { Updates, CURRENT_VERSION } from "../src/updates.mjs";
 import { http, thread } from "./fixtures.mjs";
-import { apiTarget } from "../src/model.mjs";
+import { apiTarget, reportedWorkflow } from "../src/model.mjs";
 import { loadDevelopmentAPI } from "../src/development.mjs";
 
 export async function createCanvasFixture({
@@ -49,6 +49,14 @@ export async function createCanvasFixture({
     if (endpoint === "/repos/fletchto99/copilot-notifications-canvas/releases/latest" && args.includes("GET")) {
       return http({ tag_name: `v${CURRENT_VERSION}`, draft: false, prerelease: false });
     }
+    if (endpoint === "graphql") {
+      assert.ok(args.includes("POST") && !target.custom);
+      const value = name => args.find(arg => arg.startsWith(`${name}=`))?.slice(name.length + 1);
+      const row = rows.find(row => row.subject.url ===
+        `https://api.github.com/repos/${value("owner")}/${value("name")}/pulls/${value("number")}`);
+      assert.ok(row, "Unexpected synthetic merge queue lookup");
+      return http({ data: { repository: { pullRequest: { isInMergeQueue: row.mergeQueued ?? false } } } });
+    }
     if (args.includes("PATCH") || args.includes("DELETE")) {
       const path = new URL(endpoint, target.origin).pathname.slice(target.prefix.length);
       const match = /^\/notifications\/threads\/(\d+)$/.exec(path);
@@ -63,6 +71,43 @@ export async function createCanvasFixture({
       return `HTTP/2 ${args.includes("DELETE") ? 204 : 205} Synthetic\r\n\r\n`;
     }
     const url = new URL(endpoint, "https://api.github.com");
+    const jobs = /^\/repos\/([^/]+\/[^/]+)\/actions\/runs\/(\d+)(?:\/attempts\/(\d+))?\/jobs$/.exec(url.pathname.slice(target.prefix.length));
+    if (args.includes("GET") && url.origin === target.origin && jobs) {
+      assert.equal(url.searchParams.get("per_page"), "100");
+      assert.equal(url.searchParams.get("filter"), jobs[3] ? null : "latest");
+      const selected = rows.filter(row => row.repository.full_name === jobs[1]);
+      assert.ok(selected.some(row => row.subject.url === `${target.baseUrl}/repos/${jobs[1]}/actions/runs/${jobs[2]}` ||
+        row.workflowRunResults?.workflow_runs.some(run => String(run.id) === jobs[2])), "Unexpected synthetic job lookup");
+      const items = selected.flatMap(row => row.workflowJobs ?? [])
+        .filter(job => String(job.run_id) === jobs[2] && (!jobs[3] || String(job.run_attempt) === jobs[3]));
+      return http({ total_count: items.length, jobs: items });
+    }
+    if (args.includes("GET") && url.origin === target.origin && url.searchParams.has("check_suite_id")) {
+      const suiteId = url.searchParams.get("check_suite_id");
+      const row = rows.find(row => row.subject.url ===
+        `${url.origin}${url.pathname.replace(/\/actions\/runs$/, `/check-suites/${suiteId}`)}`);
+      assert.ok(row, "Unexpected synthetic workflow run lookup");
+      assert.equal(url.searchParams.get("per_page"), "2");
+      return http(row.workflowRunResults ?? { total_count: 0, workflow_runs: [] });
+    }
+    if (args.includes("GET") && url.origin === target.origin &&
+        /^\/repos\/[^/]+\/[^/]+\/actions\/runs$/.test(url.pathname.slice(target.prefix.length))) {
+      assert.equal(url.searchParams.get("per_page"), "100");
+      assert.ok(url.searchParams.has("created"));
+      const matching = rows.filter(row => !row.subject.url &&
+        url.pathname === `${target.prefix}/repos/${row.repository.full_name}/actions/runs` &&
+        reportedWorkflow(row.subject.title)?.branch === url.searchParams.get("branch"));
+      assert.ok(matching.length, "Unexpected synthetic workflow matching request");
+      const runs = [...new Map(matching.flatMap(row => row.workflowRunResults?.workflow_runs ?? []).map(run => [run.id, run])).values()];
+      return http({ total_count: runs.length, workflow_runs: runs });
+    }
+    if (args.includes("GET") && url.origin === target.origin &&
+        /^\/repos\/[^/]+\/[^/]+\/(?:issues|pulls|check-suites|actions\/runs)\/\d+$/.test(url.pathname.slice(target.prefix.length))) {
+      const row = rows.find(row => row.subject.url === url.href);
+      assert.ok(row, `Unexpected synthetic subject lookup: ${endpoint}`);
+      return http(row.subjectDetails ?? (row.subject.type === "CheckSuite"
+        ? { status: "completed", conclusion: "success" } : { state: "open", merged: false, draft: false }));
+    }
     assert.ok(args.includes("GET") && url.origin === target.origin && url.pathname === `${target.prefix}/notifications`,
       `Unexpected request: ${endpoint}`);
     const offset = (Number(url.searchParams.get("page")) - 1) * 50;

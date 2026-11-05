@@ -48,6 +48,12 @@ full procedure, verification requirements, and troubleshooting.
 - Choose **All notifications**, **Repository**, or **Date** in **Settings**.
 - Set **Show notifications** in **Settings** to **All** for read and unread inbox
   items, or **Unread only** to narrow the view.
+- Icons show issue/PR states, including merge queue membership, and check-suite
+  results. Hover text and screen-reader labels describe the status without
+  extra text in the row, including when it was checked and whether a refresh
+  failed. Status loads for on-screen, expanded rows without delaying the inbox.
+- Check-suite rows open run results when GitHub provides a verifiable run link;
+  otherwise they keep the repository Actions fallback.
 - Use the envelope to mark a row **read**, or the checkmark to mark it **done**.
   Each group header offers the same bulk actions.
 - Use **Load more** for older notifications. Search, counts, and bulk actions
@@ -70,7 +76,14 @@ The local `artifacts/` directory stores settings and desktop coordination data:
 timestamps, hashed activity/thread IDs, watcher/process markers and sanitized
 errors. GitHub CLI handles credentials; they never enter the canvas renderer.
 
-GitHub CLI fetches notifications and public release metadata. Update checks do
+GitHub CLI fetches notifications, the status of loaded issues, pull requests and
+check suites, merge queue membership, bounded workflow-run matches for missing
+links, and public release metadata. Inferred run links are identified in
+screen-reader descriptions and fall back
+to filtered Actions when matching is inconclusive. Failed runs open the job log
+viewer when exactly one job failed; the extension reads job metadata, not logs.
+Status is
+cached only in memory. Update checks do
 not send notification content or download or execute release code. Only explicit
 **Mark as read** or **Mark as done** actions send notification updates; visiting a
 linked GitHub page may also mark a notification read on GitHub.

@@ -59,6 +59,27 @@ test("timestamps remain inside row metadata in every grouping", async t => {
   }
 });
 
+test("Enter auto-repeat cannot retrigger notification actions after focus moves, but fresh presses and navigation remain native", async t => {
+  const ui = await renderer();
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  const actions = ui.ids.get("groups").querySelectorAll("button")
+    .filter(button => button.dataset.action || button.dataset.batchAction);
+  for (const id of ["batch-stop", "batch-retry", "batch-dismiss"]) actions.push(ui.ids.get(id));
+  for (const target of actions) {
+    let prevented = false;
+    ui.document.events.keydown({ key: "Enter", repeat: true, target, preventDefault: () => { prevented = true; } });
+    assert.equal(prevented, true);
+    for (const [key, repeat] of [["Enter", false], [" ", true], ["ArrowRight", true]]) {
+      ui.document.events.keydown({ key, repeat, target, preventDefault: () => assert.fail("Unrelated native keyboard behavior changed") });
+    }
+  }
+  for (const target of [ui.ids.get("search"), ui.ids.get("force-refresh"), ui.ids.get("groups").querySelectorAll(".row-link")[0]]) {
+    ui.document.events.keydown({ key: "Enter", repeat: true, target, preventDefault: () => assert.fail("Non-action Enter must remain native") });
+  }
+  assert.deepEqual(ui.patches, []);
+  assert.deepEqual(ui.deletions, []);
+});
+
 test("Done is a distinct explicit row action in every grouping and focuses the next Done button", async t => {
   for (const groupBy of ["repo", "date", "none"]) {
     const ui = await renderer({ storedSettings: { groupBy }, initialRows: [thread("1"), thread("2")] });
