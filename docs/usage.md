@@ -34,8 +34,9 @@ the last known icon and identifies it as a **cached result** with the failure
 reason; it does not pretend the old result was just rechecked.
 These are subject states, not the notification's Read/Done state.
 
-Discussions also have state-aware icons. Resolved discussions use a purple
-checkmarked discussion bubble; answered discussions use green bubbles.
+Discussions also have state-aware icons. Resolved discussions use purple
+overlapping bubbles with a checkmark; answered discussions use a single green
+checkmarked bubble. Open, answered, and closed states differ by shape, not just color.
 Open or reopened discussions stay gray. Duplicate and outdated discussions use
 gray bubbles with a slash or clock, respectively. Discussion state comes from
 a read-only GraphQL query for `closed`, `isAnswered`, and `stateReason`;
@@ -127,6 +128,9 @@ Lookups are shared across
 panels in the provider and cached in memory for five minutes (or longer if
 GitHub requests it). Changed notification timestamps and **Force refresh**
 revalidate status sooner, without bypassing rate limits or failure backoff.
+If Force refresh overlaps an older status request, that older response remains
+due for revalidation rather than restarting the five-minute cache lifetime.
+GraphQL quota pauses preserve cached discussion results and their check times.
 Uncached lookups cover all loaded rows in expanded groups, scheduled from top to bottom in the current
 repository, flat, or browser-local date grouping. Search and attention filters
 exclude hidden matches from this work. Rows outside the viewport load without
@@ -144,7 +148,9 @@ or delay the inbox action.
 Status-selection failures are reported in the panel and retried automatically
 without disabling inbox actions.
 Up to twenty status lookups run concurrently across panels sharing the provider;
-icons appear as their lookups finish, so completion order can differ from row
+waiting callers receive slots in first-in, first-out order, and newly expanded
+groups can use idle slots without waiting for an existing slow lookup.
+Icons appear as their lookups finish, so completion order can differ from row
 order. Changes to the view reprioritize remaining rows as slots become available.
 Already dispatched requests may finish after a group is collapsed. Duplicate
 lookups share the cache, rate-limit backoff still applies, and inbox reads and

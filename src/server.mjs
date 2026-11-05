@@ -141,6 +141,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
       const items = inbox.shownSelection(groups).items;
       subjectItems = subjectView.groupBy === "date" ? groupThreadsByDate(items, subjectView.timeZone).flatMap(group => group.items) : items;
     }
+    inbox.client.wakeSubjects();
   };
   const setSubjectView = view => {
     if (view.groupBy === "date" && view.timeZone !== null) groupThreadsByDate([], view.timeZone);

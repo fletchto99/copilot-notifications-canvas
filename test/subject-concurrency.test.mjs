@@ -73,6 +73,8 @@ test("twenty status requests run concurrently across panels and free slots keep 
   assert.equal(new Set(f.calls).size, 65);
   assert.equal(f.client.subjectWorkers.size, 0);
   assert.equal(f.client.subjectRequests.size, 0);
+  assert.equal(f.client.subjectWaiters.size, 0);
+  assert.equal(f.client.subjectRefreshes.size, 0);
 });
 
 test("overlapping panels deduplicate in-flight lookups and reuse the completed cache", async () => {
@@ -176,4 +178,59 @@ test("aborted requests retain their slots until the transport finishes stopping"
   await Promise.all([rejected, second]);
   assert.equal(f.maximum, 20);
   assert.equal(f.calls.length, 40);
+});
+
+test("shared slots serve waiting callers before a large selection reclaims them", async () => {
+  const f = fixture();
+  const first = f.client.refreshSubjects(items(80));
+  await settle();
+  const second = f.client.refreshSubjects(items(1, 81));
+  const third = f.client.refreshSubjects(items(1, 82));
+  await settle();
+  try {
+    f.releases.get(f.calls[0])();
+    await settle();
+    assert.equal(f.calls[20], "/repos/example/widgets/issues/81");
+    f.releases.get(f.calls[1])();
+    await settle();
+    assert.equal(f.calls[21], "/repos/example/widgets/issues/82");
+  } finally {
+    await f.drain();
+    await Promise.all([first, second, third]);
+  }
+});
+
+test("a stable live selection computes subject keys linearly rather than for every membership check", async () => {
+  const all = items(500);
+  let reads = 0;
+  for (const item of all) {
+    const repository = item.repository;
+    Object.defineProperty(item, "repository", { get() { reads++; return repository; } });
+  }
+  const client = new GitHubClient({ run: async () => http({ state: "closed" }) });
+  await client.refreshSubjects(() => all);
+  assert.ok(reads < all.length * 40, `${reads} repository reads for ${all.length} rows`);
+});
+
+test("aborting a FIFO waiter removes it without consuming the next released slot", async () => {
+  const f = fixture();
+  const first = f.client.refreshSubjects(items(80));
+  await settle();
+  const controller = new AbortController();
+  const second = f.client.refreshSubjects(items(1, 81), controller.signal);
+  const rejected = assert.rejects(second, { code: "closed" });
+  const third = f.client.refreshSubjects(items(1, 82));
+  await settle();
+  controller.abort();
+  await rejected;
+  assert.equal(f.client.subjectWaiters.size, 1);
+  try {
+    f.releases.get(f.calls[0])();
+    await settle();
+    assert.equal(f.calls[20], "/repos/example/widgets/issues/82");
+  } finally {
+    await f.drain();
+    await Promise.all([first, third]);
+  }
+  assert.equal(f.client.subjectWaiters.size, 0);
 });

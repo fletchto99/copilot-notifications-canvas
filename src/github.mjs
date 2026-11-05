@@ -314,7 +314,10 @@ export class GitHubClient {
     this.jobCache = new Map();
     this.subjectLinksReady = new Set();
     this.subjectWorkers = new Set();
+    this.subjectWaiters = new Set();
+    this.subjectRefreshes = new Set();
     this.subjectRequests = new Map();
+    this.subjectInvalidations = new Map();
     this.sequence = 0;
     this.queue = Promise.resolve();
     this.blockedUntil = 0;
@@ -402,11 +405,15 @@ export class GitHubClient {
 
   invalidateSubjects(items) {
     for (const item of items) {
+      const key = subjectKey(item, this.target);
+      if (key) this.subjectInvalidations.set(key, (this.subjectInvalidations.get(key) ?? 0) + 1);
       for (const cache of [this.subjectCache, this.mergeQueueCache, this.checkRunCache]) {
-        const cached = cache.get(subjectKey(item, this.target));
+        const cached = cache.get(key);
         if (cached && !cached.error) cached.nextRefreshAt = 0;
       }
-      const jobs = this.jobCache.get(this.#jobSearch(item)?.endpoint);
+      const jobKey = this.#jobSearch(item)?.endpoint;
+      if (jobKey) this.subjectInvalidations.set(jobKey, (this.subjectInvalidations.get(jobKey) ?? 0) + 1);
+      const jobs = this.jobCache.get(jobKey);
       if (jobs && !jobs.error) jobs.nextRefreshAt = 0;
     }
   }
@@ -439,20 +446,27 @@ export class GitHubClient {
   async refreshSubjects(items, signal) {
     let previousItems;
     let subjects;
+    let selectedKeys;
     let failed = false;
+    let failure;
     const processed = new Set();
-    const nextSubject = () => {
+    const updateSelection = () => {
       const currentItems = typeof items === "function" ? items() : items;
       if (currentItems !== previousItems) {
         previousItems = currentItems;
         subjects = new Map();
+        selectedKeys = new Set();
         for (const item of currentItems) {
           const endpoint = subjectKey(item, this.target);
+          if (endpoint) selectedKeys.add(endpoint);
           if (endpoint && !processed.has(endpoint) && (!subjects.has(endpoint) || item.updatedAt > subjects.get(endpoint).updatedAt)) {
             subjects.set(endpoint, item);
           }
         }
       }
+    };
+    const nextSubject = () => {
+      updateSelection();
       const next = subjects.entries().next().value;
       if (!next) return null;
       const [endpoint, item] = next;
@@ -470,8 +484,10 @@ export class GitHubClient {
             const next = nextSubject();
             if (!next) return false;
             const [endpoint, item] = next;
-            const selected = () => !failed &&
-              (typeof items !== "function" || items().some(item => subjectKey(item, this.target) === endpoint));
+            const selected = () => {
+              updateSelection();
+              return !failed && selectedKeys.has(endpoint);
+            };
             for (const kind of subjectEndpoint(item, this.target) ? ["state", "queue", "run", "jobs"] : ["match", "jobs"]) {
               if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
               if (!selected()) break;
@@ -490,19 +506,71 @@ export class GitHubClient {
         throw error;
       }
     };
-    const results = await Promise.allSettled(Array.from({ length: SUBJECT_CONCURRENCY }, worker));
-    const failure = results.find(result => result.status === "rejected");
-    if (failure) throw failure.reason;
+    const workers = new Set();
+    let finish;
+    const finished = new Promise(resolve => { finish = resolve; });
+    const wake = () => {
+      try {
+        if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
+        if (!failed) {
+          updateSelection();
+          const count = Math.min(SUBJECT_CONCURRENCY - workers.size, subjects.size);
+          for (let index = 0; index < count; index++) {
+            const pending = worker().catch(error => {
+              failed = true;
+              failure ??= error;
+            }).finally(() => {
+              workers.delete(pending);
+              wake();
+            });
+            workers.add(pending);
+          }
+        }
+      } catch (error) {
+        failed = true;
+        failure ??= error;
+      }
+      if (!workers.size) finish();
+    };
+    if (typeof items === "function") this.subjectRefreshes.add(wake);
+    try {
+      wake();
+      await finished;
+      if (failure) throw failure;
+    } finally {
+      this.subjectRefreshes.delete(wake);
+    }
   }
 
-  async #withSubjectSlot(work, signal) {
-    while (this.subjectWorkers.size >= SUBJECT_CONCURRENCY) {
-      await waitForSubjectWork(Promise.race(this.subjectWorkers), signal);
-    }
-    const pending = work();
-    const settled = pending.catch(() => {}).finally(() => this.subjectWorkers.delete(settled));
-    this.subjectWorkers.add(settled);
-    return pending;
+  wakeSubjects() {
+    for (const wake of this.subjectRefreshes) wake();
+  }
+
+  #withSubjectSlot(work, signal) {
+    return new Promise((resolve, reject) => {
+      const aborted = () => {
+        this.subjectWaiters.delete(start);
+        reject(new InboxError("closed", "The canvas was closed.", 410));
+      };
+      const start = () => {
+        this.subjectWaiters.delete(start);
+        signal?.removeEventListener("abort", aborted);
+        if (signal?.aborted) return aborted();
+        const pending = work();
+        const settled = pending.catch(() => {}).finally(() => {
+          this.subjectWorkers.delete(settled);
+          this.subjectWaiters.values().next().value?.();
+        });
+        this.subjectWorkers.add(settled);
+        pending.then(resolve, reject);
+      };
+      if (signal?.aborted) return aborted();
+      if (this.subjectWorkers.size < SUBJECT_CONCURRENCY && !this.subjectWaiters.size) start();
+      else {
+        this.subjectWaiters.add(start);
+        signal?.addEventListener("abort", aborted, { once: true });
+      }
+    });
   }
 
   async #refreshSubject(endpoint, item, signal, kind, selected) {
@@ -523,7 +591,10 @@ export class GitHubClient {
       await waitForSubjectWork(this.queue, signal);
       if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
       if (!selected()) return;
+      if ((mergeQueue || item.type === "Discussion") && this.now() < this.graphqlBlockedUntil) return;
       const cached = cache.get(endpoint);
+      const invalidationKey = runJobs ? endpoint : subjectKey(item, this.target);
+      const generation = this.subjectInvalidations.get(invalidationKey) ?? 0;
       try {
         started = true;
         const result = await this.request(endpoint, signal, "GET", {
@@ -532,9 +603,11 @@ export class GitHubClient {
         });
         cache.set(endpoint, {
           ...result, updatedAt: cached?.updatedAt > item.updatedAt ? cached.updatedAt : item.updatedAt,
+          ...(!result.error && generation !== (this.subjectInvalidations.get(invalidationKey) ?? 0) ? { nextRefreshAt: 0 } : {}),
         });
       } catch (error) {
         if (!(error instanceof InboxError) || error.code === "closed") throw error;
+        if (error.code === "graphql_rate_limited" && error.requestDeferred) return;
         cache.set(endpoint, {
           state: runMatch || runJobs ? null : cached?.state ?? null, checkedAt: cached?.checkedAt,
           error: { code: error.code, message: error.message },
@@ -665,8 +738,10 @@ export class GitHubClient {
       throw error;
     }
     if (graphql && now < this.graphqlBlockedUntil) {
-      const error = this.graphqlLastError ?? rateLimitError(true);
+      const cause = this.graphqlLastError ?? rateLimitError(true);
+      const error = new InboxError(cause.code, cause.message, cause.status);
       error.retryAt = this.graphqlBlockedUntil;
+      error.requestDeferred = true;
       throw error;
     }
     if (!force && cached && !cached.invalidated && now < cached.nextRefreshAt) return cached;
@@ -823,5 +898,6 @@ export class GitHubClient {
     this.checkRunCache.clear();
     this.jobCache.clear();
     this.subjectLinksReady.clear();
+    this.subjectInvalidations.clear();
   }
 }

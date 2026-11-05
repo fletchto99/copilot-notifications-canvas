@@ -53,7 +53,8 @@ for (const packaged of [false, true]) {
           for (const index of [1, 3, 4, 6, 7]) await expect(fields.nth(index).getByRole("img")).toHaveCSS("color", colors.muted);
           const shapes = await fields.locator("path").evaluateAll(nodes => nodes.map(node => node.getAttribute("d")));
           expect(shapes[0]).toMatch(/M6 9l2 2 5-5$/);
-          expect(new Set(shapes).size).toBe(4);
+          expect(shapes[2]).toBe("M3 4h18v13H9l-6 4V4ZM7 10l3 3 6-6");
+          expect(new Set(shapes).size).toBe(5);
           for (const width of [320, 960]) {
             await page.setViewportSize({ width, height: 900 });
             expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);

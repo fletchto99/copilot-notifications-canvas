@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { GitHubClient, firstPage, RETRY_MS, SUBJECT_POLL_MS } from "../src/github.mjs";
-import { apiTarget, normalizeThreads } from "../src/model.mjs";
+import { apiTarget, InboxError, normalizeThreads } from "../src/model.mjs";
 import { Inbox } from "../src/inbox.mjs";
 import { startServer } from "../src/server.mjs";
 import { http, thread } from "./fixtures.mjs";
@@ -159,6 +159,47 @@ test("discussion authentication and secondary rate limits pause shared requests"
     assert.ok(client.blockedUntil >= RETRY_MS);
     await assert.rejects(client.page(firstPage(), undefined, { force: true }), { code });
   }
+});
+
+test("mixed refreshes preserve cached discussion state and lifetime while GraphQL is paused", async () => {
+  let calls = 0;
+  const client = new GitHubClient({ now: () => 1000, run: async args => {
+    calls++;
+    return args.at(-1) === "graphql" ? response(resolved, { "x-poll-interval": "900" }) : http({ state: "closed" });
+  } });
+  const discussion = item();
+  const issue = normalizeThreads([thread("2", {
+    subject: { type: "Issue", title: "Synthetic issue", url: "https://api.github.com/repos/example/widgets/issues/1" },
+  })])[0];
+  await client.refreshSubjects([discussion]);
+  const cached = client.subjectCache.get("/repos/example/widgets/discussions/74");
+  client.graphqlBlockedUntil = 301_000;
+  client.graphqlLastError = new InboxError("graphql_rate_limited", "GraphQL checks paused.", 429);
+  await client.refreshSubjects([discussion, issue]);
+  assert.equal(calls, 2);
+  assert.equal(client.subjectCache.get("/repos/example/widgets/discussions/74"), cached);
+  assert.equal(cached.nextRefreshAt, 901_000);
+  const snapshot = client.subjectSnapshot(discussion);
+  assert.equal(snapshot.subjectState, "closed");
+  assert.equal(snapshot.subjectStateStale, false);
+  assert.equal(snapshot.subjectCheckedAt, 1000);
+  assert.match(snapshot.subjectStateError, /paused/);
+});
+
+test("a GraphQL pause learned during request preparation does not overwrite cached discussions", async () => {
+  let calls = 0;
+  const client = new GitHubClient({ now: () => 1000, run: async () => {
+    calls++;
+    return response(resolved, { "x-poll-interval": "900" });
+  } });
+  const discussion = item();
+  await client.refreshSubjects([discussion]);
+  const cached = client.subjectCache.get("/repos/example/widgets/discussions/74");
+  client.beforeRequest = async () => { client.graphqlBlockedUntil = 301_000; };
+  await client.refreshSubjects([discussion]);
+  assert.equal(calls, 1);
+  assert.equal(client.subjectCache.get("/repos/example/widgets/discussions/74"), cached);
+  assert.equal(client.subjectSnapshot(discussion).subjectStateStale, false);
 });
 
 test("discussion requests never escape validated links, GraphQL integer bounds or custom APIs", async () => {

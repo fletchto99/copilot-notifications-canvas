@@ -294,3 +294,20 @@ test("malformed status selections are rejected before fetching or writing", asyn
   assert.equal(fixture.inbox.pages.length, 0);
   assert.deepEqual(fixture.calls, []);
 });
+
+test("expanding a selection replenishes idle workers without waiting for a slow existing lookup", async t => {
+  const fixture = await setup(t, 25, { holdFirst: true, initialRows: extraRows(25) });
+  const initial = await fixture.call("refresh", {}, { "X-Notification-Subjects": "manual" });
+  const selectionKey = initial.data.selectionKey;
+  await fixture.call("subjects", { version: 1, selectionKey, offset: 0, positions: [0], complete: true });
+  await fixture.call("state");
+  assert.equal(fixture.calls.length, 1);
+  await fixture.call("subjects", {
+    version: 2, selectionKey, offset: 0, positions: Array.from({ length: 25 }, (_, index) => index), complete: true,
+  });
+  await fixture.call("state");
+  assert.equal(fixture.calls.length, 20, "The expanded selection must fill free slots before the first lookup finishes");
+  fixture.release();
+  await fixture.finished;
+  assert.equal(new Set(fixture.calls).size, 25);
+});

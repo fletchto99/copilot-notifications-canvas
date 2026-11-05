@@ -90,7 +90,7 @@ const subjectIcons = {
   Discussion: {
     unknown: discussionOutline,
     open: discussionOutline,
-    answered: discussionOutline,
+    answered: "M3 4h18v13H9l-6 4V4ZM7 10l3 3 6-6",
     closed: `${discussionOutline}M6 9l2 2 5-5`,
     duplicate: `${discussionOutline}M8 11l4-4`,
     outdated: `${discussionOutline}M9 7v3l3 1`,

@@ -54,7 +54,8 @@ test("state icons have accessible names without hover tooltips or visible status
       assert.equal(new Set([...shapes, queuedShape]).size, 5, "open, draft, closed, merged, and queued PRs have different shapes");
       const discussions = fields.filter(field => field.dataset.subjectType === "Discussion")
         .map(field => field.querySelectorAll("path")[0].attributes.d);
-      assert.equal(new Set(discussions).size, 4, "closed, duplicate and outdated discussions have distinct shapes");
+      assert.equal(new Set(discussions).size, 5, "open, answered, closed, duplicate and outdated discussions have distinct shapes");
+      assert.equal(discussions[1], "M3 4h18v13H9l-6 4V4ZM7 10l3 3 6-6", "answered discussions have a single checkmarked bubble");
       assert.match(discussions[2], /M6 9l2 2 5-5$/, "closed discussions have a checkmark");
     }
     assert.deepEqual(ui.patches, []);
