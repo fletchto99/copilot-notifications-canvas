@@ -101,8 +101,9 @@ function recordActivity(state, items, baseline, initial) {
 function notificationMessages(arrivals) {
   return groupThreads(arrivals, { query: "" }).flatMap(group =>
     group.items.length >= BURST_THRESHOLD
-      ? [{ title: group.repository, body: `${group.items.length} new notifications` }]
-      : group.items.map(item => ({ title: group.repository, body: notificationTitle(item) })));
+      ? [{ title: group.repository, body: `${group.items.length} new notifications`,
+        url: `https://github.com/notifications?${new URLSearchParams({ query: `repo:${group.repository}` })}` }]
+      : group.items.map(item => ({ title: group.repository, body: notificationTitle(item), url: item.url, item })));
 }
 
 export class DesktopNotifications {
@@ -385,7 +386,16 @@ export class DesktopNotifications {
         state.nextPollAt = nextPollAt;
         // Claim activity durably before delivery: a crash may lose an alert, but never replay it.
         await saveDocument(this.statePath, state);
-        for (const message of notificationMessages(arrivals)) {
+        for (const { item, ...message } of notificationMessages(arrivals)) {
+          if (this.platform === "win32" && item?.type === "CheckSuite") {
+            await this.client.refreshSubjects([item], signal);
+            const subject = this.client.subjectSnapshot(item);
+            message.url = subject.url ?? item.url;
+            if (subject.subjectLinkError || subject.subjectStateError) {
+              this.log("Could not fully resolve a Windows notification's check-run link; using the available GitHub destination.",
+                { level: "warning" });
+            }
+          }
           const current = await this.preferences.document();
           signal.throwIfAborted();
           if (!current.desktopNotifications || generation(current) !== state.generation) break;

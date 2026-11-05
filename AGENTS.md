@@ -74,8 +74,9 @@ output. Development loads source without a build; release builds bundle
   desktop polling/delivery for custom targets. Never extract or copy credentials
   between hosts or pass them into the renderer. Do not introduce telemetry or
   remote renderer assets.
-- Native alerts are the explicit opt-in exception: they send titles and
-  repository names to the OS. Do not enable desktop alerts or change preferences
+- Native alerts are the explicit opt-in exception: they send titles, repository
+  names, and Windows alerts' validated GitHub destinations to the OS.
+  Do not enable desktop alerts or change preferences
   as a side effect of opening, updating, or testing the extension.
 - Bind each panel server to `127.0.0.1` on an ephemeral port. Preserve capability
   authentication, host/origin/fetch-site validation, same-origin POSTs, request
@@ -161,6 +162,7 @@ defined in `package.json`; platform coverage is in
 | Release build and packaged integration tests | `npm run build && npm run test:package` |
 | Browser and accessibility tests in Chromium and WebKit | `npm run test:browser` |
 | One browser engine | `npm run test:browser -- --project=webkit` |
+| Isolated native Linux notification transport (requires system test tools) | `npm run test:notifications:linux` |
 | Explicit full local validation, stopping on any failure | `npm run check:full` |
 
 Use `npm run dev:fixture` for a standalone synthetic UI preview without GitHub
@@ -196,6 +198,13 @@ Reuse synthetic data from `test/fixtures.mjs`, injected clocks/process runners,
 renderer fixtures, SDK stubs, and the isolated browser/package harnesses.
 Tests must not require GitHub sign-in, change real read state, send real OS
 notifications, or write to the user's real `COPILOT_HOME`.
+
+Native notification checks must stay non-delivering: Windows builds toast XML
+with native delivery removed, macOS compiles AppleScript without executing it,
+and Linux uses an exclusively owned fake notification service on a private
+D-Bus session. The Node.js 24 Linux CI job uses `ubuntu-latest` for its system
+test packages; Node.js 22 coverage and source lint remain on `ubuntu-slim`.
+See [native notification coverage](docs/development.md#native-notification-coverage).
 
 For renderer changes, include relevant renderer tests and browser/accessibility
 coverage in both engines. For build, asset-loading, or installer changes,

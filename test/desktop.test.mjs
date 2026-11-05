@@ -12,7 +12,7 @@ import { firstPage, GitHubClient, POLL_MS, RETRY_MS } from "../src/github.mjs";
 import { Inbox } from "../src/inbox.mjs";
 import { InboxError } from "../src/model.mjs";
 import { acquireLock } from "../src/lock.mjs";
-import { http, thread, next } from "./fixtures.mjs";
+import { http, thread, next, workflowRun, workflowJob } from "./fixtures.mjs";
 
 const epoch = Date.parse("2026-01-10T12:00:00Z");
 const updated = (id, time) => thread(id, { updated_at: new Date(time).toISOString() });
@@ -100,11 +100,12 @@ test("initial backlog is silent and small batches retain each thread's title and
   f.rows([updated("2", time), updated("3", time - 1000), thread()]);
   await watcher.check();
   assert.equal(f.deliveries.length, 2);
-  assert.deepEqual(Object.keys(f.deliveries[0]).sort(), ["body", "platform", "signal", "sound", "title"]);
+  assert.deepEqual(Object.keys(f.deliveries[0]).sort(), ["body", "platform", "signal", "sound", "title", "url"]);
   assert.equal(f.deliveries[0].sound, "default");
   assert.equal(f.deliveries[0].title, "example/widgets");
   assert.equal(f.deliveries[0].body, "#42 Synthetic notification 2");
   assert.equal(f.deliveries[1].body, "#42 Synthetic notification 3");
+  assert.equal(f.deliveries[0].url, "https://github.com/example/widgets/pull/42");
   f.advance();
   await watcher.check();
   assert.equal(f.deliveries.length, 2);
@@ -750,6 +751,165 @@ test("individual desktop alerts include issue and PR numbers but not unrelated I
       { title: "example/widgets", body: "New release" },
     ]);
     assert.ok(f.deliveries.every(alert => alert.platform === platform));
+    assert.deepEqual(f.deliveries.map(alert => alert.url), [
+      "https://github.com/example/widgets/issues/7",
+      "https://github.com/example/widgets/pull/8",
+      "https://github.com/notifications",
+      "https://github.com/example/widgets/releases",
+    ]);
+    assert.equal(f.calls.length, 2, "issue and PR links need no extra API requests");
+  }
+});
+
+test("Windows check alerts resolve direct, suite and inferred destinations after checkpointing", async t => {
+  for (const kind of ["direct", "suite", "inferred"]) {
+    const f = await fixture(t);
+    const watcher = f.make({ platform: "win32" });
+    await watcher.check();
+    const time = f.advance();
+    const row = updated("2", time);
+    row.subject = {
+      type: "CheckSuite", title: "Synthetic build workflow run failed for main branch",
+      url: kind === "direct" ? "https://api.github.com/repos/example/widgets/actions/runs/123"
+        : kind === "suite" ? "https://api.github.com/repos/example/widgets/check-suites/7" : null,
+    };
+    f.response(async args => {
+      const endpoint = args.at(-1);
+      if (endpoint.startsWith("/notifications?")) return http([row, thread()]);
+      assert.equal((await f.state()).watermark, time, "claim precedes optional link lookups");
+      assert.doesNotMatch(endpoint, /\/logs/);
+      if (endpoint.includes("/jobs?")) return http({ total_count: 1, jobs: [workflowJob()] });
+      if (endpoint.includes("/actions/runs?")) return http({
+        total_count: 1, workflow_runs: [workflowRun({ check_suite_id: 7, updated_at: new Date(time).toISOString() })],
+      });
+      return http({ status: "completed", conclusion: "failure" });
+    });
+    await watcher.check();
+    assert.equal(watcher.snapshot().state, "watching");
+    assert.equal(f.deliveries.length, 1);
+    assert.equal(f.deliveries[0].url, "https://github.com/example/widgets/actions/runs/123/job/456");
+    assert.equal(Object.hasOwn(f.deliveries[0], "item"), false);
+    assert.deepEqual(f.logs, []);
+    assert.doesNotMatch(JSON.stringify(await f.state()), /github\.com|Synthetic|example\/widgets|url|\/job\//);
+    f.advance();
+    await watcher.check();
+    assert.equal(f.deliveries.length, 1, "resolved alerts are not replayed");
+  }
+});
+
+test("Windows check alerts preserve safe fallbacks and report metadata failures without content", async t => {
+  for (const kind of ["run", "ambiguous", "denied", "unsafe", "jobs-denied"]) {
+    const f = await fixture(t);
+    const watcher = f.make({ platform: "win32" });
+    await watcher.check();
+    const time = f.advance();
+    const row = updated("2", time);
+    row.subject = {
+      type: "CheckSuite", title: "Synthetic build workflow run failed for main branch",
+      url: "https://api.github.com/repos/example/widgets/check-suites/7",
+    };
+    f.response(args => {
+      const endpoint = args.at(-1);
+      if (endpoint.startsWith("/notifications?")) return http([row, thread()]);
+      if (endpoint.includes("/actions/runs?")) {
+        if (kind === "denied") return http({ message: "private upstream response" }, {}, 403);
+        if (kind === "ambiguous") return http({ total_count: 0, workflow_runs: [] });
+        return http({ total_count: 1, workflow_runs: [workflowRun({
+          check_suite_id: 7,
+          html_url: kind === "unsafe" ? "https://untrusted.invalid/" : "https://github.com/example/widgets/actions/runs/123",
+        })] });
+      }
+      if (endpoint.includes("/jobs?")) return kind === "jobs-denied"
+        ? http({ message: "private upstream response" }, {}, 403) : http({ total_count: 0, jobs: [] });
+      return http({ status: "completed", conclusion: "failure" });
+    });
+    await watcher.check();
+    assert.equal(watcher.snapshot().state, "watching");
+    assert.equal(f.deliveries.length, 1);
+    const expected = ["run", "jobs-denied"].includes(kind) ? "https://github.com/example/widgets/actions/runs/123"
+      : `https://github.com/example/widgets/actions?${new URLSearchParams({ query: 'workflow:"Synthetic build" branch:"main" is:failure' })}`;
+    assert.equal(f.deliveries[0].url, expected);
+    assert.equal(f.logs.length, ["denied", "unsafe", "jobs-denied"].includes(kind) ? 1 : 0);
+    if (f.logs.length) assert.equal(f.logs[0][1].level, "warning");
+    assert.doesNotMatch(JSON.stringify(f.logs), /private|Synthetic|example\/widgets|https:/);
+  }
+});
+
+test("Windows check link lookups respect backoff and cancellation without replay or opt-out delivery", async t => {
+  for (const kind of ["rate-limited", "disabled", "closed"]) {
+    const f = await fixture(t);
+    const watcher = f.make({ platform: "win32" });
+    await watcher.check();
+    const time = f.advance();
+    const row = updated("2", time);
+    row.subject = {
+      type: "CheckSuite", title: "Synthetic build workflow run failed for main branch",
+      url: "https://api.github.com/repos/example/widgets/check-suites/7",
+    };
+    let changed = false;
+    f.response(async args => {
+      const endpoint = args.at(-1);
+      if (endpoint.startsWith("/notifications?")) return http([row, thread()]);
+      if (endpoint.includes("/actions/runs?")) {
+        if (!changed) {
+          changed = true;
+          if (kind === "disabled") await f.preferences.update({ desktopNotifications: false });
+          if (kind === "closed") watcher.controller.abort();
+        }
+        return kind === "rate-limited" ? http({}, { "retry-after": "600" }, 429)
+          : http({ total_count: 1, workflow_runs: [workflowRun({ check_suite_id: 7 })] });
+      }
+      if (endpoint.includes("/jobs?")) return http({ total_count: 0, jobs: [] });
+      return http({ status: "completed", conclusion: "failure" });
+    });
+    await watcher.check();
+    assert.equal((await f.state()).watermark, time);
+    if (kind === "rate-limited") {
+      assert.equal(f.deliveries.length, 1);
+      assert.match(f.deliveries[0].url, /\/actions\?query=/);
+      const calls = f.calls.length;
+      f.advance();
+      await watcher.check();
+      assert.equal(f.calls.length, calls, "link lookup backoff also pauses later inbox requests");
+      assert.equal(f.deliveries.length, 1);
+    } else {
+      assert.equal(f.deliveries.length, 0);
+      if (kind === "closed") {
+        f.advance();
+        await watcher.check();
+        assert.equal(f.deliveries.length, 0, "an interrupted lookup does not replay the claimed alert");
+      }
+    }
+  }
+});
+
+test("Windows burst clicks open the repository inbox without resolving individual check links", async t => {
+  const f = await fixture(t);
+  const watcher = f.make({ platform: "win32" });
+  await watcher.check();
+  const time = f.advance();
+  f.rows(Array.from({ length: 5 }, (_, i) => thread(String(i + 2), {
+    updated_at: new Date(time).toISOString(),
+    subject: { type: "CheckSuite", title: "Synthetic build workflow run failed for main branch", url: null },
+  })));
+  await watcher.check();
+  assert.equal(f.deliveries.length, 1);
+  assert.equal(f.deliveries[0].body, "5 new notifications");
+  assert.equal(f.deliveries[0].url, "https://github.com/notifications?query=repo%3Aexample%2Fwidgets");
+  assert.equal(f.calls.length, 2);
+});
+
+test("macOS and Linux check alerts do not fetch Windows click metadata", async t => {
+  for (const platform of ["darwin", "linux"]) {
+    const f = await fixture(t);
+    const watcher = f.make({ platform });
+    await watcher.check();
+    const row = updated("2", f.advance());
+    row.subject = { type: "CheckSuite", title: "Synthetic build workflow run failed for main branch", url: null };
+    f.rows([row, thread()]);
+    await watcher.check();
+    assert.equal(f.deliveries.length, 1);
+    assert.equal(f.calls.length, 2);
   }
 });
 

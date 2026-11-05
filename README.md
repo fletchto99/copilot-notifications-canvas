@@ -71,7 +71,8 @@ disk, or send them to the agent. There is no telemetry or remote asset loading.
 
 **Desktop alerts send repository names and titles to your OS**, which may retain
 them in notification history or show them on the lock screen. System settings
-control this, not the extension.
+control this, not the extension. Windows alerts also include a validated GitHub
+destination URL so clicking opens the related item in your default browser.
 
 The local `artifacts/` directory stores settings and desktop coordination data:
 timestamps, hashed activity/thread IDs, watcher/process markers and sanitized
@@ -79,8 +80,8 @@ errors. GitHub CLI handles credentials; they never enter the canvas renderer.
 
 GitHub CLI fetches notifications, the status of loaded issues, pull requests and
 check suites, merge queue membership, bounded workflow-run matches for missing
-links, and public release metadata. Inferred run links are identified in
-screen-reader descriptions and fall back
+links (including new individual Windows check alerts), and public release
+metadata. Inferred run links are identified in screen-reader descriptions and fall back
 to filtered Actions when matching is inconclusive. Failed runs open the job log
 viewer when exactly one job failed; the extension reads job metadata, not logs.
 Status is

@@ -23,7 +23,7 @@ jobs:
         include:
           - os: ubuntu-slim
             node: "22"
-          - os: ubuntu-slim
+          - os: ubuntu-latest
             node: "24"
           - os: macos-latest
             node: "24"
@@ -43,6 +43,14 @@ jobs:
       - name: Run tests
         if: matrix.node != '22'
         run: npm test
+      - name: Install isolated Linux notification test tools
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends dbus-daemon libnotify-bin python3-dbus python3-gi
+      - name: Test real notify-send against a private fake notification service
+        if: matrix.os == 'ubuntu-latest'
+        run: npm run test:notifications:linux
   windows:
     name: Node.js 24 (windows-latest)
     runs-on: windows-latest
@@ -55,8 +63,10 @@ jobs:
         with:
           node-version-file: .node-version
           package-manager-cache: false
-      - name: Test Windows installation, settings, locks and notification arguments
+      - name: Test Windows installation, settings, locks and native toast construction
         run: node --test test/platform.test.mjs test/lock.test.mjs test/settings.test.mjs test/notifier.test.mjs
+      - name: Test Windows notification destinations and workflow resolution
+        run: node --test --test-name-pattern="Windows|individual desktop alerts" test/desktop.test.mjs
   lint:
     name: Lint
     runs-on: ubuntu-slim
