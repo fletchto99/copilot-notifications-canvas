@@ -154,8 +154,8 @@ test("CI rows wait for their initial destination even with a known result and th
     type: "CheckSuite", title: "Synthetic build workflow run failed for main branch", url: null,
   } })], subjectStates });
   try {
-    let link = ui.ids.get("groups").querySelectorAll(".row-link")[0];
-    assert.equal(link.href, undefined);
+    const link = ui.ids.get("groups").querySelectorAll(".row-link")[0];
+    assert.equal(link.href, "");
     assert.equal(link.attributes.role, "link");
     assert.equal(link.attributes["aria-disabled"], "true");
     assert.equal(link.attributes["aria-busy"], "true");
@@ -175,7 +175,7 @@ test("CI rows wait for their initial destination even with a known result and th
       url: "https://github.com/example/widgets/actions/runs/123/job/456",
     };
     await ui.fireTimer();
-    link = ui.ids.get("groups").querySelectorAll(".row-link")[0];
+    assert.equal(ui.ids.get("groups").querySelectorAll(".row-link")[0], link);
     assert.equal(link.href, subjectStates[1].url);
     assert.equal(link.attributes["aria-disabled"], undefined);
     assert.equal(link.attributes["aria-busy"], undefined);
@@ -184,10 +184,59 @@ test("CI rows wait for their initial destination even with a known result and th
     assert.equal(ui.ids.get("groups").querySelectorAll(".subject-failure").length, 1);
     assert.equal(ui.ids.get("groups").querySelectorAll(".destination").length, 0);
     link.events.click({ metaKey: true, preventDefault: () => assert.fail("Resolved links must navigate natively") });
+    subjectStates[1] = {
+      subjectState: "failure", subjectLinkLoading: false, direct: false,
+      url: "https://github.com/example/widgets/actions", label: "Open repository Actions",
+    };
+    await ui.fireTimer();
+    assert.equal(ui.ids.get("groups").querySelectorAll(".row-link")[0], link);
+    assert.equal(link.href, subjectStates[1].url);
+    assert.ok(link.querySelectorAll(".sr-only").some(node => node.textContent === "Open repository Actions" && !node.hidden));
+    subjectStates[1].subjectLinkLoading = true;
+    await ui.fireTimer();
+    assert.equal(link.href, "");
+    assert.equal(link.attributes["aria-disabled"], "true");
+    link.events.click({ preventDefault: () => { prevented++; } });
+    assert.equal(prevented, 4);
     assert.deepEqual(ui.patches, []);
     assert.deepEqual(ui.deletions, []);
   } finally {
     ui.window.events.pagehide();
+  }
+});
+
+test("one subject update preserves every row control and only creates its metadata in a large loaded inbox", async () => {
+  for (const groupBy of ["repo", "none", "date"]) {
+    const subjectStates = {};
+    const ui = await renderer({
+      initialRows: Array.from({ length: 1000 }, (_, index) => thread(String(index + 1))),
+      subjectStates, storedSettings: { groupBy },
+    });
+    try {
+      const groups = ui.ids.get("groups");
+      const controls = groups.querySelectorAll("[data-focus-key]");
+      const icons = groups.querySelectorAll(".subject-icon");
+      const read = groups.querySelectorAll(".mark-read")[0];
+      read.focus();
+      read.parentNode.dataset.tooltipDismissed = "true";
+      let created = 0;
+      const create = ui.document.createElement;
+      ui.document.createElement = tag => { created++; return create(tag); };
+      subjectStates[1] = { subjectState: "merged", subjectCheckedAt: Date.now() };
+      await ui.fireTimer();
+      assert.ok(groups.querySelectorAll("[data-focus-key]").every((node, index) => node === controls[index]));
+      assert.ok(groups.querySelectorAll(".subject-icon").slice(1).every((node, index) => node === icons[index + 1]));
+      assert.ok(created < 10, `created ${created} elements for one subject result`);
+      assert.match(groups.querySelectorAll(".subject-icon")[0].attributes["aria-label"], /Pull Request: Merged\. Checked/);
+      assert.equal(ui.document.activeElement, read);
+      assert.equal(read.parentNode.dataset.tooltipDismissed, "true");
+      created = 0;
+      await ui.fireTimer();
+      assert.equal(created, 0, "an unchanged poll does not replace metadata");
+    } finally {
+      ui.window.events.pagehide();
+      ui.inbox.close();
+    }
   }
 });
 

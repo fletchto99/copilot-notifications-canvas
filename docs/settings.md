@@ -91,8 +91,12 @@ Desktop alerts poll the unread-only feed, normally every 60 seconds. With
 a desktop baseline or include read/completed items in alert scans. Selecting
 **Unread only**, or explicitly selecting the agent's unread view, lets the canvas
 share unread results with the watcher.
-The watcher follows any additional unread pages needed for new activity,
-independent of search or how many pages the canvas has loaded.
+The watcher follows every unread page before checkpointing activity,
+independent of search or how many pages the canvas has loaded. An older REST
+update timestamp does not stop the scan because those timestamps do not define
+GitHub's inbox order. Large unread inboxes can therefore require more requests;
+cache reuse, polling intervals, and rate-limit waits still apply. A failed
+continuation leaves the activity checkpoint unchanged and sends no partial alerts.
 Reusing cached results does not postpone the next background polling deadline.
 The first successful baseline uses a response started after the current desktop
 notification activation and remains silent, even if alerts are enabled during an

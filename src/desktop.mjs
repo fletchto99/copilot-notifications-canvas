@@ -373,7 +373,8 @@ export class DesktopNotifications {
           items.push(...page.items);
           nextPollAt = Math.max(nextPollAt, page.nextRefreshAt);
           if (boundary === null) boundary = initialBoundary(page);
-          next = page.items.some(item => item.unread && Date.parse(item.updatedAt) < boundary) ? null : page.next;
+          // API order is not updated_at order; older rows cannot bound the remaining activity.
+          next = page.next;
         }
         signal.throwIfAborted();
         const arrivals = recordActivity(state, items, boundary, initial);
