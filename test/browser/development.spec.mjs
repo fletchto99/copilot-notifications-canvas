@@ -6,6 +6,33 @@ const baseUrl = "https://git.example.com/api/v3";
 test.describe("development API selection", () => {
   test.use({ developmentApiBaseUrl: "https://api.github.com" });
 
+  for (const [name, platform, userAgentData, shortcut] of [
+    ["Windows", "Win32", undefined, "Ctrl+K"],
+    ["Linux", "Linux x86_64", undefined, "Ctrl+K"],
+    ["macOS", "MacIntel", undefined, "\u2318+K"],
+    ["Windows client hints", "MacIntel", { platform: "Windows" }, "Ctrl+K"],
+    ["macOS client hints", "Win32", { platform: "macOS" }, "\u2318+K"],
+  ]) {
+    test(`shows the renderer's command-palette shortcut on ${name}`, async ({ page, canvas }) => {
+      await page.addInitScript(({ platform, userAgentData }) => {
+        Object.defineProperty(navigator, "platform", { value: platform });
+        Object.defineProperty(navigator, "userAgentData", { value: userAgentData });
+      }, { platform, userAgentData });
+      await page.setViewportSize({ width: 320, height: 720 });
+      await page.goto(canvas.url);
+      await page.getByLabel("Settings", { exact: true }).click();
+      await expect(page.locator("#development-api-help")).toHaveText(
+        `Source builds only. Reload extension after saving with ${shortcut} -> refresh canvas.`,
+      );
+      await expect(page.getByLabel("Development API", { exact: true })).toHaveAccessibleDescription(
+        new RegExp(shortcut.replace("+", "\\+")),
+      );
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+      expect(canvas.writes).toEqual([]);
+      expect(canvas.deliveries).toEqual([]);
+    });
+  }
+
   test("saves a custom API accessibly without switching the current panel", async ({ page, canvas }) => {
     canvas.rows.splice(1);
     await page.setViewportSize({ width: 320, height: 720 });

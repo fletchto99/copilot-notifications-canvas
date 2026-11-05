@@ -43,6 +43,9 @@ In a source-loaded canvas, open **Settings > Development API**, choose
 **Custom**, and enter the complete HTTPS REST API base URL, for example
 `https://git.example.com/api/v3`. Click **Save API**, then reload extensions.
 Choose **GitHub.com** and save/reload to return to the production API.
+The reload hint shows the command-palette shortcut for the canvas renderer's
+platform: **Ctrl+K** on Windows/Linux or **Command+K** on macOS, even when the
+provider runs on a different operating system.
 
 The selection is a user-wide source-development preference, stored as
 `developmentApiBaseUrl` in the existing `artifacts/settings.json`. It becomes
