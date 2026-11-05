@@ -1153,8 +1153,6 @@ function render(fallbackFocusKey) {
   const groupBy = preferences?.groupBy ?? "repo";
   $("groups").setAttribute("aria-label", groupBy === "repo" ? "Notifications by repository" :
     groupBy === "date" ? "Notifications by date" : "Notifications in GitHub order");
-  $("subtitle").textContent = groupBy === "repo" ? "A little less noise. One repository at a time." :
-    groupBy === "date" ? "A little less noise. One day at a time." : "A little less noise. Your GitHub inbox order.";
   renderGroups(displayGroups(), fallbackFocusKey);
   scheduleViewportSync();
   renderControls();

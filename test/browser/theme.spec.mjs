@@ -39,7 +39,7 @@ for (const [target, attribute] of [
       await expect(page.locator("body")).toHaveCSS("color", rgb(foreground));
       await expect(page.locator("#settings-toggle")).toHaveCSS("border-top-color", rgb(border));
       await expect(page.locator(".attention-tab").first()).toHaveCSS("border-bottom-color", rgb(accent));
-      await expect(page.locator(".subtitle")).toHaveCSS("color", rgb(muted));
+      await expect(page.locator(".status-line")).toHaveCSS("color", rgb(muted));
       await page.evaluate(() => {
         document.getElementById("synthetic-theme-defaults").textContent += ":root { --background-color-default: #213447; }";
       });

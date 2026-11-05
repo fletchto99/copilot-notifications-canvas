@@ -6,8 +6,8 @@ const searchName = "Search loaded notification titles, issue or PR numbers, and 
 
 async function focusToolbarWithKeyboard(page, selector) {
   await page.getByRole("searchbox").focus();
-  for (const target of ["#open-inbox", "#force-refresh", "#settings-toggle"]) {
-    await page.keyboard.press("Tab");
+  for (const target of ["#settings-toggle", "#force-refresh", "#open-inbox"]) {
+    await page.keyboard.press("Shift+Tab");
     if (target === selector) break;
   }
   await expect(page.locator(selector)).toBeFocused();
@@ -65,32 +65,62 @@ for (const packaged of [false, true]) {
   });
 }
 
-test("the header keeps its typography and spacing while resizing across the compact breakpoint", async ({ page, canvas }) => {
-  canvas.rows.splice(1);
-  await page.goto(canvas.url);
-  const title = page.getByRole("heading", { name: "GitHub Notifications", exact: true });
-  const initial = await title.evaluate(node => ({
-    fontSize: getComputedStyle(node).fontSize,
-    lineHeight: getComputedStyle(node).lineHeight,
-  }));
-  const headerLayout = () => page.locator("header").evaluate(header => ({
-    padding: getComputedStyle(header.parentElement).padding,
-    elements: [".eyebrow", "h1", ".subtitle", ".attention-navigation", ".toolbar", ".status-line"].map(selector => {
-      const rect = header.querySelector(selector).getBoundingClientRect();
-      return { selector, x: rect.x, y: rect.y, height: rect.height };
-    }),
-  }));
-  const initialLayout = await headerLayout();
-  for (const width of [480, 320, 481, 960]) {
-    await page.setViewportSize({ width, height: 800 });
-    await expect(title).toHaveCSS("font-size", initial.fontSize);
-    await expect(title).toHaveCSS("line-height", initial.lineHeight);
-    expect((await title.boundingBox()).height).toBe(parseFloat(initial.lineHeight));
-    expect(await headerLayout()).toEqual(initialLayout);
-    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
-  }
-  expect(canvas.writes).toEqual([]);
-});
+for (const packaged of [false, true]) {
+  test.describe(`compact header (${packaged ? "packaged" : "source"})`, () => {
+    test.use({ packaged });
+
+    test("aligns the full title with the utility buttons and wraps only when space requires it", async ({ page, canvas }) => {
+      canvas.rows.splice(1);
+      await page.goto(canvas.url);
+      await expect(page.locator(".row")).toHaveCount(1);
+      const title = page.getByRole("heading", { name: "GitHub Notifications", exact: true });
+      await expect(page.locator(".eyebrow, #subtitle")).toHaveCount(0);
+      const initialHeight = (await page.locator("header").boundingBox()).height;
+      expect(initialHeight).toBeLessThanOrEqual(185);
+      for (const width of [480, 320, 360, 400, 481, 960]) {
+        await page.setViewportSize({ width, height: 800 });
+        await expect(title).toHaveCSS("font-size", "24px");
+        await expect(title).toHaveCSS("line-height", "30px");
+        const heading = await title.boundingBox();
+        expect([38, 60]).toContain(heading.height);
+        if (width === 320) expect(heading.height).toBe(60);
+        if (width >= 480) expect(heading.height).toBe(38);
+        const toolbar = await page.locator(".toolbar").boundingBox();
+        expect(toolbar.height).toBe(heading.height);
+        let previousRight = heading.x + heading.width;
+        for (const selector of ["#open-inbox", "#force-refresh", "#settings-toggle"]) {
+          const button = await page.locator(selector).boundingBox();
+          expect(button.width).toBe(38);
+          expect(button.height).toBe(38);
+          expect(button.y + button.height / 2).toBe(heading.y + heading.height / 2);
+          expect(button.x).toBeGreaterThanOrEqual(previousRight + 8);
+          previousRight = button.x + button.width;
+        }
+        const search = await page.getByRole("searchbox").boundingBox();
+        const tabs = await page.locator(".attention-navigation").boundingBox();
+        expect(search.width).toBe(width - 24);
+        expect(search.height).toBe(38);
+        expect(search.y).toBe(toolbar.y + toolbar.height + 8);
+        expect(tabs.y).toBe(search.y + search.height + 8);
+        expect((await page.locator("header").boundingBox()).height).toBe(initialHeight + heading.height - 38);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+      }
+      expect(canvas.writes).toEqual([]);
+    });
+
+    test("keyboard order follows the utility row, search and attention tabs", async ({ page, canvas }) => {
+      canvas.rows.splice(1);
+      await page.goto(canvas.url);
+      await expect(page.locator(".row")).toHaveCount(1);
+      await focusToolbarWithKeyboard(page, "#open-inbox");
+      for (const selector of ["#force-refresh", "#settings-toggle", "#search", "#attention-all"]) {
+        await page.keyboard.press("Tab");
+        await expect(page.locator(selector)).toBeFocused();
+      }
+      expect(canvas.writes).toEqual([]);
+    });
+  });
+}
 
 test.describe("development footer", () => {
   const branch = `feature/<footer>&${"long-branch-name-".repeat(20)}`;
@@ -270,7 +300,7 @@ test("attention tabs are keyboard accessible and fit narrow light and dark panel
   await page.keyboard.press("Tab");
   await expect(page.getByRole("button", { name: "Scroll attention tabs right", exact: true })).toBeFocused();
   await page.keyboard.press("Tab");
-  await expect(page.getByRole("searchbox")).toBeFocused();
+  await expect(page.getByRole("button", { name: "Collapse all", exact: true })).toBeFocused();
   expect(canvas.writes).toEqual([]);
 });
 
@@ -1008,9 +1038,8 @@ for (const width of [320, 480, 960]) {
       await expect(page.locator(".repo-count")).toHaveText(["3 total \u00b7 3 unread", "1 total \u00b7 1 unread"]);
       await expect(page.getByRole("button", { name: "Mark 1 as read in example/tools; 1 shown, loaded notifications", exact: true })).toBeVisible();
       await expect(page.getByRole("button", { name: "Mark 3 as read in example/widgets; 3 shown, loaded notifications", exact: true })).toBeVisible();
-      await expect(page.locator(".eyebrow")).toBeVisible();
-      await expect(page.locator("#subtitle")).toBeVisible();
-      await expect(page.locator(".attention-navigation")).toHaveCSS("margin-top", "16px");
+      await expect(page.getByRole("heading", { name: "GitHub Notifications", exact: true })).toBeVisible();
+      await expect(page.locator(".attention-navigation")).toHaveCSS("margin-top", "8px");
       if (width <= 480) {
         const rows = await page.locator(".row").evaluateAll(nodes => nodes.map(node => {
           const time = node.querySelector("time").getBoundingClientRect();

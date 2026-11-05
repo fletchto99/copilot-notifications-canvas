@@ -19,7 +19,11 @@ for (const width of [320, 960]) {
       const bounds = await tooltip.boundingBox();
       const button = await control.boundingBox();
       expect(bounds.y).toBeGreaterThanOrEqual(8);
-      expect(Math.abs(bounds.y + bounds.height - button.y)).toBeLessThanOrEqual(1);
+      if (controls.indexOf(control) < 3) {
+        expect(Math.abs(bounds.y - button.y - button.height)).toBeLessThanOrEqual(1);
+      } else {
+        expect(Math.abs(bounds.y + bounds.height - button.y)).toBeLessThanOrEqual(1);
+      }
       expect(bounds.x).toBeGreaterThanOrEqual(0);
       expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
       await tooltip.hover();
@@ -53,14 +57,16 @@ for (const width of [320, 960]) {
     }
 
     await page.getByRole("searchbox").focus();
-    await controls[1].focus();
-    const tooltip = page.locator("#refresh-tooltip");
+    const scrollControl = controls[3];
+    await scrollControl.focus();
+    const tooltip = page.locator(`#${await scrollControl.getAttribute("aria-describedby")}`);
+    const anchor = scrollControl.locator("..");
     await expect(tooltip).toBeVisible();
-    await controls[1].evaluate(node => window.scrollTo(0, window.scrollY + node.getBoundingClientRect().top - 12));
-    await expect(page.locator("#refresh-control")).toHaveAttribute("data-tooltip-placement", "below");
+    await scrollControl.evaluate(node => window.scrollTo(0, window.scrollY + node.getBoundingClientRect().top - 12));
+    await expect(anchor).toHaveAttribute("data-tooltip-placement", "below");
     await expect(tooltip).toBeVisible();
     await page.evaluate(() => window.scrollTo(0, 0));
-    await expect(page.locator("#refresh-control")).toHaveAttribute("data-tooltip-placement", "above");
+    await expect(anchor).toHaveAttribute("data-tooltip-placement", "above");
     await expect(tooltip).toBeVisible();
     await page.setViewportSize({ width, height: 850 });
     await expect(tooltip).toBeVisible();

@@ -114,8 +114,9 @@ test("Settings follows keyboard focus and shows friendly grouping labels with un
   await page.keyboard.press("Tab");
   await expect(page.locator("#settings")).not.toHaveAttribute("open");
   await expect(page.locator("#settings-tooltip")).toBeHidden();
-  await expect(page.locator("#collapse")).toBeFocused();
-  expect(await page.locator("#collapse").evaluate(node => {
+  const search = page.getByRole("searchbox");
+  await expect(search).toBeFocused();
+  expect(await search.evaluate(node => {
     const box = node.getBoundingClientRect();
     return document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2) === node;
   })).toBe(true);
