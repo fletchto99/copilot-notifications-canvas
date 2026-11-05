@@ -53,7 +53,7 @@ test("GitHub inbox is an accessible icon link before Refresh and Settings in the
   assert.doesNotMatch(attributes, /\bhidden\b/);
   assert.match(content, /<svg\b[^>]*aria-hidden="true"[^>]*focusable="false"/);
   assert.match(content, /^\s*<svg\b[^>]*>\s*<path\b[^>]*\/>\s*<path\b[^>]*\/>\s*<\/svg>\s*$/);
-  assert.match(html, /<div class="toolbar">\s*<label class="search">[\s\S]*?<\/label>\s*<div id="inbox-control"[^>]*>[\s\S]*?<\/div>\s*<div id="refresh-control"[^>]*>[\s\S]*?<\/div>\s*<details id="settings"/);
+  assert.match(html, /<div class="toolbar">\s*<h1>GitHub Notifications<\/h1>\s*<div id="inbox-control"[^>]*>[\s\S]*?<\/div>\s*<div id="refresh-control"[^>]*>[\s\S]*?<\/div>\s*<details id="settings"/);
   assert.equal([...html.matchAll(/href="https:\/\/github\.com\/notifications"/g)].length, 0);
 });
 
@@ -614,7 +614,6 @@ test("none restores cross-repository API order in one group with repository meta
     ["example/alpha", "example/zulu", "example/zulu", "example/alpha", "example/widgets"]);
   assert.equal(ui.ids.get("collapse").hidden, false);
   assert.equal(list.attributes["aria-label"], "Notifications in GitHub order");
-  assert.match(ui.ids.get("subtitle").textContent, /GitHub inbox order/);
   const first = list.querySelectorAll("a")[0];
   first.focus();
   await runInContext("update()", ui.context);

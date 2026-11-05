@@ -19,6 +19,10 @@ for (const packaged of [false, true]) {
       await expect(panel).toHaveAttribute("tabindex", "0");
       await page.locator("#settings-toggle").focus();
       await page.keyboard.press("Tab");
+      await expect(page.getByRole("searchbox")).toBeFocused();
+      await page.keyboard.press("Tab");
+      await expect(page.getByRole("tab", { name: "All (0)", exact: true })).toBeFocused();
+      await page.keyboard.press("Tab");
       await expect(panel).toBeFocused();
       expect(canvas.writes).toEqual([]);
     });

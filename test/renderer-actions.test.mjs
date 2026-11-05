@@ -401,13 +401,13 @@ test("repository toggle focus is inset inside the clipped card", () => {
   assert.match(styles, /\.repo-toggle:focus-visible \{\s+outline-offset: -3px;\s+\}/);
 });
 
-test("compact toolbar keeps a shrinkable search beside matching inbox, refresh and settings icons", () => {
-  assert.match(styles, /\.toolbar \{\s+display: flex;[^}]*\}/);
-  assert.match(styles, /\.search \{\s+flex: 1;\s+min-width: 0;\s+\}/);
+test("compact toolbar aligns the title and utility icons above full-width search", () => {
+  assert.match(styles, /\.toolbar \{\s+display: flex;\s+align-items: center;[^}]*\}/);
+  assert.match(styles, /\.search \{\s+display: block;\s+min-width: 0;[^}]*\}/);
+  assert.match(styles, /\.search input \{\s+height: 38px;\s+\}/);
   assert.match(styles, /\.icon-button \{[^}]*flex-shrink: 0;[^}]*width: 38px;\s+height: 38px;[^}]*color: var\(--canvas-text\);/);
   assert.match(styles, /\.settings \{[^}]*flex-shrink: 0;/);
   assert.doesNotMatch(styles, /\.toolbar \{[^}]*flex-wrap: wrap/);
-  assert.doesNotMatch(styles, /\.search \{[^}]*flex-basis: 100%/);
 });
 
 test("notification metadata, counts and action tooltips use 12px text", () => {

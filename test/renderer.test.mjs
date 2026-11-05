@@ -57,8 +57,8 @@ test("renderer public controls survive bundling and minification", async () => {
   assert.equal(ui.timers.size, 0);
 });
 
-test("update banner sits below the subtitle and above the inbox controls with its prompt collapsed", () => {
-  const positions = ['class="subtitle"', 'id="update-banner"', 'class="toolbar"', 'id="count"', 'id="groups"']
+test("update banner sits below the title toolbar and above search and filters with its prompt collapsed", () => {
+  const positions = ['class="toolbar"', 'id="update-banner"', 'id="search"', 'id="attention-navigation"', 'id="count"', 'id="groups"']
     .map(marker => html.indexOf(marker));
   assert.ok(positions.every((position, index) => position >= 0 && (index === 0 || position > positions[index - 1])));
   assert.match(html, /<button id="update-details-toggle"[^>]*aria-expanded="false" aria-controls="update-prompt-details"/);
@@ -569,9 +569,10 @@ test("issue and PR numbers appear in metadata in every grouping and search witho
   }
 });
 
-test("canvas is titled GitHub Notifications without mode tabs or the old All notice", () => {
+test("canvas retains its document title with a compact heading and no decorative text or mode tabs", () => {
   assert.match(html, /<title>GitHub Notifications<\/title>/);
   assert.match(html, /<h1>GitHub Notifications<\/h1>/);
+  assert.doesNotMatch(html, /eyebrow|subtitle|A little less noise/);
   assert.doesNotMatch(html, /id="(?:all|unread|api-limit)"/);
 });
 

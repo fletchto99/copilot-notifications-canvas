@@ -10,6 +10,11 @@ to include older notifications.
 
 ## Find notifications
 
+The compact title row keeps **Open GitHub inbox**, **Force refresh**, and
+**Settings** together. Full-width search and attention tabs stay visible below
+it, followed by loaded counts and **Collapse all**. The title wraps on narrow
+panels without shrinking the utility buttons.
+
 Search by title, issue/PR number, or repository. Each row shows its type, number
 when available, notification reason, and last-updated time.
 Date grouping requires a supported browser time zone; the other groupings do not.
