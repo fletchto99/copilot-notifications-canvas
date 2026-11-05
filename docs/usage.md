@@ -25,7 +25,7 @@ Date grouping requires a supported browser time zone; the other groupings do not
 Issues and pull requests also have state-aware icons: open
 items are green, completed issues and merged pull requests are purple, closed
 unmerged pull requests are red, and draft pull requests and issues closed as
-not planned are gray. A distinct purple queue icon identifies PRs in the merge
+not planned are gray. A yellow dotted merge icon identifies PRs in the merge
 queue. Icons have no hover tooltips or extra status text in the row; their
 state descriptions remain available to screen readers. Live descriptions include
 the time of the last successful check, such as **Checked 2 minutes ago**.
@@ -34,6 +34,16 @@ the last known icon and identifies it as a **cached result** with the failure
 reason; it does not pretend the old result was just rechecked.
 These are subject states, not the notification's Read/Done state.
 
+Discussions also have state-aware icons. Resolved discussions use purple
+overlapping bubbles with a checkmark; answered discussions use a single green
+checkmarked bubble. Open, answered, and closed states differ by shape, not just color.
+Open or reopened discussions stay gray. Duplicate and outdated discussions use
+gray bubbles with a slash or clock, respectively. Discussion state comes from
+a read-only GraphQL query for `closed`, `isAnswered`, and `stateReason`;
+it never fetches discussion titles, bodies, or comments. Missing links, denied
+access, or custom development REST APIs leave the icon gray with an explicit
+status-unavailable description rather than guessing that a discussion is closed.
+
 Other notification types have static icons, with no status lookup or loading
 indicator:
 
@@ -41,7 +51,6 @@ indicator:
 | --- | --- |
 | `Release` | Tag |
 | `Commit` | Commit |
-| `Discussion` | Discussion bubbles |
 | `RepositoryAdvisory`, `RepositoryVulnerabilityAlert`, `RepositoryDependabotAlertsThread` | Security shield |
 | `RepositoryInvitation` | Envelope |
 | `WorkflowRun` | Workflow |
@@ -110,20 +119,46 @@ Open PRs
 also use a read-only GraphQL query for merge queue membership. Queue access
 failures preserve the known REST state and add an explanatory screen-reader
 description; custom development REST APIs do not query github.com for queue data.
-Exhausting GraphQL's primary quota pauses merge-queue checks without blocking
+Discussion lookups use the same GraphQL quota and do not run against custom
+development REST APIs.
+Exhausting GraphQL's primary quota pauses discussion and merge-queue checks without blocking
 REST inbox polling or Read/Done actions. Authentication failures and secondary
 rate limits still pause shared requests.
 Lookups are shared across
 panels in the provider and cached in memory for five minutes (or longer if
 GitHub requests it). Changed notification timestamps and **Force refresh**
 revalidate status sooner, without bypassing rate limits or failure backoff.
-Uncached lookups follow the on-screen, expanded rows from top to bottom in the current
+If Force refresh overlaps an older status request, that older response remains
+due for revalidation rather than restarting the five-minute cache lifetime.
+GraphQL quota pauses preserve cached discussion results and their check times.
+Uncached lookups cover all loaded rows in expanded groups, scheduled from top to bottom in the current
 repository, flat, or browser-local date grouping. Search and attention filters
-exclude hidden matches from this work. Off-screen rows and collapsed groups wait
-until they enter view. Scrolling, resizing, and expanding a group update this
-transient viewport selection without persisting it. Changes to the view reprioritize the
-remaining rows after an in-flight lookup finishes; cached results can appear
-immediately. A small spinner fills the icon slot while an initial status is
+exclude hidden matches from this work. Rows outside the viewport load without
+waiting for scrolling; collapsed groups wait until expanded. Expanding or
+collapsing a group updates this transient selection without persisting it.
+The panel sends status selections separately in bounded chunks tied to the
+current loaded snapshot, rather than putting notification IDs in every request.
+Large loaded lists therefore do not hit a selection-header limit or block
+refresh, search, Read, or Done. Incomplete selections never start new lookups;
+changed views discard the remaining chunks and send a fresh selection.
+If an inbox action or refresh changes the snapshot while a chunk is in flight,
+the provider reports that the selection is stale and the panel reloads the
+current snapshot immediately. This normal race does not show an outage warning
+or delay the inbox action.
+Status-selection failures appear as a status-loading notice and retry
+automatically without disabling inbox actions, marking loaded notifications as
+stale, or replacing the normal empty-inbox guidance and refresh control.
+Up to twenty status lookups run concurrently across panels sharing the provider;
+waiting callers receive slots in first-in, first-out order, and newly expanded
+groups can use idle slots without waiting for an existing slow lookup.
+Icons appear as their lookups finish, so completion order can differ from row
+order. Changes to the view reprioritize remaining rows as slots become available.
+Already dispatched requests may finish after a group is collapsed. Re-expanding
+the group resumes any skipped status or destination lookups without duplicating
+requests still in flight or waiting for unrelated slow rows. Duplicate
+lookups share the cache, rate-limit backoff still applies, and inbox reads and
+Read/Done actions do not wait for outstanding status lookups.
+Cached results can appear immediately. A small spinner fills the icon slot while an initial status is
 loading. It stays still when reduced motion is enabled, and known icons remain
 visible during background refreshes.
 For CI rows, the initial spinner lasts until the run and any failed-job lookup

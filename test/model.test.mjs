@@ -152,6 +152,7 @@ test("known API subject links become safe GitHub web links", () => {
     assert.equal(result.url, `https://github.com/example/widgets/${expected}`);
     assert.equal(result.direct, true);
     assert.equal(result.number, number);
+    if (type === "Discussion") assert.equal(result.discussionNumber, "9");
   }
 });
 

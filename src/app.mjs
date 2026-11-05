@@ -17,8 +17,12 @@ let intersecting = true;
 let timer;
 let tooltipTimer;
 let overlayFrame;
-let viewportFrame;
-let lastViewport = "";
+let subjectSelectionFrame;
+let lastSubjectSelection;
+let subjectSelectionVersion = 0;
+let subjectSelectionPending = false;
+let subjectSelectionError = "";
+let subjectSelectionRetryAt = 0;
 let refreshStatusKey;
 let searchTimer;
 let searchComposing = false;
@@ -56,10 +60,10 @@ const pendingCheck = `${issueOutline}M12 7v5l3 2`;
 const failedCheck = "M6 6 18 18M6 18 18 6";
 const bellIcon = "M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9ZM10 21a2 2 0 0 0 4 0";
 const securityIcon = "M12 3 21 6v6c0 5-9 9-9 9s-9-4-9-9V6l9-3ZM12 8v5m0 4h.01";
+const discussionOutline = "M3 4h14v10H8l-5 4V4Zm5 10v4h8l5 3V8h-4";
 const subjectTypeIcons = {
   Release: "M3 3h7l11 11-7 7L3 10V3ZM7 7h.01",
   Commit: "M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0ZM3 12h5m8 0h5",
-  Discussion: "M3 4h14v10H8l-5 4V4Zm5 10v4h8l5 3V8h-4",
   RepositoryAdvisory: securityIcon,
   RepositoryVulnerabilityAlert: securityIcon,
   RepositoryDependabotAlertsThread: securityIcon,
@@ -83,6 +87,14 @@ const subjectIcons = {
     merged: "M8 5a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM8 19a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM21 12a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM6 7v10m0-10c0 3 4 5 11 5",
     merge_queued: "M6 11v6M8 19a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM21 12a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM6.75 5a.75 .75 0 1 1-1.5 0 .75 .75 0 0 1 1.5 0ZM12.25 8.5a.75 .75 0 1 1-1.5 0 .75 .75 0 0 1 1.5 0Z",
   },
+  Discussion: {
+    unknown: discussionOutline,
+    open: discussionOutline,
+    answered: "M3 4h18v13H9l-6 4V4ZM7 10l3 3 6-6",
+    closed: `${discussionOutline}M6 9l2 2 5-5`,
+    duplicate: `${discussionOutline}M8 11l4-4`,
+    outdated: `${discussionOutline}M9 7v3l3 1`,
+  },
   CheckSuite: {
     unknown: "M4 3h16v18H4ZM8 8h8M8 12h8M8 16h4",
     success: "m5 12 4 4L19 6",
@@ -103,6 +115,7 @@ const subjectIcons = {
 };
 const subjectLabels = {
   open: "Open", closed: "Closed", not_planned: "Closed (not planned)", duplicate: "Closed (duplicate)", draft: "Draft", merged: "Merged",
+  answered: "Answered", outdated: "Closed (outdated)",
   merge_queued: "In merge queue", success: "Passing", failure: "Failed", queued: "Queued", in_progress: "In progress",
   waiting: "Waiting", requested: "Requested", pending: "Pending", neutral: "Neutral", cancelled: "Cancelled",
   skipped: "Skipped", timed_out: "Timed out", action_required: "Action required", startup_failure: "Startup failure", stale: "Stale",
@@ -197,21 +210,68 @@ function updateSubjectDescription(icon) {
   icon.setAttribute("aria-label", description);
 }
 
-function visibleSubjectIds() {
-  if (!visible()) return "";
-  return [...$("groups").querySelectorAll(".row-link")].filter(link => {
-    const bounds = link.getBoundingClientRect();
-    return bounds.bottom > 0 && bounds.top < window.innerHeight && bounds.bottom > bounds.top;
-  }).map(link => link.dataset.threadId).join(",");
+function expandedSubjectSelection() {
+  if (!state || !visible()) return;
+  const items = state.groups.flatMap(group => group.items).sort((a, b) => a.apiPosition - b.apiPosition);
+  const positions = new Map(items.map((item, index) => [item.id, index]));
+  return JSON.stringify({
+    selectionKey: state.selectionKey,
+    positions: displayGroups().filter(group => !collapsed.has(group.key))
+      .flatMap(group => group.items.map(item => positions.get(item.id))),
+  });
 }
 
-function scheduleViewportSync() {
-  if (!hasCapability || !visible() || connectionError || viewportFrame !== undefined || visibleSubjectIds() === lastViewport) return;
-  viewportFrame = requestAnimationFrame(() => {
-    viewportFrame = undefined;
-    if (!visible() || busy || batchBusy || marking.size || pendingFilters || pollPromise) return;
-    if (visibleSubjectIds() !== lastViewport) void update();
+function scheduleSubjectSelectionSync() {
+  if (!hasCapability || !visible() || !state || connectionError || subjectSelectionPending ||
+      Date.now() < subjectSelectionRetryAt || subjectSelectionFrame !== undefined ||
+      expandedSubjectSelection() === lastSubjectSelection) return;
+  subjectSelectionFrame = requestAnimationFrame(() => {
+    subjectSelectionFrame = undefined;
+    if (!visible() || subjectSelectionPending || busy || batchBusy || marking.size || pendingFilters || pollPromise) return;
+    if (expandedSubjectSelection() !== lastSubjectSelection) void syncSubjectSelection();
   });
+}
+
+async function syncSubjectSelection() {
+  const selection = expandedSubjectSelection();
+  const { selectionKey, positions } = JSON.parse(selection);
+  const version = subjectSelectionVersion = Math.max(subjectSelectionVersion, state.subjectSelectionVersion ?? 0) + 1;
+  subjectSelectionPending = true;
+  lastSubjectSelection = undefined;
+  let refreshNeeded = false;
+  try {
+    for (let offset = 0; ; offset += 100) {
+      if (expandedSubjectSelection() !== selection) return;
+      const complete = offset + 100 >= positions.length;
+      const result = await api("subjects", { version, selectionKey, offset, positions: positions.slice(offset, offset + 100), complete });
+      if (!Number.isSafeInteger(result?.version) || result.version < 0 ||
+          !["stale", complete ? "complete" : "pending"].includes(result.status) ||
+          result.status !== "stale" && result.version !== version) {
+        throw new Error("The provider returned an invalid status selection response.");
+      }
+      subjectSelectionVersion = Math.max(subjectSelectionVersion, result.version);
+      if (result.status === "stale") {
+        refreshNeeded = true;
+        return;
+      }
+      if (complete) break;
+    }
+    lastSubjectSelection = selection;
+    subjectSelectionError = "";
+    refreshNeeded = true;
+  } catch (error) {
+    if (!visible() && error.name === "AbortError") return;
+    subjectSelectionError = `Notification status loading paused. ${error.name === "AbortError"
+      ? "The status selection request timed out." : error.message || "The status selection request failed."} Retrying automatically.`;
+    subjectSelectionRetryAt = Date.now() + 5000;
+  } finally {
+    subjectSelectionPending = false;
+    render();
+    if (refreshNeeded) {
+      await pollPromise;
+      void update();
+    }
+  }
 }
 
 async function api(path, input) {
@@ -219,9 +279,6 @@ async function api(path, input) {
   requestControllers.add(controller);
   const timeout = setTimeout(() => controller.abort(), 35_000);
   try {
-    const viewport = visibleSubjectIds();
-    if (viewport.length > 8192) throw new Error("Too many visible notifications to load status. Narrow the view and try again.");
-    lastViewport = viewport;
     const groupBy = path === "settings" ? input?.groupBy ?? preferences?.groupBy : preferences?.groupBy;
     const timeZone = groupBy === "date" ? Intl.DateTimeFormat().resolvedOptions().timeZone : undefined;
     if (groupBy === "date" && (typeof timeZone !== "string" || !timeZone)) {
@@ -234,7 +291,7 @@ async function api(path, input) {
         ...(input === undefined ? {} : { "Content-Type": "application/json" }),
         ...(groupBy ? { "X-Notification-Group-By": groupBy } : {}),
         ...(timeZone ? { "X-Notification-Time-Zone": timeZone } : {}),
-        "X-Notification-Visible-Ids": viewport,
+        "X-Notification-Subjects": "manual",
       },
       body: input === undefined ? undefined : JSON.stringify(input),
       signal: controller.signal,
@@ -797,7 +854,6 @@ function positionOverlays() {
       positionTooltip(anchor);
     }
   }
-  scheduleViewportSync();
 }
 
 function bindTooltip(control, anchor) {
@@ -999,7 +1055,7 @@ function renderGroups(groups, fallbackFocusKey) {
       else collapsed.delete(group.key);
       disclosure.setAttribute("aria-expanded", String(!rows.hidden));
       setControlText($("collapse"), groups.some(item => !collapsed.has(item.key)) ? "Collapse all" : "Expand all");
-      scheduleViewportSync();
+      scheduleSubjectSelectionSync();
     });
     header.append(disclosure, createBatchControls({
       repository: group.repository, date: group.date, timeZone: group.timeZone,
@@ -1149,8 +1205,8 @@ function render(fallbackFocusKey) {
   panel.tabIndex = state?.groups.length ? -1 : 0;
   $("empty-symbol").hidden = caughtUp;
   $("count").hidden = caughtUp;
-  $("notice").hidden = !error;
-  $("notice").textContent = error ? `${state?.loaded ? "Showing previously loaded notifications. " : ""}${error}` : "";
+  $("notice").hidden = !error && !subjectSelectionError;
+  $("notice").textContent = error ? `${state?.loaded ? "Showing previously loaded notifications. " : ""}${error}` : subjectSelectionError;
   if (!state) {
     if (error) {
       $("empty-title").textContent = "Your inbox is unavailable";
@@ -1167,7 +1223,7 @@ function render(fallbackFocusKey) {
   $("groups").setAttribute("aria-label", groupBy === "repo" ? "Notifications by repository" :
     groupBy === "date" ? "Notifications by date" : "Notifications in GitHub order");
   renderGroups(displayGroups(), fallbackFocusKey);
-  scheduleViewportSync();
+  scheduleSubjectSelectionSync();
   renderControls();
   if (state.groups.length && movePanelFocus) {
     restoreFocus(panel, $("groups").querySelectorAll(".repo-toggle")[0]);
@@ -1403,7 +1459,7 @@ $("collapse").addEventListener("click", () => {
   }
   listKey = undefined;
   renderGroups(groups);
-  scheduleViewportSync();
+  scheduleSubjectSelectionSync();
   setControlText($("collapse"), close ? "Expand all" : "Collapse all");
 });
 let wasVisible = visible();
@@ -1421,8 +1477,8 @@ function visibilityChanged() {
     dismissTooltips();
     for (const controller of requestControllers) controller.abort();
     closeSettings();
-    if (viewportFrame !== undefined) cancelAnimationFrame(viewportFrame);
-    viewportFrame = undefined;
+    if (subjectSelectionFrame !== undefined) cancelAnimationFrame(subjectSelectionFrame);
+    subjectSelectionFrame = undefined;
   }
 }
 document.addEventListener("visibilitychange", visibilityChanged);
@@ -1460,8 +1516,8 @@ window.addEventListener("pagehide", () => {
   clearTimeout(copyFeedbackTimer);
   if (overlayFrame !== undefined) cancelAnimationFrame(overlayFrame);
   overlayFrame = undefined;
-  if (viewportFrame !== undefined) cancelAnimationFrame(viewportFrame);
-  viewportFrame = undefined;
+  if (subjectSelectionFrame !== undefined) cancelAnimationFrame(subjectSelectionFrame);
+  subjectSelectionFrame = undefined;
   for (const controller of requestControllers) controller.abort();
   observer.disconnect();
   themeObserver.disconnect();

@@ -303,6 +303,7 @@ test("all HTTP notification request paths inherit another client's server deadli
       await inbox.batch.done;
       for (let count = 0; count < 3; count++) {
         await readerClient.queue;
+        await Promise.all(readerClient.subjectWorkers);
         await new Promise(resolve => setImmediate(resolve));
       }
     };

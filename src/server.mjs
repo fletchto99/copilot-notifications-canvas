@@ -124,12 +124,14 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
   let subjectFailure = null;
   let subjectRetryAt = 0;
   let subjectView = { groupBy: "repo", timeZone: null };
-  let subjectViewport = null;
+  let subjectSelection = null;
+  let subjectSelectionVersion = 0;
+  let pendingSubjectSelection;
   let subjectItems = [];
   const orderSubjects = (groups = inbox.groups()) => {
-    if (subjectViewport !== null) {
+    if (subjectSelection !== null) {
       const loaded = new Map(groups.flatMap(group => group.items).map(item => [item.id, item]));
-      subjectItems = subjectViewport.flatMap(id => loaded.has(id) ? [loaded.get(id)] : []);
+      subjectItems = subjectSelection.flatMap(id => loaded.has(id) ? [loaded.get(id)] : []);
     } else if (subjectView.groupBy === "repo") {
       subjectItems = groups.flatMap(group => group.items);
     } else if (subjectView.groupBy === "date" && subjectView.timeZone === null) {
@@ -139,11 +141,51 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
       const items = inbox.shownSelection(groups).items;
       subjectItems = subjectView.groupBy === "date" ? groupThreadsByDate(items, subjectView.timeZone).flatMap(group => group.items) : items;
     }
+    inbox.client.wakeSubjects();
   };
   const setSubjectView = view => {
     if (view.groupBy === "date" && view.timeZone !== null) groupThreadsByDate([], view.timeZone);
     subjectView = view;
     orderSubjects();
+  };
+  const selectSubjects = input => {
+    const { version, selectionKey, offset, positions, complete } = input;
+    if (Object.keys(input).some(key => !["version", "selectionKey", "offset", "positions", "complete"].includes(key)) ||
+        !Number.isSafeInteger(version) || version < 1 ||
+        typeof selectionKey !== "string" || !/^[a-f0-9]{64}$/.test(selectionKey) ||
+        !Number.isSafeInteger(offset) || offset < 0 || typeof complete !== "boolean" ||
+        !Array.isArray(positions) || positions.length > 100 || !complete && !positions.length ||
+        positions.some(position => !Number.isSafeInteger(position) || position < 0)) {
+      throw new InboxError("invalid_subject_selection", "Send a bounded chunk of loaded notification positions.", 400);
+    }
+    if (offset === 0 ? version <= subjectSelectionVersion :
+        version !== subjectSelectionVersion || pendingSubjectSelection?.selectionKey !== selectionKey ||
+        offset !== pendingSubjectSelection.positions.size) {
+      throw new InboxError("stale_subject_selection", "The notification view changed. Status selection will retry with the current view.", 409);
+    }
+    const shown = inbox.shownSelection();
+    if (selectionKey !== shown.selectionKey) {
+      // Inbox actions can supersede an otherwise valid upload while it is in flight.
+      if (pendingSubjectSelection?.selectionKey === selectionKey) pendingSubjectSelection = undefined;
+      return { status: "stale", version: subjectSelectionVersion };
+    }
+    const previous = offset === 0 ? new Set() : pendingSubjectSelection.positions;
+    if (positions.some(position => position >= shown.items.length || previous.has(position)) ||
+        new Set(positions).size !== positions.length) {
+      throw new InboxError("invalid_subject_selection", "Select each shown, loaded notification at most once.", 400);
+    }
+    if (offset === 0) {
+      subjectSelectionVersion = version;
+      pendingSubjectSelection = { selectionKey, positions: previous };
+      subjectSelection = [];
+    }
+    for (const position of positions) pendingSubjectSelection.positions.add(position);
+    if (complete) {
+      subjectSelection = [...pendingSubjectSelection.positions].map(position => shown.items[position].id);
+      pendingSubjectSelection = undefined;
+    }
+    orderSubjects();
+    return { status: complete ? "complete" : "pending", version: subjectSelectionVersion };
   };
   const snapshot = () => {
     const state = inbox.snapshot();
@@ -160,7 +202,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
       }).finally(() => { subjectRefresh = undefined; });
     }
     return {
-      ...state, development, subjectsLoading: Boolean(subjectRefresh),
+      ...state, development, subjectSelectionVersion, subjectsLoading: Boolean(subjectRefresh),
       groups: state.groups.map(group => ({
         ...group, items: group.items.map(item => {
           const subject = inbox.client.subjectSnapshot(item);
@@ -257,7 +299,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         res.end(file.body);
         return;
       }
-      if (!["/api/ready", "/api/state", "/api/refresh", "/api/more", "/api/filters", "/api/settings", "/api/development", "/api/read", "/api/done", "/api/updates"].includes(path) &&
+      if (!["/api/ready", "/api/state", "/api/subjects", "/api/refresh", "/api/more", "/api/filters", "/api/settings", "/api/development", "/api/read", "/api/done", "/api/updates"].includes(path) &&
           !batchRoutes.has(path)) {
         throw new InboxError("not_found", "Route not found.", 404);
       }
@@ -271,15 +313,12 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         return json(200, { ready: Boolean(staticFiles) });
       }
       if (!staticFiles) throw new InboxError("server_initializing", "The canvas is still loading its local files. Retrying in the background.", 503);
-      const viewport = req.headers["x-notification-visible-ids"];
-      if (viewport !== undefined) {
-        if (typeof viewport !== "string" || viewport.length > 8192 || viewport !== "" && !/^\d+(?:,\d+)*$/.test(viewport)) {
-          throw new InboxError("invalid_viewport", "Use a bounded list of notification IDs for the visible rows.", 400);
-        }
-        const ids = viewport ? viewport.split(",") : [];
-        if (new Set(ids).size !== ids.length) throw new InboxError("invalid_viewport", "Visible notification IDs must not repeat.", 400);
-        subjectViewport = ids;
-        orderSubjects();
+      const manualSubjects = req.headers["x-notification-subjects"];
+      if (manualSubjects !== undefined && manualSubjects !== "manual") {
+        throw new InboxError("invalid_subject_selection", "Use manual status selection for renderer requests.", 400);
+      }
+      if (manualSubjects === "manual" && subjectSelection === null) {
+        subjectSelection = [];
       }
       if (path === "/api/development" && !developmentAPI) {
         throw new InboxError("not_found", "Development API selection is unavailable in this build.", 404);
@@ -308,9 +347,10 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         if (req.method !== "POST") throw new InboxError("method", "Only POST is supported.", 405);
         if (req.headers.origin !== origin) throw new InboxError("origin", "A same-origin request is required.", 403);
         const input = await readBody(req);
-        if (!["/api/refresh", "/api/filters", "/api/settings", "/api/development", "/api/read", "/api/done"].includes(path) && !batchRoutes.has(path) && Object.keys(input).length) {
+        if (!["/api/subjects", "/api/refresh", "/api/filters", "/api/settings", "/api/development", "/api/read", "/api/done"].includes(path) && !batchRoutes.has(path) && Object.keys(input).length) {
           throw new InboxError("invalid_input", "This action takes an empty object.", 400);
         }
+        if (path === "/api/subjects") return json(200, selectSubjects(input));
         if (path === "/api/updates") {
           if (!updates) throw new InboxError("updates_unavailable", "Release checks are unavailable.", 503);
           void updates.check({ force: true });
