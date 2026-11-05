@@ -26,11 +26,11 @@ test("coverage cannot silently omit unexecuted runtime files or count tests in t
 
 test("coverage badges show measured line coverage with accessible text and threshold-based colors", () => {
   for (const [percent, value, color] of [
-    [0, "0.00%", "#e05d44"],
-    [94.5, "94.50%", "#e05d44"],
-    [95, "95.00%", "#4c1"],
-    [98.765, "98.77%", "#4c1"],
-    [100, "100.00%", "#4c1"],
+    [0, "0.00%", "#b91c1c"],
+    [94.5, "94.50%", "#b91c1c"],
+    [95, "95.00%", "#166534"],
+    [98.765, "98.77%", "#166534"],
+    [100, "100.00%", "#166534"],
   ]) {
     const svg = renderCoverageBadge(percent);
     assert.ok(svg.startsWith('<svg xmlns="http://www.w3.org/2000/svg"'));
@@ -39,6 +39,34 @@ test("coverage badges show measured line coverage with accessible text and thres
     assert.ok(svg.includes(`<text x="94.5" y="14">${value}</text>`));
     assert.ok(svg.includes(`fill="${color}"`));
     assert.doesNotMatch(svg, /<script|<image|href=/);
+  }
+});
+
+test("coverage badge text meets 4.5:1 contrast across both status colors and the gradient", () => {
+  const channels = hex => {
+    const digits = hex.slice(1);
+    const expanded = digits.length === 3 ? [...digits].map(digit => digit.repeat(2)).join("") : digits;
+    return expanded.match(/../g).map(channel => parseInt(channel, 16));
+  };
+  const luminance = rgb => rgb.map(value => {
+    const channel = value / 255;
+    return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+  }).reduce((sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index], 0);
+
+  for (const percent of [94.5, 95]) {
+    const svg = renderCoverageBadge(percent);
+    const foreground = channels(svg.match(/<g fill="(#[\da-f]+)" text-anchor=/)[1]);
+    assert.match(svg, /<stop offset="0" stop-color="#bbb" stop-opacity="\.1"\/><stop offset="1" stop-opacity="\.1"\/>/);
+    for (const background of svg.matchAll(/<path fill="(#[\da-f]+)" d=/g)) {
+      for (let step = 0; step <= 100; step++) {
+        const overlay = 187 * (1 - step / 100);
+        const composited = channels(background[1]).map(channel => channel * 0.9 + overlay * 0.1);
+        const light = luminance(foreground);
+        const dark = luminance(composited);
+        const contrast = (Math.max(light, dark) + 0.05) / (Math.min(light, dark) + 0.05);
+        assert.ok(contrast >= 4.5, `${background[1]} at gradient step ${step}: ${contrast.toFixed(2)}:1`);
+      }
+    }
   }
 });
 

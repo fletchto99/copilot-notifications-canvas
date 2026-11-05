@@ -13,7 +13,7 @@ export function renderCoverageBadge(percent) {
     throw new Error("Line coverage must be a finite percentage between 0 and 100.");
   }
   const value = `${percent.toFixed(2)}%`;
-  const color = percent >= 95 ? "#4c1" : "#e05d44";
+  const color = percent >= 95 ? "#166534" : "#b91c1c";
   return `<svg xmlns="http://www.w3.org/2000/svg" width="126" height="20" role="img" aria-label="Line coverage: ${value}">
   <title>Line coverage: ${value}</title>
   <linearGradient id="s" x2="0" y2="100%"><stop offset="0" stop-color="#bbb" stop-opacity=".1"/><stop offset="1" stop-opacity=".1"/></linearGradient>

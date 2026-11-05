@@ -225,12 +225,15 @@ After all checks in a main-branch push pass, the separate **Coverage badge**
 workflow publishes the SVG to an automatically created, independent `badges`
 branch. Only that publishing job has `contents: write`; test jobs remain
 read-only, and the publisher does not check out or execute repository code.
-It downloads the artifact from that exact successful run, skips superseded
-main commits, and never force-pushes. Pull requests, tags, failed runs, and
+It downloads the artifact from that exact successful run and checks `main`
+before preparing the update and again immediately before pushing, skipping
+commits that have been superseded. These checks are not atomic with updates to
+`main`. It never force-pushes. Pull requests, tags, failed runs, and
 manual test runs cannot publish a badge. The badge becomes available after
 the first successful main-branch push with these workflows installed; until
 then, its image URL will not exist. Later failed runs leave the previous badge
-in place, so consult the adjacent CI badge for current build health.
+in place, so consult the adjacent CI badge, scoped to pushes on `main`, for
+current build health.
 No external coverage service, additional secret, or source-branch commit is
 required. Repository rules must allow the Actions token to create and update
 `badges`; publication failures appear in the workflow rather than silently

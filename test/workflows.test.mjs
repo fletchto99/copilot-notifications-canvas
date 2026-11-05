@@ -119,9 +119,13 @@ test("coverage publication uses only successful main-push artifacts in a separat
   assert.match(publisher, /git init --initial-branch=badges/);
   assert.match(publisher, /git fetch --depth=1 origin refs\/heads\/badges/);
   assert.match(publisher, /git diff --cached --quiet/);
+  assert.match(publisher, /require_current_main\n\s+git push origin HEAD:refs\/heads\/badges/);
   assert.match(publisher, /git push origin HEAD:refs\/heads\/badges/);
   assert.doesNotMatch(publisher, /actions\/checkout|--force|npm |node |pull_request_target/);
   assert.match(readme, /\[!\[Line coverage\]\(https:\/\/raw\.githubusercontent\.com\/fletchto99\/copilot-notifications-canvas\/badges\/coverage\.svg\)\]/);
+  const ciBadge = new URL(readme.match(/\[!\[CI status\]\(([^)]+)\)/)[1]);
+  assert.equal(ciBadge.searchParams.get("branch"), "main");
+  assert.equal(ciBadge.searchParams.get("event"), "push");
 });
 
 test("the coverage publishing shell creates, updates, and skips badges without touching main or swallowing failures", async t => {
@@ -165,6 +169,7 @@ test("the coverage publishing shell creates, updates, and skips badges without t
     export TMPDIR="$RUNNER_TEMP"
     gh() {
       if [[ "$1" == api ]]; then
+        if [[ "\${TEST_MAIN_READ_FAILURE:-}" == 1 ]]; then return 43; fi
         printf '%s\\n' "$TEST_MAIN_SHA"
       else
         [[ "$*" == "auth setup-git --hostname github.com" ]]
@@ -176,7 +181,15 @@ test("the coverage publishing shell creates, updates, and skips badges without t
         [[ "$3" == origin && "$4" == "https://github.com/test/coverage.git" ]] || return 1
         command git remote add origin "$TEST_REMOTE"
       else
-        command git "$@"
+        command git "$@" || return $?
+        if [[ "$1" == fetch ]]; then
+          if [[ "\${TEST_ADVANCE_MAIN_DURING_FETCH:-}" == 1 ]]; then
+            TEST_MAIN_SHA="advanced-during-fetch"
+          fi
+          if [[ "\${TEST_FAIL_MAIN_DURING_FETCH:-}" == 1 ]]; then
+            TEST_MAIN_READ_FAILURE=1
+          fi
+        fi
       fi
     }
   `;
@@ -199,6 +212,16 @@ test("the coverage publishing shell creates, updates, and skips badges without t
   assert.match(publish(), /Skipping coverage from a superseded main commit/);
   assert.equal(badgeHead(), second);
   env.TEST_MAIN_SHA = env.SOURCE_SHA;
+  await writeFile(badgePath, "<svg>99.50%</svg>\n");
+  env.TEST_ADVANCE_MAIN_DURING_FETCH = "1";
+  assert.match(publish(), /Skipping coverage from a superseded main commit/);
+  assert.equal(badgeHead(), second);
+  assert.equal(git("--git-dir", remote, "show", "badges:coverage.svg"), "<svg>99.25%</svg>");
+  delete env.TEST_ADVANCE_MAIN_DURING_FETCH;
+  env.TEST_FAIL_MAIN_DURING_FETCH = "1";
+  assert.throws(publish, error => error.status === 43);
+  assert.equal(badgeHead(), second);
+  delete env.TEST_FAIL_MAIN_DURING_FETCH;
   env.TEST_GIT_FAILURE = "ls-remote";
   assert.throws(publish, error => error.status === 42);
   assert.equal(badgeHead(), second);

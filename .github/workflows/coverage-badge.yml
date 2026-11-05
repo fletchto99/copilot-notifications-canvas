@@ -40,11 +40,15 @@ jobs:
           SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
         shell: bash
         run: |
-          current_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
-          if [[ "$current_sha" != "$SOURCE_SHA" ]]; then
-            echo "Skipping coverage from a superseded main commit."
-            exit 0
-          fi
+          require_current_main() {
+            local current_sha
+            current_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
+            if [[ "$current_sha" != "$SOURCE_SHA" ]]; then
+              echo "Skipping coverage from a superseded main commit."
+              exit 0
+            fi
+          }
+          require_current_main
 
           gh auth setup-git --hostname github.com
           directory="$(mktemp -d)"
@@ -66,4 +70,5 @@ jobs:
           git -c user.name="github-actions[bot]" \
             -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
             commit -m "Update coverage badge for $SOURCE_SHA"
+          require_current_main
           git push origin HEAD:refs/heads/badges
