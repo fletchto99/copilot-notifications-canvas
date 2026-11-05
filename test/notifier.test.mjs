@@ -130,7 +130,8 @@ $root = $roundtrip.DocumentElement
   for (const url of [undefined, "https://github.com/example/widgets/pull/42",
     `https://github.com/example/widgets/actions?${query}`]) {
     const [program, args, options] = await command("win32", "none", { url });
-    const { stdout } = await promisify(execFile)(program, [...args.slice(0, -1), script], options);
+    // Allow cold PowerShell/WinRT startup on CI without relaxing the production timeout.
+    const { stdout } = await promisify(execFile)(program, [...args.slice(0, -1), script], { ...options, timeout: 30_000 });
     assert.deepEqual(JSON.parse(stdout), {
       activation: url ? "protocol" : "", launch: url ?? "", title, body, textCount: 2, silent: "true",
     });
