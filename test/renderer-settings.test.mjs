@@ -91,6 +91,51 @@ test("notification view uses a labeled native select without help text or a tool
   assert.doesNotMatch(html, /id="match-github-inbox|id="show-notifications-(?:tooltip|help)"/);
 });
 
+test("hiding empty tabs defaults on, saves only its preference, and preserves both choices on reopen", async t => {
+  const storedSettings = { groupBy: "date", future: 42 };
+  const ui = await renderer({ initialRows: [], storedSettings });
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  const toggle = ui.ids.get("hide-empty-tabs");
+  assert.match(html, /id="hide-empty-tabs"[^>]*role="switch"[^>]*aria-checked="true" disabled/);
+  assert.match(html, /<button id="hide-empty-tabs"[\s\S]*?<\/button>\s*<button id="auto-open"/);
+  assert.equal(toggle.getAttribute("aria-checked"), "true");
+  assert.equal(toggle.disabled, false);
+  assert.deepEqual(ui.ids.get("attention-tabs").children.filter(tab => !tab.hidden).map(tab => tab.textContent), ["All (0)"]);
+  for (const hideEmptyTabs of [false, true]) {
+    toggle.focus();
+    toggle.events.click();
+    assert.equal(toggle.disabled, true);
+    await settle();
+    assert.equal(ui.document.activeElement, toggle);
+    assert.equal(toggle.getAttribute("aria-checked"), String(hideEmptyTabs));
+    assert.deepEqual(storedSettings, { groupBy: "date", future: 42, hideEmptyTabs });
+    const reopened = await renderer({ initialRows: [], storedSettings });
+    t.after(() => { reopened.window.events.pagehide(); reopened.inbox.close(); });
+    assert.equal(reopened.ids.get("hide-empty-tabs").getAttribute("aria-checked"), String(hideEmptyTabs));
+    assert.equal(reopened.ids.get("attention-tabs").children.filter(tab => !tab.hidden).length, hideEmptyTabs ? 1 : 6);
+  }
+  assert.deepEqual(ui.calls.filter(call => call.path === "/api/settings" && call.options.method === "POST")
+    .map(call => JSON.parse(call.options.body)), [{ hideEmptyTabs: false }, { hideEmptyTabs: true }]);
+  assert.deepEqual(ui.patches, []);
+  assert.deepEqual(ui.deletions, []);
+});
+
+test("failed empty-tab setting saves retain the existing visibility and expose the error", async t => {
+  const storedSettings = { hideEmptyTabs: false };
+  const ui = await renderer({ initialRows: [], storedSettings, onSettings: input => {
+    if (input) throw new Error("Synthetic settings failure");
+  } });
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  const toggle = ui.ids.get("hide-empty-tabs");
+  toggle.events.click();
+  await settle();
+  assert.equal(toggle.getAttribute("aria-checked"), "false");
+  assert.equal(toggle.disabled, false);
+  assert.equal(storedSettings.hideEmptyTabs, false);
+  assert.equal(ui.ids.get("attention-tabs").children.every(tab => !tab.hidden), true);
+  assert.match(ui.ids.get("settings-error").textContent, /Synthetic settings failure/);
+});
+
 test("Settings fits the available viewport and moves above only when that provides more space", async t => {
   const ui = await renderer();
   t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });

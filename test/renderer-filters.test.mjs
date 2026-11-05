@@ -187,6 +187,97 @@ test("keyboard tabs wrap and support Home and End without changing focus on poll
   assert.equal(ui.calls.length, calls);
 });
 
+test("empty-tab hiding follows loaded counts, ignores search and preserves All in every grouping", async t => {
+  for (const groupBy of ["repo", "date", "none"]) {
+    const ui = await renderer({ initialRows: [thread("1", { reason: "mention", unread: false })],
+      storedSettings: { hideEmptyTabs: true, groupBy } });
+    t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+    const visibleTabs = () => ui.ids.get("attention-tabs").children.filter(tab => !tab.hidden).map(tab => tab.textContent);
+    assert.deepEqual(visibleTabs(), ["All (1)", "Participating (1)", "Mentioned (1)"]);
+    assert.equal(tab(ui, "assigned").tabIndex, -1);
+    await tab(ui, "assigned").events.click();
+    await tab(ui, "assigned").events.keydown({ key: "Home", preventDefault: () => assert.fail("Hidden tabs cannot navigate") });
+    assert.equal(ui.inbox.filters.attention, "all");
+    const search = ui.ids.get("search");
+    search.focus();
+    search.value = "no matches";
+    search.events.input();
+    await ui.fireTimer(250);
+    assert.equal(ui.inbox.snapshot().matching, 0);
+    assert.deepEqual(visibleTabs(), ["All (1)", "Participating (1)", "Mentioned (1)"]);
+    ui.setRows([thread("2", { reason: "review_requested" })]);
+    await ui.ids.get("force-refresh").events.click();
+    assert.deepEqual(visibleTabs(), ["All (1)", "Participating (1)", "Review Requested (1)"]);
+    assert.equal(ui.document.activeElement, search);
+    ui.setRows([]);
+    await ui.ids.get("force-refresh").events.click();
+    assert.deepEqual(visibleTabs(), ["All (0)"]);
+    assert.equal(tab(ui, "all").tabIndex, 0);
+    await tab(ui, "all").events.keydown({ key: "ArrowRight", preventDefault() {} });
+    assert.equal(ui.document.activeElement, tab(ui, "all"));
+    assert.equal(ui.inbox.filters.attention, "all");
+    assert.deepEqual(ui.patches, []);
+    assert.deepEqual(ui.deletions, []);
+  }
+});
+
+test("selected tabs stay visible when emptied by read or done until another tab is selected", async t => {
+  for (const action of ["read", "done"]) {
+    const ui = await renderer({ initialRows: [thread("1", { reason: "mention" })],
+      storedSettings: { hideEmptyTabs: true, matchGitHubInbox: false } });
+    t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+    const selected = tab(ui, "mentioned");
+    selected.focus();
+    await selected.events.click();
+    const control = ui.ids.get("groups").querySelectorAll("button").find(button => button.dataset.action === action);
+    control.focus();
+    await control.events.click();
+    assert.equal(selected.textContent, "Mentioned (0)");
+    assert.equal(selected.hidden, false);
+    assert.equal(selected.getAttribute("aria-selected"), "true");
+    assert.equal(ui.ids.get("attention-panel").getAttribute("aria-labelledby"), selected.id);
+    assert.equal(tab(ui, "all").hidden, false);
+    assert.equal(tab(ui, "participating").hidden, true);
+    selected.focus();
+    await runInContext("update()", ui.context);
+    assert.equal(ui.document.activeElement, selected);
+    await selected.events.keydown({ key: "Home", preventDefault() {} });
+    assert.equal(ui.document.activeElement, tab(ui, "all"));
+    assert.equal(selected.hidden, true);
+    assert.equal(selected.tabIndex, -1);
+  }
+});
+
+test("keyboard tab navigation skips hidden tabs, wraps and supports Home and End", async t => {
+  const ui = await renderer({ initialRows: [thread("1", { reason: "mention" })],
+    storedSettings: { hideEmptyTabs: true } });
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  let current = "all";
+  for (const [key, expected] of [
+    ["ArrowRight", "participating"], ["ArrowRight", "mentioned"], ["ArrowRight", "all"],
+    ["ArrowLeft", "mentioned"], ["Home", "all"], ["End", "mentioned"],
+  ]) {
+    await tab(ui, current).events.keydown({ key, preventDefault() {} });
+    assert.equal(ui.document.activeElement, tab(ui, expected));
+    assert.equal(ui.inbox.filters.attention, expected);
+    assert.deepEqual(ui.ids.get("attention-tabs").children.filter(tab => tab.tabIndex === 0).map(tab => tab.id),
+      [`attention-${expected}`]);
+    current = expected;
+  }
+});
+
+test("a focused unselected tab that becomes empty moves focus to the selected tab", async t => {
+  const ui = await renderer({ initialRows: [thread("1", { reason: "mention" })],
+    storedSettings: { hideEmptyTabs: true } });
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  tab(ui, "mentioned").focus();
+  ui.inbox.onThreadUpdated("1");
+  await runInContext("update()", ui.context);
+  assert.equal(tab(ui, "mentioned").hidden, true);
+  assert.equal(ui.document.activeElement, tab(ui, "all"));
+  assert.equal(tab(ui, "all").tabIndex, 0);
+});
+
 test("passive count updates reveal focused tabs horizontally without scrolling ancestors", async () => {
   for (const [bounds, expected] of [
     [{ left: 10.2, right: 110 }, 80],

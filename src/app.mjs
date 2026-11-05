@@ -137,6 +137,7 @@ function renderSettings() {
   for (const [id, key] of [
     ["auto-open", "autoOpen"],
     ["desktop-notifications", "desktopNotifications"],
+    ["hide-empty-tabs", "hideEmptyTabs"],
   ]) {
     if (preferences) {
       $(id).setAttribute("aria-checked", String(Boolean(preferences[key])));
@@ -882,16 +883,25 @@ function render(fallbackFocusKey) {
   const cleared = Boolean(state && !state.loaded && (state.hasMore || state.needsRefresh));
   const caughtUp = Boolean(state && !error && !loading && !filtered && !state.groups.length && !cleared);
   const attention = state?.filters.attention ?? "all";
-  const focusedTab = [...attentionTabs.values()].find(tab => tab === document.activeElement);
+  let focusedTab = [...attentionTabs.values()].find(tab => tab === document.activeElement);
   let tabsChanged = false;
   for (const { value, label } of attentionFilters) {
     const tab = attentionTabs.get(value);
     const text = state ? `${label} (${state.attentionCounts[value]})` : label;
     const selected = String(value === attention);
-    if (tab.textContent !== text || tab.getAttribute("aria-selected") !== selected) tabsChanged = true;
+    const hidden = Boolean(preferences?.hideEmptyTabs && state?.attentionCounts[value] === 0 &&
+      value !== "all" && value !== attention);
+    if (tab.textContent !== text || tab.getAttribute("aria-selected") !== selected || tab.hidden !== hidden) tabsChanged = true;
     tab.textContent = text;
     tab.setAttribute("aria-selected", selected);
-    tab.tabIndex = (focusedTab ? tab === focusedTab : value === attention) ? 0 : -1;
+    tab.hidden = hidden;
+  }
+  if (focusedTab?.hidden) {
+    focusedTab = attentionTabs.get(attention);
+    focusedTab.focus({ preventScroll: true });
+  }
+  for (const [value, tab] of attentionTabs) {
+    tab.tabIndex = !tab.hidden && (focusedTab ? tab === focusedTab : value === attention) ? 0 : -1;
   }
   renderAttentionOverflow();
   if (focusedTab && tabsChanged) revealAttentionTab(focusedTab);
@@ -989,7 +999,7 @@ function activateAttention(value) {
   return update("filters", { attention: value });
 }
 
-for (const [index, filter] of attentionFilters.entries()) {
+for (const filter of attentionFilters) {
   const tab = element("button", "attention-tab", filter.label);
   tab.id = `attention-${filter.value}`;
   tab.type = "button";
@@ -999,20 +1009,22 @@ for (const [index, filter] of attentionFilters.entries()) {
   tab.tabIndex = filter.value === "all" ? 0 : -1;
   tab.disabled = !hasCapability;
   tab.addEventListener("click", () => {
-    if (!tab.disabled) return activateAttention(filter.value);
+    if (!tab.disabled && !tab.hidden) return activateAttention(filter.value);
   });
   tab.addEventListener("keydown", event => {
-    if (tab.disabled) return;
+    if (tab.disabled || tab.hidden) return;
+    const visibleFilters = attentionFilters.filter(filter => !attentionTabs.get(filter.value).hidden);
+    const index = visibleFilters.indexOf(filter);
     let next;
-    if (event.key === "ArrowRight") next = (index + 1) % attentionFilters.length;
-    else if (event.key === "ArrowLeft") next = (index + attentionFilters.length - 1) % attentionFilters.length;
+    if (event.key === "ArrowRight") next = (index + 1) % visibleFilters.length;
+    else if (event.key === "ArrowLeft") next = (index + visibleFilters.length - 1) % visibleFilters.length;
     else if (event.key === "Home") next = 0;
-    else if (event.key === "End") next = attentionFilters.length - 1;
+    else if (event.key === "End") next = visibleFilters.length - 1;
     else return;
     event.preventDefault();
-    const filter = attentionFilters[next];
-    attentionTabs.get(filter.value).focus();
-    return activateAttention(filter.value);
+    const nextFilter = visibleFilters[next];
+    attentionTabs.get(nextFilter.value).focus();
+    return activateAttention(nextFilter.value);
   });
   attentionTabs.set(filter.value, tab);
   $("attention-tabs").append(tab);
@@ -1070,6 +1082,11 @@ $("theme").addEventListener("change", () => {
 });
 $("group-by").addEventListener("change", () => {
   if (preferences && !$("group-by").disabled) void settingsRequest({ groupBy: $("group-by").value });
+});
+$("hide-empty-tabs").addEventListener("click", () => {
+  if (preferences && !$("hide-empty-tabs").disabled) {
+    void settingsRequest({ hideEmptyTabs: !preferences.hideEmptyTabs });
+  }
 });
 document.addEventListener("click", event => {
   if ($("settings").open && !$("settings").contains(event.target)) closeSettings();

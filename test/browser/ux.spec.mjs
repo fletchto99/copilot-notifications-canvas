@@ -154,6 +154,7 @@ test("refresh failures expose retry timing and ignore clicks during backoff with
 });
 
 test("empty filter guidance does not suggest an unavailable Load more action", async ({ page, canvas }) => {
+  await canvas.preferences.update({ hideEmptyTabs: false });
   canvas.rows.splice(1);
   canvas.rows[0].reason = "review_requested";
   await page.goto(canvas.url);
