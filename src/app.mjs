@@ -1422,12 +1422,12 @@ const themeObserver = new MutationObserver(renderTheme);
 themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: themeAttributes });
 themeObserver.observe(document.body, { attributes: true, attributeFilter: themeAttributes });
 const layoutObserver = new ResizeObserver(() => {
-  if (stopped) return;
-  renderAttentionOverflow();
-  if (overlayFrame !== undefined) return;
-  // Settings positioning can resize the panel this observer is watching.
+  if (stopped || overlayFrame !== undefined) return;
+  // Overflow controls and Settings positioning can resize the observed elements.
   overlayFrame = requestAnimationFrame(() => {
     overlayFrame = undefined;
+    if (stopped) return;
+    renderAttentionOverflow();
     positionOverlays();
   });
 });

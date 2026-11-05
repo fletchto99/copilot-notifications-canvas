@@ -12,6 +12,51 @@ async function expectPanelInViewport(page) {
 for (const packaged of [false, true]) {
   test.describe(`settings viewport (${packaged ? "packaged" : "source"})`, () => {
     test.use({ packaged });
+    test("resize callbacks defer overflow and Settings mutations until an animation frame", async ({ page, canvas }) => {
+      await page.addInitScript(() => {
+        const NativeResizeObserver = window.ResizeObserver;
+        window.resizeCallbackWrites = [];
+        window.resizeCallbackCount = 0;
+        window.ResizeObserver = class extends NativeResizeObserver {
+          constructor(callback) {
+            super((entries, observer) => {
+              const mutations = new MutationObserver(() => {});
+              for (const id of ["attention-previous", "attention-next", "settings-panel"]) {
+                mutations.observe(document.getElementById(id), { attributes: true });
+              }
+              try {
+                window.resizeCallbackCount++;
+                callback(entries, observer);
+                window.resizeCallbackWrites.push(...mutations.takeRecords().map(record =>
+                  `${record.target.id}:${record.attributeName}`));
+              } finally {
+                mutations.disconnect();
+              }
+            });
+          }
+        };
+      });
+      canvas.rows.splice(6);
+      await canvas.preferences.update({ hideEmptyTabs: false });
+      await page.setViewportSize({ width: 320, height: 480 });
+      await page.goto(canvas.url);
+      await expect(page.locator(".row")).toHaveCount(6);
+      await expect(page.locator("#attention-next")).toBeVisible();
+      await page.getByLabel("Settings", { exact: true }).click();
+      await page.mouse.move(0, 0);
+      await expectPanelInViewport(page);
+      await page.setViewportSize({ width: 960, height: 720 });
+      await expect(page.locator("#attention-next")).toBeHidden();
+      await expectPanelInViewport(page);
+      await page.setViewportSize({ width: 320, height: 480 });
+      await expect(page.locator("#attention-next")).toBeVisible();
+      await expectPanelInViewport(page);
+      expect(await page.evaluate(() => window.resizeCallbackCount)).toBeGreaterThan(0);
+      expect(await page.evaluate(() => window.resizeCallbackWrites)).toEqual([]);
+      expect(canvas.writes).toEqual([]);
+      expect(canvas.deliveries).toEqual([]);
+    });
+
     test("opening Settings before its native toggle event avoids resize-observer errors", async ({ page, canvas }) => {
       canvas.rows.splice(6);
       await page.setViewportSize({ width: 320, height: 480 });
