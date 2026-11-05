@@ -5,6 +5,7 @@ const token = location.hash.slice(1);
 const hasCapability = /^[a-f0-9]{64}$/.test(token);
 const collapsed = new Set();
 const attentionTabs = new Map();
+const rowViews = new Map();
 const tooltipAnchorsByControl = new WeakMap();
 let pointerInteraction = false;
 const relative = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
@@ -129,17 +130,27 @@ function svgIcon(d, size) {
   return svg;
 }
 
-function subjectMetadata(item) {
+function subjectMetadata(item, field = element("span")) {
   const type = item.type.replace(/([a-z])([A-Z])/g, "$1 $2");
-  const label = element("span", "notification-type", item.number ? `${type} #${item.number}` : type);
-  if (!Object.hasOwn(subjectIcons, item.type)) return label;
+  const labelText = item.number ? `${type} #${item.number}` : type;
+  if (!Object.hasOwn(subjectIcons, item.type)) {
+    field.className = "notification-type";
+    setControlText(field, labelText);
+    return field;
+  }
+  if (!field.children.length) {
+    const icon = element("span", "subject-icon");
+    icon.append(svgIcon("", 16));
+    field.append(icon, element("span", "notification-type"));
+  }
+  const [icon, label] = field.children;
+  setControlText(label, labelText);
   const status = Object.hasOwn(subjectIcons[item.type], item.subjectState) ? item.subjectState : "unknown";
   const linkLoading = item.subjectLinkLoading === true;
   const loading = linkLoading || item.subjectLoading === true && status === "unknown" && !item.subjectStateError;
-  const field = element("span", `notification-subject subject-${loading ? "loading" : status.replaceAll("_", "-")}`);
+  field.className = `notification-subject subject-${loading ? "loading" : status.replaceAll("_", "-")}`;
   field.dataset.subjectType = item.type;
-  const icon = element("span", "subject-icon");
-  icon.append(svgIcon(loading ? "M21 12a9 9 0 1 1-9-9" : subjectIcons[item.type][status], 16));
+  icon.querySelectorAll("path")[0].setAttribute("d", loading ? "M21 12a9 9 0 1 1-9-9" : subjectIcons[item.type][status]);
   const stateLabel = subjectLabels[status] ?? (linkLoading ? "Loading run destination" : item.subjectStateError ? "Status unavailable" : loading ? "Loading status" : "Status not loaded yet");
   const description = `${type}: ${stateLabel}${linkLoading && status !== "unknown" ? ". Loading run destination" : ""}${item.subjectStateSource === "notification"
     ? ". Reported by this notification; may not reflect a later rerun." : ""}${item.subjectStateStale
@@ -148,9 +159,9 @@ function subjectMetadata(item) {
     ? ". Opens the only failed job's log viewer." : ""}${item.subjectLinkError ? `. ${item.subjectLinkError}` : ""}`;
   icon.dataset.description = description;
   if (Number.isFinite(item.subjectCheckedAt) && item.subjectCheckedAt >= 0) icon.dataset.checkedAt = String(item.subjectCheckedAt);
+  else delete icon.dataset.checkedAt;
   icon.setAttribute("role", "img");
   updateSubjectDescription(icon);
-  field.append(icon, label);
   return field;
 }
 
@@ -908,13 +919,46 @@ function createBatchControls({ repository, date, timeZone, selectionKey, count, 
   return controls;
 }
 
+function renderRowSubject(view, item) {
+  const key = JSON.stringify(item);
+  if (key === view.key) return;
+  view.key = key;
+  const loading = item.subjectLinkLoading === true;
+  if (loading) {
+    view.link.removeAttribute("href");
+    view.link.setAttribute("role", "link");
+    view.link.setAttribute("aria-disabled", "true");
+    view.link.setAttribute("aria-busy", "true");
+  } else {
+    view.link.href = item.url;
+    for (const attribute of ["role", "aria-disabled", "aria-busy"]) view.link.removeAttribute(attribute);
+  }
+  if (view.destination) {
+    view.destination.hidden = loading || item.direct && item.subjectLinkSource !== "inferred" && item.subjectLinkTarget !== "job";
+    view.destination.textContent = view.destination.hidden ? "" : item.label;
+  }
+  view.subject = subjectMetadata(item, view.subject);
+}
+
 function renderGroups(groups, fallbackFocusKey) {
   $("collapse").hidden = !groups.length;
   setControlText($("collapse"), groups.some(group => !collapsed.has(group.key)) ? "Collapse all" : "Expand all");
-  // Keep focused controls and disclosure state stable across unchanged polls.
-  const key = JSON.stringify(groups);
-  if (key === listKey) return;
+  // Subject hydration must not replace links or buttons during a pointer press.
+  const key = JSON.stringify(groups.map(group => ({
+    ...group, items: group.items.map(item => [
+      item.id, item.repository, item.title, item.type, item.number, item.reason,
+      item.unread, item.updatedAt, item.apiPosition,
+      item.type === "CheckSuite" ? null : [item.direct, item.label],
+    ]),
+  })));
+  if (key === listKey) {
+    for (const group of groups) {
+      for (const item of group.items) renderRowSubject(rowViews.get(item.id), item);
+    }
+    return;
+  }
   listKey = key;
+  rowViews.clear();
   const previousFocus = document.activeElement;
   const focused = previousFocus?.dataset.focusKey;
   const dismissedTooltips = new Set([...$("groups").querySelectorAll("[data-focus-key]")]
@@ -956,23 +1000,18 @@ function renderGroups(groups, fallbackFocusKey) {
       const content = element("div", "row-content");
       const title = element("span", "title", item.title || "(Untitled notification)");
       const link = element("a", "row-link");
-      const linkLoading = item.subjectLinkLoading === true;
-      if (linkLoading) {
-        link.setAttribute("role", "link");
-        link.setAttribute("aria-disabled", "true");
-        link.setAttribute("aria-busy", "true");
-      } else {
-        link.href = item.url;
-      }
+      const view = { link, destination: item.type === "CheckSuite" ? element("span", "sr-only") : null };
+      renderRowSubject(view, item);
+      rowViews.set(item.id, view);
       link.target = "_blank";
       link.rel = "noopener noreferrer";
       link.addEventListener("click", event => {
-        if (linkLoading) return event.preventDefault();
+        if (link.getAttribute("aria-disabled") === "true") return event.preventDefault();
         suppressHover();
       });
       link.addEventListener("auxclick", event => {
         if (event.button === 1) {
-          if (linkLoading) return event.preventDefault();
+          if (link.getAttribute("aria-disabled") === "true") return event.preventDefault();
           suppressHover();
         }
       });
@@ -982,7 +1021,7 @@ function renderGroups(groups, fallbackFocusKey) {
       link.dataset.threadId = item.id;
       content.append(title);
       content.append(element("span", "sr-only", item.unread ? "Unread" : "Read"));
-      if (!linkLoading && item.type === "CheckSuite" && (!item.direct || item.subjectLinkSource === "inferred" || item.subjectLinkTarget === "job")) content.append(element("span", "sr-only", item.label));
+      if (view.destination) content.append(view.destination);
       const metadata = element("div", "metadata");
       const time = element("time", "", relativeTime(item.updatedAt));
       time.dateTime = item.updatedAt;
@@ -990,7 +1029,7 @@ function renderGroups(groups, fallbackFocusKey) {
       time.setAttribute("aria-label", time.title);
       const fields = [
         ...(group.repository ? [] : [element("span", "repository", item.repository)]),
-        subjectMetadata(item),
+        view.subject,
         element("span", "", item.reason.replaceAll("_", " ")),
         ...(!item.direct && item.type !== "CheckSuite" ? [element("span", "destination", item.label)] : []),
         time,
