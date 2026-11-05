@@ -7,10 +7,33 @@ const baseUrl = "https://git.example.com/api/v3";
 const defaultBase = "https://api.github.com";
 
 test("development API help explains how to reload through the command palette", () => {
-  assert.match(html, /id="development-api-help"[^>]*>[^<]*Reload extension after saving with ⌘\+k -> refresh canvas\./);
+  assert.match(html, /id="development-api-help"[^>]*>[^<]*Reload extension after saving with <span id="development-api-shortcut">Ctrl\+K<\/span> -> refresh canvas\./);
   assert.match(html, /refresh canvas\.<\/p>\s*<p id="development-api-auth" class="settings-help">Authenticate the selected host/);
   assert.match(html, /id="development-api-url"[^>]*aria-describedby="development-api-help development-api-auth"/);
 });
+
+for (const [name, navigatorPlatform, userAgentData, shortcut] of [
+  ["Windows", "Win32", undefined, "Ctrl+K"],
+  ["Linux", "Linux x86_64", undefined, "Ctrl+K"],
+  ["macOS", "MacIntel", undefined, "\u2318+K"],
+  ["Windows client hints", "MacIntel", { platform: "Windows" }, "Ctrl+K"],
+  ["macOS client hints", "Win32", { platform: "macOS" }, "\u2318+K"],
+  ["empty client hints", "MacIntel", { platform: "" }, "\u2318+K"],
+  ["unknown platform", "", undefined, "Ctrl+K"],
+  ["missing platform", undefined, undefined, "Ctrl+K"],
+]) {
+  test(`development API shortcut follows the renderer on ${name}, not the provider`, async t => {
+    const ui = await renderer({
+      developmentApi: { baseUrl: defaultBase, savedBaseUrl: defaultBase, requiresReload: false },
+      navigatorPlatform,
+      userAgentData,
+      desktopPlatform: shortcut === "Ctrl+K" ? "darwin" : "win32",
+    });
+    t.after(() => ui.window.events.pagehide());
+    assert.equal(ui.ids.get("development-settings").hidden, false);
+    assert.equal(ui.ids.get("development-api-shortcut").textContent, shortcut);
+  });
+}
 
 test("API controls stay hidden without the source-only capability", async () => {
   const ui = await renderer();

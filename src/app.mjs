@@ -305,6 +305,8 @@ function renderSettings() {
     $("development-api-custom").hidden = $("development-api").value !== "custom";
     $("development-api-save").disabled = settingsBusy;
     $("development-api-active").textContent = `Active API: ${api.baseUrl}`;
+    const platform = navigator.userAgentData?.platform || navigator.platform || "";
+    $("development-api-shortcut").textContent = /^mac/i.test(platform) ? "\u2318+K" : "Ctrl+K";
     $("development-api-reload").hidden = !api.requiresReload;
   }
   renderSettingsError();
