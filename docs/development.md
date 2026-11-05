@@ -356,6 +356,9 @@ but never publishes releases.
 Tests use synthetic GitHub responses and isolated settings: no sign-in, live
 read updates, or OS notifications. SDK stubs do not verify compatibility with a
 specific Copilot build; reload and inspect the real extension after SDK changes.
+The Windows lock checks also verify that existing files and directory links at
+lock paths are refused and preserved before a candidate directory is published.
+Do not rely on a failed directory rename to protect those files on Windows.
 
 ## Copilot cloud agent and code review
 

@@ -112,7 +112,7 @@ test("the published archive installs and upgrades a self-contained provider with
   await mkdir(directory);
   const [archive] = await verifyArchive(resolve("dist"), tag);
   const listing = await execute("tar", ["-tzf", archive]);
-  assert.deepEqual(listing.stdout.trim().split("\n").sort(), ["extension.mjs", "install.mjs", "release.json"]);
+  assert.deepEqual(listing.stdout.trim().split(/\r?\n/).sort(), ["extension.mjs", "install.mjs", "release.json"]);
   await execute("tar", ["-xzf", archive, "-C", directory]);
   const bundle = await loadPackage(directory, tag);
   const installer = join(directory, "install.mjs");
