@@ -934,6 +934,55 @@ test("Windows check alerts resolve direct, suite and inferred destinations after
   }
 });
 
+test("Windows check alerts retain fresh failed-job destinations during inherited backoff", async t => {
+  for (const kind of ["direct", "suite", "inferred"]) {
+    const f = await fixture(t);
+    const reader = f.make({ platform: "win32" });
+    const writer = f.make({ platform: "win32" });
+    await reader.check();
+    await writer.check();
+    const time = f.advance();
+    const row = updated("2", time);
+    row.subject = {
+      type: "CheckSuite", title: "Synthetic build workflow run failed for main branch",
+      url: kind === "direct" ? "https://api.github.com/repos/example/widgets/actions/runs/123"
+        : kind === "suite" ? "https://api.github.com/repos/example/widgets/check-suites/7" : null,
+    };
+    f.response(args => {
+      const endpoint = args.at(-1);
+      if (endpoint.startsWith("/notifications?")) {
+        return endpoint.includes("all=true") ? http({}, { "retry-after": "600" }, 429) : http([row, thread()]);
+      }
+      if (endpoint.includes("/jobs?")) return http({ total_count: 1, jobs: [workflowJob()] });
+      if (endpoint.includes("/actions/runs?")) return http({
+        total_count: 1, workflow_runs: [workflowRun({ check_suite_id: 7, updated_at: new Date(time).toISOString() })],
+      });
+      return http({ status: "completed", conclusion: "failure" });
+    });
+    const page = await reader.client.page(firstPage(), undefined, { force: true });
+    const item = page.items[0];
+    await reader.client.refreshSubjects([item]);
+    const before = reader.client.subjectSnapshot(item);
+    assert.equal(before.subjectLinkTarget, "job");
+    await assert.rejects(writer.client.page(firstPage({ mode: "inbox" }), undefined, { force: true }),
+      { code: "rate_limited" });
+    await writer.check();
+    assert.equal(reader.client.blockedUntil, 0, "backoff will be inherited when the cached arrival is processed");
+    const calls = f.calls.length;
+    await reader.sync();
+    assert.equal(f.calls.length, calls);
+    assert.equal(f.deliveries.length, 1);
+    assert.equal(f.deliveries[0].url, before.url);
+    assert.deepEqual(reader.client.subjectSnapshot(item), before);
+    assert.deepEqual(f.logs, []);
+    assert.equal((await f.state()).blockedUntil, writer.client.serverBlockedUntil);
+    assert.equal((await f.state()).nextPollAt, writer.client.serverBlockedUntil);
+    await reader.sync();
+    assert.equal(f.calls.length, calls);
+    assert.equal(f.deliveries.length, 1, "cached link reuse must not replay activity");
+  }
+});
+
 test("Windows check alerts preserve safe fallbacks and report metadata failures without content", async t => {
   for (const kind of ["run", "ambiguous", "denied", "unsafe", "jobs-denied"]) {
     const f = await fixture(t);

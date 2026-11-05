@@ -55,6 +55,60 @@ test("inferred, suite and direct runs open the unique failed job with the approp
   }
 });
 
+test("fresh check metadata for unchanged activity survives backoff without new requests or extended freshness", async () => {
+  for (const kind of ["inferred", "suite", "direct"]) {
+    let now = 0;
+    const { client, item, calls } = fixture({ kind, now: () => now });
+    await client.refreshSubjects([item]);
+    const before = client.subjectSnapshot(item);
+    const caches = [client.subjectCache, client.checkRunCache, client.jobCache];
+    const entries = caches.map(cache => structuredClone([...cache]));
+    const count = calls.length;
+    client.blockedUntil = client.serverBlockedUntil = 600_000;
+    now = SUBJECT_POLL_MS - 1;
+    await client.refreshSubjects([item]);
+    assert.equal(calls.length, count);
+    assert.deepEqual(client.subjectSnapshot(item), before);
+    assert.deepEqual(caches.map(cache => [...cache]), entries, "fresh metadata and its original deadline must be retained");
+    assert.equal(client.subjectSnapshot(item).url, jobURL);
+    assert.equal(client.blockedUntil, 600_000);
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(client.refreshSubjects([item], controller.signal), { code: "closed" });
+    assert.deepEqual(caches.map(cache => [...cache]), entries, "cancellation cannot rewrite a fresh cache");
+  }
+});
+
+test("expired, invalidated, or changed check activity still uses conservative fallbacks during backoff", async () => {
+  for (const kind of ["inferred", "suite", "direct"]) {
+    for (const change of ["expired", "invalidated", "updated", "expired-job"]) {
+      let now = 0;
+      const { client, item, calls } = fixture({ kind, now: () => now });
+      await client.refreshSubjects([item]);
+      assert.equal(client.subjectSnapshot(item).url, jobURL);
+      const count = calls.length;
+      client.blockedUntil = client.serverBlockedUntil = 600_000;
+      const current = change === "updated" ? { ...item, updatedAt: "2026-01-10T12:01:00Z" } : item;
+      if (change === "expired") now = SUBJECT_POLL_MS;
+      if (change === "invalidated") client.invalidateSubjects([item]);
+      if (change === "expired-job") {
+        for (const entry of client.jobCache.values()) entry.nextRefreshAt = 0;
+      }
+      await client.refreshSubjects([current]);
+      const snapshot = client.subjectSnapshot(current);
+      assert.equal(calls.length, count);
+      assert.notEqual(snapshot.url, jobURL);
+      assert.equal(snapshot.subjectLinkTarget, undefined);
+      assert.ok(snapshot.subjectLinkError || snapshot.subjectStateError);
+      assert.equal(client.blockedUntil, 600_000);
+      if (change === "expired-job") {
+        assert.equal(snapshot.subjectState, "failure", "an unavailable job must not invalidate fresh run status");
+        assert.equal(snapshot.url, kind === "inferred" ? `${runURL}/attempts/1` : runURL);
+      }
+    }
+  }
+});
+
 test("inferred job lookups stay pinned to the named attempt and reject a different attempt", async () => {
   for (const actual of [1, 3, 4]) {
     const { client, item, jobCalls } = fixture({ attempt: 3, jobs: [workflowJob({ run_attempt: actual })] });

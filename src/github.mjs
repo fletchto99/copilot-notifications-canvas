@@ -447,6 +447,7 @@ export class GitHubClient {
     try {
       const result = await this.request(endpoint, signal, "GET", {
         subjectType: item.type, mergeQueue, checkRun, runMatch, runJobs, force: item.updatedAt > (cached?.updatedAt ?? ""),
+        allowCachedDuringBackoff: item.type === "CheckSuite",
       });
       cache.set(endpoint, {
         ...result, updatedAt: cached?.updatedAt > item.updatedAt ? cached.updatedAt : item.updatedAt,
@@ -556,7 +557,7 @@ export class GitHubClient {
     const cached = method === "GET" ? cache.get(endpoint) : undefined;
     if (cached?.error && now < cached.nextRefreshAt) return cached;
     if (allowCachedDuringBackoff && !force && cached && !cached.invalidated &&
-        cached.sequence >= minSequence && now < cached.nextRefreshAt) return cached;
+        (subjectType || cached.sequence >= minSequence) && now < cached.nextRefreshAt) return cached;
     if (this.beforeRequest) {
       await this.beforeRequest();
       if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);

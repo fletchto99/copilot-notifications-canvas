@@ -175,6 +175,10 @@ agent reads, Read/Done writes, each queued batch item, and subject-status
 lookups. Writes recheck after their spacing delay and are only marked in flight
 once preparation succeeds. A longer inherited rate-limit wait replaces stale
 local error messages, but a longer local failure retains its own message.
+Fresh cached check status, run matches, and failed-job links remain usable for
+the same notification activity during backoff, without extending their freshness.
+Expired or invalidated metadata, newer activity, and actual lookup failures
+still use the conservative fallback destinations.
 See [Privacy](../README.md#privacy).
 
 ## Troubleshooting
