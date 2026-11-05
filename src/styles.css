@@ -947,10 +947,6 @@ a:hover {
   margin: 0 6px;
 }
 
-.destination {
-  font-style: italic;
-}
-
 time {
   color: var(--muted);
   font-size: 12px;

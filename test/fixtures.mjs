@@ -10,6 +10,11 @@ export function thread(id = "1", overrides = {}) {
   };
 }
 
+export const staticSubjectTypes = [
+  "Release", "Commit", "Discussion", "RepositoryAdvisory", "RepositoryVulnerabilityAlert",
+  "RepositoryDependabotAlertsThread", "RepositoryInvitation", "WorkflowRun", "AgentSessionThread",
+];
+
 export function http(body = [], headers = {}, status = 200) {
   return `HTTP/2.0 ${status} Synthetic\r\n${Object.entries({ "content-type": "application/json", ...headers }).map(([key, value]) => `${key}: ${value}\r\n`).join("")}\r\n${status === 304 ? "" : JSON.stringify(body)}`;
 }

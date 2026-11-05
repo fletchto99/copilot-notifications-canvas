@@ -83,6 +83,10 @@ output. Development loads source without a build; release builds bundle
   limits, and restrictive response headers. Do not add permissive CORS.
 - Treat notification content as untrusted text and preserve URL validation.
   Maintain accessible names, keyboard/focus behavior, and app theme-token support.
+- Keep visible row metadata limited to repository (when needed), type/number,
+  GitHub reason, and timestamp. Never inject destination hints such as
+  "Open repository releases" or "Open GitHub inbox" into it; navigation
+  explanations belong in screen-reader descriptions only.
 
 ### Inbox and read/done behavior
 

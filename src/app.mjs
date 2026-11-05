@@ -54,6 +54,19 @@ const issueOutline = "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z";
 const pullRequestNodes = "M8 5a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM8 19a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM20 19a2 2 0 1 1-4 0 2 2 0 0 1 4 0Z";
 const pendingCheck = `${issueOutline}M12 7v5l3 2`;
 const failedCheck = "M6 6 18 18M6 18 18 6";
+const bellIcon = "M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9ZM10 21a2 2 0 0 0 4 0";
+const securityIcon = "M12 3 21 6v6c0 5-9 9-9 9s-9-4-9-9V6l9-3ZM12 8v5m0 4h.01";
+const subjectTypeIcons = {
+  Release: "M3 3h7l11 11-7 7L3 10V3ZM7 7h.01",
+  Commit: "M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0ZM3 12h5m8 0h5",
+  Discussion: "M3 4h14v10H8l-5 4V4Zm5 10v4h8l5 3V8h-4",
+  RepositoryAdvisory: securityIcon,
+  RepositoryVulnerabilityAlert: securityIcon,
+  RepositoryDependabotAlertsThread: securityIcon,
+  RepositoryInvitation: "M3 5h18v14H3V5Zm0 0 9 7 9-7",
+  WorkflowRun: "M3 3h6v6H3ZM15 15h6v6h-6ZM6 9v9h9M9 6h9v9",
+  AgentSessionThread: "M5 7h14v13H5V7ZM12 3v4M2 11v5m20-5v5M9 11v2m6-2v2M9 17h6",
+};
 const subjectIcons = {
   Issue: {
     unknown: `${issueOutline}M13 12a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z`,
@@ -131,25 +144,30 @@ function svgIcon(d, size) {
 }
 
 function subjectMetadata(item, field = element("span")) {
-  const type = item.type.replace(/([a-z])([A-Z])/g, "$1 $2");
+  const type = item.type.replace(/([a-z])([A-Z])/g, "$1 $2").trim() || "Notification";
   const labelText = item.number ? `${type} #${item.number}` : type;
-  if (!Object.hasOwn(subjectIcons, item.type)) {
-    field.className = "notification-type";
-    setControlText(field, labelText);
-    return field;
-  }
   if (!field.children.length) {
     const icon = element("span", "subject-icon");
+    icon.setAttribute("role", "img");
     icon.append(svgIcon("", 16));
     field.append(icon, element("span", "notification-type"));
   }
   const [icon, label] = field.children;
   setControlText(label, labelText);
+  field.dataset.subjectType = item.type;
+  if (!Object.hasOwn(subjectIcons, item.type)) {
+    field.className = "notification-subject";
+    icon.querySelectorAll("path")[0].setAttribute("d",
+      Object.hasOwn(subjectTypeIcons, item.type) ? subjectTypeIcons[item.type] : bellIcon);
+    icon.dataset.description = type;
+    delete icon.dataset.checkedAt;
+    updateSubjectDescription(icon);
+    return field;
+  }
   const status = Object.hasOwn(subjectIcons[item.type], item.subjectState) ? item.subjectState : "unknown";
   const linkLoading = item.subjectLinkLoading === true;
   const loading = linkLoading || item.subjectLoading === true && status === "unknown" && !item.subjectStateError;
   field.className = `notification-subject subject-${loading ? "loading" : status.replaceAll("_", "-")}`;
-  field.dataset.subjectType = item.type;
   icon.querySelectorAll("path")[0].setAttribute("d", loading ? "M21 12a9 9 0 1 1-9-9" : subjectIcons[item.type][status]);
   const stateLabel = subjectLabels[status] ?? (linkLoading ? "Loading run destination" : item.subjectStateError ? "Status unavailable" : loading ? "Loading status" : "Status not loaded yet");
   const description = `${type}: ${stateLabel}${linkLoading && status !== "unknown" ? ". Loading run destination" : ""}${item.subjectStateSource === "notification"
@@ -160,7 +178,6 @@ function subjectMetadata(item, field = element("span")) {
   icon.dataset.description = description;
   if (Number.isFinite(item.subjectCheckedAt) && item.subjectCheckedAt >= 0) icon.dataset.checkedAt = String(item.subjectCheckedAt);
   else delete icon.dataset.checkedAt;
-  icon.setAttribute("role", "img");
   updateSubjectDescription(icon);
   return field;
 }
@@ -933,10 +950,8 @@ function renderRowSubject(view, item) {
     view.link.href = item.url;
     for (const attribute of ["role", "aria-disabled", "aria-busy"]) view.link.removeAttribute(attribute);
   }
-  if (view.destination) {
-    view.destination.hidden = loading || item.direct && item.subjectLinkSource !== "inferred" && item.subjectLinkTarget !== "job";
-    view.destination.textContent = view.destination.hidden ? "" : item.label;
-  }
+  view.destination.hidden = loading || item.direct && item.subjectLinkSource !== "inferred" && item.subjectLinkTarget !== "job";
+  view.destination.textContent = view.destination.hidden ? "" : item.label;
   view.subject = subjectMetadata(item, view.subject);
 }
 
@@ -948,7 +963,6 @@ function renderGroups(groups, fallbackFocusKey) {
     ...group, items: group.items.map(item => [
       item.id, item.repository, item.title, item.type, item.number, item.reason,
       item.unread, item.updatedAt, item.apiPosition,
-      item.type === "CheckSuite" ? null : [item.direct, item.label],
     ]),
   })));
   if (key === listKey) {
@@ -1000,7 +1014,7 @@ function renderGroups(groups, fallbackFocusKey) {
       const content = element("div", "row-content");
       const title = element("span", "title", item.title || "(Untitled notification)");
       const link = element("a", "row-link");
-      const view = { link, destination: item.type === "CheckSuite" ? element("span", "sr-only") : null };
+      const view = { link, destination: element("span", "sr-only") };
       renderRowSubject(view, item);
       rowViews.set(item.id, view);
       link.target = "_blank";
@@ -1021,7 +1035,7 @@ function renderGroups(groups, fallbackFocusKey) {
       link.dataset.threadId = item.id;
       content.append(title);
       content.append(element("span", "sr-only", item.unread ? "Unread" : "Read"));
-      if (view.destination) content.append(view.destination);
+      content.append(view.destination);
       const metadata = element("div", "metadata");
       const time = element("time", "", relativeTime(item.updatedAt));
       time.dateTime = item.updatedAt;
@@ -1031,7 +1045,6 @@ function renderGroups(groups, fallbackFocusKey) {
         ...(group.repository ? [] : [element("span", "repository", item.repository)]),
         view.subject,
         element("span", "", item.reason.replaceAll("_", " ")),
-        ...(!item.direct && item.type !== "CheckSuite" ? [element("span", "destination", item.label)] : []),
         time,
       ];
       for (const [index, field] of fields.entries()) {
