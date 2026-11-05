@@ -168,3 +168,50 @@ test("committing a selection during a poll requests a fresh snapshot after that 
     ui.inbox.close();
   }
 });
+
+test("a snapshot changed by another panel immediately restarts stale uploads without showing an outage", async () => {
+  const initialRows = rows(250);
+  let changed = false;
+  const ui = await renderer({
+    initialRows,
+    onSubjects: async input => {
+      if (input.offset === 100 && !changed) {
+        changed = true;
+        await ui.inbox.markDone({ id: initialRows[0].id });
+      }
+    },
+  });
+  try {
+    await sync(ui);
+    assert.equal(ui.ids.get("notice").hidden, true);
+    assert.equal(ui.ids.get("groups").querySelectorAll(".row-link").length, 249);
+    await sync(ui);
+    assert.equal(ui.ids.get("notice").hidden, true);
+    assert.deepEqual(ui.subjectSelections.at(-1), initialRows.slice(1).map(row => row.id));
+    assert.deepEqual(selectionCalls(ui).map(({ version, offset }) => [version, offset]),
+      [[1, 0], [1, 100], [2, 0], [2, 100], [2, 200]]);
+    assert.equal(ui.animationFrames.size, 0);
+  } finally {
+    ui.window.events.pagehide();
+    ui.inbox.close();
+  }
+});
+
+test("malformed status selection responses stay explicit errors rather than triggering stale retries", async () => {
+  for (const result of [
+    null, {}, { status: "pending", version: -1 }, { status: "stale", version: "1" },
+    { status: "complete", version: 1 }, { status: "pending", version: 2 },
+  ]) {
+    const ui = await renderer({ initialRows: rows(150), onSubjects: async () => result });
+    try {
+      await sync(ui);
+      assert.match(ui.ids.get("notice").textContent, /invalid status selection response/);
+      assert.equal(selectionCalls(ui).length, 1);
+      assert.deepEqual(ui.subjectSelections, []);
+      assert.equal(ui.animationFrames.size, 0);
+    } finally {
+      ui.window.events.pagehide();
+      ui.inbox.close();
+    }
+  }
+});

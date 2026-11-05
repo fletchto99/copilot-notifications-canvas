@@ -137,6 +137,10 @@ current loaded snapshot, rather than putting notification IDs in every request.
 Large loaded lists therefore do not hit a selection-header limit or block
 refresh, search, Read, or Done. Incomplete selections never start new lookups;
 changed views discard the remaining chunks and send a fresh selection.
+If an inbox action or refresh changes the snapshot while a chunk is in flight,
+the provider reports that the selection is stale and the panel reloads the
+current snapshot immediately. This normal race does not show an outage warning
+or delay the inbox action.
 Status-selection failures are reported in the panel and retried automatically
 without disabling inbox actions.
 Up to twenty status lookups run concurrently across panels sharing the provider;

@@ -157,12 +157,16 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         positions.some(position => !Number.isSafeInteger(position) || position < 0)) {
       throw new InboxError("invalid_subject_selection", "Send a bounded chunk of loaded notification positions.", 400);
     }
-    const shown = inbox.shownSelection();
-    if (selectionKey !== shown.selectionKey ||
-        (offset === 0 ? version <= subjectSelectionVersion :
-          version !== subjectSelectionVersion || pendingSubjectSelection?.selectionKey !== selectionKey ||
-          offset !== pendingSubjectSelection.positions.size)) {
+    if (offset === 0 ? version <= subjectSelectionVersion :
+        version !== subjectSelectionVersion || pendingSubjectSelection?.selectionKey !== selectionKey ||
+        offset !== pendingSubjectSelection.positions.size) {
       throw new InboxError("stale_subject_selection", "The notification view changed. Status selection will retry with the current view.", 409);
+    }
+    const shown = inbox.shownSelection();
+    if (selectionKey !== shown.selectionKey) {
+      // Inbox actions can supersede an otherwise valid upload while it is in flight.
+      if (pendingSubjectSelection?.selectionKey === selectionKey) pendingSubjectSelection = undefined;
+      return { status: "stale", version: subjectSelectionVersion };
     }
     const previous = offset === 0 ? new Set() : pendingSubjectSelection.positions;
     if (positions.some(position => position >= shown.items.length || previous.has(position)) ||
@@ -180,7 +184,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
       pendingSubjectSelection = undefined;
     }
     orderSubjects();
-    return { version: subjectSelectionVersion };
+    return { status: complete ? "complete" : "pending", version: subjectSelectionVersion };
   };
   const snapshot = () => {
     const state = inbox.snapshot();

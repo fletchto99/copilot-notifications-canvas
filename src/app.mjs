@@ -238,17 +238,27 @@ async function syncSubjectSelection() {
   const version = subjectSelectionVersion = Math.max(subjectSelectionVersion, state.subjectSelectionVersion ?? 0) + 1;
   subjectSelectionPending = true;
   lastSubjectSelection = undefined;
-  let completed = false;
+  let refreshNeeded = false;
   try {
     for (let offset = 0; ; offset += 100) {
       if (expandedSubjectSelection() !== selection) return;
       const complete = offset + 100 >= positions.length;
-      await api("subjects", { version, selectionKey, offset, positions: positions.slice(offset, offset + 100), complete });
+      const result = await api("subjects", { version, selectionKey, offset, positions: positions.slice(offset, offset + 100), complete });
+      if (!Number.isSafeInteger(result?.version) || result.version < 0 ||
+          !["stale", complete ? "complete" : "pending"].includes(result.status) ||
+          result.status !== "stale" && result.version !== version) {
+        throw new Error("The provider returned an invalid status selection response.");
+      }
+      subjectSelectionVersion = Math.max(subjectSelectionVersion, result.version);
+      if (result.status === "stale") {
+        refreshNeeded = true;
+        return;
+      }
       if (complete) break;
     }
     lastSubjectSelection = selection;
     subjectSelectionError = "";
-    completed = true;
+    refreshNeeded = true;
   } catch (error) {
     if (!visible() && error.name === "AbortError") return;
     subjectSelectionError = `Notification status loading paused. ${error.name === "AbortError"
@@ -257,7 +267,7 @@ async function syncSubjectSelection() {
   } finally {
     subjectSelectionPending = false;
     render();
-    if (completed) {
+    if (refreshNeeded) {
       await pollPromise;
       void update();
     }

@@ -55,7 +55,8 @@ test("large selections use bounded chunks, publish atomically and leave ordinary
     assert.ok(Buffer.byteLength(JSON.stringify(input)) <= 4096);
     const selected = await f.call("subjects", input);
     assert.equal(selected.status, 200);
-    assert.deepEqual(selected.data, { version: 1 }, "Chunks do not return entire inbox snapshots");
+    assert.deepEqual(selected.data, { status: input.complete ? "complete" : "pending", version: 1 },
+      "Chunks do not return entire inbox snapshots");
     if (!input.complete) {
       assert.equal((await f.call("state")).data.subjectsLoading, false);
       assert.equal(f.statuses().length, 0, "An incomplete upload must not dispatch lookups");
@@ -110,7 +111,10 @@ test("refresh, filters and triage invalidate position mappings instead of select
         action === "filters" ? { query: "issue 2" } : { id: f.rows[0].id });
       assert.equal(result.status, 200, "Ordinary actions remain available during an upload");
       const stale = await f.select({ offset: 1, positions: [1], complete: true });
-      assert.equal(stale.status, 409);
+      assert.equal(stale.status, 200);
+      assert.deepEqual(stale.data, { status: "stale", version: 1 });
+      assert.equal((await f.select({ offset: 1, positions: [1], complete: true })).status, 409,
+        "A stale snapshot discards its pending upload; chunks cannot continue it");
       await f.call("state");
       assert.equal(f.statuses().length, 0);
       const current = (await f.call("state")).data;
@@ -120,7 +124,21 @@ test("refresh, filters and triage invalidate position mappings instead of select
       const expected = action === "refresh" ? 3 : action === "filters" || action === "done" ? 2 : 1;
       assert.deepEqual(f.statuses().map(({ path }) => path), [`/repos/example/widgets/issues/${expected}`]);
     });
+
   }
+});
+
+test("a stale first chunk requests a fresh snapshot without clearing an existing selection", async t => {
+  const f = await setup(t, 3);
+  assert.equal((await f.select({ positions: [0] })).status, 200);
+  const stale = await f.select({ version: 2, selectionKey: "a".repeat(64), positions: [999], complete: false });
+  assert.equal(stale.status, 200);
+  assert.deepEqual(stale.data, { status: "stale", version: 1 });
+  await f.call("state");
+  await f.finish();
+  assert.deepEqual(f.statuses().map(({ path }) => path), ["/repos/example/widgets/issues/1"]);
+  assert.equal((await f.select({ version: 2, positions: [999] })).status, 400,
+    "Positions outside the current snapshot remain invalid");
 });
 
 test("status selection retains authentication, same-origin POST and request-size limits", async t => {

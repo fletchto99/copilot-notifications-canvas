@@ -270,7 +270,11 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       calls.push({ path, options });
       if (path === "/api/subjects") {
         const input = JSON.parse(options.body);
-        if (onSubjects) await onSubjects(input);
+        const result = await onSubjects?.(input);
+        if (result !== undefined) return { ok: true, json: async () => result };
+        if (input.selectionKey !== inbox.shownSelection().selectionKey) {
+          return { ok: true, json: async () => ({ status: "stale", version: subjectSelectionVersion }) };
+        }
         subjectSelectionVersion = input.version;
         if (input.offset === 0) subjectPositions = [];
         assert.equal(input.offset, subjectPositions.length);
@@ -281,7 +285,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
           const shown = inbox.shownSelection().items;
           subjectSelections.push(subjectPositions.map(position => shown[position]?.id));
         }
-        return { ok: true, json: async () => ({ version: subjectSelectionVersion }) };
+        return { ok: true, json: async () => ({ status: input.complete ? "complete" : "pending", version: subjectSelectionVersion }) };
       }
       if (path === "/api/settings" || path === "/api/development") {
         const input = options.body ? JSON.parse(options.body) : undefined;
