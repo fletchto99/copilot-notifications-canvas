@@ -16,6 +16,26 @@ const lintStyles = code => stylelint.lint({
   code, configFile: fileURLToPath(new URL("../stylelint.config.mjs", import.meta.url)),
 });
 
+test("ESLint file globs preserve runtime, browser and ignored-file boundaries", async () => {
+  for (const [path, code, expectedRules] of [
+    ["src/app.mjs", "window.location.reload();", []],
+    ["src/lint-fixture.mjs", "window.location.reload();", ["no-undef"]],
+    ["src/lint-fixture.mjs", "process.exitCode = 1;", []],
+    ["src/lint-fixture.mjs", 'console.log("fixture");', ["no-console"]],
+    ["test/browser/lint-fixture.spec.mjs", "window.location.reload();", []],
+    [".github/extensions/github-notifications/lint-fixture.mjs", 'console.log("fixture");', ["no-console"]],
+    ["scripts/lint-fixture.mjs", 'console.log("fixture");', []],
+  ]) {
+    const filePath = fileURLToPath(new URL(`../${path}`, import.meta.url));
+    assert.equal(await eslint.isPathIgnored(filePath), false, path);
+    const [result] = await eslint.lintText(code, { filePath });
+    assert.deepEqual(result.messages.map(message => message.ruleId), expectedRules, path);
+  }
+  for (const path of ["node_modules/fixture/index.mjs", "dist/extension.mjs", "coverage/report.mjs", "src/artifacts/fixture.mjs"]) {
+    assert.equal(await eslint.isPathIgnored(fileURLToPath(new URL(`../${path}`, import.meta.url))), true, path);
+  }
+});
+
 test("served recovery JavaScript and CSS pass the browser ESLint and Stylelint rules", async t => {
   let githubCalls = 0;
   const inbox = new Inbox(new GitHubClient({ run: async () => {

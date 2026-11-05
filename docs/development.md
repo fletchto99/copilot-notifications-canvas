@@ -15,6 +15,15 @@ use a current patched release. With nvm, run
 support Node.js 22 or later; their dependency-free tests retain Node.js 22
 coverage.
 
+The tooling dependencies temporarily override `minimatch` to `11.0.3` only
+under `eslint` and `@eslint/config-array` to address
+[GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249).
+Both upstream packages still require the affected major version. Remove these
+overrides once their dependency ranges and the lockfile resolve to patched
+versions without them. After changing the overrides, run `npm run lint`,
+including the recovery lint tests, to check file matching and rule enforcement.
+This dependency is not part of the shipped extension.
+
 Provider modules and renderer assets live in `src/`. The entry point at
 `.github/extensions/github-notifications/extension.mjs` imports
 `src/extension.mjs`, so opening this repository as a Copilot project loads the

@@ -23,6 +23,14 @@
     "build": "node scripts/build-release.mjs",
     "test:package": "node --test test/package.integration.mjs"
   },
+  "overrides": {
+    "eslint": {
+      "minimatch": "11.0.3"
+    },
+    "@eslint/config-array": {
+      "minimatch": "11.0.3"
+    }
+  },
   "devDependencies": {
     "@axe-core/playwright": "4.14.0",
     "@eslint/js": "10.0.1",
