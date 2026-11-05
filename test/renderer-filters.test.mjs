@@ -325,6 +325,68 @@ test("latest tab and search edits are merged while a filter request is in flight
   ]);
 });
 
+test("queued empty tabs retain focus through in-flight responses, retries and newer selections", async t => {
+  for (const outcome of ["success", "retry", "superseded"]) {
+    let hold = false;
+    const requests = [];
+    const ui = await renderer({
+      initialRows: [thread("1", { reason: "review_requested" }), thread("2", { reason: "mention" })],
+      onFilters: () => hold ? new Promise((resolve, reject) => requests.push({ resolve, reject })) : undefined,
+    });
+    t.after(() => {
+      hold = false;
+      for (const request of requests) request.resolve();
+      ui.window.events.pagehide();
+      ui.inbox.close();
+    });
+    const mentioned = tab(ui, "mentioned");
+    mentioned.focus();
+    await mentioned.events.click();
+    ui.inbox.onThreadUpdated("2");
+    await runInContext("update()", ui.context);
+    assert.equal(mentioned.textContent, "Mentioned (0)");
+    hold = true;
+    const first = mentioned.events.keydown({ key: "ArrowRight", preventDefault() {} });
+    await settle();
+    await tab(ui, "review_requested").events.keydown({ key: "ArrowLeft", preventDefault() {} });
+    assert.equal(ui.document.activeElement, mentioned);
+    requests[0].resolve();
+    await first;
+    await settle();
+    assert.equal(requests.length, 2);
+    assert.equal(ui.inbox.filters.attention, "review_requested");
+    assert.equal(mentioned.hidden, false, `${outcome}: queued destination stays visible`);
+    assert.equal(ui.document.activeElement, mentioned, `${outcome}: intermediate response retains focus`);
+    await runInContext("render()", ui.context);
+    assert.equal(mentioned.hidden, false, `${outcome}: in-flight destination stays visible`);
+    assert.equal(ui.document.activeElement, mentioned);
+    assert.deepEqual(ui.ids.get("attention-tabs").children.filter(tab => tab.tabIndex === 0).map(tab => tab.id),
+      ["attention-mentioned"]);
+    if (outcome === "superseded") {
+      await mentioned.events.keydown({ key: "Home", preventDefault() {} });
+    }
+    hold = false;
+    if (outcome === "retry") {
+      requests[1].reject(new Error("Synthetic filter failure"));
+      await settle();
+      assert.match(ui.ids.get("notice").textContent, /Synthetic filter failure/);
+      assert.equal(mentioned.hidden, false);
+      assert.equal(ui.document.activeElement, mentioned);
+      await ui.fireTimer();
+    } else {
+      requests[1].resolve();
+      await settle();
+    }
+    const expected = outcome === "superseded" ? "all" : "mentioned";
+    assert.equal(ui.inbox.filters.attention, expected);
+    assert.equal(ui.document.activeElement, tab(ui, expected));
+    assert.equal(tab(ui, expected).getAttribute("aria-selected"), "true");
+    await tab(ui, expected).events.keydown({ key: "Home", preventDefault() {} });
+    assert.equal(mentioned.hidden, true, `${outcome}: obsolete destination no longer stays visible`);
+    assert.equal(ui.document.activeElement, tab(ui, "all"));
+  }
+});
+
 test("keyboard navigation moves the tab stop immediately, before filtering completes", async () => {
   let release;
   const ui = await renderer({ initialRows: rows, onFilters: () => new Promise(resolve => { release = resolve; }) });

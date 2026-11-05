@@ -17,6 +17,7 @@ let overlayFrame;
 let refreshStatusKey;
 let searchTimer;
 let pendingFilters;
+let inFlightAttention;
 let pendingRefresh = false;
 let refreshing = false;
 let pollPromise;
@@ -544,11 +545,13 @@ async function blockingUpdate(path, input) {
   let succeeded = false;
   busy = true;
   refreshing = path === "refresh";
+  inFlightAttention = path === "filters" ? input.attention : undefined;
   renderControls();
   try {
     await pollPromise;
     if (path === "filters" && pendingFilters) {
       input = { ...input, ...pendingFilters };
+      inFlightAttention = input.attention;
       pendingFilters = undefined;
       clearTimeout(searchTimer);
     }
@@ -556,6 +559,7 @@ async function blockingUpdate(path, input) {
   } finally {
     busy = false;
     refreshing = false;
+    inFlightAttention = undefined;
     if (!succeeded && path === "filters") pendingFilters = { ...input, ...pendingFilters };
     render();
     restoreFocus(previousFocus);
@@ -883,6 +887,7 @@ function render(fallbackFocusKey) {
   const cleared = Boolean(state && !state.loaded && (state.hasMore || state.needsRefresh));
   const caughtUp = Boolean(state && !error && !loading && !filtered && !state.groups.length && !cleared);
   const attention = state?.filters.attention ?? "all";
+  const requestedAttention = pendingFilters?.attention ?? inFlightAttention;
   let focusedTab = [...attentionTabs.values()].find(tab => tab === document.activeElement);
   let tabsChanged = false;
   for (const { value, label } of attentionFilters) {
@@ -890,14 +895,14 @@ function render(fallbackFocusKey) {
     const text = state ? `${label} (${state.attentionCounts[value]})` : label;
     const selected = String(value === attention);
     const hidden = Boolean(preferences?.hideEmptyTabs && state?.attentionCounts[value] === 0 &&
-      value !== "all" && value !== attention);
+      value !== "all" && value !== attention && value !== requestedAttention);
     if (tab.textContent !== text || tab.getAttribute("aria-selected") !== selected || tab.hidden !== hidden) tabsChanged = true;
     tab.textContent = text;
     tab.setAttribute("aria-selected", selected);
     tab.hidden = hidden;
   }
   if (focusedTab?.hidden) {
-    focusedTab = attentionTabs.get(attention);
+    focusedTab = attentionTabs.get(requestedAttention ?? attention);
     focusedTab.focus({ preventScroll: true });
   }
   for (const [value, tab] of attentionTabs) {

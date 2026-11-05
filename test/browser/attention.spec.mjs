@@ -145,6 +145,52 @@ for (const packaged of [false, true]) {
       expect(canvas.doneWrites).toEqual(["1"]);
     });
 
+    for (const [away, back, reason, label] of [
+      ["ArrowRight", "ArrowLeft", "review_requested", "Review Requested"],
+      ["Home", "End", "subscribed", "All"],
+    ]) {
+      test(`${away} then ${back} preserves empty-tab focus across delayed filter responses`, async ({ page, canvas }) => {
+        canvas.rows.splice(2);
+        canvas.rows[0].reason = reason;
+        canvas.rows[1].reason = "mention";
+        await page.goto(canvas.url);
+        await page.getByRole("tab", { name: "Mentioned (1)", exact: true }).click();
+        await page.locator('[data-focus-key="done:2"]').click();
+        const mentioned = page.getByRole("tab", { name: "Mentioned (0)", exact: true });
+        await expect(mentioned).toHaveAttribute("aria-selected", "true");
+        await mentioned.focus();
+        let hold = true;
+        const releases = [];
+        await page.route("**/api/filters", async route => {
+          if (hold) await new Promise(resolve => releases.push(resolve));
+          await route.continue();
+        });
+        try {
+          await page.keyboard.press(away);
+          await expect.poll(() => releases.length).toBe(1);
+          await expect(page.getByRole("tab", { name: `${label} (1)`, exact: true })).toBeFocused();
+          await page.keyboard.press(back);
+          await expect(mentioned).toBeFocused();
+          releases[0]();
+          await expect.poll(() => releases.length).toBe(2);
+          await expect(mentioned).toBeVisible();
+          await expect(mentioned).toBeFocused();
+          await expect(mentioned).toHaveAttribute("tabindex", "0");
+          hold = false;
+          releases[1]();
+          await expect(mentioned).toHaveAttribute("aria-selected", "true");
+          await expect(mentioned).toBeFocused();
+          await page.keyboard.press("Home");
+          await expect(page.getByRole("tab", { name: "All (1)", exact: true })).toBeFocused();
+          await expect(page.locator("#attention-mentioned")).toBeHidden();
+          expect(canvas.doneWrites).toEqual(["2"]);
+        } finally {
+          hold = false;
+          for (const release of releases) release();
+        }
+      });
+    }
+
     test("hidden tabs reappear when older matching notifications are loaded", async ({ page, canvas }) => {
       canvas.rows.splice(51);
       for (const row of canvas.rows) row.reason = "subscribed";
