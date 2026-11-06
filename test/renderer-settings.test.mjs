@@ -254,6 +254,106 @@ test("Settings activation dismisses its tooltip without preventing pointer or ke
   }
 });
 
+test("Escape leaves open select pickers to the browser before dismissing Settings", async t => {
+  const ui = await renderer();
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  const settings = ui.ids.get("settings");
+  const select = ui.ids.get("theme");
+  let pickerOpen = true;
+  let prevented = false;
+  ui.window.CSS = { supports: selector => selector === "selector(select:open)" };
+  ui.document.querySelector = selector => {
+    assert.equal(selector, "select:open");
+    return pickerOpen ? select : null;
+  };
+  settings.open = true;
+  select.focus();
+  ui.document.events.keydown({ key: "Escape", target: select, preventDefault: () => { prevented = true; } });
+  assert.equal(prevented, false);
+  assert.equal(settings.open, true);
+  assert.equal(ui.document.activeElement, select);
+  pickerOpen = false;
+  ui.document.events.keydown({ key: "Escape", target: select, preventDefault: () => { prevented = true; } });
+  assert.equal(prevented, true);
+  assert.equal(settings.open, false);
+  assert.equal(ui.document.activeElement, ui.ids.get("settings-toggle"));
+});
+
+test("saving a focused picker option returns focus to its select, including failures and queued saves", async t => {
+  for (const queued of [false, true]) {
+    for (const fail of [false, true]) {
+      let reads = 0;
+      let finish;
+      const ui = await renderer({ storedSettings: { groupBy: "repo" }, onSettings: input => {
+        if (!input && ++reads === 3 && queued) return new Promise(resolve => { finish = resolve; });
+        if (input && fail) throw new Error("Synthetic settings failure.");
+      } });
+      t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+      if (queued) {
+        ui.ids.get("settings").open = true;
+        ui.ids.get("settings").events.toggle();
+        await settle();
+        await ui.fireTimer();
+        assert.equal(typeof finish, "function");
+      }
+      const select = ui.ids.get("group-by");
+      const option = ui.document.createElement("option");
+      select.append(option);
+      option.focus();
+      select.value = "none";
+      select.events.change();
+      finish?.();
+      await settle();
+      assert.equal(select.disabled, false);
+      assert.equal(select.value, fail ? "repo" : "none");
+      assert.equal(ui.document.activeElement, select);
+      assert.equal(ui.ids.get("settings-error").hidden, !fail);
+    }
+  }
+});
+
+test("background settings polls preserve focus for disabled and untouched picker options", async t => {
+  for (const id of ["show-notifications", "theme", "group-by"]) {
+    const ui = await renderer();
+    t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+    ui.ids.get("settings").open = true;
+    ui.ids.get("settings").events.toggle();
+    await settle();
+    const select = ui.ids.get(id);
+    const option = ui.document.createElement("option");
+    select.append(option);
+    option.focus();
+    await ui.fireTimer();
+    assert.equal(select.disabled, false);
+    assert.equal(ui.document.activeElement, id === "show-notifications" ? select : option);
+    assert.equal(ui.ids.get("settings").open, true);
+    assert.equal(ui.calls.some(call => call.path === "/api/settings" && call.options.body), false);
+  }
+});
+
+test("background picker focus restoration does not steal focus moved during the read", async t => {
+  let reads = 0;
+  let finish;
+  const ui = await renderer({ onSettings: input => {
+    if (!input && ++reads === 3) return new Promise(resolve => { finish = resolve; });
+  } });
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  ui.ids.get("settings").open = true;
+  ui.ids.get("settings").events.toggle();
+  await settle();
+  const select = ui.ids.get("show-notifications");
+  const option = ui.document.createElement("option");
+  select.append(option);
+  option.focus();
+  await ui.fireTimer();
+  assert.equal(typeof finish, "function");
+  ui.ids.get("search").focus();
+  finish();
+  await settle();
+  assert.equal(select.disabled, false);
+  assert.equal(ui.document.activeElement, ui.ids.get("search"));
+});
+
 test("tooltips prefer above, flip near the top edge and follow viewport changes without undoing dismissal", async t => {
   const ui = await renderer();
   t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
@@ -884,17 +984,23 @@ test("Match Copilot follows the app theme and falls back to OS changes only when
   const ui = await renderer({ appColorMode: "dark", systemDark: false });
   assert.equal(ui.ids.get("theme").value, "system");
   assert.equal(ui.document.documentElement.dataset.notificationTheme, undefined);
+  assert.equal(ui.document.documentElement.style.colorScheme, "dark");
   ui.setSystemTheme(true);
   assert.equal(ui.document.documentElement.dataset.notificationTheme, undefined);
+  assert.equal(ui.document.documentElement.style.colorScheme, "dark");
   ui.setAppTheme("light");
   assert.equal(ui.document.documentElement.dataset.notificationTheme, undefined);
+  assert.equal(ui.document.documentElement.style.colorScheme, "light");
   ui.setAppTheme(null);
   assert.equal(ui.document.documentElement.dataset.notificationTheme, "dark");
+  assert.equal(ui.document.documentElement.style.colorScheme, "dark");
   ui.setSystemTheme(false);
   assert.equal(ui.document.documentElement.dataset.notificationTheme, "light");
+  assert.equal(ui.document.documentElement.style.colorScheme, "light");
   ui.document.body.setAttribute("data-color-mode", "light");
   ui.setSystemTheme(true);
   assert.equal(ui.document.documentElement.dataset.notificationTheme, undefined);
+  assert.equal(ui.document.documentElement.style.colorScheme, "light");
   assert.equal(ui.ids.get("theme").value, "system");
   assert.equal(ui.calls.some(call => call.path === "/api/settings" && call.options.body), false);
   ui.window.events.pagehide();
@@ -909,23 +1015,28 @@ test("custom app theme tones retain host colors and explicit overrides still win
       host.setAttribute("data-theme-tone", tone);
       ui.setSystemTheme(tone !== "dark");
       assert.equal(ui.document.documentElement.dataset.notificationTheme, undefined);
+      assert.equal(ui.document.documentElement.style.colorScheme, tone);
       const theme = ui.ids.get("theme");
       theme.value = "dark";
       theme.events.change();
       await settle();
       assert.equal(ui.document.documentElement.dataset.notificationTheme, "dark");
+      assert.equal(ui.document.documentElement.style.colorScheme, "dark");
       theme.value = "system";
       theme.events.change();
       await settle();
       assert.equal(ui.document.documentElement.dataset.notificationTheme, undefined);
+      assert.equal(ui.document.documentElement.style.colorScheme, tone);
     }
     host.removeAttribute("data-theme-tone");
     ui.setSystemTheme(true);
     assert.equal(ui.document.documentElement.dataset.notificationTheme, "dark");
+    assert.equal(ui.document.documentElement.style.colorScheme, "dark");
     host.setAttribute("data-theme-tone", "auto");
     host.setAttribute("data-color-mode", "light");
     ui.setSystemTheme(true);
     assert.equal(ui.document.documentElement.dataset.notificationTheme, undefined);
+    assert.equal(ui.document.documentElement.style.colorScheme, "light");
   }
 });
 
@@ -949,10 +1060,12 @@ test("Dark, Light and Match Copilot choices persist across panels without changi
       ui.setSystemTheme(mode === "dark");
       assert.equal(select.value, theme);
       assert.equal(ui.document.documentElement.dataset.notificationTheme, theme === "system" ? undefined : theme);
+      assert.equal(ui.document.documentElement.style.colorScheme, theme === "system" ? mode : theme);
     }
     const reopened = await renderer({ storedSettings, appColorMode: "dark", systemDark: true });
     assert.equal(reopened.ids.get("theme").value, theme);
     assert.equal(reopened.document.documentElement.dataset.notificationTheme, theme === "system" ? undefined : theme);
+    assert.equal(reopened.document.documentElement.style.colorScheme, theme === "system" ? "dark" : theme);
     reopened.window.events.pagehide();
   }
   assert.deepEqual(ui.calls.filter(call => call.path === "/api/settings" && call.options.body)

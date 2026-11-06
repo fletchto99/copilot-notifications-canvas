@@ -76,7 +76,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     get disabled() { return this._disabled; }
     set disabled(value) {
       this._disabled = Boolean(value);
-      if (value && !retainDisabledFocus && document.activeElement === this) document.activeElement = document.body;
+      if (value && !retainDisabledFocus && this.contains(document.activeElement)) document.activeElement = document.body;
     }
     get hidden() { return this._hidden; }
     set hidden(value) {
@@ -127,6 +127,12 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       document.activeElement = this;
     }
     contains(node) { return this === node || this.children.some(child => child.contains(node)); }
+    closest(selector) {
+      for (let node = this; node; node = node.parentNode) {
+        if (node.tag === selector) return node;
+      }
+      return null;
+    }
     matches(selector) {
       return selector === ":focus-visible" ? this.focusVisible !== false : selector === ":hover" && this.hovered === true;
     }

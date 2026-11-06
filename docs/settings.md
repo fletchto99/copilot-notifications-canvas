@@ -21,11 +21,17 @@ without a reload. This is the renamed
 **System** option; existing saved choices are unchanged. Explicit
 **Dark** and **Light** use the extension's fixed palettes, so their borders and
 accents can differ from Copilot in the same color mode. Theme selection does not
-change layout or spacing.
+change layout or spacing. Native dropdowns follow the active light/dark mode,
+and their option text and backgrounds use the canvas palette where supported
+by the browser. Webviews that support customizable selects also show rounded,
+padded menus with theme-aware highlights and a selection checkmark. Older
+webviews keep the readable platform-native popup. Both use the browser's built-in
+selection and keyboard behavior.
 
 The saved grouping values remain `repo`, `none`, and `date`; the display labels
 do not change existing preferences. Press Escape, click outside Settings, or move
-keyboard focus outside it to close the panel.
+keyboard focus outside it to close the panel. When a dropdown is open, Escape
+dismisses that picker first; press it again to close Settings.
 Settings stays within the canvas viewport, scrolling internally when needed.
 It opens above its button when that offers more space and closes if the button
 scrolls out of view. Labels and dropdowns stack when needed to accommodate wider
