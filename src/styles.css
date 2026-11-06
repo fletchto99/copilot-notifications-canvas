@@ -898,14 +898,19 @@ a:hover {
 .notification-subject {
   display: inline-flex;
   align-items: baseline;
-  flex-wrap: wrap;
   gap: 4px;
+}
+
+.notification-type {
+  min-width: 0;
 }
 
 .subject-icon {
   display: inline-flex;
-  align-self: center;
+  align-self: flex-start;
+  align-items: center;
   flex-shrink: 0;
+  height: 1lh;
 }
 
 .subject-open .subject-icon,
