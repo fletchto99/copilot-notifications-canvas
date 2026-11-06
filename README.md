@@ -12,7 +12,7 @@ showing read and unread inbox items; choose **Unread only** to narrow the view. 
 stay hidden in both views. Search, mark rows
 or groups as read or done, and opt into desktop notifications or auto-open.
 
-![GitHub Notifications canvas with a compact title toolbar, full-width search, and attention tabs above ten synthetic notifications, seven unread, across three example repositories with pull request status icons including a yellow merge-queue icon, distinct purple closed-discussion and green answered-discussion icons, a release tag, a failed check run, a security alert, and read/done controls](docs/images/github-notifications.png)
+![GitHub Notifications canvas with a compact title toolbar including a keyboard shortcut icon before Settings, full-width search and attention tabs above ten synthetic notifications, seven unread, across three example repositories with pull request status icons including a yellow merge-queue icon, distinct purple closed-discussion and green answered-discussion icons, a release tag, a failed check run, a security alert, and read/done controls](docs/images/github-notifications.png)
 
 ## Prerequisites
 
@@ -67,6 +67,12 @@ full procedure, verification requirements, and troubleshooting.
   or the repository Actions page otherwise.
 - Use the envelope to mark a row **read**, or the checkmark to mark it **done**.
   Each group header offers the same bulk actions.
+- Use **J/K** to move between visible rows, **Enter** to open a focused link,
+  **I** to mark the focused row read, and **Shift+E** to mark it done.
+  Read advances to the next visible row after success. **/** focuses search;
+  **Enter** in search focuses the first result once filtering finishes.
+  **?** opens the shortcut guide. Disable character
+  shortcuts in **Settings > Keyboard shortcuts** if preferred.
 - Use **Load more** for older notifications. Search, counts, and bulk actions
   cover **loaded items only**, not your entire GitHub inbox.
 

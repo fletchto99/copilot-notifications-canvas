@@ -73,7 +73,7 @@ test("Enter auto-repeat cannot retrigger notification actions after focus moves,
       ui.document.events.keydown({ key, repeat, target, preventDefault: () => assert.fail("Unrelated native keyboard behavior changed") });
     }
   }
-  for (const target of [ui.ids.get("search"), ui.ids.get("force-refresh"), ui.ids.get("groups").querySelectorAll(".row-link")[0]]) {
+  for (const target of [ui.ids.get("force-refresh"), ui.ids.get("groups").querySelectorAll(".row-link")[0]]) {
     ui.document.events.keydown({ key: "Enter", repeat: true, target, preventDefault: () => assert.fail("Non-action Enter must remain native") });
   }
   assert.deepEqual(ui.patches, []);
@@ -407,7 +407,8 @@ test("compact toolbar aligns the title and utility icons above full-width search
   assert.match(styles, /\.search input \{\s+height: 38px;\s+\}/);
   assert.match(styles, /\.icon-button \{[^}]*flex-shrink: 0;[^}]*width: 38px;\s+height: 38px;[^}]*color: var\(--canvas-text\);/);
   assert.match(styles, /\.settings \{[^}]*flex-shrink: 0;/);
-  assert.doesNotMatch(styles, /\.toolbar \{[^}]*flex-wrap: wrap/);
+  assert.doesNotMatch(styles.match(/(?:^|\n)\.toolbar \{[^}]*\}/)[0], /flex-wrap: wrap/);
+  assert.match(styles, /@media \(max-width: 360px\) \{\s+\.toolbar \{\s+flex-wrap: wrap;\s+justify-content: flex-end;\s+\}\s+\.toolbar h1 \{\s+flex-basis: 100%;/);
 });
 
 test("notification metadata, counts and action tooltips use 12px text", () => {
@@ -453,8 +454,9 @@ test("repository action starts from one click with no dialog and preserves indep
   assert.equal(disclosure.attributes["aria-expanded"], "false");
   assert.match(groupActionText(groupRead), /Marking 0\/2/);
   assert.equal(groupRead.attributes["aria-busy"], "true");
-  assert.doesNotMatch(html, /<dialog|batch-confirm|batch-start|batch-cancel/);
-  assert.doesNotMatch(script, /showModal|batch\/prepare|Repository action finished/);
+  assert.doesNotMatch(html, /batch-confirm|batch-start|batch-cancel/);
+  assert.doesNotMatch(script, /batch\/prepare|Repository action finished/);
+  assert.ok(!ui.ids.get("shortcuts-dialog").open);
   release();
   await ui.inbox.batch.done;
   await runInContext("update()", ui.context);

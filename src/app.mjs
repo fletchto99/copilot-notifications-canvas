@@ -26,6 +26,8 @@ let subjectSelectionRetryAt = 0;
 let refreshStatusKey;
 let searchTimer;
 let searchComposing = false;
+let searchFocusRequested = false;
+let searchEnterHeld = false;
 let pendingFilters;
 let inFlightAttention;
 let pendingRefresh = false;
@@ -50,6 +52,7 @@ const marking = new Map();
 let actionError = "";
 let batchBusy = false;
 let batchFocusKey;
+let shortcutReturnFocus;
 const iconPaths = {
   read: "M3 9 12 3l9 6v11H3V9Zm0 0 9 6 9-6M3 20l6-7m12 7-6-7",
   done: "m5 12 4 4L19 6",
@@ -123,6 +126,7 @@ const subjectLabels = {
 const tooltipControls = [
   ["open-inbox", "inbox-control"],
   ["force-refresh", "refresh-control"],
+  ["shortcuts-toggle", "shortcuts-control"],
   ["settings-toggle", "settings-toggle"],
 ];
 
@@ -345,6 +349,7 @@ function renderSettings() {
     ["auto-open", "autoOpen"],
     ["desktop-notifications", "desktopNotifications"],
     ["hide-empty-tabs", "hideEmptyTabs"],
+    ["keyboard-shortcuts", "keyboardShortcuts"],
   ]) {
     if (preferences) {
       $(id).setAttribute("aria-checked", String(Boolean(preferences[key])));
@@ -409,6 +414,8 @@ async function settingsRequest(input, quiet = false, path = "settings") {
     }
     return;
   }
+  // WebKit can retain a picker's option focus through disabling and re-enabling its select.
+  if (input && previousFocus !== active) previousFocus.focus({ preventScroll: true });
   let refreshInbox = false;
   settingsBusy = true;
   if (!quiet) {
@@ -566,10 +573,11 @@ function closeSettings(focus = false) {
   if (focus && document.hasFocus()) $("settings-toggle").focus();
 }
 
-async function markThread(id, action) {
+async function markThread(id, action, focusRow = false) {
   if (!visible() || busy || batchBusy || batchLocked() || marking.size || pendingFilters) return;
-  const key = `${action}:${id}`;
-  const index = displayGroups().flatMap(group => group.items).findIndex(item => item.id === id);
+  const key = `${focusRow ? "thread" : action}:${id}`;
+  const items = () => displayGroups().filter(group => !focusRow || !collapsed.has(group.key)).flatMap(group => group.items);
+  const index = items().findIndex(item => item.id === id);
   const previousFocus = document.activeElement;
   let nextFocusKey = key;
   dismissTooltips();
@@ -580,9 +588,15 @@ async function markThread(id, action) {
     await pollPromise;
     if (!visible()) return;
     state = await api(action, { id });
-    const remaining = displayGroups().flatMap(group => group.items);
-    const next = remaining[Math.min(index, remaining.length - 1)];
-    nextFocusKey = remaining.some(item => item.id === id) ? `done:${id}` : next ? `${action}:${next.id}` : null;
+    const remaining = items();
+    const retained = remaining.findIndex(item => item.id === id);
+    if (focusRow && action === "read" && retained >= 0) {
+      nextFocusKey = `thread:${(remaining[retained + 1] ?? remaining[retained]).id}`;
+    } else {
+      const next = remaining[Math.min(index, remaining.length - 1)];
+      nextFocusKey = retained >= 0 ? `${focusRow ? "thread" : "done"}:${id}` :
+        next ? `${focusRow ? "thread" : action}:${next.id}` : null;
+    }
   } catch (error) {
     actionError = `Could not mark the notification as ${action}. ${error.message || "Try again."}`;
     try {
@@ -594,6 +608,9 @@ async function markThread(id, action) {
     marking.delete(id);
     render(nextFocusKey);
     restoreFocus(previousFocus, nextFocusKey ? focusKey(nextFocusKey) : $("search"));
+    if (focusRow && document.activeElement?.dataset.focusKey === nextFocusKey) {
+      document.activeElement.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
     void flushPendingUpdates();
     schedule();
   }
@@ -614,6 +631,69 @@ function requestsPaused() {
 function focusKey(key) {
   return [...$("groups").querySelectorAll("[data-focus-key]")]
     .find(node => node.dataset.focusKey === key);
+}
+
+function visibleRowLinks() {
+  return [...rowViews.values()].map(view => view.link).filter(link => !link.closest(".repo-items")?.hidden);
+}
+
+function focusSearchResult() {
+  if (!searchFocusRequested || busy || pollPromise || batchBusy || batchLocked() || marking.size ||
+      pendingFilters || searchComposing || !state || ["idle", "loading"].includes(state.status)) return;
+  searchFocusRequested = false;
+  if (!visible() || !document.hasFocus() || document.activeElement !== $("search") ||
+      $("search").disabled || $("search").value !== state.filters.query) return;
+  const link = visibleRowLinks()[0];
+  if (!link) return;
+  suppressHover();
+  link.focus({ preventScroll: true });
+  link.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+
+function openShortcuts() {
+  if ($("shortcuts-dialog").open) return;
+  shortcutReturnFocus = document.activeElement;
+  closeSettings();
+  dismissTooltips();
+  $("shortcuts-dialog").showModal();
+}
+
+function handleShortcut(event) {
+  if (!visible() || !document.hasFocus() || !preferences?.keyboardShortcuts || event.defaultPrevented ||
+      event.isComposing || event.keyCode === 229 || event.ctrlKey || event.metaKey || event.altKey ||
+      $("settings").open || $("shortcuts-dialog").open ||
+      event.target?.closest("input, textarea, select, [contenteditable], [role=textbox]")) return;
+  if (event.key === "?") {
+    event.preventDefault();
+    if (!event.repeat) openShortcuts();
+    return;
+  }
+  if (event.key === "/") {
+    if (!$("search").disabled) {
+      event.preventDefault();
+      $("search").focus();
+    }
+    return;
+  }
+  const links = visibleRowLinks();
+  const index = links.findIndex(link => link.dataset.threadId === document.activeElement?.dataset.threadId);
+  if (!event.shiftKey && ["j", "k"].includes(event.key)) {
+    if (!links.length) return;
+    event.preventDefault();
+    const next = index < 0 ? (event.key === "j" ? 0 : links.length - 1) :
+      Math.max(0, Math.min(links.length - 1, index + (event.key === "j" ? 1 : -1)));
+    suppressHover();
+    links[next].focus({ preventScroll: true });
+    links[next].scrollIntoView({ block: "nearest", inline: "nearest" });
+    return;
+  }
+  const action = event.key === "i" && !event.shiftKey ? "read" : event.key === "E" && event.shiftKey ? "done" : null;
+  if (!action || index < 0) return;
+  event.preventDefault();
+  if (event.repeat) return;
+  const id = links[index].dataset.threadId;
+  const button = focusKey(`${action}:${id}`);
+  if (button && !button.disabled) return markThread(id, action, true);
 }
 
 function restoreFocus(previous, preferred) {
@@ -781,7 +861,10 @@ async function blockingUpdate(path, input) {
     busy = false;
     refreshing = false;
     inFlightAttention = undefined;
-    if (!succeeded && path === "filters") pendingFilters = { ...input, ...pendingFilters };
+    if (!succeeded && path === "filters") {
+      pendingFilters = { ...input, ...pendingFilters };
+      searchFocusRequested = false;
+    }
     render();
     restoreFocus(previousFocus);
     if (succeeded || path !== "filters" || (pendingRefresh && !requestsPaused())) void flushPendingUpdates();
@@ -795,7 +878,8 @@ async function flushPendingUpdates() {
     pendingRefresh = false;
     return blockingUpdate("refresh", { force: true });
   }
-  if (!pendingFilters || searchComposing) return;
+  if (searchComposing) return;
+  if (!pendingFilters) return focusSearchResult();
   const input = pendingFilters;
   pendingFilters = undefined;
   clearTimeout(searchTimer);
@@ -803,6 +887,7 @@ async function flushPendingUpdates() {
     await blockingUpdate("filters", input);
   } else {
     renderControls();
+    focusSearchResult();
   }
 }
 
@@ -932,6 +1017,15 @@ function renderControls() {
   $("batch-dismiss").disabled = batchBusy || busy;
   $("groups").setAttribute("aria-busy", String(loading));
   renderNotificationView();
+  $("shortcuts-control").hidden = preferences?.keyboardShortcuts === false;
+  for (const [control, keys] of [
+    [$("groups"), "j k"], [$("search"), "/"], [$("shortcuts-toggle"), "?"],
+    ...[...$("groups").querySelectorAll("button")].filter(button => button.dataset.action)
+      .map(button => [button, button.dataset.action === "read" ? "i" : "Shift+e"]),
+  ]) {
+    if (preferences?.keyboardShortcuts) control.setAttribute("aria-keyshortcuts", keys);
+    else control.removeAttribute("aria-keyshortcuts");
+  }
 }
 
 function displayGroups() {
@@ -1382,6 +1476,22 @@ $("hide-empty-tabs").addEventListener("click", () => {
     void settingsRequest({ hideEmptyTabs: !preferences.hideEmptyTabs });
   }
 });
+$("keyboard-shortcuts").addEventListener("click", () => {
+  if (preferences && !$("keyboard-shortcuts").disabled) {
+    void settingsRequest({ keyboardShortcuts: !preferences.keyboardShortcuts });
+  }
+});
+$("shortcuts-toggle").addEventListener("click", () => {
+  $("shortcuts-toggle").focus();
+  openShortcuts();
+});
+$("shortcuts-close").addEventListener("click", () => $("shortcuts-dialog").close());
+$("shortcuts-dialog").addEventListener("close", () => {
+  const previous = shortcutReturnFocus;
+  const target = previous?.dataset?.focusKey ? focusKey(previous.dataset.focusKey) : $(previous?.id);
+  restoreFocus($("shortcuts-close"), target ?? $("search"));
+  shortcutReturnFocus = undefined;
+});
 document.addEventListener("click", event => {
   if ($("settings").open && !$("settings").contains(event.target)) closeSettings();
 });
@@ -1390,12 +1500,36 @@ document.addEventListener("focusin", event => {
 });
 document.addEventListener("keydown", event => {
   pointerInteraction = false;
+  if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
+  if (event.key === "Enter") {
+    if (searchEnterHeld && event.repeat) {
+      event.preventDefault();
+      return;
+    }
+    if (!event.repeat) searchEnterHeld = false;
+  }
+  if (event.target === $("search")) {
+    if (event.key !== "Enter") searchFocusRequested = false;
+    else if (!searchComposing && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey &&
+        visible() && document.hasFocus() && !$("search").disabled) {
+      event.preventDefault();
+      if (event.repeat) return;
+      searchEnterHeld = true;
+      searchFocusRequested = true;
+      return flushPendingUpdates();
+    }
+  }
   if (event.key === "Enter" && event.repeat && (event.target?.dataset?.action || event.target?.dataset?.batchAction ||
       ["batch-stop", "batch-retry", "batch-dismiss"].includes(event.target?.id))) {
     event.preventDefault();
     return;
   }
-  if (event.key !== "Escape") return;
+  if (event.key !== "Escape") return handleShortcut(event);
+  if ($("shortcuts-dialog").open) {
+    event.preventDefault();
+    $("shortcuts-dialog").close();
+    return;
+  }
   // Let the browser dismiss an open picker before closing its Settings panel.
   if (window.CSS?.supports("selector(select:open)") && document.querySelector("select:open")) return;
   if ($("settings").open) {
@@ -1404,7 +1538,11 @@ document.addEventListener("keydown", event => {
   }
   dismissTooltips();
 });
+document.addEventListener("keyup", event => {
+  if (event.key === "Enter") searchEnterHeld = false;
+});
 document.addEventListener("pointerdown", () => {
+  searchFocusRequested = false;
   delete document.documentElement.dataset.pointerHoverSuppressed;
   pointerInteraction = true;
   setTooltipKeyboard(document.activeElement, false);
@@ -1417,6 +1555,8 @@ $("open-inbox").addEventListener("auxclick", event => {
   if (event.button === 1) suppressHover();
 });
 window.addEventListener("blur", () => {
+  searchFocusRequested = false;
+  searchEnterHeld = false;
   suppressHover();
 });
 window.addEventListener("scroll", positionOverlays, { passive: true });
@@ -1433,6 +1573,7 @@ for (const [control, anchor] of tooltipControls) {
   bindTooltip($(control), $(anchor));
 }
 function queueSearch() {
+  searchFocusRequested = false;
   pendingFilters = { ...pendingFilters, query: $("search").value };
   renderControls();
   clearTimeout(searchTimer);
@@ -1453,6 +1594,7 @@ $("search").addEventListener("input", event => {
   if (event?.isComposing) searchComposing = true;
   queueSearch();
 });
+$("search").addEventListener("blur", () => { searchFocusRequested = false; });
 $("collapse").addEventListener("click", () => {
   const groups = displayGroups();
   const close = groups.some(group => !collapsed.has(group.key));
@@ -1476,6 +1618,8 @@ function visibilityChanged() {
     void tick();
     void settingsRequest();
   } else {
+    searchFocusRequested = false;
+    searchEnterHeld = false;
     copyAttempt++;
     dismissTooltips();
     for (const controller of requestControllers) controller.abort();
@@ -1511,6 +1655,8 @@ systemTheme.addEventListener("change", renderTheme);
 renderTheme();
 window.addEventListener("pagehide", () => {
   stopped = true;
+  searchFocusRequested = false;
+  searchEnterHeld = false;
   copyAttempt++;
   dismissTooltips();
   clearTimeout(timer);

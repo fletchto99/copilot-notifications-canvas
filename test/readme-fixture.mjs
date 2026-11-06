@@ -16,6 +16,7 @@ export const readmePreferences = {
   groupBy: "repo",
   darkMode: true,
   hideEmptyTabs: true,
+  keyboardShortcuts: true,
   autoOpen: false,
   desktopNotifications: false,
 };

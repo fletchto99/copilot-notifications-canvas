@@ -6,7 +6,7 @@ const searchName = "Search loaded notification titles, issue or PR numbers, and 
 
 async function focusToolbarWithKeyboard(page, selector) {
   await page.getByRole("searchbox").focus();
-  for (const target of ["#settings-toggle", "#force-refresh", "#open-inbox"]) {
+  for (const target of ["#settings-toggle", "#shortcuts-toggle", "#force-refresh", "#open-inbox"]) {
     await page.keyboard.press("Shift+Tab");
     if (target === selector) break;
   }
@@ -69,51 +69,57 @@ for (const packaged of [false, true]) {
   test.describe(`compact header (${packaged ? "packaged" : "source"})`, () => {
     test.use({ packaged });
 
-    test("aligns the full title with the utility buttons and wraps only when space requires it", async ({ page, canvas }) => {
-      canvas.rows.splice(1);
-      await page.goto(canvas.url);
-      await expect(page.locator(".row")).toHaveCount(1);
-      const title = page.getByRole("heading", { name: "GitHub Notifications", exact: true });
-      await expect(page.locator(".eyebrow, #subtitle")).toHaveCount(0);
-      const initialHeight = (await page.locator("header").boundingBox()).height;
-      expect(initialHeight).toBeLessThanOrEqual(185);
-      for (const width of [480, 320, 360, 400, 481, 960]) {
-        await page.setViewportSize({ width, height: 800 });
-        await expect(title).toHaveCSS("font-size", "24px");
-        await expect(title).toHaveCSS("line-height", "30px");
-        const heading = await title.boundingBox();
-        expect([38, 60]).toContain(heading.height);
-        if (width === 320) expect(heading.height).toBe(60);
-        if (width >= 480) expect(heading.height).toBe(38);
-        const toolbar = await page.locator(".toolbar").boundingBox();
-        expect(toolbar.height).toBe(heading.height);
-        let previousRight = heading.x + heading.width;
-        for (const selector of ["#open-inbox", "#force-refresh", "#settings-toggle"]) {
-          const button = await page.locator(selector).boundingBox();
-          expect(button.width).toBe(38);
-          expect(button.height).toBe(38);
-          expect(button.y + button.height / 2).toBe(heading.y + heading.height / 2);
-          expect(button.x).toBeGreaterThanOrEqual(previousRight + 8);
-          previousRight = button.x + button.width;
+    for (const font of ["default", "Arial"]) {
+      test(`keeps the full title readable and utility buttons aligned with ${font} fonts`, async ({ page, canvas }, testInfo) => {
+        canvas.rows.splice(1);
+        await page.goto(canvas.url);
+        await expect(page.locator(".row")).toHaveCount(1);
+        if (font === "Arial") await page.addStyleTag({ content: ":root { --font-sans: Arial, sans-serif; }" });
+        const title = page.getByRole("heading", { name: "GitHub Notifications", exact: true });
+        await expect(page.locator(".eyebrow, #subtitle")).toHaveCount(0);
+        const initialHeight = (await page.locator("header").boundingBox()).height;
+        expect(initialHeight).toBeLessThanOrEqual(185);
+        for (const width of [480, 320, 360, 361, 400, 481, 960]) {
+          await page.setViewportSize({ width, height: 800 });
+          const stacked = width <= 360;
+          await expect(title).toHaveCSS("font-size", "24px");
+          await expect(title).toHaveCSS("line-height", "30px");
+          const heading = await title.boundingBox();
+          expect([38, 60]).toContain(heading.height);
+          if (stacked || width >= 480) expect(heading.height).toBe(38);
+          const toolbar = await page.locator(".toolbar").boundingBox();
+          expect(toolbar.height).toBe(heading.height + (stacked ? 46 : 0));
+          if (stacked) expect(heading.width).toBe(width - 24);
+          let previousRight = stacked ? heading.x - 8 : heading.x + heading.width;
+          for (const selector of ["#open-inbox", "#force-refresh", "#shortcuts-toggle", "#settings-toggle"]) {
+            const button = await page.locator(selector).boundingBox();
+            expect(button.width).toBe(38);
+            expect(button.height).toBe(38);
+            expect(button.y + button.height / 2).toBe(stacked ? heading.y + heading.height + 27 : heading.y + heading.height / 2);
+            expect(button.x).toBeGreaterThanOrEqual(previousRight + 8);
+            previousRight = button.x + button.width;
+          }
+          expect(previousRight).toBe(width - 12);
+          const search = await page.getByRole("searchbox").boundingBox();
+          const tabs = await page.locator(".attention-navigation").boundingBox();
+          expect(search.width).toBe(width - 24);
+          expect(search.height).toBe(38);
+          expect(search.y).toBe(toolbar.y + toolbar.height + 8);
+          expect(tabs.y).toBe(search.y + search.height + 8);
+          expect((await page.locator("header").boundingBox()).height).toBe(initialHeight + toolbar.height - 38);
+          expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+          if (width === 320) await page.screenshot({ path: testInfo.outputPath(`header-${font}-320.png`) });
         }
-        const search = await page.getByRole("searchbox").boundingBox();
-        const tabs = await page.locator(".attention-navigation").boundingBox();
-        expect(search.width).toBe(width - 24);
-        expect(search.height).toBe(38);
-        expect(search.y).toBe(toolbar.y + toolbar.height + 8);
-        expect(tabs.y).toBe(search.y + search.height + 8);
-        expect((await page.locator("header").boundingBox()).height).toBe(initialHeight + heading.height - 38);
-        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
-      }
-      expect(canvas.writes).toEqual([]);
-    });
+        expect(canvas.writes).toEqual([]);
+      });
+    }
 
     test("keyboard order follows the utility row, search and attention tabs", async ({ page, canvas }) => {
       canvas.rows.splice(1);
       await page.goto(canvas.url);
       await expect(page.locator(".row")).toHaveCount(1);
       await focusToolbarWithKeyboard(page, "#open-inbox");
-      for (const selector of ["#force-refresh", "#settings-toggle", "#search", "#attention-all"]) {
+      for (const selector of ["#force-refresh", "#shortcuts-toggle", "#settings-toggle", "#search", "#attention-all"]) {
         await page.keyboard.press("Tab");
         await expect(page.locator(selector)).toBeFocused();
       }
@@ -616,7 +622,7 @@ test("the toolbar refresh icon shows the current update age on hover and keyboar
   const tooltip = page.locator("#refresh-tooltip");
   const tooltipText = page.locator("#refresh-tooltip-text");
   await expect(refresh).toHaveAttribute("aria-busy", "false");
-  await expect(page.locator(".toolbar > #refresh-control + #settings")).toHaveCount(1);
+  await expect(page.locator(".toolbar > #refresh-control + #shortcuts-control + #settings")).toHaveCount(1);
   await expect(refresh).not.toHaveAttribute("title");
   await expect(tooltip).toBeHidden();
   await expect(refresh.locator("svg")).toHaveCount(1);
@@ -642,7 +648,7 @@ test("the toolbar refresh icon shows the current update age on hover and keyboar
   const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
   expect(results.violations).toEqual([]);
   await page.screenshot({ path: testInfo.outputPath("refresh-tooltip-dark.png") });
-  await page.getByRole("heading", { name: "GitHub Notifications", exact: true }).hover();
+  await page.mouse.move(0, 0);
   await expect(tooltip).toBeHidden();
   canvas.advance(1000);
   await page.clock.setFixedTime(new Date(initial.lastFetchedAt + 24_000));
@@ -711,6 +717,7 @@ test("all toolbar icons use matching instant tooltips with keyboard and Escape s
     for (const [id, tooltipId, label] of [
       ["open-inbox", "inbox-tooltip", "Open GitHub inbox"],
       ["force-refresh", "refresh-tooltip", null],
+      ["shortcuts-toggle", "shortcuts-tooltip", "Keyboard shortcuts (?)"],
       ["settings-toggle", "settings-tooltip", "Settings"],
     ]) {
       const control = page.locator(`#${id}`);
@@ -951,7 +958,7 @@ test("Settings supports keyboard dismissal and persists theme and auto-open acro
   await expect(page.getByRole("switch", { name: "Desktop notifications", exact: true })).toHaveAttribute("aria-checked", "false");
   await expect(page.getByRole("combobox", { name: "Sound", exact: true })).toHaveValue("default");
   expect(await canvas.preferences.read()).toEqual({
-    matchGitHubInbox: true, autoOpen: true, darkMode: true, desktopNotifications: false, desktopSound: "default", groupBy: "repo", hideEmptyTabs: true,
+    matchGitHubInbox: true, autoOpen: true, darkMode: true, desktopNotifications: false, desktopSound: "default", groupBy: "repo", hideEmptyTabs: true, keyboardShortcuts: true,
   });
   await theme.selectOption("system");
   await expect.poll(async () => (await canvas.preferences.read()).darkMode).toBeNull();

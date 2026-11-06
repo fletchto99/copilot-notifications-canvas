@@ -164,8 +164,12 @@ test("customizable dropdowns preserve keyboard selection, cancellation, focus an
   canvas.rows.splice(1);
   await page.goto(canvas.url);
   await expect(page.locator(".row")).toHaveCount(1);
-  await page.locator("#settings-toggle").click();
+  await Promise.all([
+    page.waitForResponse(response => response.url().endsWith("/api/settings") && response.request().method() === "GET"),
+    page.locator("#settings-toggle").click(),
+  ]);
   const grouping = page.getByRole("combobox", { name: "Group By", exact: true });
+  await expect(grouping).toBeEnabled();
   await grouping.focus();
   await grouping.press("Space");
   await expect(page.locator("#group-by:open")).toBeVisible();

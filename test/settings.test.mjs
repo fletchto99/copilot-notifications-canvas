@@ -10,7 +10,7 @@ import { startServer } from "../src/server.mjs";
 import { Inbox } from "../src/inbox.mjs";
 import { GitHubClient } from "../src/github.mjs";
 
-const defaults = { matchGitHubInbox: true, autoOpen: false, darkMode: null, desktopNotifications: false, desktopSound: "default", groupBy: "repo", hideEmptyTabs: true };
+const defaults = { matchGitHubInbox: true, autoOpen: false, darkMode: null, desktopNotifications: false, desktopSound: "default", groupBy: "repo", hideEmptyTabs: true, keyboardShortcuts: true };
 
 async function setup(t, io) {
   const directory = await fs.mkdtemp(join(tmpdir(), "notification-settings-test-"));
@@ -90,6 +90,7 @@ test("malformed stored settings and invalid updates fail explicitly without over
   for (const data of ["{", "[]", "null", '{"autoOpen":"yes"}', '{"desktopNotifications":1}',
     '{"matchGitHubInbox":null}', '{"matchGitHubInbox":"true"}', '{"matchGitHubInbox":0}',
     '{"hideEmptyTabs":null}', '{"hideEmptyTabs":"true"}', '{"hideEmptyTabs":0}',
+    '{"keyboardShortcuts":null}', '{"keyboardShortcuts":"true"}', '{"keyboardShortcuts":0}',
     '{"desktopSound":null}', '{"desktopGeneration":false}', '{"darkMode":"dark"}', '{"darkMode":0}',
     '{"groupBy":null}', '{"groupBy":"unknown"}', '{"groupBy":false}', '{"groupBy":[]}', " ".repeat(17000)]) {
     await fs.writeFile(preferences.path, data);
@@ -100,10 +101,24 @@ test("malformed stored settings and invalid updates fail explicitly without over
   for (const input of [null, [], {}, { autoOpen: "yes" }, { darkMode: "dark" }, { darkMode: 0 },
     { matchGitHubInbox: null }, { matchGitHubInbox: "true" }, { matchGitHubInbox: 0 },
     { hideEmptyTabs: null }, { hideEmptyTabs: "true" }, { hideEmptyTabs: 0 },
+    { keyboardShortcuts: null }, { keyboardShortcuts: "true" }, { keyboardShortcuts: 0 },
     { darkMode: undefined }, { autoOpen: null }, { autoOpen: true, token: "not accepted" },
     { groupBy: undefined }, { groupBy: null }, { groupBy: "unknown" }, { groupBy: "Repo" },
     { groupBy: false }, { groupBy: [] }, { groupBy: { value: "date" } }]) {
     await assert.rejects(preferences.update(input), { code: "invalid_settings" });
+  }
+});
+
+test("character shortcuts default on and can be disabled across instances without losing unknown settings", async t => {
+  const preferences = await setup(t);
+  await fs.writeFile(preferences.path, '{"groupBy":"date","future":42}');
+  assert.equal((await preferences.read()).keyboardShortcuts, true);
+  const other = new Preferences({ directory: preferences.directory });
+  for (const keyboardShortcuts of [false, true]) {
+    await preferences.update({ keyboardShortcuts });
+    await other.update({ darkMode: null });
+    assert.equal((await other.read()).keyboardShortcuts, keyboardShortcuts);
+    assert.deepEqual(await preferences.document(), { groupBy: "date", future: 42, keyboardShortcuts, darkMode: null });
   }
 });
 
@@ -240,6 +255,8 @@ test("settings HTTP routes require capability/origin and persist only permitted 
   for (const [input, status] of [[{ autoOpen: true }, 200], [{ darkMode: true }, 200],
     [{ hideEmptyTabs: false }, 200], [{ hideEmptyTabs: true }, 200],
     [{ hideEmptyTabs: "true" }, 400], [{ hideEmptyTabs: null }, 400], [{ hideEmptyTabs: 0 }, 400],
+    [{ keyboardShortcuts: false }, 200], [{ keyboardShortcuts: true }, 200],
+    [{ keyboardShortcuts: "true" }, 400], [{ keyboardShortcuts: null }, 400], [{ keyboardShortcuts: 0 }, 400],
     [{ groupBy: "none" }, 200], [{ groupBy: "repo" }, 200], [{ groupBy: "date" }, 200],
     [{ groupBy: "unknown" }, 400], [{ groupBy: null }, 400],
     [{ autoOpen: "yes" }, 400], [{ darkMode: "dark" }, 400], [{ sound: true }, 400]]) {

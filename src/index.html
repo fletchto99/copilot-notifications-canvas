@@ -29,6 +29,15 @@
           </button>
           <span id="refresh-tooltip" class="tooltip" role="tooltip"><span id="refresh-tooltip-text" class="tooltip-content">Not updated yet</span></span>
         </div>
+        <div id="shortcuts-control" class="tooltip-anchor">
+          <button id="shortcuts-toggle" class="icon-button" type="button" aria-label="Keyboard shortcuts" aria-describedby="shortcuts-tooltip" aria-haspopup="dialog" aria-controls="shortcuts-dialog">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+              <rect x="2" y="5" width="20" height="14" rx="2"/>
+              <path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M7 15h10"/>
+            </svg>
+          </button>
+          <span id="shortcuts-tooltip" class="tooltip" role="tooltip"><span id="shortcuts-tooltip-text" class="tooltip-content">Keyboard shortcuts (?)</span></span>
+        </div>
         <details id="settings" class="settings">
           <summary id="settings-toggle" class="icon-button tooltip-anchor" aria-label="Settings" aria-describedby="settings-tooltip" aria-controls="settings-panel" aria-expanded="false">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true" focusable="false">
@@ -51,6 +60,10 @@
             </button>
             <button id="auto-open" class="switch-toggle" type="button" role="switch" aria-checked="false" disabled>
               <span>Auto-open</span>
+              <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+            </button>
+            <button id="keyboard-shortcuts" class="switch-toggle" type="button" role="switch" aria-checked="true" disabled>
+              <span>Keyboard shortcuts</span>
               <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
             </button>
             <button id="desktop-notifications" class="switch-toggle" type="button" role="switch" aria-checked="false" aria-describedby="desktop-status" disabled>
@@ -177,6 +190,24 @@
     <footer>
       <p id="development-build" hidden></p>
     </footer>
+    <dialog id="shortcuts-dialog" aria-labelledby="shortcuts-title" aria-describedby="shortcuts-description">
+      <div class="shortcuts-heading">
+        <h2 id="shortcuts-title">Keyboard shortcuts</h2>
+        <button id="shortcuts-close" type="button" autofocus>Close</button>
+      </div>
+      <p id="shortcuts-description">Shortcuts work while this panel has focus, outside text fields and Settings.</p>
+      <dl class="shortcuts-list">
+        <dt><kbd>j</kbd> / <kbd>k</kbd></dt><dd>Next / previous visible notification</dd>
+        <dt><kbd>Enter</kbd></dt><dd>From search, focus the first result; on a link, open it</dd>
+        <dt><kbd>i</kbd></dt><dd>Mark the focused notification as read and move to the next row</dd>
+        <dt><kbd>Shift</kbd> + <kbd>E</kbd></dt><dd>Mark the focused notification as done</dd>
+        <dt><kbd>/</kbd></dt><dd>Focus search</dd>
+        <dt><kbd>?</kbd></dt><dd>Show this guide</dd>
+        <dt><kbd>Esc</kbd></dt><dd>Close this guide or Settings</dd>
+      </dl>
+      <p>Navigation skips collapsed groups and stops at the ends. Read/Done affect only the focused row, never a group.</p>
+      <p>Turn off <strong>Keyboard shortcuts</strong> in Settings to disable character shortcuts and hide the toolbar help icon. Tab and Enter still work.</p>
+    </dialog>
   </main>
 </body>
 </html>

@@ -11,6 +11,7 @@ across sessions and preserved during packaged upgrades.
 | Group By | Repository | **Repository**: preserve GitHub's API order, grouping repositories by first appearance. **All notifications**: one collapsible group in API order. **Date**: newest local calendar day first, using REST update times for buckets and API order for rows. |
 | Hide empty tabs | On | Hides attention tabs with zero loaded notifications. **All** and the selected tab always stay visible. Counts ignore search; tabs reappear when matching notifications are loaded. Saved choices are preserved. |
 | Theme | Match Copilot | **Match Copilot** uses Copilot's theme colors, falling back to the OS theme when opened outside Copilot. **Dark** and **Light** use fixed palettes. |
+| Keyboard shortcuts | On | Enables J/K navigation, I Read, Shift+E Done, / search, and ? help inside the focused canvas. Turn off to disable character shortcuts and hide the toolbar help icon; native Tab/Enter remain available. |
 | Auto-open | Off | Opens a missing Notifications panel when its provider attaches to a new or resumed session, unless you previously closed it in that session. Existing panels are left alone. |
 | Desktop notifications | Off | Enables native alerts while a Notifications canvas is open and its extension process is running. |
 | Sound | System default | System-specific sounds for desktop alerts; see the platform table below. |
@@ -36,6 +37,12 @@ Settings stays within the canvas viewport, scrolling internally when needed.
 It opens above its button when that offers more space and closes if the button
 scrolls out of view. Labels and dropdowns stack when needed to accommodate wider
 text, and the panel adjusts when typography or header content changes.
+
+The character-shortcut preference is stored as the `keyboardShortcuts` boolean,
+defaults to `true` when absent, and follows the same user-wide polling and
+validation rules as other preferences. No focused-row or navigation history is
+persisted. See [keyboard controls](usage.md#keyboard-and-preferences) for the full
+shortcut list and action safeguards.
 
 The dropdown stores `matchGitHubInbox` in the user-wide settings file:
 `true` means **All** and `false` means **Unread only**. Existing
