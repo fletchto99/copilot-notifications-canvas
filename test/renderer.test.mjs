@@ -611,8 +611,9 @@ test("every grouping keeps the total and unread format for all-unread, mixed and
   }
 });
 
-test("counts return on arrivals and stay visible until an empty inbox is reconciled", async () => {
+test("counts return on arrivals and hide immediately after completing the last notification", async t => {
   const ui = await renderer({ initialRows: [] });
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
   const search = ui.ids.get("search");
   const settings = ui.ids.get("settings");
   assert.equal(ui.ids.get("count").hidden, true);
@@ -624,11 +625,9 @@ test("counts return on arrivals and stay visible until an empty inbox is reconci
   assert.equal(ui.ids.get("count").hidden, false);
   assert.equal(ui.ids.get("count").textContent, "1 total \u00b7 1 unread");
   await ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.focusKey === "done:1").events.click();
-  assert.equal(ui.ids.get("count").hidden, false);
   assert.equal(ui.ids.get("count").textContent, "0 total \u00b7 0 unread");
-  assert.equal(ui.ids.get("empty-title").textContent, "Loaded notifications cleared");
-  ui.setRows([]);
-  await ui.ids.get("empty-refresh").events.click();
+  assert.equal(ui.ids.get("empty-title").textContent, "All caught up \u{1F389}");
+  assert.equal(ui.ids.get("empty-refresh").hidden, true);
   assert.equal(ui.ids.get("count").hidden, true);
   assert.equal(ui.ids.get("collapse").hidden, true);
   assert.equal(ui.ids.get("empty").hidden, false);
