@@ -414,6 +414,8 @@ async function settingsRequest(input, quiet = false, path = "settings") {
     }
     return;
   }
+  // WebKit can retain a picker's option focus through disabling and re-enabling its select.
+  if (input && previousFocus !== active) previousFocus.focus({ preventScroll: true });
   let refreshInbox = false;
   settingsBusy = true;
   if (!quiet) {

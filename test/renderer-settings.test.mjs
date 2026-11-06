@@ -333,6 +333,35 @@ test("background settings polls preserve focus for disabled and untouched picker
   }
 });
 
+test("saving retained option focus moves it to the select before disabling, without overriding newer focus", async t => {
+  for (const fail of [false, true]) {
+    for (const moveFocus of [false, true]) {
+      let finish;
+      const ui = await renderer({ retainDisabledFocus: true, storedSettings: { groupBy: "repo" }, onSettings: input => {
+        if (input) return new Promise((resolve, reject) => {
+          finish = () => fail ? reject(new Error("Synthetic settings failure.")) : resolve();
+        });
+      } });
+      t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+      const select = ui.ids.get("group-by");
+      const option = ui.document.createElement("option");
+      select.append(option);
+      option.focus();
+      select.value = "none";
+      select.events.change();
+      assert.equal(select.disabled, true);
+      assert.equal(ui.document.activeElement, select);
+      if (moveFocus) ui.ids.get("search").focus();
+      finish();
+      await settle();
+      assert.equal(select.disabled, false);
+      assert.equal(select.value, fail ? "repo" : "none");
+      assert.equal(ui.document.activeElement, moveFocus ? ui.ids.get("search") : select);
+      assert.equal(ui.ids.get("settings-error").hidden, !fail);
+    }
+  }
+});
+
 test("background picker focus restoration does not steal focus moved during the read", async t => {
   let reads = 0;
   let finish;
