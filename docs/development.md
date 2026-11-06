@@ -2,123 +2,87 @@
 
 [README](../README.md) | [Usage](usage.md) | [Installation](installation.md) | [Settings](settings.md)
 
-Coding agents should follow [AGENTS.md](../AGENTS.md). Copilot also loads
-[`.github/copilot-instructions.md`](../.github/copilot-instructions.md), which
-points to the shared repository guidance.
+**Jump to:** [Preview](#synthetic-preview) | [Screenshot](#readme-screenshot) |
+[Environment check](#environment-check) | [Tests](#tests-and-checks) |
+[Packaging](#packaging) | [Releases](#publishing-releases)
+
+[AGENTS.md](../AGENTS.md) is the shared source for architecture, implementation
+conventions, privacy, and lifecycle invariants.
 
 ## Local development
 
-Development tooling requires Node.js 24 or later (`package.json` declares
-`>=24`). The checked-in `.node-version` selects the Node.js 24 development line;
-use a current patched release. With nvm, run
-`nvm install "$(cat .node-version)"`. The extension runtime and installer still
-support Node.js 22 or later; their dependency-free tests retain Node.js 22
-coverage.
+Use a current patched **Node.js 24+** for development; `.node-version` selects
+the preferred major. The extension runtime and installer still support Node.js
+22, which remains covered by the dependency-free tests.
 
-Provider modules and renderer assets live in `src/`. The entry point at
+Edit provider modules and renderer assets in `src/`. The discovery shim at
 `.github/extensions/github-notifications/extension.mjs` imports
-`src/extension.mjs`, so opening this repository as a Copilot project loads the
-local source without a build. After edits, reload extensions and use extension
-**list/inspect** to check the provider and its log.
+`src/extension.mjs`: opening this repository as a Copilot project loads source
+without a build. After edits or branch changes, reload extensions and use
+extension **list/inspect** to check the provider and its log.
 
-Source checkouts show `dev (v<version>) <branch-name>` in the footer, using
-`version.json` and the extension checkout's branch when the panel opens. Reload
-extensions after switching branches. Detached checkouts show `detached HEAD`;
-if Git is unavailable, the footer shows `branch unavailable` and the provider
-logs a warning. Packaged releases do not show this development label.
-
-Each session uses its own checkout and loaded asset snapshot; do not delete a
-checkout while a session uses it. Some Copilot versions register both the
-project-local checkout and the user-wide installation instead of shadowing the
-installed copy. Auto-open selects the project provider when it is available and
-uses a per-session lock and the runtime's live panel snapshot to avoid duplicate
-opens. Dismissal comes from the session's durable canvas-close events, not a
-user-wide completion marker. Separate sessions can each open their own panel.
-For manual opens, pass `extensionId: project:github-notifications` to select the
-local canvas.
+The source footer shows `dev (v<version>) <branch-name>` (`detached HEAD` or
+`branch unavailable` when applicable); packaged releases omit it. If both local
+and installed providers appear, select `extensionId: project:github-notifications`.
+Sessions keep their loaded code and assets until reloaded; never delete a
+checkout still in use. See [Settings](settings.md) for auto-open and dismissal.
 
 ### Selecting a development API
 
 In a source-loaded canvas, open **Settings > Development API**, choose
-**Custom**, and enter the complete HTTPS REST API base URL, for example
-`https://git.example.com/api/v3`. Click **Save API**, then reload extensions.
-Choose **GitHub.com** and save/reload to return to the production API.
-The reload hint shows the command-palette shortcut for the canvas renderer's
-platform: **Ctrl+K** on Windows/Linux or **Command+K** on macOS, even when the
-provider runs on a different operating system.
+**Custom**, enter an HTTPS REST base URL such as `https://git.example.com/api/v3`,
+then **Save API** and reload extensions. Choose **GitHub.com** and save/reload to
+switch back. The reload shortcut follows the renderer's platform: **Ctrl+K** on
+Windows/Linux, **Command+K** on macOS.
 
-The selection is a user-wide source-development preference, stored as
-`developmentApiBaseUrl` in the existing `artifacts/settings.json`. It becomes
-active when each provider starts; saving never switches a running provider,
-its loaded notifications, batches, retries, or caches to another API.
-Other running sessions keep their current API until their extensions reload.
-Settings shows both the active API and whether a reload is needed. Invalid
-stored URLs fail explicitly; correct that key rather than deleting other
-settings. Packaged releases ignore the preference and reject API-selection
-requests, including when they share the same settings file with source builds.
+The user-wide `developmentApiBaseUrl` preference lives in `artifacts/settings.json`.
+It takes effect only at provider startup; loaded rows, batches, retries, and
+caches never switch targets mid-session. Settings identifies the active API and
+pending reload. Correct invalid values without deleting other settings.
+Packaged releases ignore this preference and reject API-selection requests.
 
-GitHub CLI still owns authentication. Authenticate for the **selected host**,
-for example with `gh auth login --hostname git.example.com`, using an account
-and token supported by that server with notifications access. Configure any
-required private-network connection separately. Do not enter tokens or cookies
-in the URL, canvas, repository, or logs. The extension uses an explicit
-`gh api --hostname <host>` and the selected absolute REST URL; it never extracts
-or copies the production token. GitHub CLI's own host credentials and token
-environment-variable rules still apply.
+Authenticate with GitHub CLI for the **selected host**, for example
+`gh auth login --hostname git.example.com`, using that server's supported
+credentials and any required private-network connection. The provider uses
+`gh api --hostname <host>` and the selected REST URL; it never copies credentials
+between hosts. Never put tokens or cookies in URLs, the renderer, or logs.
 
-Non-default HTTPS ports are supported: the port stays in API and website URLs,
-while `gh --hostname` receives only the hostname. IPv6 literal hosts are rejected
-because GitHub CLI does not accept them; use a DNS hostname or IPv4 address.
+Supported bases use DNS names or IPv4, optionally with a non-default HTTPS port;
+`gh --hostname` receives only the hostname. IPv6 literals, credentials, query
+strings, fragments, and encoded paths are rejected. Pagination stays on the
+selected notifications endpoint with its original filters and page size.
+Destination links use the API's website origin; separate website hostnames are
+unsupported. Release discovery and installation remain on GitHub.com.
 
-Only HTTPS bases without embedded credentials, query strings, fragments, or
-encoded paths are accepted. Notification pagination must stay on that base's
-notifications endpoint with the original `all` and `is_done` filters and page size.
-Issue/PR, repository, and inbox links use the selected API's origin as the
-website origin; APIs with a separate website hostname are not supported.
-Release discovery and installation links remain on GitHub.com.
-
-**A custom API is not necessarily an isolated dataset.** Read/done controls
-still perform real per-thread writes when explicitly clicked, and some
-development servers share production data. A banner identifies the active
-custom API. Desktop polling and native delivery are disabled for custom APIs
-without changing saved desktop preferences or production coordination files.
-The inbox link stays unavailable until the active API is known; the link and
-custom-API warning do not need to wait for the first notification fetch.
-Use synthetic fixtures for automated validation, never live notification writes.
+**Custom APIs may share production data.** Panel read/done actions still write
+to GitHub. A banner identifies the custom target; desktop polling and delivery
+are disabled without changing saved desktop preferences. Use synthetic fixtures
+for automation, never live notification writes.
 
 ### Inbox API contract
 
-Show notifications defaults to All and uses `all=true&is_done=false`. Unread only
-uses `all=false` without `is_done`. Both use `per_page=50` and explicit
-pagination. The existing agent `mode: "unread"` overrides this preference with
-`all=false`, and desktop polling also stays unread-only. Cache entries and
-pagination validation keep the two queries separate. Unfiltered `all=true`
-requests are rejected so neither view can include Done notifications.
+All (the default) uses `all=true&is_done=false`; Unread only, agent
+`mode: "unread"`, and desktop polling use `all=false` without `is_done`.
+Both views use `per_page=50`, explicit pagination, and separate caches.
+Unfiltered `all=true` is rejected so Done items stay hidden.
 
-This behavior requires server support for the `is_done` filter. Do not release
-or publish these changes before that support is deployed: older servers may
-ignore the parameter and include Done items in the default inbox. Validate
-against an explicitly selected development API using read-only requests and
-aggregate counts, never captured notification content.
+**Do not publish the All view before server support for `is_done` is deployed.**
+Older servers may silently ignore it. Validate with read-only requests and
+aggregate counts against an explicitly selected development API, never captured
+notification content.
 
 ### Synthetic preview
 
 ```sh
 npm run dev:fixture
-```
-
-This standalone preview needs only Node.js, not development dependencies,
-GitHub sign-in, or the Copilot host. It shares the browser tests' synthetic
-fixture and runs the real renderer and protected loopback server. The sample
-inbox includes pagination, search, and multiple attention categories. GitHub
-reads, read/done updates, release checks, and desktop delivery are simulated.
-
-Choose a reproducible preset with `--scenario`:
-
-```sh
 npm run dev:fixture -- --scenario=stale
 npm run dev:fixture -- --help
 ```
+
+The preview runs the real renderer and protected loopback server using
+`test/canvas-fixtures.mjs`. It needs only Node.js, not development dependencies,
+GitHub sign-in, or Copilot. Reads, read/done writes, release checks, and alerts
+are simulated.
 
 | Scenario | Behavior |
 | --- | --- |
@@ -128,261 +92,197 @@ npm run dev:fixture -- --help
 | `rate-limited` | Notification reads return HTTP 429 with a 120-second retry header. Real provider backoff applies, including to Force refresh. |
 | `stale` | The first notification read succeeds. Click **Force refresh** to fail the next read with HTTP 503 while retaining the loaded rows. |
 
-`--scenario stale` is also accepted. Unknown names, extra arguments, and duplicate
-options fail before starting a server. Restart the command to switch or reset
-scenarios; there is no in-page scenario switcher. The error presets continue
-failing notification reads after their retry waits, so the provider may increase
-backoff. Settings and synthetic release checks remain available. Scenario
-definitions in `test/preview-scenarios.mjs` reuse the shared request hooks rather
-than forcing renderer state.
+Presets live in `test/preview-scenarios.mjs`; `--scenario stale` also works.
+Invalid or duplicate options fail before startup. Restart to change/reset a
+scenario or load source edits; there is no hot reload. Error presets keep failing
+notification reads after retry waits, so backoff may increase; Settings remains usable.
 
-Open the printed `file://` launcher in a browser. It redirects to the preview
-without printing its capability URL to terminal logs. The launcher is stored
-with owner-only permissions in a private temporary directory; do not share it
-or the resulting browser URL. The footer identifies the preview and selected scenario.
-GitHub links in the renderer still navigate to GitHub when explicitly clicked.
+Open the printed private `file://` launcher. **Never share it or the resulting
+capability URL.** The footer identifies the scenario; explicitly clicked GitHub
+links still open GitHub. Settings, the owner-only launcher, and desktop
+coordination stay in a temporary directory, never your real `COPILOT_HOME`.
+Alerts start off; enabling them records simulated deliveries only. Ctrl+C or
+SIGTERM stops the server and removes temporary files.
+This does not validate the host SDK or host-provided theme tokens.
 
-Settings and desktop coordination files stay in that temporary directory, never
-in your real `COPILOT_HOME`. Desktop alerts start off; enabling them only records
-simulated deliveries in memory. Ctrl+C or SIGTERM stops the server and removes
-the launcher and temporary settings. Each run starts fresh. After source or
-asset changes, stop and restart the preview; it does not hot-reload. This does
-not validate host SDK integration or host-provided theme tokens.
+### README screenshot
+
+```sh
+npm run screenshot:readme
+```
+
+Overwrites `docs/images/github-notifications.png` using the real renderer and
+`test/readme-fixture.mjs`: ten notifications, seven unread, across `example/atlas`,
+`example/design-system`, and `example/cli`, including varied issue/PR/discussion
+states and a failed check run. Keep this canonical scene rather than inventing
+rows for each PR. **Settings stays closed.** Inspect the image and keep its README
+alt text accurate.
+
+Requires [development dependencies](#environment-check) and managed Chromium:
+`npx playwright install chromium` (add `--with-deps` on Linux if system libraries
+are missing). No GitHub sign-in or Copilot host is needed.
+
+| Fixed capture settings | Value |
+| --- | --- |
+| Clock / locale / time zone | `2026-01-10T12:00:00Z` / `en-US` / UTC |
+| View | All inbox, repository grouping, dark theme |
+| Viewport / scale | 735 x 1000 CSS pixels / 2x; full-page PNG, currently 1470 x 2000 |
+
+Capture waits for rows, resolved icons, and fonts; disables animations/carets;
+parks the pointer outside content; and omits the development footer.
+**Identical pixels require the same locked browser, OS/architecture, and system
+fonts.** The renderer's normal font stack is preserved. For a shared Linux
+environment, use the exact digest-pinned image in [browser CI](../.github/workflows/tests.yml);
+do not expect cross-platform byte equality.
+
+Use `-- --output=readme-preview.png` to keep the README image unchanged (the parent
+directory must exist), or `-- --help` for dependency-free usage. The
+[regression test](../test/browser/readme-screenshot.spec.mjs) compares fresh captures
+within each engine; see [Tests and checks](#tests-and-checks).
+
+The shared synthetic fixture keeps real preferences and alerts untouched.
+External browser requests are blocked; notification links and read/done controls
+are never clicked. The command saves only after capture, assertions, and cleanup
+succeed, and reports failures without exposing capability URLs.
 
 ### Environment check
-
-Select Node.js 24 using the repository's `.node-version` and your version
-manager, then run:
 
 ```sh
 npm run doctor
 ```
 
-The read-only check reports the supported Node version, installed development
-dependency versions, `actionlint` availability, and Chromium/WebKit executable
-paths. It exits nonzero if a prerequisite is missing or cannot be inspected and
-prints remediation commands. It does not install tools, launch browsers,
-authenticate with GitHub, inspect notification data, or change preferences.
-It runs even before development dependencies are installed.
+A read-only check for Node, locked dependencies, `actionlint`, and browser
+executables. It works before dependency installation, prints remediation commands,
+and fails for missing/uninspectable prerequisites. It does not install tools,
+launch browsers, authenticate, read notifications, or change preferences.
+Executable checks do not prove browser launch readiness; run browser tests.
 
-Use `npm ci --ignore-scripts --engine-strict` to restore development dependencies. For
-`actionlint`, macOS users can run `brew install actionlint`; with Go installed,
-run `go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12` and add Go's
-binary directory to `PATH`. Linux users can also follow the checksum-verified
-installation steps in the [setup workflow](../.github/workflows/copilot-setup-steps.yml).
-Browser installation is described below. Finding browser executables does not
-prove that Linux system libraries or headless launch dependencies are available;
-the browser tests provide that validation.
+| Missing tool | Setup |
+| --- | --- |
+| Development dependencies | `npm ci --ignore-scripts --engine-strict` |
+| Chromium / WebKit | `npx playwright install --with-deps chromium webkit` (system libraries may require permission) |
+| actionlint | `go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12`, then add Go's binary directory to `PATH`; macOS also supports `brew install actionlint` |
+
+Linux can instead use the checksum-verified actionlint installation in
+[Copilot setup](../.github/workflows/copilot-setup-steps.yml).
 
 ## Tests and checks
 
-Unit and HTTP integration tests need no dependency installation:
+Run from the repository root, starting with tests relevant to the change.
+Node tests and coverage need no dependency installation; other checks need the
+[tools above](#environment-check).
 
-```sh
-node --test test/*.test.mjs
-```
+| Check | Command |
+| --- | --- |
+| Node unit / HTTP integration | `npm test` |
+| Targeted Node tests (example) | `node --test test/server.test.mjs test/inbox.test.mjs` |
+| Source coverage | `npm run test:coverage` |
+| JS, CSS, formatting, recovery lint | `npm run lint` |
+| Workflow lint | `npm run lint:workflows` |
+| Release build and packaged integration | `npm run build && npm run test:package` |
+| Browser / accessibility, both engines | `npm run test:browser` |
+| WebKit only | `npm run test:browser -- --project=webkit` |
+| Screenshot reproducibility | `npm run test:browser -- readme-screenshot` |
+| Full local validation | `npm run check:full` |
 
-For lint, coverage, packaging, and browser checks:
+Coverage enforces aggregate **95% lines, branches, and functions**, with every
+eligible runtime/release/installer module included. The reporter and build script
+are excluded; packaged checks validate the build separately.
 
-```sh
-npm ci --ignore-scripts --engine-strict
-npm run lint
-npm run lint:workflows  # Requires actionlint on PATH.
-npm run test:coverage
-npm run build
-npm run test:package
-npx playwright install --with-deps chromium webkit
-npm run test:browser
-```
-
-`npm run lint` runs all source checks:
-
-- `npm run lint:js` checks JavaScript with ESLint.
-- `npm run lint:css` checks CSS with Stylelint and `stylelint-config-standard`.
-- `npm run format:css:check` checks CSS formatting with Prettier.
-- `npm run lint:recovery` checks the embedded recovery JavaScript and CSS with
-  the same browser ESLint rules and Stylelint configuration.
-
-CI runs each check as a separate step. Stylelint catches CSS errors and enforces
-CSS conventions; Prettier keeps the stylesheet readable with multiline rules
-and declarations.
-
-Lint, Windows and browser checks, cloud setup, and release tooling read
-`.node-version` to use current Node.js 24. The runtime test matrix explicitly
-covers Node.js 22 and 24, with source coverage on Node.js 22. Every CI dependency
-install uses `--engine-strict` so unsupported package engines fail instead of
-only warning. Release bundles still target Node.js 22; the development
-requirement does not raise the runtime minimum. CI does not separately test the
-initial 24.0.0 release.
+`check:full` runs doctor, lint, workflow lint, coverage, build, package tests, and
+both browser engines, stopping on failure. It never installs prerequisites,
+skips unavailable checks, or publishes. Outputs stay in ignored directories.
+Tests use synthetic responses and temporary settings: no sign-in, live writes,
+or OS alerts. SDK stubs cannot prove host compatibility; reload and inspect the
+real extension after SDK changes.
 
 ### Native notification coverage
 
-CI checks native notification contracts without sending real desktop alerts:
+| Platform | Non-delivering check |
+| --- | --- |
+| Windows | Construct real PowerShell XML/WinRT payloads with delivery removed; validate click targets, permission/sender failures, cancellation, and at-most-once behavior. XML round-trip tests allow 30 seconds; production keeps its 10-second timeout. |
+| macOS | Compile/decompile AppleScript with `osacompile` / `osadecompile`, never execute `display notification`. |
+| Linux | Run `notify-send` against an exclusively owned fake service on a private `dbus-run-session`; check escaping, Unicode, and sound hints. |
 
-- Windows runs the real Windows PowerShell XML/WinRT construction with delivery
-  removed, verifies protocol click destinations, and exercises permission and
-  sender failures with synthetic objects. It also checks issue/PR destinations,
-  check-run resolution, cancellation, and at-most-once behavior. The XML round-trip
-  test allows 30 seconds per subprocess for cold PowerShell/WinRT startup on CI;
-  production delivery retains its 10-second timeout.
-- macOS compiles and decompiles the actual AppleScript using `osacompile` and
-  `osadecompile`, without executing `display notification`.
-- The Node.js 24 Linux job uses `ubuntu-latest` to install `dbus-daemon`,
-  `libnotify-bin`, `python3-dbus`, and `python3-gi`. It runs real `notify-send`
-  against a fake notification service on a private `dbus-run-session`, checking
-  text escaping, Unicode, and sound hints. No graphical desktop is involved.
-  Node.js 22 coverage and source lint retain the lightweight `ubuntu-slim` runner.
+For Linux, install `dbus-daemon`, `libnotify-bin`, `python3-dbus`, and `python3-gi`,
+then run `npm run test:notifications:linux`. It creates and removes its own bus,
+never uses the user's notification service, and fails rather than skips when
+tools are missing. It is separate from the dependency-free suite.
 
-On Linux with those system packages installed, run
-`npm run test:notifications:linux`. The test creates and tears down its own bus,
-requires exclusive ownership of the fake notification service before sending,
-and does not use a user's desktop notification service. Missing tools fail this
-integration check rather than silently skipping it. It remains separate from
-the dependency-free Node suite.
-
-These checks do **not** prove visible banners, OS permissions, Focus/Do Not
-Disturb behavior, or browser activation on an actual desktop. Windows click
-targets are validated in the toast payload; Linux and macOS click navigation
-are not implemented. Those end-to-end behaviors require manual testing.
+Visible banners, real OS permissions, Focus/Do Not Disturb, and browser activation
+still need manual testing. Windows click targets are checked in the payload;
+Linux/macOS click navigation is not implemented.
 
 ### Coverage badge
 
-The README coverage badge shows measured aggregate **line coverage** from the
-Node.js 22 run, rounded to two decimal places, not the 95% minimum. The existing
-reporter writes a standalone SVG when `COVERAGE_BADGE_PATH` is set; normal local
-coverage runs do not create badge files. CI uploads only that SVG, not source
-files or per-file coverage data.
+The badge reports measured Node.js 22 **line coverage**, rounded to two decimals,
+not the minimum threshold. `COVERAGE_BADGE_PATH` makes the reporter write an SVG;
+ordinary local runs do not. CI uploads only that SVG, not source/per-file data.
 
-After all checks in a main-branch push pass, the separate **Coverage badge**
-workflow publishes the SVG to an automatically created, independent `badges`
-branch. Only that publishing job has `contents: write`; test jobs remain
-read-only, and the publisher does not check out or execute repository code.
-It downloads the artifact from that exact successful run and checks `main`
-before preparing the update and again immediately before pushing, skipping
-commits that have been superseded. These checks are not atomic with updates to
-`main`. It never force-pushes. Pull requests, tags, failed runs, and
-manual test runs cannot publish a badge. The badge becomes available after
-the first successful main-branch push with these workflows installed; until
-then, its image URL will not exist. Later failed runs leave the previous badge
-in place, so consult the adjacent CI badge, scoped to pushes on `main`, for
-current build health.
-No external coverage service, additional secret, or source-branch commit is
-required. Repository rules must allow the Actions token to create and update
-`badges`; publication failures appear in the workflow rather than silently
-replacing the measurement.
+After a successful main push, the separate **Coverage badge** workflow publishes
+the exact run's SVG to the independent `badges` branch. Only the publisher has
+`contents: write`; it never executes repository code or force-pushes. It checks
+`main` before preparing and pushing the update, skipping superseded commits
+(these checks are not atomic with changes to `main`).
+
+PRs, tags, failed runs, and manual runs cannot publish. Before the first successful
+main push the image is absent; later failures leave the last badge in place.
+Use the adjacent CI badge for current build health. No external service, extra
+secret, or source-branch commit is needed. Repository rules must allow Actions
+to create/update `badges`; publication failures remain visible in the workflow.
 
 ### Tooling and browser coverage
 
-The recovery lint check starts an isolated loopback server with synthetic
-missing renderer assets and lints the fallback content it serves. It makes no
-GitHub requests, sends no desktop alerts, and checks invalid snippets to verify
-that the lint rules reject errors. Its tooling-only integration tests require
-development dependencies and stay outside the dependency-free Node test suite.
-The fallback remains embedded in the provider; no development build or runtime
-recovery-file reads are introduced.
+`npm run lint` combines `lint:js` (ESLint), `lint:css` (Stylelint),
+`format:css:check` (Prettier), and `lint:recovery`. Recovery lint checks the actual
+embedded fallback served by an isolated loopback server, including invalid
+snippets; its dependency-requiring integration tests stay outside the Node suite.
 
-The Stylelint configuration retains prefix-style media queries and allows
-shared state and component rules to rely on specificity rather than source
-order. Inline exceptions preserve the existing WebKit select and screen-reader
-clipping fallbacks; unused exceptions fail lint.
+Keep styles in plain CSS. Use `npm run lint:css -- --fix` for autofixable findings,
+then `npm run format:css`; `format:css:check` is read-only. Formatting touches
+only CSS; release builds minify it. Preserve the Stylelint exceptions for WebKit
+selects and screen-reader clipping; unused exceptions fail lint.
 
-Run `npm run format:css` to format `src/**/*.css`, or
-`npm run format:css:check` to check formatting without writing files. These
-formatting commands do not touch JavaScript or other files. For autofixable
-Stylelint findings, run `npm run lint:css -- --fix` before `npm run format:css`.
-Keep source styles in plain CSS; release builds minify the stylesheet
-automatically.
+The [test workflow](../.github/workflows/tests.yml) defines platform coverage:
+Node.js 22/24 runtime tests, with coverage on 22; `.node-version` for tooling;
+strict engine checks on every dependency install; and Node.js 22 release bundles.
+It does not separately test the initial Node.js 24.0.0 release.
 
-Coverage also works without `npm ci`. It enforces aggregate minimums of 95% for
-lines, branches, and functions, not per-file minimums. Every eligible runtime
-and release/installer module must appear in the report. The coverage reporter
-and build script remain excluded from the percentages; packaged integration
-tests validate the build separately.
+**Workflow lint:** the [Docker action](../ci/actionlint/action.yml) uses a
+version/digest-pinned [upstream image](../ci/actionlint/Dockerfile), preserving
+ShellCheck, Pyflakes, and `-color -verbose` output. Docker jobs, Linux native tests,
+and Copilot setup use `ubuntu-latest`; Node.js 22 coverage, source lint, and release
+jobs use `ubuntu-slim`, which cannot run Docker-in-Docker.
 
-Playwright downloads browser binaries and may need permission to install Linux
-system libraries. Use `-- --project=webkit` with `npm run test:browser` to run one
-engine.
+[Dependabot](../.github/dependabot.yml) tracks `ci/actionlint/Dockerfile` weekly
+on the default branch, not inline `docker://` references. For version bumps,
+verify the image digest and setup binary checksum, then align Copilot setup's
+URL/checksum, doctor remediation, and the Go install command above.
+The alignment test enforces this; digest-only updates need no version changes.
+The CI image does not provision agent tools. Administrators must update
+required-check rules separately if workflow check names change.
 
-For an explicit full local check after targeted tests, run:
+**Browser CI:** both engines run in a version/digest-pinned Playwright image
+with browsers and libraries preinstalled. Update its version and verified digest
+with the locked `@playwright/test` dependency; alignment is tested.
+PR/main CI validates packaging but never publishes releases.
 
-```sh
-npm run check:full
-```
-
-This runs the environment check, JavaScript/workflow lint, all Node tests with
-coverage, the release build, packaged integration tests, and browser/accessibility
-tests in both Chromium and WebKit, stopping at the first failure. It never
-installs missing prerequisites, skips unavailable checks, or publishes a release.
-Build output and test reports remain in their ignored directories.
-
-CI separates source linting (`Lint`, on `ubuntu-slim`) from workflow linting
-(`Actionlint`, on `ubuntu-latest`). Workflow lint uses the repository-owned
-[Docker action](../ci/actionlint/action.yml). Its
-[Dockerfile](../ci/actionlint/Dockerfile) contains only the
-[official actionlint Docker image](https://github.com/rhysd/actionlint/blob/main/docs/usage.md#docker),
-pinned by version and digest, including its ShellCheck and Pyflakes integrations.
-The action always passes `-color -verbose`, listing checked workflows and the
-final error count even on successful runs. It needs no Node setup or npm
-installation. The Docker action needs a full Linux
-VM: [`ubuntu-slim`](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#single-cpu-runners)
-is an unprivileged container and does not support Docker-in-Docker.
-Docker-based jobs, native Linux notification tests, and Copilot setup use
-`ubuntu-latest`; Node.js 22 coverage, source lint, and release jobs use
-`ubuntu-slim`. The container digests pin the
-tool environments independently of the host Ubuntu release.
-
-The weekly `docker` entry in [Dependabot configuration](../.github/dependabot.yml)
-tracks the Dockerfile actually used by CI. The action lives under `ci/` so Docker
-dependency updates do not need to modify files under `.github/`.
-The configuration takes effect on the default branch;
-the `github-actions` updater does not track inline `docker://` references.
-Dependabot can propose image tag and digest updates, but it does not update the
-binary URL/checksum in Copilot setup or the installation guidance. For version
-bumps, update those companion pins, the doctor remediation command, and the
-versioned Go installation command above. A dedicated alignment test rejects
-version drift. Digest-only changes for the same version retain that alignment.
-Always verify new image digests and binary checksums before accepting an update.
-
-Copilot setup still installs that binary so agents can run `npm run lint:workflows`
-in their own session; the CI container does not provision the agent environment.
-If CI check names change, repository administrators must coordinate corresponding
-required-check rules separately; editing a workflow does not update those rules.
-
-See the [test workflow](../.github/workflows/tests.yml) for platform coverage and
-required checks. Browser CI runs both engines in the official Playwright image,
-which includes browser binaries and system libraries; it does not run APT or
-download browsers during each job. The image is pinned by version and digest.
-Update both pins whenever the locked `@playwright/test` version changes; the
-workflow tests check that the versions match. PR/main CI validates packaging
-but never publishes releases.
-Tests use synthetic GitHub responses and isolated settings: no sign-in, live
-read updates, or OS notifications. SDK stubs do not verify compatibility with a
-specific Copilot build; reload and inspect the real extension after SDK changes.
-The Windows lock checks also verify that existing files and directory links at
-lock paths are refused and preserved before a candidate directory is published.
-Do not rely on a failed directory rename to protect those files on Windows.
+Windows lock tests preserve existing files and directory links before publishing
+candidate directories: a failed directory rename is not a safe guard on Windows.
 
 ## Copilot cloud agent and code review
 
-[Copilot setup steps](../.github/workflows/copilot-setup-steps.yml) prepare an
-full Ubuntu runner (`ubuntu-latest`) with Node.js 24, locked development dependencies,
-and checksum-verified `actionlint`. Cloud-agent sessions and code reviews share
-this lightweight setup, without a separate review workflow. It checks tool
-availability without running the test suite, installing the extension, or
-publishing a release. It needs no notification credentials or separately
-installed Copilot SDK.
+[Copilot setup](../.github/workflows/copilot-setup-steps.yml) supplies an
+`ubuntu-latest` runner with Node.js 24, locked dependencies, and checksum-verified
+actionlint for cloud-agent sessions and code reviews. It checks availability,
+not tests, extension installation, or releases; no notification credentials or
+separate SDK are needed.
 
-Setup does not install browser binaries or system libraries. For tasks needing
-browser validation, run the Playwright installation command in
-[Tests and checks](#tests-and-checks) on demand. Downloads need network access,
-and Linux system libraries may require installation permission; report any
-environment restrictions rather than treating unrun tests as passing. Browser
-and accessibility validation still runs in CI's pre-provisioned container.
-
-Copilot uses the shared setup once the workflow is on the default branch. It
-does not configure local Copilot app/CLI sessions. Manual runs and path-filtered
-pull-request/main runs validate setup when the workflow, `.node-version`, or
-dependency manifests change; the agent still runs the checks relevant to its task.
+Once on the default branch, setup applies to cloud sessions, **not local app/CLI
+sessions**. It omits browsers and system libraries: install them
+[on demand](#environment-check), then run the relevant checks. Report network
+or permission restrictions rather than treating unrun checks as passing.
+Manual and path-filtered PR/main runs validate setup changes.
 
 ## Packaging
 

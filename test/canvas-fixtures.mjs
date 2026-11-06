@@ -14,6 +14,7 @@ import { loadDevelopmentAPI } from "../src/development.mjs";
 
 export async function createCanvasFixture({
   assetFailure = false, desktopEnabled = false, packaged = false, development, developmentApiBaseUrl, log: report = () => {},
+  now = Date.now,
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), "notification-fixture-"));
   const directory = join(root, "home", "extensions", "github-notifications", "artifacts");
@@ -121,21 +122,21 @@ export async function createCanvasFixture({
     return http(selected.slice(offset, offset + 50), offset + 50 < selected.length
       ? { link: `<${next.href}>; rel="next"` } : {});
   };
-  const client = new GitHubClient({ run, now: () => Date.now() + offset, apiBaseUrl: target.baseUrl });
+  const client = new GitHubClient({ run, now: () => now() + offset, apiBaseUrl: target.baseUrl });
   const preferences = new Preferences({ directory });
   const log = (message, options) => {
     (options.level === "warning" ? warnings : errors).push(message);
     report(message, options);
   };
   const desktop = new DesktopNotifications({
-    preferences, client, now: () => Date.now() + offset, platform: "darwin",
+    preferences, client, now: () => now() + offset, platform: "darwin",
     notify: async message => { deliveries.push(message); },
     log,
   });
   const updates = new Updates({ run: async args => {
     assert.equal(args.at(-1), "/repos/fletchto99/copilot-notifications-canvas/releases/latest");
     return http({ tag_name: `v${CURRENT_VERSION}`, draft: false, prerelease: false });
-  }, log });
+  }, log, now: () => now() + offset });
   const inbox = new Inbox(client);
   let server;
   let registration;
@@ -177,7 +178,7 @@ export async function createCanvasFixture({
     return {
       root, url: server.url, rows, writes, doneWrites, requests, preferences, deliveries, desktop, errors, warnings, close,
       setRequestHook: hook => { requestHook = hook; },
-      advance: ms => { offset += ms; return Date.now() + offset; },
+      advance: ms => { offset += ms; return now() + offset; },
       recoverAssets: () => { assetsUnavailable = false; },
     };
   } catch (error) {
