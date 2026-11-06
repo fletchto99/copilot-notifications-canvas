@@ -224,6 +224,8 @@ using Settings or the shortcut guide. Ctrl/Command/Alt combinations and native
 Tab, arrow, and Enter behavior on links and buttons are left alone. Enter in
 search also works with character shortcuts disabled. The toolbar help icon is hidden
 when shortcuts are disabled; re-enable them in Settings to bring it back.
+On panels 360px or narrower, the utility icons sit in a right-aligned row below
+the title so font differences do not squeeze the title between controls.
 
 Search Enter waits for pending filters and ignores input-method composition.
 Editing the query again, moving focus away, or a failed filter cancels the

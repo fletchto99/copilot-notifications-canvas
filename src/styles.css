@@ -1151,7 +1151,12 @@ footer:has(#development-build[hidden]) {
 
 @media (max-width: 360px) {
   .toolbar {
-    gap: 2px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .toolbar h1 {
+    flex-basis: 100%;
   }
 }
 

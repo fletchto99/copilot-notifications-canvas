@@ -19,7 +19,7 @@ for (const width of [320, 960]) {
       const bounds = await tooltip.boundingBox();
       const button = await control.boundingBox();
       expect(bounds.y).toBeGreaterThanOrEqual(8);
-      if (controls.indexOf(control) < 4) {
+      if (button.y < bounds.height + 8) {
         expect(Math.abs(bounds.y - button.y - button.height)).toBeLessThanOrEqual(1);
       } else {
         expect(Math.abs(bounds.y + bounds.height - button.y)).toBeLessThanOrEqual(1);

@@ -407,7 +407,8 @@ test("compact toolbar aligns the title and utility icons above full-width search
   assert.match(styles, /\.search input \{\s+height: 38px;\s+\}/);
   assert.match(styles, /\.icon-button \{[^}]*flex-shrink: 0;[^}]*width: 38px;\s+height: 38px;[^}]*color: var\(--canvas-text\);/);
   assert.match(styles, /\.settings \{[^}]*flex-shrink: 0;/);
-  assert.doesNotMatch(styles, /\.toolbar \{[^}]*flex-wrap: wrap/);
+  assert.doesNotMatch(styles.match(/(?:^|\n)\.toolbar \{[^}]*\}/)[0], /flex-wrap: wrap/);
+  assert.match(styles, /@media \(max-width: 360px\) \{\s+\.toolbar \{\s+flex-wrap: wrap;\s+justify-content: flex-end;\s+\}\s+\.toolbar h1 \{\s+flex-basis: 100%;/);
 });
 
 test("notification metadata, counts and action tooltips use 12px text", () => {
