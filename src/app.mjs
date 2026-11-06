@@ -1174,7 +1174,7 @@ function render(fallbackFocusKey) {
   const error = actionError || state?.error?.message || connectionError;
   const loading = state?.status === "idle" || state?.status === "loading";
   const filtered = Boolean(state?.filters.query || (state && state.filters.attention !== "all"));
-  const cleared = Boolean(state && !state.loaded && (state.hasMore || state.needsRefresh));
+  const cleared = Boolean(state && !state.loaded && state.hasMore);
   const caughtUp = Boolean(state && !error && !loading && !filtered && !state.groups.length && !cleared);
   const attention = state?.filters.attention ?? "all";
   const requestedAttention = pendingFilters?.attention ?? inFlightAttention;

@@ -2,37 +2,47 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { runInContext } from "node:vm";
 import { renderer, settle } from "./renderer-fixtures.mjs";
-import { http, inboxNext as next, thread } from "./fixtures.mjs";
+import { http, inboxNext as next, next as unreadNext, thread } from "./fixtures.mjs";
 
-test("clearing loaded rows waits for reconciliation before claiming the inbox is caught up", async t => {
+test("clearing the last notifications is caught up immediately unless unloaded pages remain", async t => {
   for (const hasMore of [false, true]) {
-    for (const action of ["done"]) {
+    for (const matchGitHubInbox of [false, true]) {
       let fetches = 0;
-      const ui = await renderer({ onFetch: () => ++fetches === 1
-        ? http([thread("1"), thread("2")], hasMore ? { link: next } : {})
+      const link = matchGitHubInbox ? next : unreadNext;
+      const ui = await renderer({ storedSettings: { matchGitHubInbox }, onFetch: () => ++fetches === 1
+        ? http([thread("1"), thread("2")], hasMore ? { link } : {})
         : http(hasMore ? [thread("3")] : []) });
       t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
       for (const id of ["1", "2"]) {
-        await ui.ids.get("groups").querySelectorAll("button").find(button => button.dataset.focusKey === `${action}:${id}`).events.click();
+        const done = ui.ids.get("groups").querySelectorAll("button").find(button => button.dataset.focusKey === `done:${id}`);
+        done.focus();
+        await done.events.click();
       }
       assert.equal(fetches, 1);
+      assert.equal(ui.inbox.summary().needsRefresh, true);
+      assert.equal(ui.ids.get("empty").hidden, false);
+      const refresh = ui.ids.get("empty-refresh");
+      if (!hasMore) {
+        assert.equal(ui.ids.get("empty-title").textContent, "All caught up \u{1F389}");
+        assert.equal(ui.ids.get("empty-description").textContent, "New notifications will appear here, grouped by repository.");
+        assert.equal(ui.ids.get("count").hidden, true);
+        assert.equal(ui.ids.get("empty-symbol").hidden, true);
+        assert.equal(ui.ids.get("more").hidden, true);
+        assert.equal(refresh.hidden, true);
+        assert.equal(ui.document.activeElement, ui.ids.get("search"));
+        continue;
+      }
       assert.equal(ui.ids.get("empty-title").textContent, "Loaded notifications cleared");
       assert.equal(ui.ids.get("empty-description").textContent, "Refresh to check for remaining notifications.");
       assert.equal(ui.ids.get("count").hidden, false);
-      const refresh = ui.ids.get("empty-refresh");
       assert.equal(refresh.hidden, false);
       refresh.focus();
       await refresh.events.click();
       assert.equal(fetches, 2);
       assert.equal(refresh.hidden, true);
       assert.equal(ui.document.activeElement, ui.ids.get("search"));
-      if (hasMore) {
-        assert.equal(ui.ids.get("empty").hidden, true);
-        assert.deepEqual(ui.inbox.loadedItems().map(item => item.id), ["3"]);
-      } else {
-        assert.equal(ui.ids.get("empty-title").textContent, "All caught up \u{1F389}");
-        assert.equal(ui.ids.get("count").hidden, true);
-      }
+      assert.equal(ui.ids.get("empty").hidden, true);
+      assert.deepEqual(ui.inbox.loadedItems().map(item => item.id), ["3"]);
     }
   }
 });

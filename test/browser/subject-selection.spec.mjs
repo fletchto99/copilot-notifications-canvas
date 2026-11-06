@@ -72,7 +72,7 @@ for (const packaged of [false, true]) {
       await expect(page.locator("#notice")).toBeHidden({ timeout: 15_000 });
     });
 
-    test("status loading failures preserve filtered, cleared and caught-up inbox states", async ({ page, canvas }, testInfo) => {
+    test("status loading failures preserve filtered and immediately caught-up inbox states", async ({ page, canvas }, testInfo) => {
       canvas.rows.splice(1);
       let fail = true;
       await page.route("**/api/subjects", async route => {
@@ -95,11 +95,7 @@ for (const packaged of [false, true]) {
       await page.getByRole("searchbox").fill("");
       await expect(page.locator(".row")).toHaveCount(1);
       await page.locator('[data-focus-key="done:1"]').click();
-      await expect(page.locator("#empty-title")).toHaveText("Loaded notifications cleared");
-      await expect(page.locator("#empty-description")).toHaveText("Refresh to check for remaining notifications.");
-      await expect(page.locator("#empty-refresh")).toBeVisible();
-      await expect(page.locator("#empty-refresh")).toHaveAttribute("aria-disabled", "false");
-      await page.locator("#empty-refresh").click();
+      await expect(page.locator("#empty-refresh")).toBeHidden();
       await expect(page.locator("#empty-title")).toContainText("All caught up");
       await expect(page.locator("#empty-description")).toHaveText("New notifications will appear here, grouped by repository.");
       await expect(page.locator("#count")).toBeHidden();

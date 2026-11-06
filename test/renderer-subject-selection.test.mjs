@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { thread } from "./fixtures.mjs";
+import { http, inboxNext as next, thread } from "./fixtures.mjs";
 import { renderer, settle } from "./renderer-fixtures.mjs";
 
 const rows = count => Array.from({ length: count }, (_, index) => thread(String(1000000000000 + index)));
@@ -118,10 +118,12 @@ test("status upload failures are explicit, retry on polling, and never block ord
 });
 
 test("status selection failures preserve empty, filtered and cleared inbox presentation", async () => {
-  for (const mode of ["empty", "filtered", "cleared"]) {
+  for (const mode of ["empty", "filtered", "cleared", "completed"]) {
     let fail = true;
+    const initialRows = mode === "empty" ? [] : rows(1);
     const ui = await renderer({
-      initialRows: mode === "empty" ? [] : rows(1),
+      initialRows,
+      onFetch: mode === "cleared" ? () => http(initialRows.filter(row => !row.done), { link: next }) : undefined,
       onSubjects: async () => { if (fail) throw new Error("Synthetic selection failure"); },
     });
     try {
@@ -129,17 +131,18 @@ test("status selection failures preserve empty, filtered and cleared inbox prese
         ui.ids.get("search").value = "no matching notifications";
         ui.ids.get("search").events.input({});
         await ui.fireTimer(250);
-      } else if (mode === "cleared") {
+      } else if (mode === "cleared" || mode === "completed") {
         await ui.ids.get("groups").querySelectorAll(".mark-done")[0].events.click();
       }
       const description = ui.ids.get("empty-description").textContent;
       await sync(ui);
       assert.match(ui.ids.get("notice").textContent, /^Notification status loading paused\./);
-      assert.equal(ui.ids.get("empty-title").textContent, mode === "empty" ? "All caught up \u{1F389}" :
+      const caughtUp = mode === "empty" || mode === "completed";
+      assert.equal(ui.ids.get("empty-title").textContent, caughtUp ? "All caught up \u{1F389}" :
         mode === "filtered" ? "No matches in loaded notifications" : "Loaded notifications cleared");
       assert.equal(ui.ids.get("empty-description").textContent, description);
-      assert.equal(ui.ids.get("count").hidden, mode === "empty");
-      assert.equal(ui.ids.get("empty-symbol").hidden, mode === "empty");
+      assert.equal(ui.ids.get("count").hidden, caughtUp);
+      assert.equal(ui.ids.get("empty-symbol").hidden, caughtUp);
       assert.equal(ui.ids.get("empty-refresh").hidden, mode !== "cleared");
       assert.equal(ui.ids.get("force-refresh").attributes["aria-disabled"], "false");
       if (mode === "cleared") {
