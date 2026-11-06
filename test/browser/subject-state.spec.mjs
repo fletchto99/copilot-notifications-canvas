@@ -7,7 +7,7 @@ for (const packaged of [false, true]) {
     test.use({ packaged });
 
     test("static type icons and fallback bells stay accessible without status lookups", async ({ page, canvas }, testInfo) => {
-      const types = ["Release", ...staticSubjectTypes, "FutureSubject", "__proto__", ""];
+      const types = ["Release", ...staticSubjectTypes, "FutureSubject", "__proto__", "", "X".repeat(80)];
       const labels = types.map(type => type.replace(/([a-z])([A-Z])/g, "$1 $2") || "Notification");
       const paths = { Commit: "commits/abcdef0123456" };
       canvas.rows.splice(0, canvas.rows.length, ...types.map((type, index) => thread(String(index + 1), {
@@ -32,7 +32,7 @@ for (const packaged of [false, true]) {
             await expect(metadata).not.toContainText(/Open (?:GitHub|repository)/);
             await expect(metadata.locator(".metadata-item")).toHaveCount(groupBy === "repo" ? 3 : 4);
           }
-          for (const width of [320, 960]) {
+          for (const width of [320, 375, 960]) {
             await page.setViewportSize({ width, height: 900 });
             for (const [index, field] of (await fields.all()).entries()) {
               await expect(field).toHaveClass("notification-subject");
@@ -44,6 +44,27 @@ for (const packaged of [false, true]) {
               await expect(icon.locator("svg")).toHaveAttribute("aria-hidden", "true");
               await expect(icon.locator("svg")).toHaveCSS("width", "16px");
               await expect(icon.locator("path")).toHaveAttribute("d", /^M/);
+              const layout = await field.evaluate(node => {
+                const label = node.querySelector(".notification-type");
+                const range = document.createRange();
+                range.setStart(label.firstChild, 0);
+                range.setEnd(label.firstChild, 1);
+                const firstLetter = range.getBoundingClientRect();
+                const icon = node.querySelector("svg").getBoundingClientRect();
+                return {
+                  iconCenter: icon.top + icon.height / 2,
+                  iconRight: icon.right,
+                  textTop: firstLetter.top,
+                  textBottom: firstLetter.bottom,
+                  textLeft: firstLetter.left,
+                  labelRight: label.getBoundingClientRect().right,
+                  fieldRight: node.getBoundingClientRect().right,
+                };
+              });
+              expect(layout.iconCenter, `${labels[index]} icon stays on the first text line`).toBeGreaterThanOrEqual(layout.textTop);
+              expect(layout.iconCenter).toBeLessThanOrEqual(layout.textBottom);
+              expect(layout.iconRight).toBeLessThanOrEqual(layout.textLeft);
+              expect(layout.labelRight).toBeLessThanOrEqual(layout.fieldRight + 1);
             }
             expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
           }
