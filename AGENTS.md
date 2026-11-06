@@ -180,10 +180,13 @@ limitations. `.node-version` selects the preferred development Node major;
 keep it aligned with the setup workflow.
 
 For UI changes, refresh `docs/images/github-notifications.png` in the same
-change so the README shows the current renderer. Use synthetic demo data with
-mixed read/unread notifications, representative issue/PR states, and a failed
-check run. Inspect the captured image and update its README alt text as needed.
-Never use live notification content or include private launcher/capability URLs.
+change so the README shows the current renderer. Run `npm run screenshot:readme`
+to reuse the canonical synthetic rows and repositories with mixed read/unread
+notifications, representative issue/PR states, and a failed check run. Keep
+Settings closed. See [README screenshot](docs/development.md#readme-screenshot)
+for environment requirements and pixel reproducibility limits. Inspect the
+captured image and update its README alt text as needed. Never use live
+notification content or include private launcher/capability URLs.
 
 Node tests and coverage need no dependency installation and retain Node.js 22
 runtime compatibility coverage. For development tools, use Node.js 24 or later.

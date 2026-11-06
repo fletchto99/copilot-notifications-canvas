@@ -149,6 +149,64 @@ the launcher and temporary settings. Each run starts fresh. After source or
 asset changes, stop and restart the preview; it does not hot-reload. This does
 not validate host SDK integration or host-provided theme tokens.
 
+### README screenshot
+
+```sh
+npm run screenshot:readme
+```
+
+This overwrites `docs/images/github-notifications.png` with the real source
+renderer and the canonical synthetic scene in `test/readme-fixture.mjs`: ten
+notifications, seven unread, across `example/atlas`, `example/design-system`,
+and `example/cli`. It includes queued/draft/merged PRs, open/closed issues,
+closed/answered discussions, a release, a failed check run, and a security alert.
+Change that fixture deliberately rather than inventing new rows for each UI PR.
+Settings stays closed; the capture does not click notification links or read/done
+controls.
+
+The command needs the locked development dependencies and Playwright Chromium:
+use `npm ci --ignore-scripts --engine-strict` if dependencies are missing, and
+`npx playwright install chromium` if its browser is missing. On Linux, use
+`npx playwright install --with-deps chromium` when system libraries are also needed.
+No GitHub sign-in or Copilot host is required.
+
+The script fixes provider/browser time to `2026-01-10T12:00:00Z`, locale to
+`en-US`, time zone to UTC, repository grouping, the All inbox view, dark theme,
+a 735 x 1000 CSS-pixel viewport, and 2x device scale (1470 x 2000 output for the
+current layout). It waits for the expected rows, resolved status icons and fonts,
+not an arbitrary sleep. Animations and carets are disabled, the pointer is parked
+outside the content, and the development footer is omitted without modifying
+renderer assets. A full-page capture includes all content if a future layout
+grows taller.
+
+**Pixel reproducibility is environment-specific.** Use the same locked
+Playwright version and its managed Chromium, OS/architecture, and installed
+system fonts. The normal renderer font stack is preserved (for example, Segoe UI
+on Windows); font fallback and rasterization differ on macOS and Linux.
+Upgrading browsers/fonts can change pixels even when the scene is unchanged.
+For a shared Linux environment, use the exact digest-pinned Playwright image in
+the [browser CI job](../.github/workflows/tests.yml), not a floating image tag.
+Do not expect a Windows capture to byte-match one from that image.
+
+To write a review artifact without replacing the README image, use
+`npm run screenshot:readme -- --output=readme-preview.png` (the parent directory
+must already exist). `--help` lists usage without loading Playwright.
+The [browser regression](../test/browser/readme-screenshot.spec.mjs) captures
+twice in fresh contexts and fixtures and requires identical PNG bytes within
+each engine; run it with:
+
+```sh
+npm run test:browser -- readme-screenshot
+```
+
+All provider reads, release/status checks, and writes use the shared synthetic
+fixture. Browser requests outside its private loopback origin are blocked.
+Temporary settings, servers and browser contexts are cleaned up on success or
+failure; real preferences and desktop alerts are untouched. The command fails
+on rendering/provider errors without logging capability URLs, and saves the
+image only after capture and cleanup succeed. Inspect the generated image and
+keep the README alt text accurate before committing it.
+
 ### Environment check
 
 Select Node.js 24 using the repository's `.node-version` and your version
