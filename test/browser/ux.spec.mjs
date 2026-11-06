@@ -6,6 +6,35 @@ for (const packaged of [false, true]) {
   test.describe(packaged ? "packaged UX recovery" : "source UX recovery", () => {
     test.use({ packaged });
 
+    for (const scope of ["row", "repo", "date", "none"]) {
+      test(`completing the final notifications via ${scope} shows the caught-up view without refreshing`, async ({ page, canvas }) => {
+        canvas.rows.splice(scope === "row" ? 1 : 2);
+        canvas.rows[0].unread = false;
+        await canvas.preferences.update({ groupBy: scope === "row" ? "repo" : scope });
+        await page.goto(canvas.url);
+        await expect(page.locator(".row")).toHaveCount(canvas.rows.length);
+        const reads = () => canvas.requests.filter(path => path.startsWith("/notifications?"));
+        expect(reads()).toHaveLength(1);
+        const done = page.locator(scope === "row" ? ".mark-done" : ".repo-done");
+        await done.focus();
+        await done.press("Enter");
+        await expect(page.locator(".row")).toHaveCount(0);
+        await expect(page.locator("#empty-title")).toHaveText("All caught up \u{1F389}");
+        await expect(page.locator("#empty-description")).toHaveText(scope === "none"
+          ? "New notifications will appear here in GitHub inbox order."
+          : `New notifications will appear here, grouped by ${scope === "date" ? "date" : "repository"}.`);
+        for (const id of ["empty-refresh", "empty-symbol", "count", "more", "collapse"]) {
+          await expect(page.locator(`#${id}`)).toBeHidden();
+        }
+        await expect(page.getByRole("searchbox")).toBeFocused();
+        expect(reads()).toHaveLength(1);
+        expect(canvas.doneWrites).toEqual(canvas.rows.map(row => row.id));
+        expect(canvas.deliveries).toEqual([]);
+        const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+        expect(results.violations).toEqual([]);
+      });
+    }
+
     test("cleared loaded rows offer refresh while unread items remain on later pages", async ({ page, canvas }) => {
       await canvas.preferences.update({ groupBy: "none" });
       let first = true;

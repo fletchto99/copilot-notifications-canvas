@@ -329,11 +329,16 @@ unless GitHub requires a rate-limit or error wait. The retry time is shown;
 refresh controls remain focusable but cannot send requests during that wait.
 Hover or focus the refresh icon to see when the last update succeeded.
 
+Completing the last notification shows **All caught up** immediately when
+there are no known remaining pages; no manual refresh is required. Automatic
+refresh continues to check for new notifications. If unloaded pages remain,
+the canvas offers a refresh before loading more.
+
 | Message | Next step |
 | --- | --- |
-| Loaded notifications cleared | Refresh to check for remaining items, or load more if available |
+| Loaded notifications cleared | Known remaining pages exist; refresh after read/done changes, or load more if available |
 | No matches in loaded notifications | Change the tab or search; load more if offered |
-| All caught up | No loaded items, known remaining pages, or pending reconciliation remain |
+| All caught up | No loaded items or known remaining pages; automatic refresh keeps checking for new notifications |
 | Request failed | Follow the error message; usable rows stay visible while automatic checks wait to retry |
 
 ## Keyboard and preferences
