@@ -160,7 +160,7 @@ controls wrap while row actions stay beside their content.
 | Mark as done | Checkmark | Move to Done |
 
 Read rows show only Done. After a confirmed Read in **All**, the row stays and
-keyboard focus moves to Done; Read's space stays reserved so a second click
+focus moves from the Read button to Done; Read's space stays reserved so a second click
 cannot open the row. In **Unread only**, Read removes the row.
 Done removes it in either view.
 
@@ -203,19 +203,56 @@ pages remain; automatic refresh continues. Otherwise, refresh before loading mor
 
 | Key / gesture | Effect |
 | --- | --- |
+| J / K | Focus the next / previous visible notification in the displayed order |
+| Enter in search | Focus the first visible result once filtering finishes; does not open it |
+| Enter on a row link | Open GitHub using the native link; no extension Read/Done request |
+| I | Mark only the focused notification as read, then advance to the next visible row |
+| Shift+E | Mark only the focused notification as done |
+| / | Focus search without changing the query |
+| ? or the toolbar keyboard icon (before Settings) | Open the keyboard shortcut guide |
 | Left/Right Arrow, Home, End | Switch visible attention tabs; edge scroll buttons do not change selection |
 | Tab | Visit row links and separate Read/Done controls; empty-state panels remain focusable |
 | Hover / focus a button | Show its action tooltip |
-| Escape | Dismiss a tooltip or open menu; dismissal survives row updates |
+| Escape | Close the shortcut guide and restore focus, or dismiss a tooltip or open menu; dismissal survives row updates |
 | Click or focus outside Settings | Close Settings |
 | Hold Enter | Does not repeat Read/Done/batch actions after focus moves; release and press again |
+
+Character shortcuts are enabled by default and can be disabled in
+**Settings > Keyboard shortcuts**. They work only while the canvas has focus,
+not while typing in search, editing text, composing with an input method, or
+using Settings or the shortcut guide. Ctrl/Command/Alt combinations and native
+Tab, arrow, and Enter behavior on links and buttons are left alone. Enter in
+search also works with character shortcuts disabled. The toolbar help icon is hidden
+when shortcuts are disabled; re-enable them in Settings to bring it back.
+
+Search Enter waits for pending filters and ignores input-method composition.
+Editing the query again, moving focus away, or a failed filter cancels the
+pending focus move. With no visible result (including collapsed groups), focus
+stays in search. Holding Enter through the focus move cannot open the result;
+release and press again to open its link.
+
+J/K skip collapsed groups and stop at the first/last row without wrapping or
+loading more. With no row focused, J starts at the first visible row and K at
+the last. Read/Done shortcuts require focus on a row link or one of its buttons;
+they never act on a group or a previously focused row. Holding these keys does
+not repeat writes. Done requires Shift; pressing E alone does nothing.
+Pending filters, writes, and batches use the same safeguards
+as the buttons.
+
+After a successful Read shortcut, focus advances to the next visible row, even
+when the read row remains in **All**. At the end of the list it stays on the
+retained row without wrapping. Clicking Read still focuses that row's Done button.
+When an action removes its row, focus moves to the next visible row (or the
+previous row at the end); if none remain, focus moves to search. Failures retain
+focus and show the existing action error; moving focus elsewhere while a request
+runs is respected.
 
 Background updates preserve controls and in-progress clicks without stealing
 focus from Copilot's composer or another window. If notifications arrive while
 the empty-state panel is focused, focus moves to the first group header.
 Hover highlights clear on navigation or window blur and resume on fresh pointer input.
 
-[Settings](settings.md) persists view, grouping, theme, auto-open, desktop alerts,
+[Settings](settings.md) persists view, grouping, theme, keyboard shortcuts, auto-open, desktop alerts,
 and sound across sessions. Auto-open and desktop alerts default **off**.
 Opted-in alerts can continue while the canvas is hidden; see
 [desktop notification privacy and support](settings.md#desktop-notifications).

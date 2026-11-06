@@ -53,7 +53,7 @@ test("GitHub inbox is an accessible icon link before Refresh and Settings in the
   assert.doesNotMatch(attributes, /\bhidden\b/);
   assert.match(content, /<svg\b[^>]*aria-hidden="true"[^>]*focusable="false"/);
   assert.match(content, /^\s*<svg\b[^>]*>\s*<path\b[^>]*\/>\s*<path\b[^>]*\/>\s*<\/svg>\s*$/);
-  assert.match(html, /<div class="toolbar">\s*<h1>GitHub Notifications<\/h1>\s*<div id="inbox-control"[^>]*>[\s\S]*?<\/div>\s*<div id="refresh-control"[^>]*>[\s\S]*?<\/div>\s*<details id="settings"/);
+  assert.match(html, /<div class="toolbar">\s*<h1>GitHub Notifications<\/h1>\s*<div id="inbox-control"[^>]*>[\s\S]*?<\/div>\s*<div id="refresh-control"[^>]*>[\s\S]*?<\/div>\s*<div id="shortcuts-control"[^>]*>[\s\S]*?<\/div>\s*<details id="settings"/);
   assert.equal([...html.matchAll(/href="https:\/\/github\.com\/notifications"/g)].length, 0);
 });
 
@@ -72,9 +72,11 @@ test("Settings uses an icon-only toggle with an accessible name and tooltip", ()
   assert.match(styles, /\.settings\[open\] > summary > \.tooltip \{\s+display: none;\s+\}/);
 });
 
-test("inbox and Settings tooltips share hover, focus and Escape behavior", async () => {
+test("inbox, keyboard shortcuts and Settings tooltips share hover, focus and Escape behavior", async () => {
   const ui = await renderer();
-  for (const [control, anchor] of [["open-inbox", "inbox-control"], ["settings-toggle", "settings-toggle"]]) {
+  for (const [control, anchor] of [
+    ["open-inbox", "inbox-control"], ["shortcuts-toggle", "shortcuts-control"], ["settings-toggle", "settings-toggle"],
+  ]) {
     ui.ids.get(control).events.pointerenter();
     assert.equal(ui.ids.get(anchor).dataset.tooltipDismissed, undefined);
     ui.document.events.keydown({ key: "Escape" });
@@ -415,7 +417,10 @@ test("opening the inbox dismisses tooltips without cancelling navigation or maki
 test("canvas blur, hiding and closing dismiss every toolbar tooltip without moving focus", async () => {
   for (const action of ["blur", "hidden", "non-intersecting", "close"]) {
     const ui = await renderer();
-    const controls = [["open-inbox", "inbox-control"], ["force-refresh", "refresh-control"], ["settings-toggle", "settings-toggle"]];
+    const controls = [
+      ["open-inbox", "inbox-control"], ["force-refresh", "refresh-control"],
+      ["shortcuts-toggle", "shortcuts-control"], ["settings-toggle", "settings-toggle"],
+    ];
     for (const [control] of controls) ui.ids.get(control).events.pointerenter();
     const focus = ui.ids.get("force-refresh");
     focus.focus();
@@ -705,6 +710,7 @@ test("Group By is a labeled select above development settings and defaults to re
   assert.match(html, /<div class="select-setting">\s*<label for="group-by">Group By<\/label>\s*<select id="group-by" disabled>/);
   assert.match(html, /<option value="none">All notifications<\/option>\s*<option value="repo" selected>Repository<\/option>\s*<option value="date">Date<\/option>/);
   assert.match(html, /<select id="group-by"[^>]*>[\s\S]*?<\/select>\s*<\/div>\s*<section id="development-settings"/);
+  assert.match(html, /<button id="auto-open"[\s\S]*?<\/button>\s*<button id="keyboard-shortcuts"[\s\S]*?<\/button>\s*<button id="desktop-notifications"/);
   const ui = await renderer();
   assert.equal(ui.ids.get("group-by").value, "repo");
   assert.equal(ui.ids.get("group-by").disabled, false);

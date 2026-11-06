@@ -575,6 +575,53 @@ input::placeholder {
   font-size: 12px;
 }
 
+#shortcuts-dialog {
+  width: min(480px, calc(100% - 32px));
+  max-height: calc(100% - 32px);
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--canvas-text);
+  background: var(--canvas-background);
+}
+
+#shortcuts-dialog::backdrop {
+  background: rgb(0 0 0 / 40%);
+}
+
+.shortcuts-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+#shortcuts-dialog p {
+  margin-top: 12px;
+  color: var(--muted);
+}
+
+.shortcuts-list {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: baseline;
+  gap: 12px;
+  margin: 20px 0;
+}
+
+.shortcuts-list dd {
+  margin: 0;
+}
+
+kbd {
+  padding: 2px 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+}
+
 .notice {
   margin: 10px 0;
   border: 1px solid var(--danger);
@@ -1100,6 +1147,12 @@ footer:has(#development-build[hidden]) {
 
 [hidden] {
   display: none !important;
+}
+
+@media (max-width: 360px) {
+  .toolbar {
+    gap: 2px;
+  }
 }
 
 @media (max-width: 480px) {

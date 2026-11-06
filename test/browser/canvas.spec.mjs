@@ -6,7 +6,7 @@ const searchName = "Search loaded notification titles, issue or PR numbers, and 
 
 async function focusToolbarWithKeyboard(page, selector) {
   await page.getByRole("searchbox").focus();
-  for (const target of ["#settings-toggle", "#force-refresh", "#open-inbox"]) {
+  for (const target of ["#settings-toggle", "#shortcuts-toggle", "#force-refresh", "#open-inbox"]) {
     await page.keyboard.press("Shift+Tab");
     if (target === selector) break;
   }
@@ -88,12 +88,12 @@ for (const packaged of [false, true]) {
         const toolbar = await page.locator(".toolbar").boundingBox();
         expect(toolbar.height).toBe(heading.height);
         let previousRight = heading.x + heading.width;
-        for (const selector of ["#open-inbox", "#force-refresh", "#settings-toggle"]) {
+        for (const selector of ["#open-inbox", "#force-refresh", "#shortcuts-toggle", "#settings-toggle"]) {
           const button = await page.locator(selector).boundingBox();
           expect(button.width).toBe(38);
           expect(button.height).toBe(38);
           expect(button.y + button.height / 2).toBe(heading.y + heading.height / 2);
-          expect(button.x).toBeGreaterThanOrEqual(previousRight + 8);
+          expect(button.x).toBeGreaterThanOrEqual(previousRight + (width <= 360 ? 2 : 8));
           previousRight = button.x + button.width;
         }
         const search = await page.getByRole("searchbox").boundingBox();
@@ -113,7 +113,7 @@ for (const packaged of [false, true]) {
       await page.goto(canvas.url);
       await expect(page.locator(".row")).toHaveCount(1);
       await focusToolbarWithKeyboard(page, "#open-inbox");
-      for (const selector of ["#force-refresh", "#settings-toggle", "#search", "#attention-all"]) {
+      for (const selector of ["#force-refresh", "#shortcuts-toggle", "#settings-toggle", "#search", "#attention-all"]) {
         await page.keyboard.press("Tab");
         await expect(page.locator(selector)).toBeFocused();
       }
@@ -616,7 +616,7 @@ test("the toolbar refresh icon shows the current update age on hover and keyboar
   const tooltip = page.locator("#refresh-tooltip");
   const tooltipText = page.locator("#refresh-tooltip-text");
   await expect(refresh).toHaveAttribute("aria-busy", "false");
-  await expect(page.locator(".toolbar > #refresh-control + #settings")).toHaveCount(1);
+  await expect(page.locator(".toolbar > #refresh-control + #shortcuts-control + #settings")).toHaveCount(1);
   await expect(refresh).not.toHaveAttribute("title");
   await expect(tooltip).toBeHidden();
   await expect(refresh.locator("svg")).toHaveCount(1);
@@ -711,6 +711,7 @@ test("all toolbar icons use matching instant tooltips with keyboard and Escape s
     for (const [id, tooltipId, label] of [
       ["open-inbox", "inbox-tooltip", "Open GitHub inbox"],
       ["force-refresh", "refresh-tooltip", null],
+      ["shortcuts-toggle", "shortcuts-tooltip", "Keyboard shortcuts (?)"],
       ["settings-toggle", "settings-tooltip", "Settings"],
     ]) {
       const control = page.locator(`#${id}`);
@@ -951,7 +952,7 @@ test("Settings supports keyboard dismissal and persists theme and auto-open acro
   await expect(page.getByRole("switch", { name: "Desktop notifications", exact: true })).toHaveAttribute("aria-checked", "false");
   await expect(page.getByRole("combobox", { name: "Sound", exact: true })).toHaveValue("default");
   expect(await canvas.preferences.read()).toEqual({
-    matchGitHubInbox: true, autoOpen: true, darkMode: true, desktopNotifications: false, desktopSound: "default", groupBy: "repo", hideEmptyTabs: true,
+    matchGitHubInbox: true, autoOpen: true, darkMode: true, desktopNotifications: false, desktopSound: "default", groupBy: "repo", hideEmptyTabs: true, keyboardShortcuts: true,
   });
   await theme.selectOption("system");
   await expect.poll(async () => (await canvas.preferences.read()).darkMode).toBeNull();

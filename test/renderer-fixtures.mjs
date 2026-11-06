@@ -129,9 +129,22 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     contains(node) { return this === node || this.children.some(child => child.contains(node)); }
     closest(selector) {
       for (let node = this; node; node = node.parentNode) {
-        if (node.tag === selector) return node;
+        if (selector.split(",").some(part => {
+          const value = part.trim();
+          return node.tag === value || (value.startsWith(".") && node.className?.split(" ").includes(value.slice(1))) ||
+            (value === "[contenteditable]" && node.getAttribute("contenteditable") !== null) ||
+            (value === "[role=textbox]" && node.getAttribute("role") === "textbox");
+        })) return node;
       }
       return null;
+    }
+    showModal() {
+      this.open = true;
+      ids.get("shortcuts-close").focus();
+    }
+    close() {
+      this.open = false;
+      this.events.close?.();
     }
     matches(selector) {
       return selector === ":focus-visible" ? this.focusVisible !== false : selector === ":hover" && this.hovered === true;
@@ -157,12 +170,15 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
   ids.get("settings-toggle").bounds = { top: 175, bottom: 213, left: 270, right: 308, width: 38, height: 38 };
   ids.get("settings-panel").scrollHeight = 364;
   for (const [anchor, tooltip] of [
-    ["inbox-control", "inbox-tooltip"], ["refresh-control", "refresh-tooltip"], ["settings-toggle", "settings-tooltip"],
+    ["inbox-control", "inbox-tooltip"], ["refresh-control", "refresh-tooltip"],
+    ["shortcuts-control", "shortcuts-tooltip"], ["settings-toggle", "settings-tooltip"],
   ]) {
     ids.get(tooltip).className = "tooltip";
     ids.get(anchor).append(ids.get(tooltip));
   }
-  for (const [anchorId, controlId] of [["inbox-control", "open-inbox"], ["refresh-control", "force-refresh"]]) {
+  for (const [anchorId, controlId] of [
+    ["inbox-control", "open-inbox"], ["refresh-control", "force-refresh"], ["shortcuts-control", "shortcuts-toggle"],
+  ]) {
     const anchor = ids.get(anchorId);
     anchor.contains = node => node === anchor || node === ids.get(controlId) || anchor.children.some(child => child.contains(node));
   }
@@ -171,7 +187,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     ["batch-progress", "batch-stop", "batch-retry", "batch-dismiss"].some(id => ids.get(id) === node);
   ids.get("settings").contains = node =>
     node === ids.get("settings") ||
-    ["settings-toggle", "settings-panel", "show-notifications", "auto-open", "theme", "group-by", "hide-empty-tabs", "check-updates", "desktop-notifications", "desktop-sound",
+    ["settings-toggle", "settings-panel", "show-notifications", "auto-open", "theme", "group-by", "hide-empty-tabs", "keyboard-shortcuts", "check-updates", "desktop-notifications", "desktop-sound",
       "development-api", "development-api-url", "development-api-save"].some(id => ids.get(id).contains(node));
   const document = {
     hidden,
@@ -305,7 +321,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
         }
         const capabilities = desktopCapabilities(desktopPlatform);
         inbox.setMatchGitHubInbox(storedSettings.matchGitHubInbox ?? true);
-        return { ok: true, json: async () => ({ matchGitHubInbox: true, hideEmptyTabs: true, desktopNotifications: false, desktopSound: "default", ...storedSettings,
+        return { ok: true, json: async () => ({ matchGitHubInbox: true, hideEmptyTabs: true, keyboardShortcuts: true, desktopNotifications: false, desktopSound: "default", ...storedSettings,
           developmentApi, desktopStatus: { ...capabilities, state: "watching",
             message: capabilities.supported ? "Watching in the background." : capabilities.help, ...desktopStatus },
         }) };

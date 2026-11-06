@@ -7,7 +7,7 @@ for (const width of [320, 960]) {
     await page.goto(canvas.url);
     await expect(page.locator(".row")).toHaveCount(50);
     const controls = [
-      page.locator("#open-inbox"), page.locator("#force-refresh"), page.locator("#settings-toggle"),
+      page.locator("#open-inbox"), page.locator("#force-refresh"), page.locator("#shortcuts-toggle"), page.locator("#settings-toggle"),
       page.locator(".repo-read").first(), page.locator(".repo-done").first(),
       page.locator('[data-focus-key="read:1"]'), page.locator('[data-focus-key="done:1"]'),
     ];
@@ -19,7 +19,7 @@ for (const width of [320, 960]) {
       const bounds = await tooltip.boundingBox();
       const button = await control.boundingBox();
       expect(bounds.y).toBeGreaterThanOrEqual(8);
-      if (controls.indexOf(control) < 3) {
+      if (controls.indexOf(control) < 4) {
         expect(Math.abs(bounds.y - button.y - button.height)).toBeLessThanOrEqual(1);
       } else {
         expect(Math.abs(bounds.y + bounds.height - button.y)).toBeLessThanOrEqual(1);
@@ -32,7 +32,7 @@ for (const width of [320, 960]) {
       await expect(tooltip).toBeHidden();
     }
 
-    for (const control of [controls[1], controls[3], controls[5]]) {
+    for (const control of [controls[1], controls[4], controls[6]]) {
       await page.mouse.move(0, 0);
       await page.evaluate(() => document.activeElement?.blur());
       await control.evaluate(node => window.scrollTo(0, window.scrollY + node.getBoundingClientRect().top - 12));
@@ -57,7 +57,7 @@ for (const width of [320, 960]) {
     }
 
     await page.getByRole("searchbox").focus();
-    const scrollControl = controls[3];
+    const scrollControl = controls[4];
     await scrollControl.focus();
     const tooltip = page.locator(`#${await scrollControl.getAttribute("aria-describedby")}`);
     const anchor = scrollControl.locator("..");

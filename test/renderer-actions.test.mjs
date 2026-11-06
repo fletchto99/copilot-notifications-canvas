@@ -73,7 +73,7 @@ test("Enter auto-repeat cannot retrigger notification actions after focus moves,
       ui.document.events.keydown({ key, repeat, target, preventDefault: () => assert.fail("Unrelated native keyboard behavior changed") });
     }
   }
-  for (const target of [ui.ids.get("search"), ui.ids.get("force-refresh"), ui.ids.get("groups").querySelectorAll(".row-link")[0]]) {
+  for (const target of [ui.ids.get("force-refresh"), ui.ids.get("groups").querySelectorAll(".row-link")[0]]) {
     ui.document.events.keydown({ key: "Enter", repeat: true, target, preventDefault: () => assert.fail("Non-action Enter must remain native") });
   }
   assert.deepEqual(ui.patches, []);
@@ -453,8 +453,9 @@ test("repository action starts from one click with no dialog and preserves indep
   assert.equal(disclosure.attributes["aria-expanded"], "false");
   assert.match(groupActionText(groupRead), /Marking 0\/2/);
   assert.equal(groupRead.attributes["aria-busy"], "true");
-  assert.doesNotMatch(html, /<dialog|batch-confirm|batch-start|batch-cancel/);
-  assert.doesNotMatch(script, /showModal|batch\/prepare|Repository action finished/);
+  assert.doesNotMatch(html, /batch-confirm|batch-start|batch-cancel/);
+  assert.doesNotMatch(script, /batch\/prepare|Repository action finished/);
+  assert.ok(!ui.ids.get("shortcuts-dialog").open);
   release();
   await ui.inbox.batch.done;
   await runInContext("update()", ui.context);
