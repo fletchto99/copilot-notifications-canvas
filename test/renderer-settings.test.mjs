@@ -312,6 +312,48 @@ test("saving a focused picker option returns focus to its select, including fail
   }
 });
 
+test("background settings polls preserve focus for disabled and untouched picker options", async t => {
+  for (const id of ["show-notifications", "theme", "group-by"]) {
+    const ui = await renderer();
+    t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+    ui.ids.get("settings").open = true;
+    ui.ids.get("settings").events.toggle();
+    await settle();
+    const select = ui.ids.get(id);
+    const option = ui.document.createElement("option");
+    select.append(option);
+    option.focus();
+    await ui.fireTimer();
+    assert.equal(select.disabled, false);
+    assert.equal(ui.document.activeElement, id === "show-notifications" ? select : option);
+    assert.equal(ui.ids.get("settings").open, true);
+    assert.equal(ui.calls.some(call => call.path === "/api/settings" && call.options.body), false);
+  }
+});
+
+test("background picker focus restoration does not steal focus moved during the read", async t => {
+  let reads = 0;
+  let finish;
+  const ui = await renderer({ onSettings: input => {
+    if (!input && ++reads === 3) return new Promise(resolve => { finish = resolve; });
+  } });
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  ui.ids.get("settings").open = true;
+  ui.ids.get("settings").events.toggle();
+  await settle();
+  const select = ui.ids.get("show-notifications");
+  const option = ui.document.createElement("option");
+  select.append(option);
+  option.focus();
+  await ui.fireTimer();
+  assert.equal(typeof finish, "function");
+  ui.ids.get("search").focus();
+  finish();
+  await settle();
+  assert.equal(select.disabled, false);
+  assert.equal(ui.document.activeElement, ui.ids.get("search"));
+});
+
 test("tooltips prefer above, flip near the top edge and follow viewport changes without undoing dismissal", async t => {
   const ui = await renderer();
   t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });

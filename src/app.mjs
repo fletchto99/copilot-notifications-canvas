@@ -401,7 +401,7 @@ function renderSettings() {
 async function settingsRequest(input, quiet = false, path = "settings") {
   if (!visible()) return;
   const active = document.activeElement;
-  const previousFocus = input ? active?.closest("select") ?? active : active;
+  const previousFocus = active?.closest("select") ?? active;
   if (settingsBusy) {
     if (input && !pendingSettings) {
       pendingSettings = { input, path, focus: previousFocus };

@@ -197,6 +197,40 @@ test("customizable dropdowns preserve keyboard selection, cancellation, focus an
   expect(canvas.deliveries).toEqual([]);
 });
 
+test("background settings polling restores focus from the Show notifications picker", async ({ page, canvas }) => {
+  canvas.rows.splice(1);
+  await page.clock.install();
+  let settingsReads = 0;
+  page.on("requestfinished", request => {
+    if (request.url().endsWith("/api/settings") && request.method() === "GET") settingsReads++;
+  });
+  await page.goto(canvas.url);
+  await expect(page.locator(".row")).toHaveCount(1);
+  await page.locator("#settings-toggle").click();
+  const view = page.getByRole("combobox", { name: "Show notifications", exact: true });
+  await expect(view).toBeEnabled();
+  await view.focus();
+  await view.press("Space");
+  await page.keyboard.press("ArrowDown");
+  await expect(view.locator('option[value="unread"]')).toBeFocused();
+  const before = settingsReads;
+  await page.clock.runFor(5000);
+  await expect.poll(() => settingsReads).toBeGreaterThan(before);
+  await expect(view).toBeEnabled();
+  // Some webviews retain option focus while others close a briefly disabled picker.
+  await expect.poll(() => view.evaluate(node => {
+    const active = document.activeElement;
+    return active === node || (node.matches(":open") && node.contains(active));
+  })).toBe(true);
+  if (await view.evaluate(node => node.matches(":open"))) await page.keyboard.press("Escape");
+  await expect(view).toBeFocused();
+  await expect(view).toHaveValue("all");
+  await expect(page.locator("#settings-panel")).toBeVisible();
+  expect((await canvas.preferences.read()).matchGitHubInbox).toBe(true);
+  expect(canvas.writes).toEqual([]);
+  expect(canvas.deliveries).toEqual([]);
+});
+
 test("long sound pickers scroll without overflowing a short canvas", async ({ page, canvas }) => {
   canvas.rows.splice(1);
   await canvas.preferences.update({ desktopNotifications: true, darkMode: true });
