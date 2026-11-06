@@ -312,12 +312,12 @@ function renderTheme() {
   const mode = [document.documentElement, document.body]
     .flatMap(node => themeAttributes.map(attribute => node.getAttribute(attribute)))
     .find(value => value === "dark" || value === "light");
-  if (theme !== "system") {
-    document.documentElement.dataset.notificationTheme = theme;
-  } else if (mode === "dark" || mode === "light") {
+  const colorScheme = theme === "system" ? mode ?? (systemTheme.matches ? "dark" : "light") : theme;
+  document.documentElement.style.colorScheme = colorScheme;
+  if (theme === "system" && mode) {
     delete document.documentElement.dataset.notificationTheme;
   } else {
-    document.documentElement.dataset.notificationTheme = systemTheme.matches ? "dark" : "light";
+    document.documentElement.dataset.notificationTheme = colorScheme;
   }
   $("theme").value = theme;
 }
@@ -400,14 +400,15 @@ function renderSettings() {
 
 async function settingsRequest(input, quiet = false, path = "settings") {
   if (!visible()) return;
+  const active = document.activeElement;
+  const previousFocus = active?.closest("select") ?? active;
   if (settingsBusy) {
     if (input && !pendingSettings) {
-      pendingSettings = { input, path, focus: document.activeElement };
+      pendingSettings = { input, path, focus: previousFocus };
       renderSettings();
     }
     return;
   }
-  const previousFocus = document.activeElement;
   let refreshInbox = false;
   settingsBusy = true;
   if (!quiet) {
@@ -1395,6 +1396,8 @@ document.addEventListener("keydown", event => {
     return;
   }
   if (event.key !== "Escape") return;
+  // Let the browser dismiss an open picker before closing its Settings panel.
+  if (window.CSS?.supports("selector(select:open)") && document.querySelector("select:open")) return;
   if ($("settings").open) {
     event.preventDefault();
     closeSettings(true);

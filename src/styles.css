@@ -361,6 +361,11 @@ button:disabled {
   cursor: pointer;
 }
 
+.select-setting option {
+  color: var(--canvas-text);
+  background-color: var(--canvas-background);
+}
+
 .select-setting::after {
   content: "";
   position: absolute;
@@ -395,6 +400,67 @@ button:disabled {
 
 .select-setting select:disabled {
   cursor: default;
+}
+
+@supports (appearance: base-select) and selector(::picker(select)) {
+  .select-setting select,
+  .select-setting select::picker(select) {
+    appearance: base-select;
+  }
+
+  .select-setting select {
+    min-height: 0;
+    justify-content: flex-end;
+  }
+
+  .select-setting select::picker-icon {
+    display: none;
+  }
+
+  .select-setting select::picker(select) {
+    max-width: calc(100vw - 24px);
+    overflow-y: auto;
+    margin-block: 4px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 4px;
+    color: var(--canvas-text);
+    background: var(--canvas-background);
+    font: inherit;
+    text-align: left;
+    text-align-last: left;
+    box-shadow: 0 8px 24px #0002;
+  }
+
+  .select-setting option {
+    gap: 8px;
+    min-height: 32px;
+    border-radius: 6px;
+    padding: 6px 10px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    cursor: pointer;
+  }
+
+  .select-setting option:is(:hover, :focus) {
+    background: color-mix(
+      in srgb,
+      var(--canvas-text) 8%,
+      var(--canvas-background)
+    );
+  }
+
+  .select-setting option:checked {
+    background: color-mix(in srgb, var(--accent) 15%, var(--canvas-background));
+  }
+
+  .select-setting option:focus-visible {
+    outline-offset: -2px;
+  }
+
+  .select-setting option::checkmark {
+    color: var(--accent);
+  }
 }
 
 .switch-toggle {
