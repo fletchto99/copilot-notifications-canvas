@@ -18,6 +18,8 @@ panels without shrinking the utility buttons.
 Search by title, issue/PR number, or repository. Each row shows its type, number
 when available, notification reason, and last-updated time.
 The repository is also shown when it is not already in the group heading.
+Long type labels wrap beside their icon on narrow panels, keeping the icon
+aligned with the first line.
 Visible row metadata never includes custom destination hints such as
 **Open repository releases** or **Open GitHub inbox**. Fallback destinations
 remain available to screen readers without adding visible metadata.

@@ -12,7 +12,7 @@ showing read and unread inbox items; choose **Unread only** to narrow the view. 
 stay hidden in both views. Search, mark rows
 or groups as read or done, and opt into desktop notifications or auto-open.
 
-![GitHub Notifications canvas with a compact title toolbar, full-width search, and attention tabs above nine synthetic notifications, six unread, across three example repositories with pull request status icons including a yellow merge-queue icon, distinct purple closed-discussion and green answered-discussion icons, a release tag, a failed check run, and read/done controls](docs/images/github-notifications.png)
+![GitHub Notifications canvas with a compact title toolbar, full-width search, and attention tabs above ten synthetic notifications, seven unread, across three example repositories with pull request status icons including a yellow merge-queue icon, distinct purple closed-discussion and green answered-discussion icons, a release tag, a failed check run, a security alert, and read/done controls](docs/images/github-notifications.png)
 
 ## Prerequisites
 
