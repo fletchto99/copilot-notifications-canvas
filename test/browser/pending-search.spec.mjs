@@ -16,7 +16,7 @@ for (const packaged of [false, true]) {
             input.dispatchEvent(new Event("input", { bubbles: true }));
             const actions = [...document.querySelectorAll(".repo-actions button, .row-actions button")];
             for (const button of actions) button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-            return { blocked: actions.every(button => button.disabled), searchDisabled: input.disabled };
+            return { blocked: actions.every(button => button.disabled || button.getAttribute("aria-disabled") === "true"), searchDisabled: input.disabled };
           });
           expect(result).toEqual({ blocked: true, searchDisabled: false });
           expect(canvas.writes).toEqual([]);

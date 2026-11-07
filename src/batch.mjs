@@ -23,19 +23,27 @@ function validDate(value) {
 export class NotificationBatch {
   constructor(inbox) {
     this.inbox = inbox;
-    this.operation = null;
-    this.done = Promise.resolve();
+    this.operations = new Map();
+    this.running = new Set();
     this.disposed = false;
   }
 
   get locked() {
-    return ["running", "stopping"].includes(this.operation?.status);
+    return [...this.operations.values()].some(operation => this.isRunning(operation));
+  }
+
+  get done() {
+    return Promise.all(this.running);
+  }
+
+  isRunning(operation) {
+    return ["running", "stopping"].includes(operation.status);
   }
 
   assertAvailable() {
     if (this.disposed) throw new InboxError("closed", "The canvas was closed.", 410);
-    if (this.locked || this.inbox.busy || this.inbox.marking.size) {
-      throw new InboxError("busy", "Finish or cancel the current inbox operation first.", 409);
+    if (this.inbox.busy) {
+      throw new InboxError("busy", "Wait for the current inbox operation to finish.", 409);
     }
   }
 
@@ -44,10 +52,11 @@ export class NotificationBatch {
         !/^[a-f0-9-]{36}$/.test(input.token)) {
       throw new InboxError("invalid_batch", "Use the current notification operation token.", 400);
     }
-    if (!this.operation || this.operation.token !== input.token) {
+    const operation = this.operations.get(input.token);
+    if (!operation) {
       throw new InboxError("unknown_batch", "This notification operation is no longer available. Review the updated view and try again.", 409);
     }
-    return this.operation;
+    return operation;
   }
 
   start(input) {
@@ -71,10 +80,10 @@ export class NotificationBatch {
     }
     const action = input.action ?? "read";
     const items = selection.items.filter(item => action === "done" || item.unread);
-    this.launch(selection.repository, items, action, dated ? "date" : shown ? "shown" : "repository", input);
+    this.launch(selection.repository, items, action, dated ? "date" : shown ? "shown" : "repository", input, selection.items);
   }
 
-  launch(repository, items, action = "read", scope = "repository", { date, timeZone } = {}) {
+  launch(repository, items, action = "read", scope = "repository", { date, timeZone } = {}, lockedItems = items) {
     if (!items.length || items.some(item => !/^[1-9]\d{0,63}$/.test(item.id)) ||
         new Set(items.map(item => item.id)).size !== items.length) {
       throw new InboxError("invalid_selection", "The selected group contains no eligible notifications or invalid thread IDs.", 400);
@@ -83,7 +92,7 @@ export class NotificationBatch {
       throw this.inbox.client.lastError ??
         new InboxError("rate_limited", "GitHub requests are paused until the rate limit resets.", 429);
     }
-    const owner = this.inbox.client.reserveThreads(items.map(item => item.id));
+    const owner = this.inbox.client.reserveThreads(lockedItems.map(item => item.id));
     const operation = {
       token: randomUUID(), repository, scope, action, status: "running",
       ...(scope === "date" ? { date, timeZone } : {}),
@@ -91,8 +100,10 @@ export class NotificationBatch {
       items: items.map(({ id, updatedAt, repository, unread }) => ({ id, updatedAt, repository, unread, result: "pending" })),
       inFlight: false, cancelled: false, error: null, owner, controller: new AbortController(),
     };
-    this.operation = operation;
-    this.done = this.run(operation);
+    this.operations.set(operation.token, operation);
+    const done = this.run(operation);
+    this.running.add(done);
+    void done.finally(() => this.running.delete(done));
   }
 
   eligible(operation, item) {
@@ -152,7 +163,7 @@ export class NotificationBatch {
         operation.cancelled || signal.aborted ? "cancelled" : "partial";
     } finally {
       this.inbox.client.releaseThreads(operation.owner);
-      if (this.disposed || operation.status === "completed") this.operation = null;
+      if (this.disposed || operation.status === "completed") this.operations.delete(operation.token);
     }
   }
 
@@ -169,6 +180,7 @@ export class NotificationBatch {
   retry(input) {
     this.assertAvailable();
     const operation = this.identify(input);
+    if (this.isRunning(operation)) throw new InboxError("busy", "Wait for this batch to finish before retrying it.", 409);
     const selection = operation.scope === "date" ? this.inbox.dateSelection(operation.date, operation.timeZone) :
       operation.scope === "shown" ? this.inbox.shownSelection() :
       this.inbox.groups().find(group => group.repository === operation.repository);
@@ -179,16 +191,17 @@ export class NotificationBatch {
       throw new InboxError("no_remaining", "No unchanged, shown notifications remain from this batch. Wait for the next automatic refresh, then review the current selection.", 409);
     }
     this.launch(operation.repository, remaining, operation.action, operation.scope, operation);
+    this.operations.delete(operation.token);
   }
 
   dismiss(input) {
     this.assertAvailable();
-    this.identify(input);
-    this.operation = null;
+    const operation = this.identify(input);
+    if (this.isRunning(operation)) throw new InboxError("busy", "Wait for this batch to finish before dismissing it.", 409);
+    this.operations.delete(operation.token);
   }
 
-  snapshot() {
-    const operation = this.operation;
+  snapshot(operation = [...this.operations.values()].at(-1)) {
     if (!operation) return null;
     const count = result => operation.items.filter(item => item.result === result).length;
     return {
@@ -197,17 +210,24 @@ export class NotificationBatch {
       total: operation.items.length, succeeded: count("succeeded"), failed: count("failed"),
       skipped: count("skipped"), notAttempted: count("pending") - Number(operation.inFlight),
       inFlight: operation.inFlight, searchActive: operation.searchActive,
+      remainingThreadIds: operation.items.filter(item => ["pending", "failed"].includes(item.result)).map(item => item.id),
       error: operation.error, retryAt: this.inbox.client.blockedUntil,
     };
   }
 
+  snapshots() {
+    return [...this.operations.values()].map(operation => this.snapshot(operation));
+  }
+
   close() {
     this.disposed = true;
-    if (this.locked) {
-      this.operation.cancelled = true;
-      this.operation.controller.abort();
-    } else {
-      this.operation = null;
+    for (const operation of this.operations.values()) {
+      if (this.isRunning(operation)) {
+        operation.cancelled = true;
+        operation.controller.abort();
+      } else {
+        this.operations.delete(operation.token);
+      }
     }
   }
 }

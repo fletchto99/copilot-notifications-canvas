@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { runInContext } from "node:vm";
-import { renderer, settle } from "./renderer-fixtures.mjs";
+import { disabled, renderer, settle } from "./renderer-fixtures.mjs";
 import { thread } from "./fixtures.mjs";
 
 const rows = ["review_requested", "mention", "team_mention", "assign", "author", "comment", "subscribed"]
@@ -44,16 +44,16 @@ test("pending search edits block row and group writes until the displayed select
     search.value = "notification 2";
     search.events.input();
     assert.equal(search.disabled, false);
-    assert.equal(original.every(button => button.disabled), true);
+    assert.equal(original.every(disabled), true);
     for (const button of original) await button.events.click();
     assert.deepEqual(ui.patches, []);
     assert.deepEqual(ui.deletions, []);
     assert.equal(ui.calls.some(call => call.path === "/api/batch/start"), false);
     await runInContext("render()", ui.context);
-    assert.equal(actions().every(button => button.disabled), true);
+    assert.equal(actions().every(disabled), true);
     await ui.fireTimer(250);
     assert.deepEqual(shown(ui), ["2"]);
-    assert.equal(actions().every(button => !button.disabled), true);
+    assert.equal(actions().every(button => !disabled(button)), true);
     await actions().find(button => button.dataset.batchAction === "done").events.click();
     await ui.inbox.batch.done;
     assert.deepEqual(ui.deletions, ["/notifications/threads/2"]);
@@ -81,7 +81,7 @@ test("reverting a pending search re-enables actions without requesting an unchan
   for (const value of ["notification 2", ""]) {
     search.value = value;
     search.events.input();
-    assert.equal(done.disabled, true);
+    assert.equal(disabled(done), true);
   }
   await ui.fireTimer(250);
   assert.equal(done.disabled, false);
@@ -169,7 +169,7 @@ test("failed filters keep mutation controls blocked until the pending search suc
   search.events.input();
   await ui.fireTimer(250);
   const done = ui.ids.get("groups").querySelectorAll("button").find(button => button.dataset.batchAction === "done");
-  assert.equal(done.disabled, true);
+  assert.equal(disabled(done), true);
   assert.match(ui.ids.get("notice").textContent, /Synthetic filter failure/);
   await done.events.click();
   assert.deepEqual(ui.deletions, []);
@@ -526,7 +526,7 @@ test("queued tab changes survive row read/done actions, a local poll, and hiding
   }
 });
 
-test("tabs cannot change the selection during a repository batch or without a capability", async () => {
+test("tabs change the displayed selection during a batch without changing its captured targets", async () => {
   let release;
   const ui = await renderer({ initialRows: [...rows, thread("8")],
     onWrite: (_path, count) => count === 1
@@ -536,16 +536,16 @@ test("tabs cannot change the selection during a repository batch or without a ca
   await tab(ui, "review_requested").events.click();
   await ui.ids.get("groups").querySelectorAll("button").find(button => button.dataset.repository).events.click();
   await settle();
-  assert.equal(tab(ui, "mentioned").disabled, true);
+  assert.equal(tab(ui, "mentioned").disabled, false);
   await tab(ui, "mentioned").events.click();
-  await tab(ui, "review_requested").events.keydown({ key: "ArrowRight", preventDefault: () => assert.fail("Disabled tab") });
-  assert.equal(ui.inbox.filters.attention, "review_requested");
+  assert.equal(ui.inbox.filters.attention, "mentioned");
+  assert.deepEqual(shown(ui), ["2"]);
   release();
   await ui.inbox.batch.done;
   await runInContext("update()", ui.context);
   assert.equal(tab(ui, "mentioned").disabled, false);
   assert.equal(ui.ids.get("empty").hidden, true);
-  assert.equal(ui.ids.get("count").textContent, "8 total \u00b7 6 unread \u00b7 2 matching");
+  assert.equal(ui.ids.get("count").textContent, "8 total \u00b7 6 unread \u00b7 1 matching");
   assert.equal(tab(ui, "review_requested").textContent, "Review Requested (2)");
   assert.equal(tab(ui, "mentioned").textContent, "Mentioned (1)");
   assert.equal(tab(ui, "team_mentioned").textContent, "Team Mentioned (1)");

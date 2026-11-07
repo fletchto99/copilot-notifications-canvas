@@ -53,7 +53,7 @@ test.describe("All notifications group", () => {
         await expect(root).toHaveCount(0);
         await expect(page.locator("#collapse")).toBeHidden();
       }
-      await expect(page.getByRole("searchbox")).toBeFocused();
+      await expect(action === "read" ? root.locator(".repo-toggle") : page.getByRole("searchbox")).toBeFocused();
       await expect(page.getByRole("tab", { name: `Mentioned (${action === "read" ? 4 : 1})`, exact: true })).toHaveAttribute("aria-selected", "true");
       expect(canvas.writes).toEqual(["1", "2", "3"]);
       expect(canvas.doneWrites).toEqual(action === "done" ? ["1", "2", "3"] : []);
@@ -144,7 +144,7 @@ test("the single group keeps collapse state through filtering, refresh and group
   expect(canvas.writes).toEqual([]);
 });
 
-test("shown batches stop and retry their original scope after switching to repository grouping", async ({ page, canvas }) => {
+test("shown batches finish their original scope after switching to repository grouping", async ({ page, canvas }) => {
   canvas.rows.splice(3);
   canvas.rows[1].repository.full_name = "example/tools";
   await canvas.preferences.update({ groupBy: "none" });
@@ -159,21 +159,18 @@ test("shown batches stop and retry their original scope after switching to repos
   try {
     await page.getByRole("button", { name: "Mark 3 as done; 3 shown, loaded notifications", exact: true }).click();
     await started;
-    await expect(page.locator("#batch-title")).toContainText("Shown notifications: Marking as done");
-    await expect(page.getByRole("searchbox")).toBeDisabled();
+    await expect(page.locator(".group-progress:visible")).toHaveText("Marking 0/3 as done...");
+    await expect(page.getByRole("searchbox")).toBeEnabled();
     await expect(page.locator(shownGroup).locator(".repo-done")).toBeDisabled();
     await page.getByLabel("Settings", { exact: true }).click();
     await page.getByRole("combobox", { name: "Group By", exact: true }).selectOption("repo");
     await page.keyboard.press("Escape");
     await expect(page.locator(shownGroup)).toHaveCount(0);
-    await page.getByRole("button", { name: "Stop remaining", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Stop remaining", exact: true })).toHaveCount(0);
     canvas.setRequestHook(undefined);
     release();
-    const retry = page.getByRole("button", { name: "Continue remaining (2)", exact: true });
-    await expect(retry).toBeVisible();
-    expect(canvas.doneWrites).toEqual(["1"]);
-    await retry.click();
     await expect(page.locator(".row")).toHaveCount(0);
+    await expect(page.locator("#batch-progress")).toBeHidden();
     expect(canvas.doneWrites).toEqual(["1", "2", "3"]);
   } finally {
     release();

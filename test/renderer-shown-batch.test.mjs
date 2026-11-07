@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { runInContext } from "node:vm";
-import { groupActionText, renderer, settle } from "./renderer-fixtures.mjs";
+import { disabled, groupActionText, groupProgress, renderer, settle } from "./renderer-fixtures.mjs";
 import { thread } from "./fixtures.mjs";
 
 const rows = [
@@ -45,7 +45,7 @@ test("the All notifications header offers bounded read and Done actions across r
     assert.deepEqual(action === "done" ? ui.patches : ui.deletions, []);
     assert.equal(ui.inbox.summary().loaded, action === "done" ? 1 : 3);
     if (action === "done") assert.equal(controls(ui).root, undefined);
-    else assert.equal(controls(ui).read.disabled, true);
+    else assert.equal(disabled(controls(ui).read), true);
     assert.equal(ui.ids.get("collapse").hidden, action === "done");
     assert.equal(ui.ids.get("empty").hidden, action === "read");
     assert.equal(ui.calls.some(call => call.path === "/api/settings" && call.options.body), false);
@@ -105,8 +105,8 @@ test("collapsed All notifications groups retain their bounded read and Done acti
     assert.deepEqual(action === "done" ? ui.deletions : ui.patches, ["/notifications/threads/1", "/notifications/threads/2"]);
     assert.deepEqual(ui.inbox.loadedItems().filter(item => action === "done" || item.unread).map(item => item.id), ["3"]);
     if (action === "done") assert.equal(controls(ui).root, undefined);
-    else assert.equal(controls(ui).read.disabled, true);
-    assert.equal(ui.document.activeElement, ui.ids.get("search"));
+    else assert.equal(disabled(controls(ui).read), true);
+    assert.equal(ui.document.activeElement, action === "done" ? ui.ids.get("search") : controls(ui).root.querySelectorAll(".repo-toggle")[0]);
   }
 });
 
@@ -162,7 +162,7 @@ test("a stale list-wide selection reports the change without silently broadening
   assert.equal(ui.document.activeElement, controls(ui).done);
 });
 
-test("shown batch progress, cancellation and retry keep the original scope after grouping changes", async t => {
+test("shown batches complete their original scope after grouping changes without a Stop control", async t => {
   let release;
   const ui = await renderer({ storedSettings: { groupBy: "none" }, initialRows: rows,
     onWrite: (_path, count, method) => {
@@ -174,26 +174,21 @@ test("shown batch progress, cancellation and retry keep the original scope after
   t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
   await controls(ui).done.events.click();
   await settle();
-  assert.match(ui.ids.get("batch-title").textContent, /^Shown notifications: Marking as done/);
-  assert.equal(groupActionText(controls(ui).done), "Marking 0/3...");
-  assert.equal(controls(ui).read.disabled, true);
-  assert.equal(controls(ui).done.disabled, true);
-  assert.equal(ui.ids.get("search").disabled, true);
-  assert.equal(ui.document.activeElement, ui.ids.get("batch-stop"));
+  await runInContext("update()", ui.context);
+  assert.equal(groupProgress(ui, "shown"), "Marking 0/3 as done...");
+  assert.equal(groupActionText(controls(ui).done), "Marking 0/3 as done...");
+  assert.equal(disabled(controls(ui).read), true);
+  assert.equal(disabled(controls(ui).done), true);
+  assert.equal(ui.ids.get("search").disabled, false);
+  assert.equal(ui.document.activeElement, controls(ui).done);
   const grouping = ui.ids.get("group-by");
   grouping.value = "repo";
   grouping.events.change();
   await settle();
   assert.equal(controls(ui).root, undefined);
   assert.equal(ui.inbox.batch.snapshot().scope, "shown");
-  await ui.ids.get("batch-stop").events.click();
+  assert.equal(ui.ids.has("batch-stop"), false);
   release();
-  await ui.inbox.batch.done;
-  await runInContext("update()", ui.context);
-  assert.deepEqual(ui.deletions, ["/notifications/threads/1"]);
-  assert.equal(ui.ids.get("batch-title").textContent, "Shown notifications: Stopped");
-  assert.equal(ui.ids.get("batch-counts").textContent, "1 marked done, 2 remaining");
-  await ui.ids.get("batch-retry").events.click();
   await ui.inbox.batch.done;
   await runInContext("update()", ui.context);
   assert.deepEqual(ui.deletions, ["/notifications/threads/1", "/notifications/threads/2", "/notifications/threads/3"]);
