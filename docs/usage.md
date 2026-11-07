@@ -161,7 +161,9 @@ controls wrap while row actions stay beside their content.
 
 Read rows show only Done. After a confirmed Read in **All**, the row stays and
 focus moves from the Read button to Done; Read's space stays reserved so a second click
-cannot open the row. In **Unread only**, Read removes the row.
+cannot open the row. A status update can unlock Done and move focus before the
+Read acknowledgement arrives, without overriding focus moved elsewhere.
+In **Unread only**, Read removes the row.
 Done removes it in either view.
 
 A pending row action locks only that row and group actions that include it.

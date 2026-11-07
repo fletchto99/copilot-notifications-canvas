@@ -402,3 +402,69 @@ test("status polls hand off shortcut focus before a delayed acknowledgement with
     assert.equal(ui.document.activeElement, moveFocus ? ui.ids.get("search") : next);
   }
 });
+
+test("All-view Read completion unlocks Done and restores focus before acknowledgement", async t => {
+  for (const retainDisabledFocus of [false, true]) {
+    for (const moveFocus of [false, true]) {
+      let release;
+      const ui = await renderer({ initialRows: [thread("1"), thread("2")], retainDisabledFocus,
+        onActionResponse: () => new Promise(resolve => { release = resolve; }) });
+      t.after(() => { release?.(); ui.window.events.pagehide(); ui.inbox.close(); });
+      const button = key => ui.ids.get("groups").querySelectorAll("button").find(button => button.dataset.focusKey === key);
+      const read = button("read:1");
+      read.focus();
+      const pending = read.events.click();
+      await settle();
+      await ui.inbox.batch.done;
+      if (moveFocus) ui.ids.get("search").focus();
+      await runInContext("update()", ui.context);
+      assert.equal(button("read:1"), undefined);
+      assert.equal(button("done:1").disabled, false);
+      const expected = moveFocus ? ui.ids.get("search") : button("done:1");
+      assert.equal(ui.document.activeElement, expected);
+      release();
+      await pending;
+      assert.equal(ui.document.activeElement, expected);
+      assert.deepEqual(ui.patches, ["/notifications/threads/1"]);
+      assert.deepEqual(ui.deletions, []);
+    }
+  }
+});
+
+test("late Read acknowledgements cannot clear a newer Done action or report a confirmed Read as failed", async t => {
+  for (const failAcknowledgement of [false, true]) {
+    let releaseRead;
+    let releaseDone;
+    const ui = await renderer({ initialRows: [thread("1"), thread("2")],
+      onActionResponse: path => path === "/api/read" ? new Promise((resolve, reject) => {
+        releaseRead = () => failAcknowledgement ? reject(new Error("Synthetic lost acknowledgement")) : resolve();
+      }) : undefined,
+      onWrite: (_path, _count, method) => method === "DELETE"
+        ? new Promise(resolve => { releaseDone = () => resolve("HTTP/2 204 No Content\r\n\r\n"); })
+        : "HTTP/2 205 Reset Content\r\n\r\n",
+    });
+    t.after(() => { releaseRead?.(); releaseDone?.(); ui.window.events.pagehide(); ui.inbox.close(); });
+    const button = key => ui.ids.get("groups").querySelectorAll("button").find(button => button.dataset.focusKey === key);
+    button("read:1").focus();
+    const pending = button("read:1").events.click();
+    await settle();
+    await finishRows(ui);
+    assert.equal(button("done:1").disabled, false);
+    await button("done:1").events.click();
+    await settle();
+    const operation = runInContext('marking.get("1")', ui.context);
+    assert.equal(operation.action, "done");
+    ui.ids.get("search").focus();
+    releaseRead();
+    await pending;
+    assert.equal(runInContext('marking.get("1")', ui.context), operation);
+    assert.equal(button("done:1").disabled, true);
+    assert.equal(ui.ids.get("notice").hidden, true);
+    assert.equal(ui.document.activeElement, ui.ids.get("search"));
+    releaseDone();
+    await finishRows(ui);
+    assert.equal(button("done:1"), undefined);
+    assert.deepEqual(ui.patches, ["/notifications/threads/1"]);
+    assert.deepEqual(ui.deletions, ["/notifications/threads/1"]);
+  }
+});

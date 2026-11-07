@@ -259,6 +259,41 @@ test("queued row acknowledgements survive more than the action request deadline 
 });
 
 for (const moveFocus of [false, true]) {
+  test(`All-view Read completion restores focus before acknowledgement (${moveFocus ? "new focus" : "Done button"})`, async ({ page, canvas }) => {
+    canvas.rows.splice(2);
+    const acknowledgement = gate();
+    const queued = gate();
+    await page.route("**/api/read", async route => {
+      const response = await route.fetch();
+      queued.release();
+      await acknowledgement.promise;
+      await route.fulfill({ response });
+    });
+    await page.goto(canvas.url);
+    try {
+      const read = page.locator('[data-focus-key="read:1"]');
+      await read.focus();
+      await read.press("Enter");
+      await queued.promise;
+      if (moveFocus) await page.getByRole("searchbox").focus();
+      await expect(page.locator(".row.read")).toHaveCount(1);
+      await expect(read).toHaveCount(0);
+      const done = page.locator('[data-focus-key="done:1"]');
+      await expect(done).toBeEnabled();
+      const expected = moveFocus ? page.getByRole("searchbox") : done;
+      await expect(expected).toBeFocused();
+      const received = page.waitForResponse(response => response.url().endsWith("/api/read"));
+      acknowledgement.release();
+      await received;
+      await expect(expected).toBeFocused();
+      expect(canvas.writes).toEqual(["1"]);
+      expect(canvas.doneWrites).toEqual([]);
+    } finally {
+      acknowledgement.release();
+      await page.unrouteAll({ behavior: "wait" });
+    }
+  });
+
   test(`shortcut completion polls preserve next-row focus before acknowledgement (${moveFocus ? "new focus" : "advance"})`, async ({ page, canvas }) => {
     canvas.rows.splice(3);
     const acknowledgement = gate();

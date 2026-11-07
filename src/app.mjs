@@ -583,7 +583,7 @@ async function markThread(id, action, focusRow = false) {
   const key = `${focusRow ? "thread" : action}:${id}`;
   const operation = { id, action, focusRow, key, previousFocus: document.activeElement,
     order: displayGroups().filter(group => !focusRow || !collapsed.has(group.key)).flatMap(group => group.items.map(item => item.id)),
-    token: null };
+    token: null, completed: false };
   dismissTooltips();
   marking.set(id, operation);
   renderControls();
@@ -591,27 +591,32 @@ async function markThread(id, action, focusRow = false) {
   actionError = "";
   try {
     await pollPromise;
+    if (operation.completed) return;
     if (!visible()) {
-      marking.delete(id);
+      if (marking.get(id) === operation) marking.delete(id);
       return;
     }
     const snapshot = await api(action, { id });
+    if (operation.completed) return;
     if (typeof snapshot.rowActionToken !== "string" || !/^[a-f0-9-]{36}$/.test(snapshot.rowActionToken)) {
       throw new Error("The provider returned an invalid notification action acknowledgement.");
     }
     operation.token = snapshot.rowActionToken;
     acceptState(snapshot);
   } catch (error) {
+    if (operation.completed) return;
     actionError = `Could not mark the notification as ${action}. ${error.message || "Try again."}`;
     try {
       acceptState(await api("state"));
     } catch {
       actionError += " Could not reconnect. Reopen this panel to inspect its current state.";
     }
-    marking.delete(id);
+    if (marking.get(id) === operation) marking.delete(id);
   } finally {
     render();
-    if (!marking.has(id)) restoreFocus(operation.previousFocus, focusKey(rowFocusKey(operation)) ?? $("search"));
+    if (!operation.completed && !marking.has(id)) {
+      restoreFocus(operation.previousFocus, focusKey(rowFocusKey(operation)) ?? $("search"));
+    }
     void flushPendingUpdates();
     schedule();
   }
@@ -631,10 +636,16 @@ function rowFocusKey({ id, action, focusRow, key, order }) {
 function reconcileRows() {
   const completed = [];
   for (const [id, operation] of marking) {
-    if (!operation.token) continue;
-    const batch = state.batches.find(batch => batch.token === operation.token);
-    if (batch && batchRunning(batch)) continue;
+    if (!operation.token) {
+      // A retained read row can confirm completion before its acknowledgement arrives.
+      if (operation.action !== "read" || state.lockedThreadIds.includes(id) ||
+          !state.groups.some(group => group.items.some(item => item.id === id && !item.unread))) continue;
+    } else {
+      const batch = state.batches.find(batch => batch.token === operation.token);
+      if (batch && batchRunning(batch)) continue;
+    }
     marking.delete(id);
+    operation.completed = true;
     completed.push(operation);
   }
   return completed;
@@ -1267,7 +1278,7 @@ function renderRowSubject(view, item) {
   view.subject = subjectMetadata(item, view.subject);
 }
 
-function renderGroups(groups, fallbackFocusKey) {
+function renderGroups(groups, fallbackFocusKey, completedRows = []) {
   const locked = lockedThreads();
   $("collapse").hidden = !groups.length;
   setControlText($("collapse"), groups.some(group => !collapsed.has(group.key)) ? "Collapse all" : "Expand all");
@@ -1417,7 +1428,7 @@ function renderGroups(groups, fallbackFocusKey) {
     if (anchor && dismissedTooltips.has(control.dataset.focusKey)) anchor.dataset.tooltipDismissed = "true";
   }
   if (focused) {
-    const pending = [...marking.values()].find(operation =>
+    const pending = [...marking.values(), ...completedRows].find(operation =>
       operation.key === focused || operation.previousFocus?.dataset.focusKey === focused);
     let target = focusKey(pending ? rowFocusKey(pending) : focused) ?? focusKey(fallbackFocusKey);
     if (target?.dataset.count === "0") target = groupFocus(focused);
@@ -1427,6 +1438,7 @@ function renderGroups(groups, fallbackFocusKey) {
 }
 
 function render(fallbackFocusKey) {
+  const completedRows = state ? reconcileRows() : [];
   renderSettingsError();
   renderUpdates(state?.updates);
   const development = state?.development;
@@ -1498,8 +1510,7 @@ function render(fallbackFocusKey) {
   const groupBy = preferences?.groupBy ?? "repo";
   $("groups").setAttribute("aria-label", groupBy === "repo" ? "Notifications by repository" :
     groupBy === "date" ? "Notifications by date" : "Notifications in GitHub order");
-  renderGroups(displayGroups(), fallbackFocusKey);
-  const completedRows = reconcileRows();
+  renderGroups(displayGroups(), fallbackFocusKey, completedRows);
   scheduleSubjectSelectionSync();
   renderControls();
   for (const operation of completedRows) {
