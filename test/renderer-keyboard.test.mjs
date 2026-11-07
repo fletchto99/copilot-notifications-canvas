@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { runInContext } from "node:vm";
-import { renderer, settle } from "./renderer-fixtures.mjs";
+import { finishRows, renderer, settle } from "./renderer-fixtures.mjs";
 import { http, thread } from "./fixtures.mjs";
 
 const links = ui => ui.ids.get("groups").querySelectorAll(".row-link");
@@ -168,6 +168,7 @@ test("i reads only the focused unread row and Shift+E completes only the focused
       assert.deepEqual(ui.patches, []);
       assert.deepEqual(ui.deletions, []);
       await press(ui, "i");
+      await finishRows(ui);
       assert.deepEqual(ui.patches, ["/notifications/threads/1"]);
       assert.equal(ui.document.activeElement.dataset.focusKey, "thread:2");
       assert.equal(await press(ui, "i", { repeat: true }), true);
@@ -178,12 +179,14 @@ test("i reads only the focused unread row and Shift+E completes only the focused
       }
       assert.deepEqual(ui.patches, ["/notifications/threads/1"]);
       await press(ui, "E", { shiftKey: true });
+      await finishRows(ui);
       assert.deepEqual(ui.deletions, ["/notifications/threads/2"]);
       if (matchGitHubInbox) {
         assert.equal(ui.document.activeElement.dataset.focusKey, "thread:1");
         await press(ui, "E", { shiftKey: true, repeat: true });
         assert.equal(ui.deletions.length, 1);
         await press(ui, "E", { shiftKey: true });
+        await finishRows(ui);
       }
       assert.equal(ui.document.activeElement, ui.ids.get("search"));
       assert.equal(links(ui).length, 0);
@@ -200,10 +203,13 @@ test("Read shortcuts advance across expanded groups and stop on the last retaine
   await ui.ids.get("groups").querySelectorAll(".repo-toggle")[1].events.click();
   control(ui, "read:1").focus();
   await press(ui, "i");
+  await finishRows(ui);
   assert.equal(ui.document.activeElement.dataset.focusKey, "thread:3");
   await press(ui, "i");
+  await finishRows(ui);
   assert.equal(ui.document.activeElement.dataset.focusKey, "thread:4");
   await press(ui, "i");
+  await finishRows(ui);
   assert.equal(ui.document.activeElement.dataset.focusKey, "thread:4");
   assert.deepEqual(ui.patches, ["/notifications/threads/1", "/notifications/threads/3", "/notifications/threads/4"]);
   assert.equal(links(ui).length, 4);
@@ -220,6 +226,7 @@ test("Read auto-advance does not steal focus moved during the write", async t =>
   control(ui, "thread:3").focus();
   finish();
   await pending;
+  await finishRows(ui);
   assert.equal(ui.document.activeElement.dataset.focusKey, "thread:3");
   assert.deepEqual(ui.patches, ["/notifications/threads/1"]);
 });
@@ -232,8 +239,10 @@ test("shortcut actions skip collapsed groups when choosing the next link and can
   await ui.ids.get("groups").querySelectorAll(".repo-toggle")[1].events.click();
   control(ui, "done:1").focus();
   await press(ui, "E", { shiftKey: true });
+  await finishRows(ui);
   assert.equal(ui.document.activeElement.dataset.focusKey, "thread:3");
   await press(ui, "E", { shiftKey: true });
+  await finishRows(ui);
   assert.equal(ui.document.activeElement, ui.ids.get("search"));
   assert.deepEqual(ui.deletions, ["/notifications/threads/1", "/notifications/threads/3"]);
 });
@@ -255,6 +264,7 @@ test("pending writes allow other rows' shortcuts and completion does not steal n
   await press(ui, "j");
   finish();
   await Promise.all([pending, second]);
+  await finishRows(ui);
   assert.deepEqual(ui.patches, ["/notifications/threads/2"]);
   assert.equal(ui.document.activeElement.dataset.focusKey, "thread:3");
   await press(ui, "/");
@@ -270,6 +280,7 @@ test("failed keyboard actions keep focus and expose the existing error without a
     const ui = await setup(t, { initialRows: [thread("1"), thread("2")], onWrite: () => http({}, {}, 500) });
     await press(ui, "j");
     await press(ui, key, options);
+    await finishRows(ui);
     assert.equal(ui.document.activeElement.dataset.focusKey, "thread:1");
     assert.match(ui.ids.get("notice").textContent, new RegExp(`Could not mark the notification as ${action}.*HTTP 500`));
     await press(ui, key, { ...options, repeat: true });

@@ -104,6 +104,7 @@ export class NotificationBatch {
     const done = this.run(operation);
     this.running.add(done);
     void done.finally(() => this.running.delete(done));
+    return operation.token;
   }
 
   eligible(operation, item) {
@@ -181,17 +182,28 @@ export class NotificationBatch {
     this.assertAvailable();
     const operation = this.identify(input);
     if (this.isRunning(operation)) throw new InboxError("busy", "Wait for this batch to finish before retrying it.", 409);
-    const selection = operation.scope === "date" ? this.inbox.dateSelection(operation.date, operation.timeZone) :
-      operation.scope === "shown" ? this.inbox.shownSelection() :
-      this.inbox.groups().find(group => group.repository === operation.repository);
-    const shown = new Set(selection?.items.map(item => item.id));
-    const remaining = operation.items.filter(item => ["pending", "failed"].includes(item.result) &&
-      shown.has(item.id) && this.eligible(operation, item));
+    const remaining = this.retryItems(operation);
     if (!remaining.length) {
       throw new InboxError("no_remaining", "No unchanged, shown notifications remain from this batch. Wait for the next automatic refresh, then review the current selection.", 409);
     }
     this.launch(operation.repository, remaining, operation.action, operation.scope, operation);
     this.operations.delete(operation.token);
+  }
+
+  retryItems(operation) {
+    const selection = operation.scope === "date" ? this.inbox.dateSelection(operation.date, operation.timeZone) :
+      ["shown", "thread"].includes(operation.scope) ? this.inbox.shownSelection() :
+      this.inbox.groups().find(group => group.repository === operation.repository);
+    const shown = new Set(selection?.items.map(item => item.id));
+    return operation.items.filter(item => ["pending", "failed"].includes(item.result) &&
+      shown.has(item.id) && this.eligible(operation, item));
+  }
+
+  clearRowResults(id, exceptToken) {
+    for (const operation of this.operations.values()) {
+      if (operation.token !== exceptToken && operation.scope === "thread" && !this.isRunning(operation) &&
+          (id === undefined || operation.items[0].id === id)) this.operations.delete(operation.token);
+    }
   }
 
   dismiss(input) {
@@ -207,10 +219,12 @@ export class NotificationBatch {
     return {
       token: operation.token, repository: operation.repository, scope: operation.scope, action: operation.action, status: operation.status,
       ...(operation.scope === "date" ? { date: operation.date, timeZone: operation.timeZone } : {}),
+      ...(operation.scope === "thread" ? { threadId: operation.items[0].id } : {}),
       total: operation.items.length, succeeded: count("succeeded"), failed: count("failed"),
       skipped: count("skipped"), notAttempted: count("pending") - Number(operation.inFlight),
       inFlight: operation.inFlight, searchActive: operation.searchActive,
       remainingThreadIds: operation.items.filter(item => ["pending", "failed"].includes(item.result)).map(item => item.id),
+      retryableThreadIds: this.isRunning(operation) ? [] : this.retryItems(operation).map(item => item.id),
       error: operation.error, retryAt: this.inbox.client.blockedUntil,
     };
   }

@@ -46,7 +46,7 @@ for (const packaged of [false, true]) {
           headers: { Authorization: `Bearer ${url.hash.slice(1)}`, Origin: url.origin },
           data: { id: "1" },
         });
-        expect(done.status()).toBe(200);
+        expect(done.status()).toBe(202);
         await page.clock.fastForward(5000);
         await expect(tab).toHaveText(`${label} (49)`);
         await expect(page.locator(".row")).toHaveCount(49);

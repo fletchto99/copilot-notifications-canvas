@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { runInContext } from "node:vm";
 import { http, thread } from "./fixtures.mjs";
-import { disabled, groupActionText, groupProgress, renderer, settle } from "./renderer-fixtures.mjs";
+import { disabled, finishRows, groupActionText, groupProgress, renderer, settle } from "./renderer-fixtures.mjs";
 
 function controls(ui, repository = "example/widgets") {
   const buttons = ui.ids.get("groups").querySelectorAll("button");
@@ -190,6 +190,7 @@ test("pending row responses lock only their row and cannot overwrite a newer com
   await button("done:1").events.click();
   button("done:2").focus();
   await button("done:2").events.click();
+  await finishRows(ui);
   const focused = ui.document.activeElement;
   assert.deepEqual(ui.deletions, ["/notifications/threads/2"]);
   assert.equal(button("done:2"), undefined);
@@ -317,6 +318,7 @@ test("row actions expose queued and active status while search remains usable", 
   assert.deepEqual(buttons().map(button => button.dataset.writeState), ["active"]);
   releases[1]();
   await second;
+  await finishRows(ui);
   assert.equal(buttons().length, 0);
 });
 
@@ -346,4 +348,57 @@ test("parallel failures keep independent inline results and dismissing one prese
   assert.equal(first.hidden, false);
   assert.equal(ui.inbox.batch.snapshots().length, 1);
   assert.equal(ui.inbox.batch.snapshot().repository, "example/widgets");
+});
+
+test("batch retries ignore locked original targets that are no longer shown", async t => {
+  let release;
+  const ui = await renderer({ initialRows: [thread("1"), thread("2")],
+    onWrite: (_path, count) => count === 1 ? http({}, {}, 500) : count === 2
+      ? new Promise(resolve => { release = () => resolve("HTTP/2 204 No Content\r\n\r\n"); })
+      : "HTTP/2 204 No Content\r\n\r\n" });
+  t.after(() => { release?.(); ui.window.events.pagehide(); ui.inbox.close(); });
+  await controls(ui).done.events.click();
+  await ui.inbox.batch.done;
+  ui.advance();
+  await runInContext("update()", ui.context);
+  const row = ui.ids.get("groups").querySelectorAll("button").find(button => button.dataset.focusKey === "done:1");
+  await row.events.click();
+  await settle();
+  await runInContext('update("filters", { query: "notification 2" })', ui.context);
+  const retry = ui.ids.get("batch-retry");
+  assert.equal(retry.disabled, false);
+  assert.deepEqual(ui.inbox.batch.snapshots().find(batch => batch.scope === "repository").retryableThreadIds, ["2"]);
+  await retry.events.click();
+  assert.equal(ui.inbox.batch.snapshots().find(batch => batch.scope === "repository").total, 1);
+  release();
+  await ui.inbox.batch.done;
+  await runInContext("update()", ui.context);
+  assert.deepEqual(ui.deletions, ["/notifications/threads/1", "/notifications/threads/1", "/notifications/threads/2"]);
+});
+
+test("status polls hand off shortcut focus before a delayed acknowledgement without overriding newer focus", async t => {
+  for (const [action, moveFocus, fromButton] of [
+    ["read", false, false], ["read", true, false], ["done", false, false], ["done", true, false],
+    ["read", false, true], ["done", false, true],
+  ]) {
+    let release;
+    const ui = await renderer({ initialRows: [thread("1"), thread("2"), thread("3")],
+      retainDisabledFocus: true,
+      storedSettings: { matchGitHubInbox: action !== "read" },
+      onActionResponse: () => new Promise(resolve => { release = resolve; }) });
+    t.after(() => { release?.(); ui.window.events.pagehide(); ui.inbox.close(); });
+    const link = ui.ids.get("groups").querySelectorAll(fromButton ? `.mark-${action}` : ".row-link")[0];
+    link.focus();
+    const pending = runInContext(`markThread("1", "${action}", true)`, ui.context);
+    await settle();
+    await ui.inbox.batch.done;
+    if (moveFocus) ui.ids.get("search").focus();
+    await runInContext("update()", ui.context);
+    const next = ui.ids.get("groups").querySelectorAll(".row-link")[0];
+    assert.equal(next.dataset.threadId, "2");
+    assert.equal(ui.document.activeElement, moveFocus ? ui.ids.get("search") : next);
+    release();
+    await pending;
+    assert.equal(ui.document.activeElement, moveFocus ? ui.ids.get("search") : next);
+  }
 });

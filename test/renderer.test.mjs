@@ -914,10 +914,8 @@ test("manual and foreground refreshes queue behind row and repository writes wit
     ui.setRows([]);
     release();
     await reading;
-    if (kind === "repository") {
-      await ui.inbox.batch.done;
-      await runInContext("update()", ui.context);
-    }
+    await ui.inbox.batch.done;
+    await runInContext("update()", ui.context);
     await settle();
     assert.deepEqual(ui.patches, kind === "row" ? ["/notifications/threads/1"] :
       ["/notifications/threads/1", "/notifications/threads/2"]);

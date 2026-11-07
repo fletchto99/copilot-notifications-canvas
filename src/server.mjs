@@ -379,8 +379,10 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
           desktop?.wake(settings);
           return json(200, await settingsSnapshot(settings));
         }
-        if (path === "/api/read") await inbox.markRead(input);
-        if (path === "/api/done") await inbox.markDone(input);
+        if (path === "/api/read" || path === "/api/done") {
+          const rowActionToken = inbox.queueThread(input, path === "/api/done" ? "done" : "read");
+          return json(202, { ...snapshot(), rowActionToken });
+        }
         if (batchRoutes.has(path)) {
           inbox.batch[batchRoutes.get(path)](input);
           return json(["/api/batch/start", "/api/batch/retry"].includes(path) ? 202 : 200, snapshot());

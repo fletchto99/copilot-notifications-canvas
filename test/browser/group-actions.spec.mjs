@@ -362,3 +362,30 @@ test("failure controls stay with their group and remain accessible when the grou
   expect(canvas.doneWrites).toEqual(["2"]);
   expect(canvas.rows[0].unread).toBe(true);
 });
+
+test("a filtered batch retry can run beside a write to an excluded original target", async ({ page, canvas }) => {
+  canvas.rows.splice(2);
+  await page.goto(canvas.url);
+  canvas.setRequestHook(args => args.includes("DELETE") ? http({}, {}, 500) : undefined);
+  await page.locator(".repo-done").click();
+  await expect(page.locator("#batch-error")).toContainText("HTTP 500");
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  canvas.setRequestHook(args => args.includes("DELETE") && args.at(-1).endsWith("/threads/1") ? held : undefined);
+  await page.clock.setFixedTime(new Date(canvas.advance(121_000)));
+  await expect(page.locator("#batch-retry")).toBeEnabled({ timeout: 10_000 });
+  try {
+    await page.locator('[data-focus-key="done:1"]').click();
+    await expect(page.locator('[data-focus-key="done:1"]')).toBeDisabled();
+    await page.getByRole("searchbox").fill("Needle widget 2");
+    await expect(page.locator(".row")).toHaveCount(1);
+    await expect(page.locator("#batch-retry")).toBeEnabled();
+    await page.locator("#batch-retry").click();
+    await expect(page.locator(".group-progress")).toHaveText("Queued 0/1 as done...");
+    release();
+    await expect(page.locator(".row")).toHaveCount(0);
+    expect(canvas.doneWrites).toEqual(["1", "2"]);
+  } finally {
+    release();
+  }
+});

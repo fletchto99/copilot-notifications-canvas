@@ -165,7 +165,6 @@ test("Done waits for confirmation, reports failures, and never retries automatic
   const held = gate();
   const entered = gate();
   let attempts = 0;
-  canvas.expectConsoleError("/api/done", "Failed to load resource: the server responded with a status of 502 (Bad Gateway)");
   canvas.setRequestHook(async args => {
     if (!args.includes("DELETE")) return;
     attempts++;
@@ -194,6 +193,7 @@ test("Done waits for confirmation, reports failures, and never retries automatic
     await expect(page.locator(".repo-read")).toBeDisabled();
     await expect(page.locator(".row")).toHaveCount(2);
     held.release();
+    await page.clock.fastForward(1000);
     await expect(page.locator("#notice")).toContainText("Could not mark the notification as done");
     await expect(done).toBeEnabled();
     await expect(done).toHaveAttribute("aria-busy", "false");
@@ -205,6 +205,7 @@ test("Done waits for confirmation, reports failures, and never retries automatic
     canvas.advance(120_000);
     canvas.setRequestHook(undefined);
     await done.press("Enter");
+    await page.clock.fastForward(1000);
     await expect(page.locator(".row")).toHaveCount(1);
     await expect(page.locator("#notice")).toBeHidden();
     expect(canvas.doneWrites).toEqual(["1"]);
@@ -212,6 +213,82 @@ test("Done waits for confirmation, reports failures, and never retries automatic
     held.release();
   }
 });
+
+test("queued row acknowledgements survive more than the action request deadline and retain later errors", async ({ page, canvas }) => {
+  canvas.rows.splice(2);
+  const first = gate();
+  const second = gate();
+  const enteredSecond = gate();
+  canvas.setRequestHook(async args => {
+    if (!args.includes("DELETE")) return;
+    if (args.at(-1).endsWith("/threads/1")) await first.promise;
+    else {
+      enteredSecond.release();
+      await second.promise;
+      return http({}, {}, 500);
+    }
+  });
+  await page.clock.install();
+  await page.goto(canvas.url);
+  try {
+    for (const id of ["1", "2"]) {
+      const acknowledgement = page.waitForResponse(response => response.url().endsWith("/api/done"));
+      await page.locator(`[data-focus-key="done:${id}"]`).click();
+      const response = await acknowledgement;
+      expect(response.status()).toBe(202);
+      expect((await response.json()).rowActionToken).toMatch(/^[a-f0-9-]{36}$/);
+    }
+    await page.clock.fastForward(29_000);
+    await expect(page.locator('[data-focus-key="done:2"]')).toHaveAttribute("data-write-state", "queued");
+    first.release();
+    await enteredSecond.promise;
+    await page.clock.fastForward(29_000);
+    await expect(page.locator('[data-focus-key="done:1"]')).toHaveCount(0);
+    await expect(page.locator('[data-focus-key="done:2"]')).toHaveAttribute("data-write-state", "active");
+    await expect(page.locator("#notice")).toBeHidden();
+    second.release();
+    await page.clock.fastForward(1000);
+    await expect(page.locator("#notice")).toContainText("Could not mark the notification as done");
+    await expect(page.locator("#notice")).toContainText("HTTP 500");
+    await expect(page.locator('[data-focus-key="done:2"]')).toBeEnabled();
+    expect(canvas.doneWrites).toEqual(["1"]);
+  } finally {
+    first.release();
+    second.release();
+  }
+});
+
+for (const moveFocus of [false, true]) {
+  test(`shortcut completion polls preserve next-row focus before acknowledgement (${moveFocus ? "new focus" : "advance"})`, async ({ page, canvas }) => {
+    canvas.rows.splice(3);
+    const acknowledgement = gate();
+    const queued = gate();
+    await page.route("**/api/done", async route => {
+      const response = await route.fetch();
+      queued.release();
+      await acknowledgement.promise;
+      await route.fulfill({ response });
+    });
+    await page.goto(canvas.url);
+    try {
+      await page.locator('[data-focus-key="thread:1"]').focus();
+      await page.keyboard.press("Shift+KeyE");
+      await queued.promise;
+      if (moveFocus) await page.getByRole("searchbox").focus();
+      await expect(page.locator('[data-focus-key="thread:1"]')).toHaveCount(0);
+      const expected = moveFocus ? page.getByRole("searchbox") : page.locator('[data-focus-key="thread:2"]');
+      await expect(expected).toBeFocused();
+      const received = page.waitForResponse(response => response.url().endsWith("/api/done"));
+      acknowledgement.release();
+      await received;
+      await expect(expected).toBeFocused();
+      expect(canvas.doneWrites).toEqual(["1"]);
+    } finally {
+      acknowledgement.release();
+      await page.unrouteAll({ behavior: "wait" });
+    }
+  });
+}
 
 test("a read batch has no Stop control and completes every selected row", async ({ page, canvas }) => {
   canvas.rows.splice(2);

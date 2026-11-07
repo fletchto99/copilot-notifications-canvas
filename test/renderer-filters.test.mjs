@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { runInContext } from "node:vm";
-import { disabled, renderer, settle } from "./renderer-fixtures.mjs";
+import { disabled, finishRows, renderer, settle } from "./renderer-fixtures.mjs";
 import { thread } from "./fixtures.mjs";
 
 const rows = ["review_requested", "mention", "team_mention", "assign", "author", "comment", "subscribed"]
@@ -69,6 +69,7 @@ test("a pointer-focused populated panel does not override the row action's focus
   panel.focus();
   const read = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.focusKey === "read:1");
   await read.events.click();
+  await finishRows(ui);
   assert.equal(ui.document.activeElement.dataset.focusKey, "done:1");
   assert.deepEqual(ui.patches, ["/notifications/threads/1"]);
 });

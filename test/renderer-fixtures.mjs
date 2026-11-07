@@ -17,6 +17,10 @@ export const groupActionText = button => button.parentNode.querySelectorAll(".to
 export const disabled = button => button.disabled || button.getAttribute("aria-disabled") === "true";
 export const groupProgress = (ui, key) => ui.ids.get("groups").querySelectorAll(".group-progress")
   .find(node => node.dataset.groupKey === key)?.textContent;
+export async function finishRows(ui) {
+  await ui.inbox.batch.done;
+  await runInContext("update()", ui.context);
+}
 
 // Minimal DOM/event/timer doubles exercise the actual renderer without a browser dependency.
 export async function renderer({ hidden = false, token = "a".repeat(64), readFailure = false,
@@ -355,15 +359,15 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
         if (onFilters) await onFilters(input);
         await inbox.setFilters(input);
       }
-      if (path === "/api/read") await inbox.markRead(JSON.parse(options.body));
-      if (path === "/api/done") await inbox.markDone(JSON.parse(options.body));
+      const rowActionToken = ["/api/read", "/api/done"].includes(path)
+        ? inbox.queueThread(JSON.parse(options.body), path === "/api/done" ? "done" : "read") : undefined;
       if (path.startsWith("/api/batch/")) inbox.batch[path.slice("/api/batch/".length)](JSON.parse(options.body));
       if (onActionResponse && ["/api/read", "/api/done", "/api/batch/start"].includes(path)) {
-        const state = snapshot();
+        const state = { ...snapshot(), ...(rowActionToken ? { rowActionToken } : {}) };
         await onActionResponse(path, state);
         return { ok: true, json: async () => state };
       }
-      return { ok: true, json: async () => snapshot() };
+      return { ok: true, json: async () => ({ ...snapshot(), ...(rowActionToken ? { rowActionToken } : {}) }) };
     },
   });
   if (!process.env.NOTIFICATIONS_TEST_SCRIPT) assert.match(script, /^import \{ apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle \} from "\.\/model\.mjs";/);

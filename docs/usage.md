@@ -166,6 +166,11 @@ Done removes it in either view.
 
 A pending row action locks only that row and group actions that include it.
 Other rows remain actionable, including rows in the same group.
+Row actions are acknowledged when queued, then progress and results arrive
+through status updates. A long wait in the write queue does not report a failed
+write. Rows change only after confirmation; failures remain visible until an
+explicit retry or a successful refresh. Status updates preserve the next-row
+keyboard focus target even if they arrive before the action acknowledgement.
 
 ### Act on a group
 
@@ -195,6 +200,8 @@ expires. Failure details and retry controls appear beside the group, or above
 the list if filtering or regrouping hides that group. Closing the panel still
 cancels outstanding work.
 
+Retry conflicts consider only currently shown, unchanged, eligible targets, so
+an unrelated write to a filtered-out item does not block the remaining retry.
 Retries keep the original action and scope, including the
 date and time zone. They exclude successes, new arrivals, changed items, and
 items that no longer match your filters.

@@ -649,6 +649,35 @@ test("search and attention changes never change a running batch's captured targe
   }
 });
 
+test("queued row failures remain visible until retry or refresh, and closing cancels queued rows", async t => {
+  const { inbox, client, advance } = await fixture({ run: args => args.includes("GET")
+    ? http([thread("1"), thread("2")]) : http({}, {}, 500) });
+  t.after(() => inbox.close());
+  const token = inbox.queueThread({ id: "1" }, "done");
+  await inbox.batch.done;
+  assert.equal(inbox.batch.snapshot().token, token);
+  assert.equal(inbox.batch.snapshot().scope, "thread");
+  assert.equal(inbox.batch.snapshot().error.code, "github_http");
+  advance(120_000);
+  await inbox.refresh({ force: true });
+  assert.equal(inbox.batch.snapshot(), null);
+  const started = [];
+  client.run = (args, { signal }) => {
+    started.push(args.at(-1));
+    return new Promise((resolve, reject) => signal.addEventListener("abort", () => reject(new Error("Synthetic shutdown")), { once: true }));
+  };
+  inbox.queueThread({ id: "1" }, "read");
+  inbox.queueThread({ id: "2" }, "done");
+  await settle();
+  inbox.close();
+  await inbox.batch.done;
+  assert.deepEqual(started, ["/notifications/threads/1"]);
+  assert.equal(client.pendingThreads.size, 0);
+  assert.equal(client.threadReservations.size, 0);
+  assert.equal(client.threadWrites.size, 0);
+  assert.deepEqual(inbox.batch.snapshots(), []);
+});
+
 test("protected snapshots distinguish queued rows from dispatched writes without leaking identities in summaries", async t => {
   const releases = [];
   const { inbox, client } = await fixture({ run: args => args.includes("GET") ? http([thread("1"), thread("2")]) :

@@ -112,6 +112,53 @@ test("HTTP integration serves a protected inbox, rejects cross-origin access and
   assert.equal((await state.json()).groups[0].items[0].title, "Synthetic notification 1");
 });
 
+test("row HTTP requests acknowledge queued writes promptly and report delayed outcomes through snapshots", async t => {
+  let now = 0;
+  const releases = [];
+  const client = new GitHubClient({ now: () => now, sleep: async delay => { now += delay; },
+    run: (args, { signal }) => args.includes("GET") ? http([thread("1"), thread("2")]) :
+      new Promise((resolve, reject) => {
+        releases.push(resolve);
+        signal.addEventListener("abort", () => reject(new Error("Synthetic shutdown")), { once: true });
+      }),
+  });
+  const inbox = new Inbox(client);
+  await inbox.refresh();
+  const server = await startServer(inbox);
+  t.after(() => server.close());
+  const url = new URL(server.url);
+  const headers = { Authorization: `Bearer ${url.hash.slice(1)}`, Origin: url.origin, "Content-Type": "application/json" };
+  const queue = async (action, id) => {
+    const response = await fetch(`${url.origin}/api/${action}`, {
+      method: "POST", headers, body: JSON.stringify({ id }), signal: AbortSignal.timeout(2000),
+    });
+    assert.equal(response.status, 202);
+    return response.json();
+  };
+  const first = await queue("read", "1");
+  const second = await queue("done", "2");
+  assert.notEqual(first.rowActionToken, second.rowActionToken);
+  assert.equal(releases.length, 1);
+  const snapshot = async () => (await fetch(`${url.origin}/api/state`, { headers })).json();
+  assert.deepEqual((await snapshot()).threadWrites.map(write => write.inFlight), [true, false]);
+  now += 29_000;
+  releases[0](http(null, {}, 205));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(releases.length, 2);
+  const midway = await snapshot();
+  assert.equal(midway.batches.some(batch => batch.token === first.rowActionToken), false);
+  assert.equal(midway.batches.find(batch => batch.token === second.rowActionToken).inFlight, true);
+  now += 29_000;
+  releases[1](http({}, {}, 500));
+  await inbox.batch.done;
+  const failed = await snapshot();
+  assert.equal(failed.batches[0].token, second.rowActionToken);
+  assert.equal(failed.batches[0].error.code, "github_http");
+  assert.equal(failed.batches[0].threadId, "2");
+  assert.equal(failed.threadWrites.length, 0);
+  assert.doesNotMatch(JSON.stringify(inbox.summary()), /threadId|retryableThreadIds|rowActionToken/);
+});
+
 test("methods, paths, origins, hosts, JSON, filter input and oversized bodies are checked", async t => {
   const { origin, headers } = await setup(t);
   for (const [path, method, body, expected] of [
@@ -311,8 +358,9 @@ test("all HTTP notification request paths inherit another client's server deadli
     const blocked = await call();
     const blockedState = await blocked.json();
     await finish();
-    assert.equal(blocked.status, path === "state" ? 200 : path === "batch/start" ? 202 : 429, path);
-    if (path === "batch/start") {
+    const queued = ["batch/start", "read", "done"].includes(path);
+    assert.equal(blocked.status, path === "state" ? 200 : queued ? 202 : 429, path);
+    if (queued) {
       const batch = inbox.batch.snapshot();
       assert.equal(batch.error.code, "rate_limited");
       assert.equal(batch.failed, 0);
@@ -326,9 +374,10 @@ test("all HTTP notification request paths inherit another client's server deadli
       ? await call("batch/retry", { token: inbox.batch.snapshot().token }) : await call();
     const resumedState = await resumed.json();
     await finish();
-    assert.equal(resumed.status, path === "batch/start" ? 202 : 200);
-    assert.equal(resumedState.loaded, path === "more" ? 2 : path === "done" ? 0 : 1);
-    if (path === "batch/start") assert.equal(inbox.batch.snapshot(), null);
+    assert.equal(resumed.status, queued ? 202 : 200);
+    assert.equal(resumedState.loaded, path === "more" ? 2 : 1);
+    if (queued) assert.equal(inbox.batch.snapshot(), null);
+    if (path === "done") assert.equal(inbox.snapshot().loaded, 0);
     if (path === "state") assert.equal(readerClient.subjectSnapshot(inbox.loadedItems()[0]).subjectState, "open");
     assert.equal(calls.length, before + 1);
     await reader.foregroundPending;

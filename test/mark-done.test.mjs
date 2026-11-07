@@ -268,12 +268,13 @@ test("the protected Done route requires an explicit same-origin POST and persist
     ["POST", {}, "{", 400],
     ["POST", {}, JSON.stringify({ id: "1", extra: true }), 400],
     ["POST", {}, '{"id":"999"}', 404],
-    ["POST", {}, '{"id":"1"}', 200],
+    ["POST", {}, '{"id":"1"}', 202],
   ]) {
     const response = await fetch(`${url.origin}/api/done`, { method, headers: { ...headers, ...override }, body });
     assert.equal(response.status, status);
     assert.equal(response.headers.get("access-control-allow-origin"), null);
   }
+  await inbox.batch.done;
   assert.equal(writes.length, 1);
   assert.ok(writes[0].includes("DELETE"));
   assert.equal(writes[0].at(-1), "/notifications/threads/1");
