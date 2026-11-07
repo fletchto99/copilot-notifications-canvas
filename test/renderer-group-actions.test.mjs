@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { runInContext } from "node:vm";
 import { http, thread } from "./fixtures.mjs";
-import { groupActionText, renderer, settle } from "./renderer-fixtures.mjs";
+import { disabled, groupActionText, groupProgress, renderer, settle } from "./renderer-fixtures.mjs";
 
 function controls(ui, repository = "example/widgets") {
   const buttons = ui.ids.get("groups").querySelectorAll("button");
@@ -36,10 +36,12 @@ test("direct Done starts only the counted search selection and disables both act
   await settle();
   assert.equal(ui.inbox.batch.snapshot().action, "done");
   assert.equal(ui.inbox.batch.snapshot().total, 2);
-  assert.equal(ui.document.activeElement, ui.ids.get("batch-stop"));
-  assert.match(ui.ids.get("batch-title").textContent, /Marking as done/);
-  assert.equal(read.disabled, true);
-  assert.equal(done.disabled, true);
+  assert.equal(ui.document.activeElement, done);
+  assert.equal(ui.ids.get("batch-progress").hidden, true);
+  await runInContext("update()", ui.context);
+  assert.equal(groupProgress(ui, "repo:example/widgets"), "Marking 0/2 as done...");
+  assert.equal(disabled(read), true);
+  assert.equal(disabled(done), true);
   assert.deepEqual(ui.deletions, ["/notifications/threads/1"]);
   assert.deepEqual(ui.patches, []);
   release();
@@ -171,4 +173,177 @@ test("batch retry waits for pending search without expanding its original scope"
   await ui.inbox.batch.done;
   assert.deepEqual(ui.deletions, ["/notifications/threads/1", "/notifications/threads/2"]);
   assert.deepEqual(ui.patches, []);
+});
+
+test("pending row responses lock only their row and cannot overwrite a newer completed action", async t => {
+  let release;
+  const ui = await renderer({ initialRows: [thread("1"), thread("2"), thread("3")],
+    onActionResponse: path => path === "/api/read" ? new Promise(resolve => { release = resolve; }) : undefined,
+  });
+  t.after(() => { release?.(); ui.window.events.pagehide(); ui.inbox.close(); });
+  const button = key => ui.ids.get("groups").querySelectorAll("button").find(button => button.dataset.focusKey === key);
+  const first = button("read:1").events.click();
+  await settle();
+  assert.equal(button("done:1").disabled, true);
+  assert.equal(button("done:2").disabled, false);
+  assert.equal(disabled(controls(ui).done), true);
+  await button("done:1").events.click();
+  button("done:2").focus();
+  await button("done:2").events.click();
+  const focused = ui.document.activeElement;
+  assert.deepEqual(ui.deletions, ["/notifications/threads/2"]);
+  assert.equal(button("done:2"), undefined);
+  release();
+  await first;
+  assert.equal(button("done:2"), undefined);
+  assert.equal(button("read:1"), undefined);
+  assert.equal(button("done:1").disabled, false);
+  assert.equal(ui.document.activeElement, focused);
+  assert.equal(controls(ui).done.disabled, false);
+});
+
+test("parallel group requests have scoped locks and independent progress without Stop controls", async t => {
+  let releaseWrite;
+  let releaseResponse;
+  const ui = await renderer({ initialRows: [
+    thread("1"), thread("2"),
+    thread("3", { repository: { full_name: "example/other" } }),
+    thread("4", { repository: { full_name: "example/other" } }),
+    thread("5", { repository: { full_name: "example/solo" } }),
+  ], onWrite: (_path, count, method) => count === 1
+    ? new Promise(resolve => { releaseWrite = () => resolve("HTTP/2 205 Reset Content\r\n\r\n"); })
+    : `HTTP/2 ${method === "DELETE" ? 204 : 205} Synthetic\r\n\r\n`,
+  onActionResponse: (path, state) => path === "/api/batch/start" && state.batches.length === 1
+    ? new Promise(resolve => { releaseResponse = resolve; }) : undefined,
+  });
+  t.after(() => { releaseWrite?.(); releaseResponse?.(); ui.window.events.pagehide(); ui.inbox.close(); });
+  const first = controls(ui).read.events.click();
+  await settle();
+  assert.equal(disabled(controls(ui).done), true);
+  assert.equal(controls(ui, "example/other").done.disabled, false);
+  await controls(ui, "example/other").done.events.click();
+  assert.equal(ui.inbox.batch.snapshots().length, 2);
+  assert.equal(ui.ids.get("additional-batches").querySelectorAll("section").length, 0);
+  const second = controls(ui, "example/other").done;
+  assert.equal(groupProgress(ui, "repo:example/widgets"), "Marking 0/2 as read...");
+  assert.equal(groupProgress(ui, "repo:example/other"), "Queued 0/2 as done...");
+  assert.equal(ui.document.activeElement, second);
+  releaseResponse();
+  await first;
+  assert.equal(ui.inbox.batch.snapshots().length, 2);
+  assert.equal(ui.document.activeElement, second, "the older response must not steal focus");
+  assert.equal(ui.inbox.batch.snapshots()[0].status, "running");
+  assert.equal(ui.inbox.batch.snapshots()[1].status, "running");
+  await controls(ui, "example/solo").done.events.click();
+  releaseWrite();
+  await ui.inbox.batch.done;
+  await runInContext("update()", ui.context);
+  assert.equal(ui.ids.get("additional-batches").querySelectorAll("section").length, 0);
+  assert.deepEqual(ui.patches, ["/notifications/threads/1", "/notifications/threads/2"]);
+  assert.deepEqual(new Set(ui.deletions), new Set(["/notifications/threads/3", "/notifications/threads/4", "/notifications/threads/5"]));
+});
+
+test("finishing a focused batch leaves focus usable while another batch is running", async t => {
+  const releases = [];
+  const ui = await renderer({ initialRows: [
+    thread("1"), thread("2", { repository: { full_name: "example/other" } }),
+  ], onWrite: () => new Promise(resolve => { releases.push(() => resolve("HTTP/2 205 Reset Content\r\n\r\n")); }) });
+  t.after(() => { for (const release of releases) release(); ui.window.events.pagehide(); ui.inbox.close(); });
+  await controls(ui).read.events.click();
+  await controls(ui, "example/other").read.events.click();
+  await settle();
+  controls(ui).read.focus();
+  releases[0]();
+  await settle();
+  await runInContext("update()", ui.context);
+  assert.equal(ui.ids.get("batch-progress").hidden, true);
+  assert.equal(ui.ids.get("search").disabled, false);
+  assert.equal(groupProgress(ui, "repo:example/other"), "Marking 0/1 as read...");
+  assert.equal(ui.document.activeElement.dataset.focusKey, "repo:example/widgets");
+  releases[1]();
+  await ui.inbox.batch.done;
+  await runInContext("update()", ui.context);
+  assert.equal(ui.document.activeElement.dataset.focusKey, "repo:example/widgets");
+});
+
+test("inline failures follow the group and remain retryable when filtering or regrouping hides it", async t => {
+  const ui = await renderer({ initialRows: [thread("1"), thread("2"), thread("3", { repository: { full_name: "example/other" } })],
+    onWrite: (_path, count) => count === 1 ? http({}, {}, 500) : "HTTP/2 204 No Content\r\n\r\n" });
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  await controls(ui).done.events.click();
+  await ui.inbox.batch.done;
+  await runInContext("update()", ui.context);
+  const result = ui.ids.get("batch-progress");
+  assert.equal(result.parentNode.className, "group-results");
+  assert.equal(result.parentNode.parentNode.querySelectorAll(".repo-name")[0].textContent, "example/widgets");
+  await runInContext('update("filters", { query: "notification 3" })', ui.context);
+  assert.equal(result.parentNode, ui.ids.get("additional-batches"));
+  assert.equal(result.hidden, false);
+  assert.match(ui.ids.get("batch-title").textContent, /example\/widgets/);
+  await runInContext('update("filters", { query: "notification 2" })', ui.context);
+  assert.equal(result.parentNode.className, "group-results");
+  const grouping = ui.ids.get("group-by");
+  grouping.value = "none";
+  grouping.events.change();
+  await settle();
+  assert.equal(result.parentNode, ui.ids.get("additional-batches"));
+  ui.advance();
+  await runInContext("update()", ui.context);
+  await ui.ids.get("batch-retry").events.click();
+  await ui.inbox.batch.done;
+  await runInContext("update()", ui.context);
+  assert.deepEqual(ui.deletions, ["/notifications/threads/1", "/notifications/threads/2"]);
+  assert.equal(result.hidden, true);
+});
+
+test("row actions expose queued and active status while search remains usable", async t => {
+  const releases = [];
+  const ui = await renderer({ initialRows: [thread("1"), thread("2")],
+    onWrite: () => new Promise(resolve => { releases.push(() => resolve("HTTP/2 205 Reset Content\r\n\r\n")); }) });
+  t.after(() => { releases.forEach(release => release()); ui.window.events.pagehide(); ui.inbox.close(); });
+  const buttons = () => ui.ids.get("groups").querySelectorAll(".mark-read");
+  const first = buttons()[0].events.click();
+  const second = buttons()[1].events.click();
+  assert.deepEqual(buttons().map(button => button.dataset.writeState), ["queued", "queued"]);
+  await settle();
+  await runInContext("update()", ui.context);
+  assert.deepEqual(buttons().map(button => button.dataset.writeState), ["active", "queued"]);
+  assert.equal(groupActionText(buttons()[1]), "Queued to mark as read");
+  assert.equal(ui.ids.get("search").disabled, false);
+  releases[0]();
+  await first;
+  await settle();
+  await runInContext("update()", ui.context);
+  assert.deepEqual(buttons().map(button => button.dataset.writeState), ["active"]);
+  releases[1]();
+  await second;
+  assert.equal(buttons().length, 0);
+});
+
+test("parallel failures keep independent inline results and dismissing one preserves the other", async t => {
+  let release;
+  const ui = await renderer({ initialRows: [thread("1"), thread("2", { repository: { full_name: "example/other" } })],
+    onWrite: () => new Promise(resolve => { release = () => resolve(http({}, {}, 500)); }) });
+  t.after(() => { release?.(); ui.window.events.pagehide(); ui.inbox.close(); });
+  await controls(ui).done.events.click();
+  await controls(ui, "example/other").done.events.click();
+  await settle();
+  release();
+  await ui.inbox.batch.done;
+  await runInContext("update()", ui.context);
+  const results = ui.ids.get("groups").querySelectorAll(".group-results");
+  const first = results[0].children[0];
+  const second = results[1].children[0];
+  assert.equal(first, ui.ids.get("batch-progress"));
+  assert.equal(second.className, "batch-progress");
+  assert.match(second.querySelectorAll("h2")[0].textContent, /example\/other/);
+  const buttons = second.querySelectorAll("button");
+  assert.equal(buttons[0].textContent, "Retry remaining (1)");
+  assert.equal(buttons[0].disabled, true);
+  buttons[1].focus();
+  await buttons[1].events.click();
+  assert.equal(results[1].children.length, 0);
+  assert.equal(first.hidden, false);
+  assert.equal(ui.inbox.batch.snapshots().length, 1);
+  assert.equal(ui.inbox.batch.snapshot().repository, "example/widgets");
 });

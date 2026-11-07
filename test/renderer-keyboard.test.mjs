@@ -238,21 +238,24 @@ test("shortcut actions skip collapsed groups when choosing the next link and can
   assert.deepEqual(ui.deletions, ["/notifications/threads/1", "/notifications/threads/3"]);
 });
 
-test("pending writes block other shortcut actions and completion does not steal newer focus", async t => {
+test("pending writes allow other rows' shortcuts and completion does not steal newer focus", async t => {
   let finish;
   const ui = await setup(t, { initialRows: [thread("1"), thread("2"), thread("3")],
-    onWrite: () => new Promise(resolve => { finish = () => resolve("HTTP/2 204 No Content\r\n\r\n"); }) });
+    onWrite: (_path, count) => count === 1
+      ? new Promise(resolve => { finish = () => resolve("HTTP/2 204 No Content\r\n\r\n"); })
+      : "HTTP/2 205 Reset Content\r\n\r\n" });
   await press(ui, "j");
   const pending = press(ui, "E", { shiftKey: true });
   await settle();
   await press(ui, "j");
-  await press(ui, "i");
+  const second = press(ui, "i");
   await press(ui, "E", { shiftKey: true });
   assert.deepEqual(ui.deletions, ["/notifications/threads/1"]);
   assert.deepEqual(ui.patches, []);
   await press(ui, "j");
   finish();
-  await pending;
+  await Promise.all([pending, second]);
+  assert.deepEqual(ui.patches, ["/notifications/threads/2"]);
   assert.equal(ui.document.activeElement.dataset.focusKey, "thread:3");
   await press(ui, "/");
   ui.ids.get("search").value = "notification 2";

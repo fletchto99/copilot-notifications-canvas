@@ -197,13 +197,13 @@ test("row failures immediately reconcile backoff and failed reconciliation remai
 test("stopped batches keep nonzero skipped counts and preserve failure details when present", async t => {
   const ui = await renderer();
   t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
-  await runInContext(`state.batch = {
-    scope: "shown", action: "done", status: "cancelled", total: 4,
-    succeeded: 1, failed: 0, skipped: 1, notAttempted: 2, retryAt: 0
-  }; render()`, ui.context);
+  await runInContext(`state.batches = [{
+    token: "synthetic", scope: "shown", action: "done", status: "cancelled", total: 4,
+    succeeded: 1, failed: 0, skipped: 1, notAttempted: 2, retryAt: 0, remainingThreadIds: ["2", "3"]
+  }]; render()`, ui.context);
   assert.equal(ui.ids.get("batch-counts").textContent, "1 marked done, 2 remaining, 1 skipped");
   assert.equal(ui.ids.get("batch-retry").textContent, "Continue remaining (2)");
-  await runInContext('state.batch.error = { message: "Outcome unknown" }; render()', ui.context);
+  await runInContext('state.batches[0].error = { message: "Outcome unknown" }; render()', ui.context);
   assert.equal(ui.ids.get("batch-retry").textContent, "Retry remaining (2)");
   assert.match(ui.ids.get("batch-counts").textContent, /1 succeeded \/ 0 failed \/ 1 skipped \/ 2 not attempted/);
   assert.equal(ui.ids.get("batch-error").textContent, "Outcome unknown");

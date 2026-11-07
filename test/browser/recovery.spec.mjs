@@ -182,6 +182,10 @@ test("Done waits for confirmation, reports failures, and never retries automatic
     await expect(done).toHaveAttribute("aria-busy", "true");
     await expect(done.locator("svg")).toHaveCount(1);
     await expect(done.locator("svg")).toBeHidden();
+    await expect(done).toHaveAttribute("data-write-state", "queued");
+    expect(await done.evaluate(node => getComputedStyle(node, "::after").animationName)).toBe("none");
+    await page.clock.fastForward(1000);
+    await expect(done).toHaveAttribute("data-write-state", "active");
     await page.emulateMedia({ reducedMotion: "reduce" });
     expect(await done.evaluate(node => getComputedStyle(node, "::after").animationName)).toBe("none");
     await page.emulateMedia({ reducedMotion: "no-preference" });
@@ -209,7 +213,7 @@ test("Done waits for confirmation, reports failures, and never retries automatic
   }
 });
 
-test("batch cancellation waits for the in-flight write and retry writes only remaining rows", async ({ page, canvas }) => {
+test("a read batch has no Stop control and completes every selected row", async ({ page, canvas }) => {
   canvas.rows.splice(2);
   await page.goto(canvas.url);
   await expect(page.locator(".row")).toHaveCount(2);
@@ -221,15 +225,14 @@ test("batch cancellation waits for the in-flight write and retry writes only rem
   try {
     await page.getByRole("button", { name: "Mark 2 as read in example/widgets; 2 shown, loaded notifications", exact: true }).click();
     await entered.promise;
-    await page.getByRole("button", { name: "Stop remaining", exact: true }).click();
-    await expect(page.locator("#batch-title")).toContainText("Stopping");
+    await expect(page.getByRole("button", { name: "Stop remaining", exact: true })).toHaveCount(0);
+    await expect(page.locator("#batch-progress")).toBeHidden();
+    await expect(page.locator(".repo-read")).toBeFocused();
     canvas.setRequestHook(undefined);
     held.release();
-    await expect(page.getByRole("button", { name: "Continue remaining (1)", exact: true })).toBeVisible();
-    expect(canvas.writes).toEqual(["1"]);
-    await page.getByRole("button", { name: "Continue remaining (1)", exact: true }).click();
     await expect(page.locator(".row.unread")).toHaveCount(0);
     await expect(page.locator(".row")).toHaveCount(2);
+    await expect(page.locator("#batch-progress")).toBeHidden();
     expect(canvas.writes).toEqual(["1", "2"]);
   } finally {
     held.release();

@@ -98,7 +98,7 @@ test.describe("date-scoped actions", () => {
     });
   }
 
-  test("date cancellation and retry stay on the original day after grouping changes", async ({ page, canvas }) => {
+  test("date actions finish their original day after grouping changes without a Stop control", async ({ page, canvas }) => {
     prepareRows(canvas);
     canvas.rows.splice(3);
     await canvas.preferences.update({ groupBy: "date" });
@@ -113,8 +113,8 @@ test.describe("date-scoped actions", () => {
     try {
       await page.getByRole("button", { name: actionName("done"), exact: true }).click();
       await started;
-      await expect(page.locator("#batch-title")).toContainText(`${label}: Marking as done`);
-      await expect(page.locator(`[data-focus-key="bulk-done:date:${date}"]`)).toHaveAccessibleDescription("Marking 0/2...");
+      await expect(page.locator(".group-progress:visible")).toHaveText("Marking 0/2 as done...");
+      await expect(page.locator(`[data-focus-key="bulk-done:date:${date}"]`)).toHaveAccessibleDescription("Marking 0/2 as done...");
       await expect(page.locator('[data-focus-key="bulk:date:2026-01-13"]')).toHaveAccessibleDescription("Mark 1 as read");
       await expect(page.locator('[data-focus-key="bulk:date:2026-01-13"]')).toHaveAttribute("aria-busy", "false");
       await page.getByLabel("Settings", { exact: true }).click();
@@ -122,15 +122,11 @@ test.describe("date-scoped actions", () => {
       await page.keyboard.press("Escape");
       await expect(page.locator('[data-focus-key="bulk:shown"]')).toBeDisabled();
       await expect(page.locator('[data-focus-key="bulk:shown"]')).toHaveAccessibleDescription("Mark 3 as read");
-      await page.getByRole("button", { name: "Stop remaining", exact: true }).click();
+      await expect(page.getByRole("button", { name: "Stop remaining", exact: true })).toHaveCount(0);
       canvas.setRequestHook(undefined);
       release();
-      const retry = page.getByRole("button", { name: "Continue remaining (1)", exact: true });
-      await expect(retry).toBeVisible();
-      expect(canvas.doneWrites).toEqual(["1"]);
-      await expect(page.locator("#batch-title")).toContainText(`${label}: Stopped`);
-      await retry.click();
       await expect(page.locator(".row")).toHaveCount(1);
+      await expect(page.locator("#batch-progress")).toBeHidden();
       expect(canvas.doneWrites).toEqual(["1", "2"]);
       expect(canvas.rows.find(row => row.id === "3").unread).toBe(true);
       await expect(page.locator('[data-focus-key="bulk:shown"]')).toHaveAccessibleDescription("Mark 1 as read");
