@@ -265,6 +265,8 @@ required-check rules separately if workflow check names change.
 **Browser CI:** both engines run in a version/digest-pinned Playwright image
 with browsers and libraries preinstalled. Update its version and verified digest
 with the locked `@playwright/test` dependency; alignment is tested.
+Each browser job has a 15-minute limit for container startup, packaging, tests,
+and report uploads; Playwright's per-test timeout remains 30 seconds.
 PR/main CI validates packaging but never publishes releases.
 
 Windows lock tests preserve existing files and directory links before publishing
