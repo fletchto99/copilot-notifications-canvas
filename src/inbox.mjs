@@ -11,6 +11,7 @@ export class Inbox {
     this.pages = [];
     this.busy = false;
     this.marking = new Set();
+    this.snapshotVersion = 0;
     this.batch = new NotificationBatch(this);
     this.error = null;
     this.settingsError = null;
@@ -23,6 +24,7 @@ export class Inbox {
         ...page,
         items: page.items.flatMap(item => item.id !== id ? [item] : retain ? [{ ...item, unread: false }] : []),
       }));
+      this.batch.clearRowResults(id);
       this.needsRefresh = true;
     };
     client.threadListeners.add(this.onThreadUpdated);
@@ -84,7 +86,10 @@ export class Inbox {
   snapshot() {
     const items = this.loadedItems();
     const groups = this.groups(items);
+    const snapshotVersion = ++this.snapshotVersion;
+    const batches = this.batch.snapshots(items, groups, snapshotVersion);
     return {
+      snapshotVersion,
       filters: { ...this.filters },
       matchGitHubInbox: this.matchGitHubInbox,
       status: this.busy ? "loading" : this.error ? (this.pages.length ? "stale" : "error") :
@@ -101,22 +106,26 @@ export class Inbox {
       lastFetchedAt: this.pages.length ? Math.min(...this.pages.map(page => page.fetchedAt)) : null,
       nextRefreshAt: Math.max(this.nextRefreshAt, this.client.blockedUntil),
       retryAt: this.client.blockedUntil,
-      batch: this.batch.snapshot(),
+      batch: batches.at(-1) ?? null,
+      batches,
+      lockedThreadIds: [...new Set([...this.client.pendingThreads, ...this.client.threadReservations.keys()])],
+      threadWrites: [...this.client.threadWrites.values()].map(write => ({ ...write })),
       groups,
     };
   }
 
   summary() {
-    const { filters, groups, batch, selectionKey, ...state } = this.snapshot();
-    const { repository, token, date, timeZone, ...batchCounts } = batch ?? {};
-    return { ...state, batch: batch ? batchCounts : null, mode: filters.mode, attention: filters.attention,
+    const { filters, groups, batch, batches, lockedThreadIds, threadWrites, snapshotVersion, selectionKey, ...state } = this.snapshot();
+    const counts = ({ repository, token, date, timeZone, threadId, remainingThreadIds, retryableThreadIds, ...batchCounts }) => batchCounts;
+    const operations = batches.filter(batch => batch.scope !== "thread" || batch.status !== "completed");
+    return { ...state, batch: operations.length ? counts(operations.at(-1)) : null, batches: operations.map(counts), mode: filters.mode, attention: filters.attention,
       searchActive: Boolean(filters.query), repositories: groups.length };
   }
 
   async execute(operation, source = "refresh") {
     if (this.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
     if (this.busy) throw new InboxError("busy", "An inbox request is already running. Try again when it finishes.", 409);
-    if (this.batch.locked) throw new InboxError("busy", "Finish or cancel the current batch first.", 409);
+    if (this.batch.locked) throw new InboxError("busy", "Wait for the current batches to finish.", 409);
     this.busy = true;
     try {
       await operation();
@@ -144,7 +153,7 @@ export class Inbox {
       throw new InboxError("invalid_input", "Refresh accepts only an optional force boolean.", 400);
     }
     if (this.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
-    if (this.batch.locked) throw new InboxError("busy", "Finish or cancel the current batch first.", 409);
+    if (this.batch.locked) throw new InboxError("busy", "Wait for the current batches to finish.", 409);
     if (!input.force && this.client.now() < this.nextRefreshAt) {
       if (this.error) throw new InboxError(this.error.code, this.error.message, 503);
       return this.summary();
@@ -163,6 +172,7 @@ export class Inbox {
       if (this.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
       if (revision !== this.client.revision) throw new InboxError("inbox_changed", "The inbox changed while refreshing. The next automatic refresh will reconcile it.", 409);
       this.pages = pages;
+      this.batch.clearRowResults();
       this.matchGitHubInbox = matchGitHubInbox;
       this.needsRefresh = pages.some(page => page.invalidated);
       this.nextRefreshAt = this.viewChanged ? 0 : Math.max(...pages.map(page => page.nextRefreshAt));
@@ -194,7 +204,6 @@ export class Inbox {
     validateFilters(input);
     if (this.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
     if (this.busy) throw new InboxError("busy", "An inbox request is already running.", 409);
-    if (this.batch.locked) throw new InboxError("busy", "Finish or cancel the current batch before changing filters.", 409);
     if (input.mode !== undefined && input.mode !== this.filters.mode) {
       if (this.marking.size) throw new InboxError("busy", "Wait for the current notification update to finish.", 409);
       return this.execute(async () => {
@@ -222,7 +231,14 @@ export class Inbox {
     return this.#markThread(input, "markDone");
   }
 
-  async #markThread(input, method) {
+  queueThread(input, action) {
+    const item = this.#thread(input, action === "done" ? "markDone" : "markRead");
+    const token = this.batch.launch(item.repository, [item], action, "thread");
+    this.batch.clearRowResults(item.id, token);
+    return token;
+  }
+
+  #thread(input, method) {
     if (!input || typeof input !== "object" || Array.isArray(input) ||
         Object.keys(input).length !== 1 || typeof input.id !== "string" ||
         !/^[1-9]\d{0,63}$/.test(input.id)) {
@@ -230,11 +246,16 @@ export class Inbox {
     }
     if (this.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
     if (this.busy) throw new InboxError("busy", "Wait for the current inbox request to finish.", 409);
-    if (this.batch.locked) throw new InboxError("busy", "Finish or cancel the current batch first.", 409);
     if (this.marking.has(input.id)) throw new InboxError("busy", "This notification is already being updated.", 409);
-    if (!this.loadedItems().some(item => item.id === input.id && (method === "markDone" || item.unread))) {
+    const item = this.loadedItems().find(item => item.id === input.id && (method === "markDone" || item.unread));
+    if (!item) {
       throw new InboxError("unknown_thread", "This notification is no longer in the loaded inbox. Let the view update automatically before trying again.", 404);
     }
+    return item;
+  }
+
+  async #markThread(input, method) {
+    this.#thread(input, method);
     this.marking.add(input.id);
     try {
       await this.client[method](input.id, this.controller.signal);

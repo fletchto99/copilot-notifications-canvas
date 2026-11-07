@@ -31,6 +31,7 @@ test("browser CI pins the locked Playwright version without installing browsers 
   assert.ok(workflow.includes("\n  browser:"));
   const browser = workflow.slice(workflow.indexOf("\n  browser:"));
   assert.match(browser, /runs-on: ubuntu-latest/);
+  assert.match(browser, /^\s+timeout-minutes: 15$/m);
   const image = browser.match(/^\s+image: mcr\.microsoft\.com\/playwright:v(\d+\.\d+\.\d+)-noble@sha256:[a-f0-9]{64}$/m);
   assert.ok(image, "Browser CI must use a version- and digest-pinned Playwright image");
   assert.equal(image[1], lock.packages["node_modules/@playwright/test"].version);

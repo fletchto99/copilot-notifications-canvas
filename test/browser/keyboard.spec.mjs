@@ -347,7 +347,7 @@ for (const packaged of [false, true]) {
       expect(canvas.writes).toEqual([]);
     });
 
-    test("pending shortcut writes and search filters cannot spill into another row", async ({ page, canvas }) => {
+    test("shortcut writes can run on separate rows while pending filters still block new actions", async ({ page, canvas }) => {
       canvas.rows.splice(3);
       await page.goto(canvas.url);
       await expect(page.locator(".row")).toHaveCount(3);
@@ -360,14 +360,18 @@ for (const packaged of [false, true]) {
         await expect(page.locator('[data-focus-key="done:1"]')).toHaveAttribute("aria-busy", "true");
         await page.keyboard.press("j");
         await page.keyboard.press("Shift+KeyE");
+        await expect(page.locator('[data-focus-key="done:2"]')).toHaveAttribute("aria-busy", "true");
         await page.keyboard.press("i");
         await page.keyboard.press("/");
-        await page.getByRole("searchbox").fill("Needle widget 2");
+        await page.getByRole("searchbox").fill("Needle tool");
+        await rowLink(page, "3").focus();
+        await page.keyboard.press("Shift+KeyE");
+        await page.keyboard.press("/");
         release();
         await expect(page.locator(".row")).toHaveCount(1);
         await expect(page.getByRole("searchbox")).toBeFocused();
-        expect(canvas.writes).toEqual(["1"]);
-        expect(canvas.doneWrites).toEqual(["1"]);
+        await expect.poll(() => canvas.writes).toEqual(["1", "2"]);
+        expect(canvas.doneWrites).toEqual(["1", "2"]);
       } finally {
         release();
       }

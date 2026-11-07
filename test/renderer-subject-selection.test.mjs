@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { http, inboxNext as next, thread } from "./fixtures.mjs";
-import { renderer, settle } from "./renderer-fixtures.mjs";
+import { finishRows, renderer, settle } from "./renderer-fixtures.mjs";
 
 const rows = count => Array.from({ length: count }, (_, index) => thread(String(1000000000000 + index)));
 const selectionCalls = ui => ui.calls.filter(call => call.path === "/api/subjects").map(call => JSON.parse(call.options.body));
@@ -102,6 +102,7 @@ test("status upload failures are explicit, retry on polling, and never block ord
       assert.equal(ui.animationFrames.size, 0, "Failures must not cause an immediate retry loop");
       await ui.ids.get("force-refresh").events.click();
       await ui.ids.get("groups").querySelectorAll(".mark-done")[0].events.click();
+      await finishRows(ui);
       assert.equal(ui.deletions.length, 1);
       assert.match(ui.ids.get("notice").textContent, /Notification status loading paused/);
       fail = false;
@@ -133,6 +134,7 @@ test("status selection failures preserve empty, filtered and cleared inbox prese
         await ui.fireTimer(250);
       } else if (mode === "cleared" || mode === "completed") {
         await ui.ids.get("groups").querySelectorAll(".mark-done")[0].events.click();
+        await finishRows(ui);
       }
       const description = ui.ids.get("empty-description").textContent;
       await sync(ui);

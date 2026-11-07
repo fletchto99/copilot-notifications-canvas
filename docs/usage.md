@@ -161,8 +161,23 @@ controls wrap while row actions stay beside their content.
 
 Read rows show only Done. After a confirmed Read in **All**, the row stays and
 focus moves from the Read button to Done; Read's space stays reserved so a second click
-cannot open the row. In **Unread only**, Read removes the row.
+cannot open the row. A status update can unlock Done and move focus before the
+Read acknowledgement arrives, without overriding focus moved elsewhere.
+In **Unread only**, Read removes the row.
 Done removes it in either view.
+
+A pending row action locks only that row and group actions that include it.
+Other rows remain actionable, including rows in the same group.
+Row actions are acknowledged when queued, then progress and results arrive
+through status updates. A long wait in the write queue does not report a failed
+write. If the acknowledgement is lost, status updates recover the accepted
+operation's actual result without sending the write again. Disconnection remains
+explicit until its outcome can be checked; a row disappearing under a filter is
+not proof of success.
+Rows change only after confirmation; failures remain visible until an
+explicit retry, a successful refresh, or a successful update to that notification
+from a group action or another panel. Status updates preserve the next-row
+keyboard focus target even if they arrive before the action acknowledgement.
 
 ### Act on a group
 
@@ -172,13 +187,29 @@ read and unread. Read hides when none are eligible without moving or activating 
 
 **Only that group's loaded tab/search matches are included**, even when collapsed.
 Filtered-out and unloaded items are excluded; date actions cover just the selected
-day. The chosen button shows a progress spinner and counts during a batch.
+day. Progress and counts appear in that group's header without moving keyboard
+focus away from the chosen action. **Queued** means a write is waiting its turn;
+**Marking** means a request is in flight. Queued indicators stay still; active
+indicators spin unless reduced motion is enabled. Row action tooltips use the
+same queued/active distinction.
 
-- **Stop remaining** lets an in-flight request finish, then stops.
-- **Continue remaining** resumes a stopped batch.
-- **Retry remaining** retries a failed batch when its wait expires.
+Independent groups and rows can have actions in progress together. A group action
+locks its selected rows, not the rest of the inbox; overlapping actions are
+blocked across panels. Each batch has its own progress. GitHub writes
+remain paced through a shared queue to respect polling and rate-limit safeguards.
+Search and attention tabs stay usable: they change the displayed rows, never an
+active batch's captured targets. Refresh and notification-view changes wait until
+active actions finish.
 
-Continuations and retries keep the original action and scope, including the
+Group actions run through their selected notifications without a Stop control.
+If a request fails, **Retry remaining** retries the unfinished work when its wait
+expires. Failure details and retry controls appear beside the group, or above
+the list if filtering or regrouping hides that group. Closing the panel still
+cancels outstanding work.
+
+Retry conflicts consider only currently shown, unchanged, eligible targets, so
+an unrelated write to a filtered-out item does not block the remaining retry.
+Retries keep the original action and scope, including the
 date and time zone. They exclude successes, new arrivals, changed items, and
 items that no longer match your filters.
 

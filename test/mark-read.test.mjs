@@ -136,11 +136,12 @@ test("HTTP mark-read routes authorize known IDs and leave mutations out of agent
     [{ Origin: "https://evil.test" }, { id: "1" }, 403],
     [{}, { id: "1/../2" }, 400],
     [{}, { id: "999" }, 404],
-    [{}, { id: "1" }, 200],
+    [{}, { id: "1" }, 202],
   ]) {
     const response = await fetch(`${url.origin}/api/read`, { method: "POST", headers: { ...headers, ...override }, body: JSON.stringify(input) });
     assert.equal(response.status, status);
   }
+  await inbox.batch.done;
   assert.equal(writes, 1);
 });
 

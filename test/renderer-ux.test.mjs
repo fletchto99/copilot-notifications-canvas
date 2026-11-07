@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { runInContext } from "node:vm";
-import { renderer, settle } from "./renderer-fixtures.mjs";
+import { finishRows, renderer, settle } from "./renderer-fixtures.mjs";
 import { http, inboxNext as next, next as unreadNext, thread } from "./fixtures.mjs";
 
 test("clearing the last notifications is caught up immediately unless unloaded pages remain", async t => {
@@ -17,6 +17,7 @@ test("clearing the last notifications is caught up immediately unless unloaded p
         const done = ui.ids.get("groups").querySelectorAll("button").find(button => button.dataset.focusKey === `done:${id}`);
         done.focus();
         await done.events.click();
+        await finishRows(ui);
       }
       assert.equal(fetches, 1);
       assert.equal(ui.inbox.summary().needsRefresh, true);
@@ -139,6 +140,7 @@ test("failed filters wait for the polling cadence while a foreground refresh is 
         if (fail) throw new Error("Synthetic filter failure");
       },
     });
+
     t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
     const deadline = ui.inbox.summary().retryAt;
     ui.intersect(false);
@@ -174,6 +176,38 @@ test("failed filters wait for the polling cadence while a foreground refresh is 
   }
 });
 
+test("failed filters do not spin while an active write prevents a queued refresh", async t => {
+  for (const batch of [false, true]) {
+    let release;
+    let attempts = 0;
+    let fail = true;
+    const ui = await renderer({ initialRows: [thread("1"), thread("2")],
+      onWrite: () => new Promise(resolve => { release = () => resolve("HTTP/2 204 No Content\r\n\r\n"); }),
+      onFilters: () => {
+        if (++attempts === 4) ui.intersect(false);
+        if (fail) throw new Error("Synthetic filter failure");
+      } });
+    t.after(() => { release?.(); ui.window.events.pagehide(); ui.inbox.close(); });
+    await runInContext(batch ? 'batchRequest("start", {repository: "example/widgets", selectionKey: state.groups[0].selectionKey, action: "done"}, ["1", "2"], "bulk-done:example/widgets")'
+      : 'markThread("1", "done")', ui.context);
+    await settle();
+    await ui.ids.get("force-refresh").events.click();
+    await runInContext('update("filters", { query: "notification 2" })', ui.context);
+    await settle();
+    assert.equal(attempts, 1);
+    await ui.fireTimer(1000);
+    assert.equal(attempts, 2);
+    fail = false;
+    await ui.fireTimer(1000);
+    assert.equal(attempts, 3);
+    assert.equal(ui.inbox.filters.query, "notification 2");
+    if (batch) ui.inbox.batch.cancel({ token: ui.inbox.batch.snapshot().token });
+    release();
+    await ui.inbox.batch.done;
+    await runInContext("update()", ui.context);
+  }
+});
+
 test("row failures immediately reconcile backoff and failed reconciliation remains explicit", async t => {
   for (const disconnect of [false, true]) {
     const ui = await renderer({ onWrite: () => {
@@ -182,10 +216,11 @@ test("row failures immediately reconcile backoff and failed reconciliation remai
     } });
     t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
     await ui.ids.get("groups").querySelectorAll("button").find(button => button.dataset.focusKey === "done:1").events.click();
+    await finishRows(ui);
     assert.equal(ui.document.querySelectorAll("article").length, 1);
     assert.equal(ui.deletions.length, 1);
     if (disconnect) {
-      assert.match(ui.ids.get("notice").textContent, /Could not reconnect/);
+      assert.match(ui.ids.get("notice").textContent, /Synthetic connection failure/);
     } else {
       assert.equal(ui.ids.get("retry-status").hidden, false);
       assert.equal(ui.ids.get("force-refresh").attributes["aria-disabled"], "true");
@@ -197,13 +232,13 @@ test("row failures immediately reconcile backoff and failed reconciliation remai
 test("stopped batches keep nonzero skipped counts and preserve failure details when present", async t => {
   const ui = await renderer();
   t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
-  await runInContext(`state.batch = {
-    scope: "shown", action: "done", status: "cancelled", total: 4,
-    succeeded: 1, failed: 0, skipped: 1, notAttempted: 2, retryAt: 0
-  }; render()`, ui.context);
+  await runInContext(`state.batches = [{
+    token: "synthetic", scope: "shown", action: "done", status: "cancelled", total: 4,
+    succeeded: 1, failed: 0, skipped: 1, notAttempted: 2, retryAt: 0, remainingThreadIds: ["2", "3"], retryableThreadIds: ["2", "3"]
+  }]; render()`, ui.context);
   assert.equal(ui.ids.get("batch-counts").textContent, "1 marked done, 2 remaining, 1 skipped");
   assert.equal(ui.ids.get("batch-retry").textContent, "Continue remaining (2)");
-  await runInContext('state.batch.error = { message: "Outcome unknown" }; render()', ui.context);
+  await runInContext('state.batches[0].error = { message: "Outcome unknown" }; render()', ui.context);
   assert.equal(ui.ids.get("batch-retry").textContent, "Retry remaining (2)");
   assert.match(ui.ids.get("batch-counts").textContent, /1 succeeded \/ 0 failed \/ 1 skipped \/ 2 not attempted/);
   assert.equal(ui.ids.get("batch-error").textContent, "Outcome unknown");

@@ -156,7 +156,7 @@ for (const width of [320, 960]) {
   }
 }
 
-test("a Done batch stops after the in-flight request and retries the original remaining selection", async ({ page, canvas }) => {
+test("a Done batch has no Stop control and completes only its original selection", async ({ page, canvas }) => {
   canvas.rows.splice(2);
   await page.goto(canvas.url);
   let release;
@@ -172,25 +172,16 @@ test("a Done batch stops after the in-flight request and retries the original re
   try {
     await page.getByRole("button", { name: doneName, exact: true }).click();
     await started;
-    await expect(page.locator("#batch-title")).toContainText("Marking as done");
+    await expect(page.locator(".group-progress")).toHaveText("Marking 0/2 as done...");
     await expect(page.locator(".repo-done")).toBeDisabled();
-    await expect(page.getByRole("button", { name: "Stop remaining", exact: true })).toBeFocused();
-    await page.getByRole("button", { name: "Stop remaining", exact: true }).click();
-    await expect(page.locator("#batch-title")).toContainText("Stopping");
+    await expect(page.locator(".repo-done")).toBeFocused();
+    await expect(page.getByRole("button", { name: "Stop remaining", exact: true })).toHaveCount(0);
+    await expect(page.locator("#batch-progress")).toBeHidden();
+    canvas.rows.push(thread("3"));
     canvas.setRequestHook(undefined);
     release();
-    const retry = page.getByRole("button", { name: "Continue remaining (1)", exact: true });
-    await expect(retry).toBeVisible();
-    await expect(page.locator("#batch-title")).toContainText("Stopped");
-    await expect(page.locator("#batch-counts")).toHaveText("1 marked done, 1 remaining");
-    expect(canvas.doneWrites).toEqual(["1"]);
-    await expect(page.locator(".repo-read")).toHaveAccessibleDescription("Mark 1 as read");
-    await expect(page.locator(".repo-done")).toBeVisible();
-    await expect(page.locator('[data-focus-key="read:2"]')).toBeVisible();
-    await expect(page.locator('[data-focus-key="done:2"]')).toBeVisible();
-    canvas.rows.push(thread("3"));
-    await retry.click();
     await expect(page.locator(".row")).toHaveCount(0);
+    await expect(page.locator("#batch-progress")).toBeHidden();
     expect(canvas.doneWrites).toEqual(["1", "2"]);
     expect(canvas.rows.find(row => row.id === "3").unread).toBe(true);
   } finally {
@@ -221,4 +212,180 @@ test("failed Done batches keep their action after backoff and do not widen retri
   await expect(page.locator(".repo-done")).toBeVisible();
   await expect(page.locator('[data-focus-key="read:3"]')).toBeVisible();
   await expect(page.locator('[data-focus-key="done:3"]')).toBeVisible();
+});
+
+test("row and group actions lock only overlapping selections and expose independent batch controls", async ({ page, canvas }) => {
+  canvas.rows.splice(5);
+  canvas.rows[3].repository.full_name = "example/tools";
+  canvas.rows[4].repository.full_name = "example/solo";
+  await page.goto(canvas.url);
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  canvas.setRequestHook(async args => {
+    if (args.includes("PATCH") && args.at(-1).endsWith("/threads/1")) await held;
+  });
+  try {
+    const rowRead = page.locator('[data-focus-key="read:1"]');
+    await rowRead.click();
+    await expect(rowRead).toBeDisabled();
+    await expect(page.locator('[data-focus-key="done:1"]')).toBeDisabled();
+    await expect(page.locator('[data-focus-key="done:2"]')).toBeEnabled();
+    await expect(page.locator('[data-focus-key="bulk:example/widgets"]')).toBeDisabled();
+    await page.locator('[data-focus-key="bulk-done:example/tools"]').click();
+    const tools = page.locator(".repo-group").filter({ has: page.locator('[data-focus-key="repo:example/tools"]') });
+    await expect(tools.locator(".group-progress")).toHaveText("Queued 0/2 as done...");
+    await expect(tools.locator(".repo-done")).toHaveAttribute("data-write-state", "queued");
+    await expect(tools.locator(".repo-done")).toBeFocused();
+    await expect(page.locator("#batch-progress")).toBeHidden();
+    await expect(page.locator('[data-focus-key="done:3"]')).toBeDisabled();
+    await expect(page.locator('[data-focus-key="done:4"]')).toBeDisabled();
+    await page.locator('[data-focus-key="bulk-done:example/solo"]').click();
+    const solo = page.locator(".repo-group").filter({ has: page.locator('[data-focus-key="repo:example/solo"]') });
+    await expect(solo.locator(".repo-done")).toBeFocused();
+    await expect(page.getByRole("button", { name: "Stop remaining", exact: true })).toHaveCount(0);
+    await expect(tools.locator(".group-progress")).toHaveText("Queued 0/2 as done...");
+    await expect(solo.locator(".group-progress")).toHaveText("Queued 0/1 as done...");
+    const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+    expect(results.violations).toEqual([]);
+    release();
+    await expect(page.locator('[data-focus-key="read:1"]')).toHaveCount(0);
+    await expect(page.locator('[data-focus-key="done:5"]')).toHaveCount(0);
+    await expect(solo).toBeHidden();
+    await expect(page.locator('[data-focus-key="done:3"]')).toHaveCount(0);
+    await expect(page.locator('[data-focus-key="done:4"]')).toHaveCount(0);
+    await expect(tools).toBeHidden();
+    await expect(page.locator('[data-focus-key="done:2"]')).toBeEnabled();
+    expect(canvas.writes).toEqual(["1", "3", "5", "4"]);
+  } finally {
+    release();
+  }
+});
+
+test("completing one batch keeps keyboard focus usable in another running batch", async ({ page, canvas }) => {
+  canvas.rows.splice(2);
+  canvas.rows[1].repository.full_name = "example/tools";
+  await page.goto(canvas.url);
+  let releaseFirst;
+  let releaseSecond;
+  const first = new Promise(resolve => { releaseFirst = resolve; });
+  const second = new Promise(resolve => { releaseSecond = resolve; });
+  canvas.setRequestHook(args => args.includes("PATCH") ? args.at(-1).endsWith("/threads/1") ? first : second : undefined);
+  try {
+    await page.locator('[data-focus-key="bulk:example/widgets"]').click();
+    await page.locator('[data-focus-key="bulk:example/tools"]').click();
+    const widgets = page.locator(".repo-group").filter({ has: page.locator('[data-focus-key="repo:example/widgets"]') });
+    const tools = page.locator(".repo-group").filter({ has: page.locator('[data-focus-key="repo:example/tools"]') });
+    await tools.locator(".repo-read").focus();
+    await expect(widgets.locator(".group-progress")).toHaveText("Marking 0/1 as read...");
+    await expect(tools.locator(".group-progress")).toHaveText("Queued 0/1 as read...");
+    releaseFirst();
+    await expect(widgets.locator(".group-progress")).toBeHidden();
+    await expect(page.getByRole("searchbox")).toBeEnabled();
+    await expect(tools.locator(".repo-read")).toBeFocused();
+    await expect(tools.locator(".group-progress")).toHaveText("Marking 0/1 as read...");
+    releaseSecond();
+    await expect(tools.locator(".group-progress")).toBeHidden();
+    await expect(tools.locator(".repo-toggle")).toBeFocused();
+    expect(canvas.writes).toEqual(["1", "2"]);
+  } finally {
+    releaseFirst();
+    releaseSecond();
+  }
+});
+
+for (const groupBy of ["repo", "date", "none"]) {
+  test(`search and attention stay usable during a captured ${groupBy} batch`, async ({ page, canvas }, testInfo) => {
+    canvas.rows.splice(3);
+    canvas.rows[0].reason = "mention";
+    canvas.rows[1].reason = "mention";
+    canvas.rows[2].reason = "assign";
+    await canvas.preferences.update({ groupBy });
+    await page.setViewportSize({ width: 320, height: 900 });
+    await page.goto(canvas.url);
+    let release;
+    const held = new Promise(resolve => { release = resolve; });
+    canvas.setRequestHook(args => args.includes("DELETE") && args.at(-1).endsWith("/threads/1") ? held : undefined);
+    try {
+      await page.getByRole("tab", { name: "Mentioned (2)", exact: true }).click();
+      await expect(page.locator(".row")).toHaveCount(2);
+      await page.locator(".repo-done").click();
+      await expect(page.locator(".repo-done")).toBeFocused();
+      await expect(page.locator(".repo-done")).toBeDisabled();
+      await expect(page.locator(".group-progress")).toHaveText("Marking 0/2 as done...");
+      await expect(page.locator("#batch-progress")).toBeHidden();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+      const accessibility = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+      expect(accessibility.violations).toEqual([]);
+      await page.screenshot({ path: testInfo.outputPath("inline-progress.png"), fullPage: true });
+      await page.getByRole("tab", { name: "Assigned (1)", exact: true }).click();
+      await expect(page.locator(".row")).toHaveCount(1);
+      await expect(page.locator('[data-focus-key="done:3"]')).toBeEnabled();
+      await page.getByRole("searchbox").fill("Needle tool");
+      await expect(page.locator(".row")).toHaveCount(1);
+      await page.locator("#force-refresh").click();
+      await page.getByRole("searchbox").fill("No matches");
+      await expect(page.locator(".row")).toHaveCount(0);
+      await page.getByRole("searchbox").fill("Needle tool");
+      await expect(page.locator(".row")).toHaveCount(1);
+      release();
+      await expect.poll(() => canvas.doneWrites).toEqual(["1", "2"]);
+      await expect(page.locator(".row")).toHaveCount(1);
+      await expect(page.getByRole("searchbox")).toBeFocused();
+      await expect(page.getByRole("tab", { name: "Assigned (1)", exact: true })).toHaveAttribute("aria-selected", "true");
+      expect(canvas.rows[2].unread).toBe(true);
+    } finally {
+      release();
+    }
+  });
+}
+
+test("failure controls stay with their group and remain accessible when the group is hidden", async ({ page, canvas }) => {
+  canvas.rows.splice(3);
+  await page.goto(canvas.url);
+  canvas.setRequestHook(args => args.includes("DELETE") ? http({}, {}, 500) : undefined);
+  await page.locator('[data-focus-key="bulk-done:example/widgets"]').click();
+  const result = page.locator("#batch-progress");
+  const widgets = page.locator(".repo-group").filter({ has: page.locator('[data-focus-key="repo:example/widgets"]') });
+  await expect(widgets.locator("#batch-error")).toContainText("GitHub returned HTTP 500");
+  await expect(widgets.locator("#batch-retry")).toBeVisible();
+  await expect(page.locator('[data-focus-key="bulk-done:example/widgets"]')).toBeFocused();
+  await page.getByRole("searchbox").fill("Needle tool");
+  await expect(page.locator("#additional-batches #batch-progress")).toBeVisible();
+  await expect(result).toContainText("example/widgets");
+  await page.getByRole("searchbox").fill("Needle widget 2");
+  await expect(widgets.locator("#batch-retry")).toBeVisible();
+  canvas.setRequestHook(undefined);
+  await page.clock.setFixedTime(new Date(canvas.advance(121_000)));
+  await expect(widgets.locator("#batch-retry")).toBeEnabled({ timeout: 10_000 });
+  await widgets.locator("#batch-retry").click();
+  await expect(result).toBeHidden();
+  expect(canvas.doneWrites).toEqual(["2"]);
+  expect(canvas.rows[0].unread).toBe(true);
+});
+
+test("a filtered batch retry can run beside a write to an excluded original target", async ({ page, canvas }) => {
+  canvas.rows.splice(2);
+  await page.goto(canvas.url);
+  canvas.setRequestHook(args => args.includes("DELETE") ? http({}, {}, 500) : undefined);
+  await page.locator(".repo-done").click();
+  await expect(page.locator("#batch-error")).toContainText("HTTP 500");
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  canvas.setRequestHook(args => args.includes("DELETE") && args.at(-1).endsWith("/threads/1") ? held : undefined);
+  await page.clock.setFixedTime(new Date(canvas.advance(121_000)));
+  await expect(page.locator("#batch-retry")).toBeEnabled({ timeout: 10_000 });
+  try {
+    await page.locator('[data-focus-key="done:1"]').click();
+    await expect(page.locator('[data-focus-key="done:1"]')).toBeDisabled();
+    await page.getByRole("searchbox").fill("Needle widget 2");
+    await expect(page.locator(".row")).toHaveCount(1);
+    await expect(page.locator("#batch-retry")).toBeEnabled();
+    await page.locator("#batch-retry").click();
+    await expect(page.locator(".group-progress")).toHaveText("Queued 0/1 as done...");
+    release();
+    await expect(page.locator(".row")).toHaveCount(0);
+    expect(canvas.doneWrites).toEqual(["1", "2"]);
+  } finally {
+    release();
+  }
 });

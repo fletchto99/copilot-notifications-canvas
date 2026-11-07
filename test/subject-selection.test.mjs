@@ -66,8 +66,9 @@ test("large selections use bounded chunks, publish atomically and leave ordinary
   await f.call("state");
   await f.finish();
   assert.deepEqual(f.statuses().map(({ path }) => path), positions.map(index => `/repos/example/widgets/issues/${index + 1}`));
-  assert.equal((await f.call("read", { id: f.rows[0].id })).status, 200);
-  assert.equal((await f.call("done", { id: f.rows[1].id })).status, 200);
+  assert.equal((await f.call("read", { id: f.rows[0].id })).status, 202);
+  assert.equal((await f.call("done", { id: f.rows[1].id })).status, 202);
+  await f.inbox.batch.done;
   assert.equal((await f.call("state")).data.loaded, 649);
   assert.doesNotMatch(JSON.stringify(f.inbox.summary()), /subjectSelection|positions|Synthetic|example\//);
 });
@@ -109,7 +110,8 @@ test("refresh, filters and triage invalidate position mappings instead of select
       if (action === "refresh") f.rows.reverse();
       const result = await f.call(action, action === "refresh" ? { force: true } :
         action === "filters" ? { query: "issue 2" } : { id: f.rows[0].id });
-      assert.equal(result.status, 200, "Ordinary actions remain available during an upload");
+      assert.equal(result.status, ["read", "done"].includes(action) ? 202 : 200, "Ordinary actions remain available during an upload");
+      await f.inbox.batch.done;
       const stale = await f.select({ offset: 1, positions: [1], complete: true });
       assert.equal(stale.status, 200);
       assert.deepEqual(stale.data, { status: "stale", version: 1 });
@@ -154,5 +156,5 @@ test("status selection retains authentication, same-origin POST and request-size
   assert.equal((await f.call("subjects", { text: "x".repeat(4096) })).status, 413);
   assert.equal((await f.call("refresh", {}, { "X-Notification-Subjects": "invalid" })).status, 400);
   assert.equal(f.statuses().length, 0);
-  assert.equal((await f.call("read", { id: f.rows[0].id })).status, 200);
+  assert.equal((await f.call("read", { id: f.rows[0].id })).status, 202);
 });

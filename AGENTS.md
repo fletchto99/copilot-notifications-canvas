@@ -114,6 +114,9 @@ output. Development loads source without a build; release builds bundle
   endpoint or an agent-facing write action.
 - GitHub owns read/done state. Never persist per-notification triage history or
   add a local completion ledger to compensate for missing GitHub API filters.
+  Queued row operations retain temporary in-memory completion receipts until a
+  state request acknowledges the snapshot the renderer consumed. Keep these out
+  of persisted state and agent-facing results, and release them on panel close.
 - Respect GitHub polling headers, rate limits, retry waits, and abort signals.
   Force refresh may bypass the polling cache, not rate/error backoff.
 

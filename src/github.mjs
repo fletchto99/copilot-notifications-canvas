@@ -330,6 +330,7 @@ export class GitHubClient {
     this.sleep = sleep;
     this.writeAvailableAt = 0;
     this.pendingThreads = new Set();
+    this.threadWrites = new Map();
     this.threadReservations = new Map();
     this.threadListeners = new Set();
     this.revision = 0;
@@ -689,6 +690,8 @@ export class GitHubClient {
       throw new InboxError("busy", "This notification belongs to an active batch.", 409);
     }
     this.pendingThreads.add(id);
+    const write = { id, action: method === "DELETE" ? "done" : "read", inFlight: false };
+    this.threadWrites.set(id, write);
     const pending = this.queue.then(async () => {
       const delay = this.writeAvailableAt - this.now();
       if (delay > 0) {
@@ -704,6 +707,7 @@ export class GitHubClient {
         await this.request(`/notifications/threads/${id}`, signal, method, { beforeWrite: () => {
           beforeWrite?.();
           dispatched = true;
+          write.inFlight = true;
         } });
       } finally {
         if (dispatched) this.writeAvailableAt = this.now() + 1000;
@@ -722,7 +726,10 @@ export class GitHubClient {
         });
       }
       for (const listener of this.threadListeners) listener(id, action);
-    }).finally(() => this.pendingThreads.delete(id));
+    }).finally(() => {
+      this.pendingThreads.delete(id);
+      this.threadWrites.delete(id);
+    });
     this.queue = pending.catch(() => {});
     return pending;
   }

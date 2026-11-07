@@ -6,10 +6,12 @@ const hasCapability = /^[a-f0-9]{64}$/.test(token);
 const collapsed = new Set();
 const attentionTabs = new Map();
 const rowViews = new Map();
+const groupViews = new Map();
 const tooltipAnchorsByControl = new WeakMap();
 let pointerInteraction = false;
 const relative = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
 let state;
+let renderedSnapshotVersion = 0;
 let listKey;
 let busy = false;
 let stopped = false;
@@ -50,8 +52,12 @@ const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
 const themeAttributes = ["data-theme-tone", "data-color-mode"];
 const marking = new Map();
 let actionError = "";
-let batchBusy = false;
-let batchFocusKey;
+let batchBusy = 0;
+const batchRequests = new Map();
+const batchViews = new Map();
+const batchFocusKeys = new Map();
+const batchControlItems = new WeakMap();
+let primaryBatchView;
 let shortcutReturnFocus;
 const iconPaths = {
   read: "M3 9 12 3l9 6v11H3V9Zm0 0 9 6 9-6M3 20l6-7m12 7-6-7",
@@ -296,6 +302,7 @@ async function api(path, input) {
         ...(groupBy ? { "X-Notification-Group-By": groupBy } : {}),
         ...(timeZone ? { "X-Notification-Time-Zone": timeZone } : {}),
         "X-Notification-Subjects": "manual",
+        ...(path === "state" ? { "X-Notification-Acknowledged-Version": String(renderedSnapshotVersion) } : {}),
       },
       body: input === undefined ? undefined : JSON.stringify(input),
       signal: controller.signal,
@@ -574,46 +581,78 @@ function closeSettings(focus = false) {
 }
 
 async function markThread(id, action, focusRow = false) {
-  if (!visible() || busy || batchBusy || batchLocked() || marking.size || pendingFilters) return;
+  if (!visible() || busy || lockedThreads().has(id) || pendingFilters) return;
   const key = `${focusRow ? "thread" : action}:${id}`;
-  const items = () => displayGroups().filter(group => !focusRow || !collapsed.has(group.key)).flatMap(group => group.items);
-  const index = items().findIndex(item => item.id === id);
-  const previousFocus = document.activeElement;
-  let nextFocusKey = key;
+  const operation = { id, action, focusRow, key, previousFocus: document.activeElement,
+    order: displayGroups().filter(group => !focusRow || !collapsed.has(group.key)).flatMap(group => group.items.map(item => item.id)),
+    token: null, completed: false, knownTokens: new Set(state.batches.map(batch => batch.token)), error: "" };
   dismissTooltips();
-  marking.set(id, action);
+  marking.set(id, operation);
   renderControls();
+  schedule();
   actionError = "";
   try {
     await pollPromise;
-    if (!visible()) return;
-    state = await api(action, { id });
-    const remaining = items();
-    const retained = remaining.findIndex(item => item.id === id);
-    if (focusRow && action === "read" && retained >= 0) {
-      nextFocusKey = `thread:${(remaining[retained + 1] ?? remaining[retained]).id}`;
-    } else {
-      const next = remaining[Math.min(index, remaining.length - 1)];
-      nextFocusKey = retained >= 0 ? `${focusRow ? "thread" : "done"}:${id}` :
-        next ? `${focusRow ? "thread" : action}:${next.id}` : null;
+    if (operation.completed) return;
+    if (!visible()) {
+      if (marking.get(id) === operation) marking.delete(id);
+      return;
     }
+    const snapshot = await api(action, { id });
+    if (operation.completed) return;
+    if (typeof snapshot.rowActionToken !== "string" || !/^[a-f0-9-]{36}$/.test(snapshot.rowActionToken)) {
+      throw new Error("The provider returned an invalid notification action acknowledgement.");
+    }
+    operation.token = snapshot.rowActionToken;
+    acceptState(snapshot);
   } catch (error) {
-    actionError = `Could not mark the notification as ${action}. ${error.message || "Try again."}`;
+    if (operation.completed) return;
+    operation.error = `Could not confirm the notification action (${action}). ${error.message || "Try again."}`;
+    operation.recoveryVersion = state.snapshotVersion;
     try {
-      state = await api("state");
+      acceptState(await api("state"));
     } catch {
-      actionError += " Could not reconnect. Reopen this panel to inspect its current state.";
+      operation.error += " Could not reconnect. Reopen this panel to inspect its current state.";
     }
   } finally {
-    marking.delete(id);
-    render(nextFocusKey);
-    restoreFocus(previousFocus, nextFocusKey ? focusKey(nextFocusKey) : $("search"));
-    if (focusRow && document.activeElement?.dataset.focusKey === nextFocusKey) {
-      document.activeElement.scrollIntoView({ block: "nearest", inline: "nearest" });
+    render();
+    if (!operation.completed && !marking.has(id)) {
+      restoreFocus(operation.previousFocus, focusKey(rowFocusKey(operation)) ?? $("search"));
     }
     void flushPendingUpdates();
     schedule();
   }
+}
+
+function rowFocusKey({ id, action, focusRow, key, order }) {
+  const items = displayGroups().filter(group => !focusRow || !collapsed.has(group.key)).flatMap(group => group.items);
+  const retained = items.find(item => item.id === id);
+  if (retained && (action !== "read" || retained.unread)) return key;
+  if (retained && !focusRow) return `done:${id}`;
+  const index = order.indexOf(id);
+  const next = order.slice(index + 1).find(id => items.some(item => item.id === id)) ??
+    (retained ? id : order.slice(0, index).reverse().find(id => items.some(item => item.id === id)));
+  return next ? `${focusRow ? "thread" : action}:${next}` : null;
+}
+
+function reconcileRows() {
+  const completed = [];
+  for (const [id, operation] of marking) {
+    const batch = state.batches.find(batch => operation.token ? batch.token === operation.token :
+      batch.scope === "thread" && batch.threadId === id && batch.action === operation.action && !operation.knownTokens.has(batch.token));
+    if (batch) {
+      operation.token = batch.token;
+      operation.error = "";
+      if (batchRunning(batch)) continue;
+    } else if (!operation.token) {
+      if (!operation.error || state.snapshotVersion <= operation.recoveryVersion) continue;
+      actionError = operation.error;
+    }
+    marking.delete(id);
+    operation.completed = true;
+    completed.push(operation);
+  }
+  return completed;
 }
 
 function visible() {
@@ -621,7 +660,41 @@ function visible() {
 }
 
 function batchLocked() {
-  return ["running", "stopping"].includes(state?.batch?.status);
+  return (state?.batches ?? []).some(batchRunning);
+}
+
+function batchRunning(batch) {
+  return ["running", "stopping"].includes(batch.status);
+}
+
+function groupForBatch(batch) {
+  if (batch.scope === "thread") return;
+  if (batch.scope === "date") {
+    return [...groupViews.values()].find(view => view.date === batch.date && view.timeZone === batch.timeZone);
+  }
+  return groupViews.get(batch.scope === "repository" ? `repo:${batch.repository}` : "shown");
+}
+
+function batchProgress(batch) {
+  return batch.status === "stopping" ? "Stopping..." :
+    `${batch.inFlight ? "Marking" : "Queued"} ${batch.succeeded}/${batch.total} as ${batch.action}...`;
+}
+
+function groupFocus(origin) {
+  const entry = [...groupViews].find(([, view]) => view.readKey === origin || view.doneKey === origin);
+  return entry ? focusKey(entry[0]) : undefined;
+}
+
+function lockedThreads() {
+  return new Set([
+    ...(state?.lockedThreadIds ?? []), ...marking.keys(),
+    ...[...batchRequests.values()].flat(),
+  ]);
+}
+
+function acceptState(snapshot) {
+  // Concurrent action responses can arrive after a newer view has already rendered.
+  if (!state || snapshot.snapshotVersion >= state.snapshotVersion) state = snapshot;
 }
 
 function requestsPaused() {
@@ -629,7 +702,7 @@ function requestsPaused() {
 }
 
 function focusKey(key) {
-  return [...$("groups").querySelectorAll("[data-focus-key]")]
+  return [...document.querySelectorAll("[data-focus-key]")]
     .find(node => node.dataset.focusKey === key);
 }
 
@@ -638,7 +711,7 @@ function visibleRowLinks() {
 }
 
 function focusSearchResult() {
-  if (!searchFocusRequested || busy || pollPromise || batchBusy || batchLocked() || marking.size ||
+  if (!searchFocusRequested || busy || pollPromise ||
       pendingFilters || searchComposing || !state || ["idle", "loading"].includes(state.status)) return;
   searchFocusRequested = false;
   if (!visible() || !document.hasFocus() || document.activeElement !== $("search") ||
@@ -722,87 +795,156 @@ function restoreFocus(previous, preferred) {
   }
 }
 
-async function batchRequest(action, input) {
-  if (!visible() || batchBusy || busy) return;
-  if (["start", "retry"].includes(action) && (marking.size || batchLocked() || pendingFilters)) return;
-  batchBusy = true;
+async function batchRequest(action, input, ids = [], returnFocusKey) {
+  const requestKey = input.token ?? returnFocusKey;
+  if (!visible() || busy || batchRequests.has(requestKey)) return;
+  if (action === "retry") ids = state.batches.find(batch => batch.token === input.token)?.retryableThreadIds ?? [];
+  const locked = lockedThreads();
+  if (["start", "retry"].includes(action) && (pendingFilters || ids.some(id => locked.has(id)))) return;
+  batchRequests.set(requestKey, ids);
+  batchBusy++;
   let failed = false;
   const previousFocus = document.activeElement;
+  const origin = returnFocusKey ?? batchFocusKeys.get(input.token);
   dismissTooltips();
   renderControls();
+  renderBatch();
   try {
     await pollPromise;
     if (!visible()) return;
-    state = await api(`batch/${action}`, input);
+    const snapshot = await api(`batch/${action}`, input);
+    if (["start", "retry"].includes(action)) {
+      const operationToken = snapshot.batch?.token;
+      if (operationToken) batchFocusKeys.set(operationToken, origin);
+    }
+    acceptState(snapshot);
     actionError = "";
   } catch (error) {
     failed = true;
     actionError = error.message || "The notification action failed. Try again.";
     try {
-      state = await api("state");
+      acceptState(await api("state"));
     } catch {
       actionError += " Could not reconnect. Reopen this panel to inspect its current progress.";
     }
   } finally {
-    batchBusy = false;
+    batchRequests.delete(requestKey);
+    batchBusy--;
     render();
     if (visible() && !failed) {
-      const target = state?.batch?.status === "stopping" ? $("batch-progress") :
-        batchLocked() ? $("batch-stop") : focusKey(batchFocusKey) ?? $("search");
-      restoreFocus(previousFocus, target);
+      const target = focusKey(origin);
+      restoreFocus(previousFocus, target && target.dataset.count !== "0" ? target : groupFocus(origin) ?? $("search"));
     } else {
-      restoreFocus(previousFocus, action === "start" ? focusKey(batchFocusKey) : undefined);
+      restoreFocus(previousFocus, action === "start" ? focusKey(origin) : undefined);
     }
     void flushPendingUpdates();
     schedule();
   }
 }
 
-function renderBatch() {
-  const batch = state?.batch;
-  const controls = [$("batch-stop"), $("batch-retry"), $("batch-dismiss")];
-  const previousFocus = document.activeElement;
-  const hadFocus = [...controls, $("batch-progress")].includes(previousFocus);
-  $("batch-progress").hidden = !batch;
-  if (!batch) {
-    for (const id of ["batch-title", "batch-counts", "batch-error"]) $(id).textContent = "";
-    if (hadFocus) restoreFocus(previousFocus, focusKey(batchFocusKey) ?? $("search"));
-    return;
+function createBatchView(primary) {
+  if (primary && primaryBatchView) return primaryBatchView;
+  const view = {};
+  for (const [part, tag] of [
+    ["progress", "section"], ["title", "h2"], ["counts", "p"], ["error", "p"],
+    ["buttons", "div"], ["retry", "button"], ["dismiss", "button"],
+  ]) {
+    view[part] = primary ? $(`batch-${part}`) : element(tag, `batch-${part}`);
   }
-  const running = ["running", "stopping"].includes(batch.status);
+  view.primary = primary;
+  view.progress.tabIndex = -1;
+  view.error.setAttribute("role", "alert");
+  if (!primary) {
+    view.buttons.append(view.retry, view.dismiss);
+    view.progress.append(view.title, view.counts, view.error, view.buttons);
+    $("additional-batches").append(view.progress);
+  }
+  for (const [part, action, text] of [
+    ["retry", "retry", "Retry remaining"],
+    ["dismiss", "dismiss", "Dismiss result"],
+  ]) {
+    view[part].type = "button";
+    view[part].dataset.batchControl = action;
+    setControlText(view[part], text);
+    view[part].addEventListener("click", () => batchRequest(action, { token: view.token }));
+  }
+  if (primary) primaryBatchView = view;
+  return view;
+}
+
+function renderBatch() {
+  if (!primaryBatchView) $("batch-progress").hidden = true;
+  const previousFocus = document.activeElement;
+  const batches = state?.batches ?? [];
+  const results = batches.filter(batch => batch.scope !== "thread" && !batchRunning(batch));
+  for (const [token, view] of batchViews) {
+    if (results.some(batch => batch.token === token)) continue;
+    const hadFocus = view.progress.contains(previousFocus);
+    view.progress.hidden = true;
+    for (const part of ["title", "counts", "error"]) view[part].textContent = "";
+    if (!view.primary) view.progress.remove();
+    batchViews.delete(token);
+    if (hadFocus) restoreFocus(previousFocus, groupFocus(batchFocusKeys.get(token)) ?? $("search"));
+    batchFocusKeys.delete(token);
+  }
+  for (const batch of results) {
+    let view = batchViews.get(batch.token);
+    if (!view) {
+      view = createBatchView(![...batchViews.values()].some(view => view.primary));
+      view.token = batch.token;
+      for (const part of ["progress", "retry", "dismiss"]) {
+        view[part].dataset.focusKey = `batch:${batch.token}:${part}`;
+      }
+      batchViews.set(batch.token, view);
+    }
+    const parent = groupForBatch(batch)?.results ?? $("additional-batches");
+    if (view.progress.parentNode !== parent) parent.append(view.progress);
+    renderBatchView(batch, view);
+  }
+  for (const token of batchFocusKeys.keys()) {
+    if (!batches.some(batch => batch.token === token)) batchFocusKeys.delete(token);
+  }
+}
+
+function renderBatchView(batch, view) {
+  const previousFocus = document.activeElement;
+  const controls = [view.retry, view.dismiss];
   const cancelled = batch.status === "cancelled" && !batch.error;
   const remaining = batch.failed + batch.notAttempted;
-  $("batch-progress").className = running ? "batch-running" : "batch-progress";
+  view.progress.hidden = false;
+  view.progress.className = "batch-progress";
   const target = batch.scope === "shown" ? "Shown notifications" : batch.scope === "date" ? dateLabel(batch.date) : batch.repository;
-  $("batch-title").textContent = `${target}: ${batch.status === "stopping" ? "Stopping after the current request" :
-    running ? `Marking as ${batch.action}...` : cancelled ? "Stopped" : `Some notifications remain to mark as ${batch.action}`}`;
-  $("batch-counts").hidden = running;
-  $("batch-counts").textContent = running ? "" : cancelled
+  view.progress.setAttribute("aria-label", `Notification operation: ${target}`);
+  view.title.textContent = `${target}: ${cancelled ? "Stopped" : `Some notifications remain to mark as ${batch.action}`}`;
+  view.counts.hidden = false;
+  view.counts.textContent = cancelled
     ? `${batch.succeeded} marked ${batch.action}, ${remaining} remaining${batch.skipped ? `, ${batch.skipped} skipped` : ""}`
     : `${batch.succeeded} succeeded / ${batch.failed} failed / ${batch.skipped} skipped / ${batch.notAttempted} not attempted (${batch.total} selected)`;
   const retryTime = batch.retryAt > Date.now() ? ` Retry after ${new Date(batch.retryAt).toLocaleTimeString()}.` : "";
   const detail = batch.error?.message ?? (batch.skipped ? "Skipped notifications changed or are no longer eligible in the loaded inbox. Review their current state separately." : "");
-  $("batch-error").hidden = !detail;
-  $("batch-error").textContent = detail + retryTime;
-  $("batch-stop").hidden = !running;
-  $("batch-stop").disabled = batchBusy || busy || batch.status === "stopping";
-  $("batch-retry").hidden = running || remaining === 0;
-  setControlText($("batch-retry"), `${cancelled ? "Continue" : "Retry"} remaining (${remaining})`);
-  $("batch-retry").disabled = batchBusy || busy || Boolean(pendingFilters) || batch.retryAt > Date.now();
-  $("batch-dismiss").hidden = running;
-  $("batch-dismiss").disabled = batchBusy || busy;
-  if (controls.includes(previousFocus) && previousFocus.hidden) restoreFocus(previousFocus, $("batch-progress"));
+  view.error.hidden = !detail;
+  view.error.textContent = detail + retryTime;
+  const pending = batchRequests.has(batch.token);
+  view.buttons.hidden = false;
+  view.retry.hidden = remaining === 0;
+  setControlText(view.retry, `${cancelled ? "Continue" : "Retry"} remaining (${remaining})`);
+  const locked = lockedThreads();
+  view.retry.disabled = pending || busy || Boolean(pendingFilters) || batch.retryAt > Date.now() ||
+    batch.retryableThreadIds.some(id => locked.has(id));
+  view.dismiss.hidden = false;
+  view.dismiss.disabled = pending || busy;
+  if (controls.includes(previousFocus) && previousFocus.hidden) restoreFocus(previousFocus, view.progress);
 }
 
 function schedule() {
   clearTimeout(timer);
-  if (visible()) timer = setTimeout(tick, batchLocked() || state?.subjectsLoading && !connectionError ? 1000 : 5000);
+  if (visible()) timer = setTimeout(tick, batchBusy || marking.size || batchLocked() || state?.subjectsLoading && !connectionError ? 1000 : 5000);
 }
 
 async function performUpdate(path, input) {
   renderControls();
   try {
-    state = await api(path, input);
+    acceptState(await api(path, input));
     connectionError = "";
     if (path === "refresh") actionError = "";
     return true;
@@ -813,7 +955,7 @@ async function performUpdate(path, input) {
       : error.message || "The local canvas disconnected. Reopen it to reconnect.";
     if (path !== "state" && visible()) {
       try {
-        state = await api("state");
+        acceptState(await api("state"));
       } catch {
         connectionError = "The local canvas disconnected. Reopen it to reconnect.";
       }
@@ -829,7 +971,7 @@ function update(path = "state", input) {
   }
   if (path !== "state") return blockingUpdate(path, input);
   if (pollPromise) return pollPromise;
-  if (busy || batchBusy || marking.size || !visible()) return Promise.resolve();
+  if (busy || !visible()) return Promise.resolve();
   pollPromise = performUpdate(path, input).finally(() => {
     pollPromise = undefined;
     render();
@@ -840,7 +982,7 @@ function update(path = "state", input) {
 }
 
 async function blockingUpdate(path, input) {
-  if (busy || batchBusy || marking.size || batchLocked() || !visible()) return;
+  if (busy || !visible() || (path !== "filters" && (batchBusy || marking.size || batchLocked()))) return;
   const previousFocus = document.activeElement;
   let succeeded = false;
   busy = true;
@@ -867,14 +1009,14 @@ async function blockingUpdate(path, input) {
     }
     render();
     restoreFocus(previousFocus);
-    if (succeeded || path !== "filters" || (pendingRefresh && !requestsPaused())) void flushPendingUpdates();
+    if (succeeded || path !== "filters" || refreshEligible()) void flushPendingUpdates();
     schedule();
   }
 }
 
 async function flushPendingUpdates() {
-  if (busy || batchBusy || marking.size || batchLocked() || !visible()) return;
-  if (pendingRefresh && !requestsPaused()) {
+  if (busy || !visible()) return;
+  if (refreshEligible()) {
     pendingRefresh = false;
     return blockingUpdate("refresh", { force: true });
   }
@@ -891,11 +1033,14 @@ async function flushPendingUpdates() {
   }
 }
 
+function refreshEligible() {
+  return pendingRefresh && !requestsPaused() && !batchBusy && !marking.size && !batchLocked();
+}
+
 async function tick() {
   if (!visible() || busy) return;
   if ($("settings").open) void settingsRequest(undefined, true);
-  if (marking.size) return schedule();
-  if (batchLocked() || batchBusy) return update();
+  if (marking.size || batchLocked() || batchBusy) return update();
   if (pendingRefresh && !requestsPaused()) return flushPendingUpdates();
   if (!state || (state.status !== "loading" && Date.now() >= state.nextRefreshAt)) {
     await update("refresh", {});
@@ -985,37 +1130,66 @@ function tickTooltip() {
 
 function renderControls() {
   const loading = busy || state?.status === "loading" || marking.size > 0 || batchBusy || batchLocked();
-  const actionsBlocked = loading || Boolean(pendingFilters);
+  const actionsBlocked = busy || state?.status === "loading" || Boolean(pendingFilters);
+  const locked = lockedThreads();
   const waiting = state && Date.now() < state.nextRefreshAt;
   renderRefreshStatus();
   $("more").disabled = loading || state?.needsRefresh || Boolean(state?.error && waiting);
+  for (const [key, view] of groupViews) {
+    const batches = (state?.batches ?? []).filter(batch => batchRunning(batch) && groupForBatch(batch) === view);
+    const starting = [...batchRequests.keys()].filter(request => request === view.readKey || request === view.doneKey);
+    const progress = batches.map(batchProgress);
+    if (!batches.length && starting.length) {
+      progress.push(`Queued to mark as ${starting[0] === view.readKey ? "read" : "done"}...`);
+    }
+    view.status.hidden = !progress.length;
+    setControlText(view.status, progress.join(" "));
+    view.status.dataset.groupKey = key;
+  }
   for (const button of $("groups").querySelectorAll("button")) {
-    if (!button.dataset.disclosure) button.disabled = actionsBlocked || marking.has(button.dataset.threadId) ||
+    if (!button.dataset.disclosure && !button.dataset.batchControl) {
+      const blocked = actionsBlocked || locked.has(button.dataset.threadId) ||
+      (batchControlItems.get(button) ?? []).some(id => locked.has(id)) ||
       button.dataset.count === "0";
+      if (button.dataset.batchAction) {
+        button.disabled = false;
+        button.setAttribute("aria-disabled", String(blocked));
+      } else {
+        button.disabled = blocked;
+      }
+    }
     if (button.dataset.threadId) {
-      button.setAttribute("aria-busy", String(marking.get(button.dataset.threadId) === button.dataset.action));
+      const write = state?.threadWrites.find(write => write.id === button.dataset.threadId && write.action === button.dataset.action);
+      const pending = write || marking.get(button.dataset.threadId)?.action === button.dataset.action;
+      button.setAttribute("aria-busy", String(Boolean(pending)));
+      button.dataset.writeState = pending ? write?.inFlight ? "active" : "queued" : "idle";
+      const label = `${pending ? write?.inFlight ? "Marking" : "Queued to mark" : "Mark"} as ${button.dataset.action}`;
+      button.parentNode.querySelectorAll(".tooltip-content")[0].textContent = label;
     }
     if (button.dataset.batchAction) {
-      const batch = batchLocked() && state.batch.action === button.dataset.batchAction && state.batch.scope === button.dataset.batchScope &&
-        (state.batch.scope === "date"
-          ? state.batch.date === button.dataset.batchDate && state.batch.timeZone === button.dataset.batchTimeZone
-          : state.batch.scope === "shown" || state.batch.repository === button.dataset.repository) ? state.batch : null;
-      const progress = batch ? batch.status === "stopping" ? "Stopping..." : `Marking ${batch.succeeded}/${batch.total}...` : null;
+      const batch = state?.batches.find(batch => batchRunning(batch) && batch.action === button.dataset.batchAction && batch.scope === button.dataset.batchScope &&
+        (batch.scope === "date"
+          ? batch.date === button.dataset.batchDate && batch.timeZone === button.dataset.batchTimeZone
+          : batch.scope === "shown" || batch.repository === button.dataset.repository));
+      const starting = batchRequests.has(button.dataset.focusKey);
+      const progress = batch ? batchProgress(batch) : starting ? `Queued to mark as ${button.dataset.batchAction}...` : null;
       const destination = button.dataset.batchDate ? ` on ${dateLabel(button.dataset.batchDate)}` :
         button.dataset.repository ? ` in ${button.dataset.repository}` : "";
       const label = `Mark ${button.dataset.count} as ${button.dataset.batchAction}`;
       button.parentNode.querySelectorAll(".tooltip-content")[0].textContent = progress ?? label;
-      button.setAttribute("aria-label", progress ? `${progress} as ${batch.action}${destination}` :
+      button.setAttribute("aria-label", progress ? `${progress}${destination}` :
         `${label}${destination}; ${button.dataset.count} shown, loaded notifications`);
-      button.setAttribute("aria-busy", String(Boolean(batch)));
+      button.setAttribute("aria-busy", String(Boolean(batch || starting)));
+      button.dataset.writeState = batch?.inFlight ? "active" : batch || starting ? "queued" : "idle";
     }
   }
-  $("search").disabled = batchBusy || batchLocked();
-  for (const tab of attentionTabs.values()) tab.disabled = !hasCapability || batchBusy || batchLocked();
-  $("batch-stop").disabled = batchBusy || busy || state?.batch?.status === "stopping";
-  $("batch-retry").disabled = batchBusy || busy || Boolean(pendingFilters) || (state?.batch?.retryAt ?? 0) > Date.now();
-  $("batch-dismiss").disabled = batchBusy || busy;
-  $("groups").setAttribute("aria-busy", String(loading));
+  $("search").disabled = false;
+  for (const tab of attentionTabs.values()) tab.disabled = !hasCapability;
+  for (const batch of state?.batches ?? []) {
+    const view = batchViews.get(batch.token);
+    if (view) renderBatchView(batch, view);
+  }
+  $("groups").setAttribute("aria-busy", String(busy || state?.status === "loading"));
   renderNotificationView();
   $("shortcuts-control").hidden = preferences?.keyboardShortcuts === false;
   for (const [control, keys] of [
@@ -1042,18 +1216,21 @@ function displayGroups() {
     .map(group => ({ ...group, selectionKey: state.selectionKey }));
 }
 
-function createBatchControls({ repository, date, timeZone, selectionKey, count, unread, tooltipPrefix }) {
+function createBatchControls({ repository, date, timeZone, selectionKey, items, count, unread, tooltipPrefix }) {
   const scope = date ? "date" : repository ? "repository" : "shown";
   const key = repository ?? (date ? `date:${date}` : "shown");
   const name = repository ?? (date ? dateLabel(date) : "shown notifications");
   const destination = date ? ` on ${name}` : repository ? ` in ${repository}` : "";
   const target = date ? { scope: "date", date, timeZone } : repository ? { repository } : { scope: "shown" };
+  const ids = items.map(item => item.id);
+  const locked = lockedThreads();
   const controls = element("div", "repo-actions");
   const read = element("button", "icon-button repo-read");
   const done = element("button", "icon-button repo-done");
   read.dataset.focusKey = `bulk:${key}`;
   done.dataset.focusKey = `bulk-done:${key}`;
   for (const [button, action] of [[read, "read"], [done, "done"]]) {
+    batchControlItems.set(button, ids);
     const selected = action === "read" ? unread : count;
     const anchor = element("div", "tooltip-anchor");
     const tooltip = element("span", "tooltip");
@@ -1071,15 +1248,14 @@ function createBatchControls({ repository, date, timeZone, selectionKey, count, 
     button.dataset.batchAction = action;
     button.setAttribute("aria-label", `Mark ${selected} as ${action}${destination}; ${selected} shown, loaded notifications`);
     button.setAttribute("aria-describedby", tooltip.id);
-    button.disabled = !selected || busy || marking.size > 0 || batchBusy || batchLocked() || Boolean(pendingFilters);
+    button.setAttribute("aria-disabled", String(!selected || busy || ids.some(id => locked.has(id)) || Boolean(pendingFilters)));
     button.append(actionIcon(action));
     bindTooltip(button, anchor);
     button.addEventListener("click", () => {
-      if (!selected || busy || batchBusy || batchLocked() || marking.size || pendingFilters) return;
+      if (button.getAttribute("aria-disabled") === "true") return;
       // WebKit pointer clicks can blur the button before this handler.
       button.focus();
-      batchFocusKey = button.dataset.focusKey;
-      return batchRequest("start", { ...target, selectionKey, action });
+      return batchRequest("start", { ...target, selectionKey, action }, ids, button.dataset.focusKey);
     });
     anchor.append(button, tooltip);
     controls.append(anchor);
@@ -1106,7 +1282,8 @@ function renderRowSubject(view, item) {
   view.subject = subjectMetadata(item, view.subject);
 }
 
-function renderGroups(groups, fallbackFocusKey) {
+function renderGroups(groups, fallbackFocusKey, completedRows = []) {
+  const locked = lockedThreads();
   $("collapse").hidden = !groups.length;
   setControlText($("collapse"), groups.some(group => !collapsed.has(group.key)) ? "Collapse all" : "Expand all");
   // Subject hydration must not replace links or buttons during a pointer press.
@@ -1124,6 +1301,7 @@ function renderGroups(groups, fallbackFocusKey) {
   }
   listKey = key;
   rowViews.clear();
+  groupViews.clear();
   const previousFocus = document.activeElement;
   const focused = previousFocus?.dataset.focusKey;
   const dismissedTooltips = new Set([...$("groups").querySelectorAll("[data-focus-key]")]
@@ -1134,6 +1312,16 @@ function renderGroups(groups, fallbackFocusKey) {
     const rows = element("div", "repo-items");
     const section = element("section", "repo-group");
     const header = element("div", "repo-header");
+    const status = element("p", "group-progress");
+    status.setAttribute("role", "status");
+    status.setAttribute("aria-live", "polite");
+    status.hidden = true;
+    const results = element("div", "group-results");
+    const actionKey = group.repository ?? (group.date ? `date:${group.date}` : "shown");
+    groupViews.set(group.key, {
+      status, results, date: group.date, timeZone: group.timeZone,
+      readKey: `bulk:${actionKey}`, doneKey: `bulk-done:${actionKey}`,
+    });
     rows.id = `group-items-${index}`;
     rows.hidden = collapsed.has(group.key);
     const disclosure = element("button", "repo-toggle");
@@ -1154,8 +1342,9 @@ function renderGroups(groups, fallbackFocusKey) {
     });
     header.append(disclosure, createBatchControls({
       repository: group.repository, date: group.date, timeZone: group.timeZone,
-      selectionKey: group.selectionKey, count: group.items.length, unread: group.unread, tooltipPrefix: `group-${index}`,
+      selectionKey: group.selectionKey, items: group.items, count: group.items.length, unread: group.unread, tooltipPrefix: `group-${index}`,
     }));
+    header.append(status, results);
     section.append(header, rows);
     fragment.append(section);
     for (const item of group.items) {
@@ -1221,10 +1410,10 @@ function renderGroups(groups, fallbackFocusKey) {
         button.dataset.focusKey = `${action}:${item.id}`;
         button.dataset.threadId = item.id;
         button.dataset.action = action;
-        button.disabled = busy || marking.has(item.id) || batchBusy || batchLocked() || Boolean(pendingFilters);
+        button.disabled = busy || locked.has(item.id) || Boolean(pendingFilters);
         button.setAttribute("aria-label", `Mark as ${action}: ${notificationTitle(item, "Untitled notification")}`);
         button.setAttribute("aria-describedby", tooltip.id);
-        button.setAttribute("aria-busy", String(marking.get(item.id) === action));
+        button.setAttribute("aria-busy", String(marking.get(item.id)?.action === action));
         button.append(actionIcon(action));
         bindTooltip(button, anchor);
         button.addEventListener("click", () => markThread(item.id, action));
@@ -1237,18 +1426,23 @@ function renderGroups(groups, fallbackFocusKey) {
     }
   }
   $("groups").replaceChildren(fragment);
+  renderBatch();
   for (const control of $("groups").querySelectorAll("[data-focus-key]")) {
     const anchor = tooltipAnchorsByControl.get(control);
     if (anchor && dismissedTooltips.has(control.dataset.focusKey)) anchor.dataset.tooltipDismissed = "true";
   }
   if (focused) {
-    const target = focusKey(focused) ?? focusKey(fallbackFocusKey);
+    const pending = [...marking.values(), ...completedRows].find(operation =>
+      operation.key === focused || operation.previousFocus?.dataset.focusKey === focused);
+    let target = focusKey(pending ? rowFocusKey(pending) : focused) ?? focusKey(fallbackFocusKey);
+    if (target?.dataset.count === "0") target = groupFocus(focused);
     // Pending actions restore focus once their replacement controls are enabled.
     if (!target?.disabled) restoreFocus(previousFocus, target);
   }
 }
 
 function render(fallbackFocusKey) {
+  const completedRows = state ? reconcileRows() : [];
   renderSettingsError();
   renderUpdates(state?.updates);
   const development = state?.development;
@@ -1265,7 +1459,11 @@ function render(fallbackFocusKey) {
     ? `Development API: ${activeAPI.baseUrl}. Read/done actions affect this API, which may share production data. Desktop alerts are disabled.`
     : "";
   renderControls();
-  const error = actionError || state?.error?.message || connectionError;
+  const rowError = state?.batches.filter(batch => batch.scope === "thread" && !batchRunning(batch) && batch.status !== "completed")
+    .map(batch => `Could not mark the notification as ${batch.action}. ${batch.error?.message ??
+      "The notification changed before it could be updated. Review its current state and try again."}`).join(" ");
+  const pendingRowError = [...marking.values()].map(operation => operation.error).filter(Boolean).join(" ");
+  const error = actionError || rowError || pendingRowError || state?.error?.message || connectionError;
   const loading = state?.status === "idle" || state?.status === "loading";
   const filtered = Boolean(state?.filters.query || (state && state.filters.attention !== "all"));
   const cleared = Boolean(state && !state.loaded && state.hasMore);
@@ -1317,9 +1515,16 @@ function render(fallbackFocusKey) {
   const groupBy = preferences?.groupBy ?? "repo";
   $("groups").setAttribute("aria-label", groupBy === "repo" ? "Notifications by repository" :
     groupBy === "date" ? "Notifications by date" : "Notifications in GitHub order");
-  renderGroups(displayGroups(), fallbackFocusKey);
+  renderGroups(displayGroups(), fallbackFocusKey, completedRows);
   scheduleSubjectSelectionSync();
   renderControls();
+  for (const operation of completedRows) {
+    const key = rowFocusKey(operation);
+    restoreFocus(operation.previousFocus, focusKey(key) ?? $("search"));
+    if (operation.focusRow && document.activeElement?.dataset.focusKey === key) {
+      document.activeElement.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+  }
   if (state.groups.length && movePanelFocus) {
     restoreFocus(panel, $("groups").querySelectorAll(".repo-toggle")[0]);
   }
@@ -1342,6 +1547,7 @@ function render(fallbackFocusKey) {
   $("empty-refresh").hidden = !cleared || !state.needsRefresh || Boolean(error) || loading;
   renderBatch();
   positionSettings();
+  renderedSnapshotVersion = state.snapshotVersion;
 }
 
 function revealAttentionTab(tab) {
@@ -1418,10 +1624,6 @@ for (const filter of attentionFilters) {
   $("attention-tabs").append(tab);
 }
 
-for (const [id, action] of [["batch-stop", "cancel"],
-  ["batch-retry", "retry"], ["batch-dismiss", "dismiss"]]) {
-  $(id).addEventListener("click", () => state?.batch && batchRequest(action, { token: state.batch.token }));
-}
 $("settings").addEventListener("toggle", () => {
   const open = $("settings").open;
   $("settings-toggle").setAttribute("aria-expanded", String(open));
@@ -1520,7 +1722,7 @@ document.addEventListener("keydown", event => {
     }
   }
   if (event.key === "Enter" && event.repeat && (event.target?.dataset?.action || event.target?.dataset?.batchAction ||
-      ["batch-stop", "batch-retry", "batch-dismiss"].includes(event.target?.id))) {
+      event.target?.dataset?.batchControl || ["batch-retry", "batch-dismiss"].includes(event.target?.id))) {
     event.preventDefault();
     return;
   }

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { runInContext } from "node:vm";
 import { http, inboxNext as next, thread } from "./fixtures.mjs";
-import { renderer, script, html, styles, settle } from "./renderer-fixtures.mjs";
+import { finishRows, renderer, script, html, styles, settle } from "./renderer-fixtures.mjs";
 
 test("the per-panel Web Audio option is replaced by the native notification sound picker", () => {
   assert.doesNotMatch(html, /id="sound"|Play sound|per-panel chime/);
@@ -980,15 +980,18 @@ test("row reads in none and date modes retain rows and focus their Done action",
     const first = readButtons()[0];
     first.focus();
     await first.events.click();
+    await finishRows(ui);
     assert.deepEqual(ui.patches, [`/notifications/threads/${ids[0]}`]);
     assert.deepEqual(readButtons().map(node => node.dataset.threadId), ids.slice(1));
     assert.equal(ui.document.activeElement.dataset.focusKey, `done:${ids[0]}`);
     const last = readButtons().find(node => node.dataset.threadId === ids[2]);
     last.focus();
     await last.events.click();
+    await finishRows(ui);
     assert.equal(ui.document.activeElement.dataset.focusKey, `done:${ids[2]}`);
     readButtons()[0].focus();
     await readButtons()[0].events.click();
+    await finishRows(ui);
     assert.equal(ui.document.activeElement.dataset.focusKey, `done:${ids[1]}`);
     assert.equal(ui.ids.get("empty").hidden, true);
     assert.equal(readButtons().length, 0);

@@ -165,7 +165,6 @@ test("Done waits for confirmation, reports failures, and never retries automatic
   const held = gate();
   const entered = gate();
   let attempts = 0;
-  canvas.expectConsoleError("/api/done", "Failed to load resource: the server responded with a status of 502 (Bad Gateway)");
   canvas.setRequestHook(async args => {
     if (!args.includes("DELETE")) return;
     attempts++;
@@ -182,6 +181,10 @@ test("Done waits for confirmation, reports failures, and never retries automatic
     await expect(done).toHaveAttribute("aria-busy", "true");
     await expect(done.locator("svg")).toHaveCount(1);
     await expect(done.locator("svg")).toBeHidden();
+    await expect(done).toHaveAttribute("data-write-state", "queued");
+    expect(await done.evaluate(node => getComputedStyle(node, "::after").animationName)).toBe("none");
+    await page.clock.fastForward(1000);
+    await expect(done).toHaveAttribute("data-write-state", "active");
     await page.emulateMedia({ reducedMotion: "reduce" });
     expect(await done.evaluate(node => getComputedStyle(node, "::after").animationName)).toBe("none");
     await page.emulateMedia({ reducedMotion: "no-preference" });
@@ -190,6 +193,7 @@ test("Done waits for confirmation, reports failures, and never retries automatic
     await expect(page.locator(".repo-read")).toBeDisabled();
     await expect(page.locator(".row")).toHaveCount(2);
     held.release();
+    await page.clock.fastForward(1000);
     await expect(page.locator("#notice")).toContainText("Could not mark the notification as done");
     await expect(done).toBeEnabled();
     await expect(done).toHaveAttribute("aria-busy", "false");
@@ -201,6 +205,7 @@ test("Done waits for confirmation, reports failures, and never retries automatic
     canvas.advance(120_000);
     canvas.setRequestHook(undefined);
     await done.press("Enter");
+    await page.clock.fastForward(1000);
     await expect(page.locator(".row")).toHaveCount(1);
     await expect(page.locator("#notice")).toBeHidden();
     expect(canvas.doneWrites).toEqual(["1"]);
@@ -209,7 +214,166 @@ test("Done waits for confirmation, reports failures, and never retries automatic
   }
 });
 
-test("batch cancellation waits for the in-flight write and retry writes only remaining rows", async ({ page, canvas }) => {
+test("queued row acknowledgements survive more than the action request deadline and retain later errors", async ({ page, canvas }) => {
+  canvas.rows.splice(2);
+  const first = gate();
+  const second = gate();
+  const enteredSecond = gate();
+  canvas.setRequestHook(async args => {
+    if (!args.includes("DELETE")) return;
+    if (args.at(-1).endsWith("/threads/1")) await first.promise;
+    else {
+      enteredSecond.release();
+      await second.promise;
+      return http({}, {}, 500);
+    }
+  });
+  await page.clock.install();
+  await page.goto(canvas.url);
+  try {
+    for (const id of ["1", "2"]) {
+      const acknowledgement = page.waitForResponse(response => response.url().endsWith("/api/done"));
+      await page.locator(`[data-focus-key="done:${id}"]`).click();
+      const response = await acknowledgement;
+      expect(response.status()).toBe(202);
+      expect((await response.json()).rowActionToken).toMatch(/^[a-f0-9-]{36}$/);
+    }
+    await page.clock.fastForward(29_000);
+    await expect(page.locator('[data-focus-key="done:2"]')).toHaveAttribute("data-write-state", "queued");
+    first.release();
+    await enteredSecond.promise;
+    await page.clock.fastForward(29_000);
+    await expect(page.locator('[data-focus-key="done:1"]')).toHaveCount(0);
+    await expect(page.locator('[data-focus-key="done:2"]')).toHaveAttribute("data-write-state", "active");
+    await expect(page.locator("#notice")).toBeHidden();
+    second.release();
+    await page.clock.fastForward(1000);
+    await expect(page.locator("#notice")).toContainText("Could not mark the notification as done");
+    await expect(page.locator("#notice")).toContainText("HTTP 500");
+    await expect(page.locator('[data-focus-key="done:2"]')).toBeEnabled();
+    expect(canvas.doneWrites).toEqual(["1"]);
+  } finally {
+    first.release();
+    second.release();
+  }
+});
+
+for (const packaged of [false, true]) {
+  test.describe(`lost row acknowledgements (${packaged ? "packaged" : "source"})`, () => {
+    test.use({ packaged });
+    for (const action of ["read", "done"]) {
+      for (const matchGitHubInbox of [false, true]) {
+        test(`${action} recovers its queued outcome in ${matchGitHubInbox ? "All" : "Unread only"}`, async ({ page, canvas }) => {
+          canvas.rows.splice(2);
+          await canvas.preferences.update({ matchGitHubInbox });
+          const held = gate();
+          canvas.setRequestHook(async args => {
+            if (args.includes(action === "read" ? "PATCH" : "DELETE")) await held.promise;
+          });
+          await page.route(`**/api/${action}`, async route => {
+            const response = await route.fetch();
+            await route.fulfill({ response, body: "{" });
+          });
+          await page.goto(canvas.url);
+          try {
+            const button = page.locator(`[data-focus-key="${action}:1"]`);
+            await button.focus();
+            const recovered = page.waitForResponse(async response => response.url().endsWith("/api/state") &&
+              (await response.json()).batches.some(batch => batch.scope === "thread" && batch.threadId === "1" && batch.action === action));
+            await button.press("Enter");
+            const state = await (await recovered).json();
+            expect(state.batches.some(batch => batch.scope === "thread" && batch.threadId === "1" && batch.action === action)).toBe(true);
+            await expect(button).toBeDisabled();
+            await expect(page.locator("#notice")).toBeHidden();
+            held.release();
+            const retained = action === "read" && matchGitHubInbox;
+            await expect(page.locator(".row")).toHaveCount(retained ? 2 : 1);
+            await expect(button).toHaveCount(0);
+            await expect(page.locator(`[data-focus-key="${retained ? "done:1" : `${action}:2`}"]`)).toBeFocused();
+            await expect(page.locator("#notice")).toBeHidden();
+            const acknowledged = await page.waitForResponse(async response => response.url().endsWith("/api/state") &&
+              (await response.json()).batches.length === 0, { timeout: 10_000 });
+            expect(acknowledged.request().headers()["x-notification-acknowledged-version"]).toMatch(/^[1-9]\d*$/);
+            expect(canvas.writes).toEqual(["1"]);
+            expect(canvas.doneWrites).toEqual(action === "done" ? ["1"] : []);
+          } finally {
+            held.release();
+            await page.unrouteAll({ behavior: "wait" });
+          }
+        });
+      }
+    }
+  });
+}
+
+for (const moveFocus of [false, true]) {
+  test(`All-view Read completion restores focus before acknowledgement (${moveFocus ? "new focus" : "Done button"})`, async ({ page, canvas }) => {
+    canvas.rows.splice(2);
+    const acknowledgement = gate();
+    const queued = gate();
+    await page.route("**/api/read", async route => {
+      const response = await route.fetch();
+      queued.release();
+      await acknowledgement.promise;
+      await route.fulfill({ response });
+    });
+    await page.goto(canvas.url);
+    try {
+      const read = page.locator('[data-focus-key="read:1"]');
+      await read.focus();
+      await read.press("Enter");
+      await queued.promise;
+      if (moveFocus) await page.getByRole("searchbox").focus();
+      await expect(page.locator(".row.read")).toHaveCount(1);
+      await expect(read).toHaveCount(0);
+      const done = page.locator('[data-focus-key="done:1"]');
+      await expect(done).toBeEnabled();
+      const expected = moveFocus ? page.getByRole("searchbox") : done;
+      await expect(expected).toBeFocused();
+      const received = page.waitForResponse(response => response.url().endsWith("/api/read"));
+      acknowledgement.release();
+      await received;
+      await expect(expected).toBeFocused();
+      expect(canvas.writes).toEqual(["1"]);
+      expect(canvas.doneWrites).toEqual([]);
+    } finally {
+      acknowledgement.release();
+      await page.unrouteAll({ behavior: "wait" });
+    }
+  });
+
+  test(`shortcut completion polls preserve next-row focus before acknowledgement (${moveFocus ? "new focus" : "advance"})`, async ({ page, canvas }) => {
+    canvas.rows.splice(3);
+    const acknowledgement = gate();
+    const queued = gate();
+    await page.route("**/api/done", async route => {
+      const response = await route.fetch();
+      queued.release();
+      await acknowledgement.promise;
+      await route.fulfill({ response });
+    });
+    await page.goto(canvas.url);
+    try {
+      await page.locator('[data-focus-key="thread:1"]').focus();
+      await page.keyboard.press("Shift+KeyE");
+      await queued.promise;
+      if (moveFocus) await page.getByRole("searchbox").focus();
+      await expect(page.locator('[data-focus-key="thread:1"]')).toHaveCount(0);
+      const expected = moveFocus ? page.getByRole("searchbox") : page.locator('[data-focus-key="thread:2"]');
+      await expect(expected).toBeFocused();
+      const received = page.waitForResponse(response => response.url().endsWith("/api/done"));
+      acknowledgement.release();
+      await received;
+      await expect(expected).toBeFocused();
+      expect(canvas.doneWrites).toEqual(["1"]);
+    } finally {
+      acknowledgement.release();
+      await page.unrouteAll({ behavior: "wait" });
+    }
+  });
+}
+
+test("a read batch has no Stop control and completes every selected row", async ({ page, canvas }) => {
   canvas.rows.splice(2);
   await page.goto(canvas.url);
   await expect(page.locator(".row")).toHaveCount(2);
@@ -221,15 +385,14 @@ test("batch cancellation waits for the in-flight write and retry writes only rem
   try {
     await page.getByRole("button", { name: "Mark 2 as read in example/widgets; 2 shown, loaded notifications", exact: true }).click();
     await entered.promise;
-    await page.getByRole("button", { name: "Stop remaining", exact: true }).click();
-    await expect(page.locator("#batch-title")).toContainText("Stopping");
+    await expect(page.getByRole("button", { name: "Stop remaining", exact: true })).toHaveCount(0);
+    await expect(page.locator("#batch-progress")).toBeHidden();
+    await expect(page.locator(".repo-read")).toBeFocused();
     canvas.setRequestHook(undefined);
     held.release();
-    await expect(page.getByRole("button", { name: "Continue remaining (1)", exact: true })).toBeVisible();
-    expect(canvas.writes).toEqual(["1"]);
-    await page.getByRole("button", { name: "Continue remaining (1)", exact: true }).click();
     await expect(page.locator(".row.unread")).toHaveCount(0);
     await expect(page.locator(".row")).toHaveCount(2);
+    await expect(page.locator("#batch-progress")).toBeHidden();
     expect(canvas.writes).toEqual(["1", "2"]);
   } finally {
     held.release();

@@ -14,10 +14,17 @@ export const html = await readFile(new URL("../src/index.html", import.meta.url)
 export const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
 export const settle = () => new Promise(resolve => setImmediate(resolve));
 export const groupActionText = button => button.parentNode.querySelectorAll(".tooltip-content")[0].textContent;
+export const disabled = button => button.disabled || button.getAttribute("aria-disabled") === "true";
+export const groupProgress = (ui, key) => ui.ids.get("groups").querySelectorAll(".group-progress")
+  .find(node => node.dataset.groupKey === key)?.textContent;
+export async function finishRows(ui) {
+  await ui.inbox.batch.done;
+  await runInContext("update()", ui.context);
+}
 
 // Minimal DOM/event/timer doubles exercise the actual renderer without a browser dependency.
 export async function renderer({ hidden = false, token = "a".repeat(64), readFailure = false,
-  initialRows, subjectStates = {}, subjectsLoading = false, onWrite, onFetch, onState, onFilters, initialOffline = false, release, development = null,
+  initialRows, subjectStates = {}, subjectsLoading = false, onWrite, onFetch, onState, onFilters, onActionResponse, initialOffline = false, release, development = null,
   onUpdates, clipboardFailure = false, onSettings, onSubjects, developmentApi, onDevelopment, retainDisabledFocus = false, desktopPlatform = "darwin", desktopStatus = {},
   storedSettings = { autoOpen: false, darkMode: null, desktopNotifications: false, desktopSound: "default" },
   appColorMode = "light", systemDark = false, navigatorPlatform, userAgentData } = {}) {
@@ -91,8 +98,16 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     }
     getAttribute(key) { return this.attributes[key] ?? null; }
     append(...children) {
-      for (const child of children) child.parentNode = this;
+      for (const child of children) {
+        if (child.parentNode) child.parentNode.children = child.parentNode.children.filter(node => node !== child);
+        child.parentNode = this;
+      }
       this.children.push(...children);
+    }
+    remove() {
+      if (this.contains(document.activeElement)) document.activeElement = document.body;
+      this.parentNode.children = this.parentNode.children.filter(child => child !== this);
+      this.parentNode = null;
     }
     replaceChildren(fragment) {
       if (this.contains(document.activeElement)) document.activeElement = document.body;
@@ -182,9 +197,10 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     const anchor = ids.get(anchorId);
     anchor.contains = node => node === anchor || node === ids.get(controlId) || anchor.children.some(child => child.contains(node));
   }
-  for (const id of ["batch-stop", "batch-retry", "batch-dismiss"]) ids.get(id).parentNode = ids.get("batch-progress");
+  ids.get("batch-buttons").parentNode = ids.get("batch-progress");
+  for (const id of ["batch-retry", "batch-dismiss"]) ids.get(id).parentNode = ids.get("batch-buttons");
   ids.get("batch-progress").contains = node =>
-    ["batch-progress", "batch-stop", "batch-retry", "batch-dismiss"].some(id => ids.get(id) === node);
+    ["batch-progress", "batch-buttons", "batch-retry", "batch-dismiss"].some(id => ids.get(id) === node);
   ids.get("settings").contains = node =>
     node === ids.get("settings") ||
     ["settings-toggle", "settings-panel", "show-notifications", "auto-open", "theme", "group-by", "hide-empty-tabs", "keyboard-shortcuts", "check-updates", "desktop-notifications", "desktop-sound",
@@ -334,6 +350,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       if (path === "/api/refresh") await inbox.refresh(JSON.parse(options.body));
       if (path === "/api/more") await inbox.more();
       if (path === "/api/state") {
+        inbox.batch.acknowledge(options.headers["X-Notification-Acknowledged-Version"]);
         const state = snapshot();
         if (onState) await onState();
         return { ok: true, json: async () => state };
@@ -343,10 +360,15 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
         if (onFilters) await onFilters(input);
         await inbox.setFilters(input);
       }
-      if (path === "/api/read") await inbox.markRead(JSON.parse(options.body));
-      if (path === "/api/done") await inbox.markDone(JSON.parse(options.body));
+      const rowActionToken = ["/api/read", "/api/done"].includes(path)
+        ? inbox.queueThread(JSON.parse(options.body), path === "/api/done" ? "done" : "read") : undefined;
       if (path.startsWith("/api/batch/")) inbox.batch[path.slice("/api/batch/".length)](JSON.parse(options.body));
-      return { ok: true, json: async () => snapshot() };
+      if (onActionResponse && ["/api/read", "/api/done", "/api/batch/start"].includes(path)) {
+        const state = { ...snapshot(), ...(rowActionToken ? { rowActionToken } : {}) };
+        await onActionResponse(path, state);
+        return { ok: true, json: async () => state };
+      }
+      return { ok: true, json: async () => ({ ...snapshot(), ...(rowActionToken ? { rowActionToken } : {}) }) };
     },
   });
   if (!process.env.NOTIFICATIONS_TEST_SCRIPT) assert.match(script, /^import \{ apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle \} from "\.\/model\.mjs";/);

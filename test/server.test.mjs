@@ -112,6 +112,65 @@ test("HTTP integration serves a protected inbox, rejects cross-origin access and
   assert.equal((await state.json()).groups[0].items[0].title, "Synthetic notification 1");
 });
 
+test("row HTTP requests acknowledge queued writes promptly and report delayed outcomes through snapshots", async t => {
+  let now = 0;
+  const releases = [];
+  const client = new GitHubClient({ now: () => now, sleep: async delay => { now += delay; },
+    run: (args, { signal }) => args.includes("GET") ? http([thread("1"), thread("2")]) :
+      new Promise((resolve, reject) => {
+        releases.push(resolve);
+        signal.addEventListener("abort", () => reject(new Error("Synthetic shutdown")), { once: true });
+      }),
+  });
+  const inbox = new Inbox(client);
+  await inbox.refresh();
+  const server = await startServer(inbox);
+  t.after(() => server.close());
+  const url = new URL(server.url);
+  const headers = { Authorization: `Bearer ${url.hash.slice(1)}`, Origin: url.origin, "Content-Type": "application/json" };
+  const queue = async (action, id) => {
+    const response = await fetch(`${url.origin}/api/${action}`, {
+      method: "POST", headers, body: JSON.stringify({ id }), signal: AbortSignal.timeout(2000),
+    });
+    assert.equal(response.status, 202);
+    return response.json();
+  };
+  const first = await queue("read", "1");
+  const second = await queue("done", "2");
+  assert.notEqual(first.rowActionToken, second.rowActionToken);
+  assert.equal(releases.length, 1);
+  const snapshot = async version => (await fetch(`${url.origin}/api/state`, {
+    headers: { ...headers, ...(version === undefined ? {} : { "X-Notification-Acknowledged-Version": String(version) }) },
+  })).json();
+  assert.deepEqual((await snapshot()).threadWrites.map(write => write.inFlight), [true, false]);
+  now += 29_000;
+  releases[0](http(null, {}, 205));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(releases.length, 2);
+  const midway = await snapshot();
+  assert.equal(midway.batches.find(batch => batch.token === first.rowActionToken).status, "completed");
+  assert.equal(midway.batches.find(batch => batch.token === second.rowActionToken).inFlight, true);
+  assert.equal((await snapshot()).batches.length, 2, "sending a snapshot is not a receipt acknowledgement");
+  assert.equal((await snapshot(midway.snapshotVersion)).batches.length, 1);
+  now += 29_000;
+  releases[1](http({}, {}, 500));
+  await inbox.batch.done;
+  const failed = await snapshot();
+  assert.equal(failed.batches[0].token, second.rowActionToken);
+  assert.equal(failed.batches[0].error.code, "github_http");
+  assert.equal(failed.batches[0].threadId, "2");
+  assert.equal(failed.threadWrites.length, 0);
+  assert.equal((await snapshot(failed.snapshotVersion)).batches.length, 1, "failed results are not acknowledged away");
+  for (const version of ["-1", "1.5", "1e2", "9007199254740992", String(inbox.snapshotVersion + 1)]) {
+    const response = await fetch(`${url.origin}/api/state`, {
+      headers: { ...headers, "X-Notification-Acknowledged-Version": version },
+    });
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error.code, "invalid_snapshot");
+  }
+  assert.doesNotMatch(JSON.stringify(inbox.summary()), /threadId|retryableThreadIds|rowActionToken/);
+});
+
 test("methods, paths, origins, hosts, JSON, filter input and oversized bodies are checked", async t => {
   const { origin, headers } = await setup(t);
   for (const [path, method, body, expected] of [
@@ -311,8 +370,9 @@ test("all HTTP notification request paths inherit another client's server deadli
     const blocked = await call();
     const blockedState = await blocked.json();
     await finish();
-    assert.equal(blocked.status, path === "state" ? 200 : path === "batch/start" ? 202 : 429, path);
-    if (path === "batch/start") {
+    const queued = ["batch/start", "read", "done"].includes(path);
+    assert.equal(blocked.status, path === "state" ? 200 : queued ? 202 : 429, path);
+    if (queued) {
       const batch = inbox.batch.snapshot();
       assert.equal(batch.error.code, "rate_limited");
       assert.equal(batch.failed, 0);
@@ -326,9 +386,11 @@ test("all HTTP notification request paths inherit another client's server deadli
       ? await call("batch/retry", { token: inbox.batch.snapshot().token }) : await call();
     const resumedState = await resumed.json();
     await finish();
-    assert.equal(resumed.status, path === "batch/start" ? 202 : 200);
-    assert.equal(resumedState.loaded, path === "more" ? 2 : path === "done" ? 0 : 1);
+    assert.equal(resumed.status, queued ? 202 : 200);
+    assert.equal(resumedState.loaded, path === "more" ? 2 : 1);
     if (path === "batch/start") assert.equal(inbox.batch.snapshot(), null);
+    if (["read", "done"].includes(path)) assert.equal(inbox.batch.snapshot().status, "completed");
+    if (path === "done") assert.equal(inbox.snapshot().loaded, 0);
     if (path === "state") assert.equal(readerClient.subjectSnapshot(inbox.loadedItems()[0]).subjectState, "open");
     assert.equal(calls.length, before + 1);
     await reader.foregroundPending;

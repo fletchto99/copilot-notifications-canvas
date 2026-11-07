@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { setTimeout as delay } from "node:timers/promises";
 import { parsePreviewArgs, previewUsage, startPreview, runPreview } from "../scripts/dev-fixture.mjs";
 import { createCanvasFixture } from "./canvas-fixtures.mjs";
 import { getPreviewScenario, previewScenarios } from "./preview-scenarios.mjs";
@@ -163,10 +164,20 @@ test("synthetic preview uses the protected server, temporary preferences and in-
   assert.ok(Object.values(initial.attentionCounts).every(count => count > 0));
   assert.equal((await post("/api/more")).loaded, 53);
   assert.equal((await post("/api/filters", { query: "Needle" })).matching, 4);
-  assert.equal((await post("/api/read", { id: "3" })).loaded, 53);
+  const settleRows = async () => {
+    for (let attempt = 0; attempt < 300; attempt++) {
+      const state = await (await get("/api/state")).json();
+      if (!state.batches.some(batch => ["running", "stopping"].includes(batch.status))) return state;
+      await delay(10);
+    }
+    assert.fail("Synthetic queued row actions did not finish");
+  };
+  assert.equal((await post("/api/read", { id: "3" }, 202)).loaded, 53);
+  await settleRows();
   assert.deepEqual(preview.writes, ["3"]);
   assert.equal(preview.rows[2].unread, false);
-  assert.equal((await post("/api/done", { id: "2" })).loaded, 52);
+  await post("/api/done", { id: "2" }, 202);
+  assert.equal((await settleRows()).loaded, 52);
   assert.deepEqual(preview.writes, ["3", "2"]);
   assert.deepEqual(preview.doneWrites, ["2"]);
   assert.equal(preview.rows[1].unread, false);

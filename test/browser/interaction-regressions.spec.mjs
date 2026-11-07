@@ -34,7 +34,7 @@ for (const packaged of [false, true]) {
       await expect(page.locator(".row")).toHaveCount(1);
     });
 
-    test("holding Enter to start a batch cannot immediately activate Stop when focus moves", async ({
+    test("holding Enter to start a batch keeps focus on its blocked action without repeating it", async ({
       page,
       canvas,
     }) => {
@@ -50,16 +50,12 @@ for (const packaged of [false, true]) {
       await page.locator(".repo-read").focus();
       try {
         await page.keyboard.down("Enter");
-        await expect(page.locator("#batch-stop")).toBeFocused();
-        await page.evaluate(() => {
-          document.addEventListener("keydown", (event) => {
-            if (event.key === "Enter" && event.repeat) window.repeatedActivationPrevented = event.defaultPrevented;
-          });
-        });
+        await expect(page.locator(".repo-read")).toBeFocused();
         await page.keyboard.down("Enter");
-        await expect(page.locator("#batch-title")).toContainText("Marking as read...");
-        await expect(page.locator("#batch-stop")).toBeEnabled();
-        expect(await page.evaluate(() => window.repeatedActivationPrevented)).toBe(true);
+        await expect(page.locator(".group-progress")).toHaveText("Marking 0/2 as read...");
+        await expect(page.locator(".repo-read")).toBeFocused();
+        await expect(page.locator("#batch-progress")).toBeHidden();
+        await expect(page.getByRole("button", { name: "Stop remaining", exact: true })).toHaveCount(0);
       } finally {
         await page.keyboard.up("Enter");
         release();

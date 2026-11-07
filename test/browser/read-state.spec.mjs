@@ -74,7 +74,7 @@ for (const packaged of [false, true]) {
         await page.locator(".repo-done").click();
         await expect(page.locator(".repo-done")).toHaveAttribute("aria-busy", "true");
         await expect(page.locator(".repo-done")).toBeVisible();
-        await expect(page.locator(".repo-done")).toHaveAccessibleDescription("Marking 0/2...");
+        await expect(page.locator(".repo-done")).toHaveAccessibleDescription("Marking 0/2 as done...");
         await expect(page.locator(".repo-done")).toHaveText("");
         await expect(page.locator(".repo-done svg")).toHaveCount(1);
         await expect(page.locator(".repo-done svg")).toBeHidden();

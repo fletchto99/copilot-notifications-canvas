@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { runInContext } from "node:vm";
 import { dateLabel } from "../src/model.mjs";
-import { groupActionText, renderer, settle } from "./renderer-fixtures.mjs";
+import { disabled, groupActionText, groupProgress, renderer, settle } from "./renderer-fixtures.mjs";
 import { thread } from "./fixtures.mjs";
 
 const selectedDate = "2026-01-12";
@@ -48,14 +48,14 @@ test("each date header has independent read and Done controls without an overall
     assert.deepEqual(action === "done" ? ui.patches : ui.deletions, []);
     assert.deepEqual(ui.inbox.loadedItems().filter(item => action === "done" || item.unread).map(item => item.id), ["3"]);
     if (action === "done") assert.equal(controls(ui).read, undefined);
-    else assert.equal(controls(ui).read.disabled, true);
+    else assert.equal(disabled(controls(ui).read), true);
     assert.equal(groupActionText(controls(ui, otherDate).read), "Mark 1 as read");
     assert.equal(ui.ids.get("groups").querySelectorAll("button").some(button => button.dataset.batchScope === "shown"), false);
     assert.equal(ui.ids.get("batch-progress").hidden, true);
   }
 });
 
-test("date progress is scoped to its own header and remains date-specific through grouping changes and retry", async t => {
+test("date progress stays scoped through grouping changes and completes without a Stop control", async t => {
   let release;
   const ui = await renderer({
     storedSettings: { groupBy: "date" },
@@ -69,32 +69,26 @@ test("date progress is scoped to its own header and remains date-specific throug
   t.after(() => { release?.(); ui.window.events.pagehide(); ui.inbox.close(); });
   await controls(ui).done.events.click();
   await settle();
-  assert.equal(groupActionText(controls(ui).done), "Marking 0/2...");
+  await runInContext("update()", ui.context);
+  assert.equal(groupActionText(controls(ui).done), "Marking 0/2 as done...");
   assert.equal(controls(ui).done.attributes["aria-busy"], "true");
   assert.equal(controls(ui).read.attributes["aria-busy"], "false");
   assert.equal(groupActionText(controls(ui, otherDate).read), "Mark 1 as read");
   assert.equal(controls(ui, otherDate).read.attributes["aria-busy"], "false");
-  assert.equal(controls(ui, otherDate).read.disabled, true);
-  assert.equal(ui.ids.get("batch-title").textContent, `${dateLabel(selectedDate)}: Marking as done...`);
-  assert.equal(ui.document.activeElement, ui.ids.get("batch-stop"));
+  assert.equal(controls(ui, otherDate).read.disabled, false);
+  assert.equal(groupProgress(ui, "date:2026-1-12"), "Marking 0/2 as done...");
+  assert.equal(ui.ids.get("batch-progress").hidden, true);
+  assert.equal(ui.document.activeElement, controls(ui).done);
   const grouping = ui.ids.get("group-by");
   grouping.value = "none";
   grouping.events.change();
   await settle();
   const shownRead = ui.ids.get("groups").querySelectorAll("button").find(button => button.dataset.focusKey === "bulk:shown");
-  assert.equal(shownRead.disabled, true);
+  assert.equal(disabled(shownRead), true);
   assert.equal(groupActionText(shownRead), "Mark 3 as read");
   assert.equal(shownRead.attributes["aria-busy"], "false");
-  await ui.ids.get("batch-stop").events.click();
+  assert.equal(ui.ids.has("batch-stop"), false);
   release();
-  await ui.inbox.batch.done;
-  await runInContext("update()", ui.context);
-  assert.deepEqual(ui.deletions, ["/notifications/threads/1"]);
-  assert.equal(ui.inbox.batch.snapshot().date, selectedDate);
-  assert.equal(ui.ids.get("batch-title").textContent, `${dateLabel(selectedDate)}: Stopped`);
-  assert.equal(ui.ids.get("batch-counts").textContent, "1 marked done, 1 remaining");
-  assert.equal(ui.ids.get("batch-retry").textContent, "Continue remaining (1)");
-  await ui.ids.get("batch-retry").events.click();
   await ui.inbox.batch.done;
   await runInContext("update()", ui.context);
   assert.deepEqual(ui.deletions, ["/notifications/threads/1", "/notifications/threads/2"]);
