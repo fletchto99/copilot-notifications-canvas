@@ -11,6 +11,7 @@ const tooltipAnchorsByControl = new WeakMap();
 let pointerInteraction = false;
 const relative = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
 let state;
+let renderedSnapshotVersion = 0;
 let listKey;
 let busy = false;
 let stopped = false;
@@ -301,6 +302,7 @@ async function api(path, input) {
         ...(groupBy ? { "X-Notification-Group-By": groupBy } : {}),
         ...(timeZone ? { "X-Notification-Time-Zone": timeZone } : {}),
         "X-Notification-Subjects": "manual",
+        ...(path === "state" ? { "X-Notification-Acknowledged-Version": String(renderedSnapshotVersion) } : {}),
       },
       body: input === undefined ? undefined : JSON.stringify(input),
       signal: controller.signal,
@@ -583,7 +585,7 @@ async function markThread(id, action, focusRow = false) {
   const key = `${focusRow ? "thread" : action}:${id}`;
   const operation = { id, action, focusRow, key, previousFocus: document.activeElement,
     order: displayGroups().filter(group => !focusRow || !collapsed.has(group.key)).flatMap(group => group.items.map(item => item.id)),
-    token: null, completed: false };
+    token: null, completed: false, knownTokens: new Set(state.batches.map(batch => batch.token)), error: "" };
   dismissTooltips();
   marking.set(id, operation);
   renderControls();
@@ -605,13 +607,13 @@ async function markThread(id, action, focusRow = false) {
     acceptState(snapshot);
   } catch (error) {
     if (operation.completed) return;
-    actionError = `Could not mark the notification as ${action}. ${error.message || "Try again."}`;
+    operation.error = `Could not confirm the notification action (${action}). ${error.message || "Try again."}`;
+    operation.recoveryVersion = state.snapshotVersion;
     try {
       acceptState(await api("state"));
     } catch {
-      actionError += " Could not reconnect. Reopen this panel to inspect its current state.";
+      operation.error += " Could not reconnect. Reopen this panel to inspect its current state.";
     }
-    if (marking.get(id) === operation) marking.delete(id);
   } finally {
     render();
     if (!operation.completed && !marking.has(id)) {
@@ -636,13 +638,15 @@ function rowFocusKey({ id, action, focusRow, key, order }) {
 function reconcileRows() {
   const completed = [];
   for (const [id, operation] of marking) {
-    if (!operation.token) {
-      // A retained read row can confirm completion before its acknowledgement arrives.
-      if (operation.action !== "read" || state.lockedThreadIds.includes(id) ||
-          !state.groups.some(group => group.items.some(item => item.id === id && !item.unread))) continue;
-    } else {
-      const batch = state.batches.find(batch => batch.token === operation.token);
-      if (batch && batchRunning(batch)) continue;
+    const batch = state.batches.find(batch => operation.token ? batch.token === operation.token :
+      batch.scope === "thread" && batch.threadId === id && batch.action === operation.action && !operation.knownTokens.has(batch.token));
+    if (batch) {
+      operation.token = batch.token;
+      operation.error = "";
+      if (batchRunning(batch)) continue;
+    } else if (!operation.token) {
+      if (!operation.error || state.snapshotVersion <= operation.recoveryVersion) continue;
+      actionError = operation.error;
     }
     marking.delete(id);
     operation.completed = true;
@@ -1455,10 +1459,11 @@ function render(fallbackFocusKey) {
     ? `Development API: ${activeAPI.baseUrl}. Read/done actions affect this API, which may share production data. Desktop alerts are disabled.`
     : "";
   renderControls();
-  const rowError = state?.batches.filter(batch => batch.scope === "thread" && !batchRunning(batch))
+  const rowError = state?.batches.filter(batch => batch.scope === "thread" && !batchRunning(batch) && batch.status !== "completed")
     .map(batch => `Could not mark the notification as ${batch.action}. ${batch.error?.message ??
       "The notification changed before it could be updated. Review its current state and try again."}`).join(" ");
-  const error = actionError || rowError || state?.error?.message || connectionError;
+  const pendingRowError = [...marking.values()].map(operation => operation.error).filter(Boolean).join(" ");
+  const error = actionError || rowError || pendingRowError || state?.error?.message || connectionError;
   const loading = state?.status === "idle" || state?.status === "loading";
   const filtered = Boolean(state?.filters.query || (state && state.filters.attention !== "all"));
   const cleared = Boolean(state && !state.loaded && state.hasMore);
@@ -1542,6 +1547,7 @@ function render(fallbackFocusKey) {
   $("empty-refresh").hidden = !cleared || !state.needsRefresh || Boolean(error) || loading;
   renderBatch();
   positionSettings();
+  renderedSnapshotVersion = state.snapshotVersion;
 }
 
 function revealAttentionTab(tab) {

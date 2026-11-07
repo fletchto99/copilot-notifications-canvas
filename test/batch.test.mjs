@@ -678,6 +678,89 @@ test("queued row failures remain visible until retry or refresh, and closing can
   assert.deepEqual(inbox.batch.snapshots(), []);
 });
 
+test("successful writes clear only that thread's stale failures in every panel", async t => {
+  for (const otherPanel of [false, true]) {
+    for (const action of ["read", "done"]) {
+      let fail = true;
+      const { inbox, client, advance } = await fixture({ run: args => args.includes("GET")
+        ? http([thread("1"), thread("2")]) : fail ? http({}, {}, 500) : args.includes("DELETE") ? "HTTP/2 204 No Content\r\n\r\n" : ok });
+      const other = new Inbox(client);
+      t.after(() => { inbox.close(); other.close(); });
+      await other.refresh();
+      const stale = inbox.queueThread({ id: "1" }, "done");
+      await inbox.batch.done;
+      advance(120_000);
+      const unrelated = inbox.queueThread({ id: "2" }, "done");
+      await inbox.batch.done;
+      advance(120_000);
+      fail = false;
+      const writer = otherPanel ? other : inbox;
+      if (otherPanel) await writer[action === "read" ? "markRead" : "markDone"]({ id: "1" });
+      else {
+        await writer.setFilters({ query: "notification 1" });
+        start(writer, "example/widgets", action);
+        await writer.batch.done;
+      }
+      assert.equal(inbox.batch.operations.has(stale), false);
+      assert.equal(inbox.batch.operations.has(unrelated), true);
+      assert.deepEqual(inbox.snapshot().batches.map(batch => batch.threadId), ["2"]);
+    }
+  }
+});
+
+test("completed row receipts survive lost snapshots and refreshes until their rendered version is acknowledged", async t => {
+  const { inbox } = await fixture();
+  t.after(() => inbox.close());
+  const before = inbox.snapshot();
+  const token = inbox.queueThread({ id: "1" }, "done");
+  await inbox.batch.done;
+  inbox.batch.acknowledge(String(before.snapshotVersion));
+  assert.equal(inbox.batch.operations.has(token), true, "an undisclosed outcome cannot be acknowledged");
+  const completed = inbox.snapshot();
+  assert.equal(completed.batches[0].status, "completed");
+  inbox.batch.acknowledge(String(before.snapshotVersion));
+  await inbox.setFilters({ query: "missing" });
+  await inbox.refresh({ force: true });
+  assert.equal(inbox.batch.operations.has(token), true);
+  assert.doesNotMatch(JSON.stringify(inbox.summary()), /token|threadId|resultVersion|Synthetic|example\//);
+  assert.equal(inbox.summary().batch, null);
+  assert.deepEqual(inbox.summary().batches, []);
+  inbox.batch.acknowledge(String(completed.snapshotVersion));
+  assert.equal(inbox.batch.operations.has(token), false);
+  inbox.batch.acknowledge(String(completed.snapshotVersion));
+  assert.deepEqual(inbox.snapshot().batches, []);
+});
+
+test("a snapshot shares retry indexes across large failed batches and computes each batch once", async t => {
+  const rows = Array.from({ length: 1000 }, (_, index) => thread(String(index + 1), {
+    repository: { full_name: index < 500 ? "example/widgets" : "example/other" },
+  }));
+  const { inbox, client, advance } = await fixture({ run: args => args.includes("GET") ? http(rows) : http({}, {}, 500) });
+  t.after(() => inbox.close());
+  start(inbox);
+  await inbox.batch.done;
+  advance(120_000);
+  start(inbox, "example/other");
+  await inbox.batch.done;
+  const loaded = t.mock.method(inbox, "loadedItems");
+  const groups = t.mock.method(inbox, "groups");
+  const cache = t.mock.method(client.cache, "values");
+  const snapshots = t.mock.method(inbox.batch, "snapshot");
+  const state = inbox.snapshot();
+  assert.deepEqual(state.batches.map(batch => batch.retryableThreadIds.length), [500, 500]);
+  assert.equal(state.batch, state.batches.at(-1));
+  assert.equal(loaded.mock.callCount(), 1);
+  assert.equal(groups.mock.callCount(), 1);
+  assert.equal(cache.mock.callCount(), 1);
+  assert.equal(snapshots.mock.callCount(), 2);
+  client.cache.set("newer-synthetic-page", {
+    sequence: inbox.pages[0].sequence + 1,
+    items: normalizeThreads([thread("1", { unread: false })]),
+  });
+  assert.deepEqual(inbox.snapshot().batches.map(batch => batch.retryableThreadIds.length), [499, 500],
+    "the next snapshot must rebuild indexes after a newer cached response");
+});
+
 test("protected snapshots distinguish queued rows from dispatched writes without leaking identities in summaries", async t => {
   const releases = [];
   const { inbox, client } = await fixture({ run: args => args.includes("GET") ? http([thread("1"), thread("2")]) :

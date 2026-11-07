@@ -337,6 +337,9 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
       setSubjectView({ groupBy: groupBy ?? settings?.groupBy ?? subjectView.groupBy, timeZone });
       if (path === "/api/state" || (path === "/api/settings" && req.method === "GET")) {
         if (req.method !== "GET") throw new InboxError("method", "Only GET is supported.", 405);
+        if (path === "/api/state" && req.headers["x-notification-acknowledged-version"] !== undefined) {
+          inbox.batch.acknowledge(req.headers["x-notification-acknowledged-version"]);
+        }
         if (path === "/api/settings") {
           const settings = await preferences.read();
           inbox.setMatchGitHubInbox(settings.matchGitHubInbox);

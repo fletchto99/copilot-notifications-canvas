@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { InboxError, uniqueThreads } from "./model.mjs";
+import { groupThreadsByDate, InboxError, uniqueThreads } from "./model.mjs";
 
 export function selectionKey(group, filters) {
   return createHash("sha256").update(JSON.stringify([
@@ -107,19 +107,29 @@ export class NotificationBatch {
     return operation.token;
   }
 
-  eligible(operation, item) {
-    const current = this.inbox.loadedItems().find(row => row.id === item.id);
+  retryContext(items = this.inbox.loadedItems(), groups = this.inbox.groups(items)) {
+    const loaded = new Map(items.map(item => [item.id, item]));
+    const sequences = new Map(this.inbox.pages.flatMap(page => page.items.map(item => [item, page.sequence])));
+    const invalidated = new Set();
+    for (const page of this.inbox.client.cache.values()) {
+      for (const row of uniqueThreads(page.items)) {
+        const current = loaded.get(row.id);
+        // Other views can retain older read states. Only newer responses invalidate a selection.
+        if (!current || page.sequence < sequences.get(current)) continue;
+        if (row.unread !== current.unread || row.repository !== current.repository || row.updatedAt > current.updatedAt) {
+          invalidated.add(row.id);
+        }
+      }
+    }
+    return { loaded, invalidated, shown: new Map(groups.flatMap(group => group.items.map(item => [item.id, item]))), dates: new Map() };
+  }
+
+  eligible(operation, item, context = this.retryContext(this.inbox.loadedItems(), [])) {
+    const current = context.loaded.get(item.id);
     if (!current || current.repository !== item.repository || current.updatedAt !== item.updatedAt ||
         current.unread !== item.unread || (operation.action === "read" && !current.unread) ||
         (operation.scope === "repository" && current.repository !== operation.repository)) return false;
-    const sequence = this.inbox.pages.find(page => page.items.includes(current)).sequence;
-    // Other views can retain older read states. Only newer responses can invalidate this selection.
-    for (const page of this.inbox.client.cache.values()) {
-      if (page.sequence < sequence) continue;
-      if (uniqueThreads(page.items).some(row => row.id === item.id &&
-          (row.unread !== item.unread || row.repository !== item.repository || row.updatedAt > item.updatedAt))) return false;
-    }
-    return true;
+    return !context.invalidated.has(item.id);
   }
 
   async run(operation) {
@@ -164,7 +174,7 @@ export class NotificationBatch {
         operation.cancelled || signal.aborted ? "cancelled" : "partial";
     } finally {
       this.inbox.client.releaseThreads(operation.owner);
-      if (this.disposed || operation.status === "completed") this.operations.delete(operation.token);
+      if (this.disposed || (operation.status === "completed" && operation.scope !== "thread")) this.operations.delete(operation.token);
     }
   }
 
@@ -190,19 +200,37 @@ export class NotificationBatch {
     this.operations.delete(operation.token);
   }
 
-  retryItems(operation) {
-    const selection = operation.scope === "date" ? this.inbox.dateSelection(operation.date, operation.timeZone) :
-      ["shown", "thread"].includes(operation.scope) ? this.inbox.shownSelection() :
-      this.inbox.groups().find(group => group.repository === operation.repository);
-    const shown = new Set(selection?.items.map(item => item.id));
+  retryItems(operation, context = this.retryContext()) {
+    let shown = context.shown;
+    if (operation.scope === "date") {
+      if (!context.dates.has(operation.timeZone)) {
+        context.dates.set(operation.timeZone, new Map(groupThreadsByDate([...shown.values()], operation.timeZone)
+          .map(group => [group.date, new Set(group.items.map(item => item.id))])));
+      }
+      shown = context.dates.get(operation.timeZone).get(operation.date) ?? new Set();
+    }
     return operation.items.filter(item => ["pending", "failed"].includes(item.result) &&
-      shown.has(item.id) && this.eligible(operation, item));
+      shown.has(item.id) && this.eligible(operation, item, context));
   }
 
   clearRowResults(id, exceptToken) {
     for (const operation of this.operations.values()) {
       if (operation.token !== exceptToken && operation.scope === "thread" && !this.isRunning(operation) &&
+          operation.status !== "completed" &&
           (id === undefined || operation.items[0].id === id)) this.operations.delete(operation.token);
+    }
+  }
+
+  acknowledge(version) {
+    if (typeof version !== "string" || !/^(0|[1-9]\d{0,15})$/.test(version) ||
+        !Number.isSafeInteger(Number(version)) || Number(version) > this.inbox.snapshotVersion) {
+      throw new InboxError("invalid_snapshot", "Acknowledge only a previously received notification snapshot.", 400);
+    }
+    for (const operation of this.operations.values()) {
+      if (operation.scope === "thread" && operation.status === "completed" &&
+          operation.resultVersion !== undefined && operation.resultVersion <= Number(version)) {
+        this.operations.delete(operation.token);
+      }
     }
   }
 
@@ -213,7 +241,7 @@ export class NotificationBatch {
     this.operations.delete(operation.token);
   }
 
-  snapshot(operation = [...this.operations.values()].at(-1)) {
+  snapshot(operation = [...this.operations.values()].at(-1), context) {
     if (!operation) return null;
     const count = result => operation.items.filter(item => item.result === result).length;
     return {
@@ -224,13 +252,20 @@ export class NotificationBatch {
       skipped: count("skipped"), notAttempted: count("pending") - Number(operation.inFlight),
       inFlight: operation.inFlight, searchActive: operation.searchActive,
       remainingThreadIds: operation.items.filter(item => ["pending", "failed"].includes(item.result)).map(item => item.id),
-      retryableThreadIds: this.isRunning(operation) ? [] : this.retryItems(operation).map(item => item.id),
+      retryableThreadIds: this.isRunning(operation) || operation.status === "completed" ? [] : this.retryItems(operation, context).map(item => item.id),
       error: operation.error, retryAt: this.inbox.client.blockedUntil,
     };
   }
 
-  snapshots() {
-    return [...this.operations.values()].map(operation => this.snapshot(operation));
+  snapshots(items, groups, version) {
+    let context;
+    return [...this.operations.values()].map(operation => {
+      if (!this.isRunning(operation) && operation.status !== "completed") context ??= this.retryContext(items, groups);
+      if (version !== undefined && operation.scope === "thread" && operation.status === "completed") {
+        operation.resultVersion ??= version;
+      }
+      return this.snapshot(operation, context);
+    });
   }
 
   close() {

@@ -24,6 +24,7 @@ export class Inbox {
         ...page,
         items: page.items.flatMap(item => item.id !== id ? [item] : retain ? [{ ...item, unread: false }] : []),
       }));
+      this.batch.clearRowResults(id);
       this.needsRefresh = true;
     };
     client.threadListeners.add(this.onThreadUpdated);
@@ -85,8 +86,10 @@ export class Inbox {
   snapshot() {
     const items = this.loadedItems();
     const groups = this.groups(items);
+    const snapshotVersion = ++this.snapshotVersion;
+    const batches = this.batch.snapshots(items, groups, snapshotVersion);
     return {
-      snapshotVersion: ++this.snapshotVersion,
+      snapshotVersion,
       filters: { ...this.filters },
       matchGitHubInbox: this.matchGitHubInbox,
       status: this.busy ? "loading" : this.error ? (this.pages.length ? "stale" : "error") :
@@ -103,8 +106,8 @@ export class Inbox {
       lastFetchedAt: this.pages.length ? Math.min(...this.pages.map(page => page.fetchedAt)) : null,
       nextRefreshAt: Math.max(this.nextRefreshAt, this.client.blockedUntil),
       retryAt: this.client.blockedUntil,
-      batch: this.batch.snapshot(),
-      batches: this.batch.snapshots(),
+      batch: batches.at(-1) ?? null,
+      batches,
       lockedThreadIds: [...new Set([...this.client.pendingThreads, ...this.client.threadReservations.keys()])],
       threadWrites: [...this.client.threadWrites.values()].map(write => ({ ...write })),
       groups,
@@ -114,7 +117,8 @@ export class Inbox {
   summary() {
     const { filters, groups, batch, batches, lockedThreadIds, threadWrites, snapshotVersion, selectionKey, ...state } = this.snapshot();
     const counts = ({ repository, token, date, timeZone, threadId, remainingThreadIds, retryableThreadIds, ...batchCounts }) => batchCounts;
-    return { ...state, batch: batch ? counts(batch) : null, batches: batches.map(counts), mode: filters.mode, attention: filters.attention,
+    const operations = batches.filter(batch => batch.scope !== "thread" || batch.status !== "completed");
+    return { ...state, batch: operations.length ? counts(operations.at(-1)) : null, batches: operations.map(counts), mode: filters.mode, attention: filters.attention,
       searchActive: Boolean(filters.query), repositories: groups.length };
   }
 

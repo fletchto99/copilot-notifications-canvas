@@ -350,6 +350,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       if (path === "/api/refresh") await inbox.refresh(JSON.parse(options.body));
       if (path === "/api/more") await inbox.more();
       if (path === "/api/state") {
+        inbox.batch.acknowledge(options.headers["X-Notification-Acknowledged-Version"]);
         const state = snapshot();
         if (onState) await onState();
         return { ok: true, json: async () => state };

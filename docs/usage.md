@@ -170,8 +170,13 @@ A pending row action locks only that row and group actions that include it.
 Other rows remain actionable, including rows in the same group.
 Row actions are acknowledged when queued, then progress and results arrive
 through status updates. A long wait in the write queue does not report a failed
-write. Rows change only after confirmation; failures remain visible until an
-explicit retry or a successful refresh. Status updates preserve the next-row
+write. If the acknowledgement is lost, status updates recover the accepted
+operation's actual result without sending the write again. Disconnection remains
+explicit until its outcome can be checked; a row disappearing under a filter is
+not proof of success.
+Rows change only after confirmation; failures remain visible until an
+explicit retry, a successful refresh, or a successful update to that notification
+from a group action or another panel. Status updates preserve the next-row
 keyboard focus target even if they arrive before the action acknowledgement.
 
 ### Act on a group

@@ -258,6 +258,54 @@ test("queued row acknowledgements survive more than the action request deadline 
   }
 });
 
+for (const packaged of [false, true]) {
+  test.describe(`lost row acknowledgements (${packaged ? "packaged" : "source"})`, () => {
+    test.use({ packaged });
+    for (const action of ["read", "done"]) {
+      for (const matchGitHubInbox of [false, true]) {
+        test(`${action} recovers its queued outcome in ${matchGitHubInbox ? "All" : "Unread only"}`, async ({ page, canvas }) => {
+          canvas.rows.splice(2);
+          await canvas.preferences.update({ matchGitHubInbox });
+          const held = gate();
+          canvas.setRequestHook(async args => {
+            if (args.includes(action === "read" ? "PATCH" : "DELETE")) await held.promise;
+          });
+          await page.route(`**/api/${action}`, async route => {
+            const response = await route.fetch();
+            await route.fulfill({ response, body: "{" });
+          });
+          await page.goto(canvas.url);
+          try {
+            const button = page.locator(`[data-focus-key="${action}:1"]`);
+            await button.focus();
+            const recovered = page.waitForResponse(async response => response.url().endsWith("/api/state") &&
+              (await response.json()).batches.some(batch => batch.scope === "thread" && batch.threadId === "1" && batch.action === action));
+            await button.press("Enter");
+            const state = await (await recovered).json();
+            expect(state.batches.some(batch => batch.scope === "thread" && batch.threadId === "1" && batch.action === action)).toBe(true);
+            await expect(button).toBeDisabled();
+            await expect(page.locator("#notice")).toBeHidden();
+            held.release();
+            const retained = action === "read" && matchGitHubInbox;
+            await expect(page.locator(".row")).toHaveCount(retained ? 2 : 1);
+            await expect(button).toHaveCount(0);
+            await expect(page.locator(`[data-focus-key="${retained ? "done:1" : `${action}:2`}"]`)).toBeFocused();
+            await expect(page.locator("#notice")).toBeHidden();
+            const acknowledged = await page.waitForResponse(async response => response.url().endsWith("/api/state") &&
+              (await response.json()).batches.length === 0, { timeout: 10_000 });
+            expect(acknowledged.request().headers()["x-notification-acknowledged-version"]).toMatch(/^[1-9]\d*$/);
+            expect(canvas.writes).toEqual(["1"]);
+            expect(canvas.doneWrites).toEqual(action === "done" ? ["1"] : []);
+          } finally {
+            held.release();
+            await page.unrouteAll({ behavior: "wait" });
+          }
+        });
+      }
+    }
+  });
+}
+
 for (const moveFocus of [false, true]) {
   test(`All-view Read completion restores focus before acknowledgement (${moveFocus ? "new focus" : "Done button"})`, async ({ page, canvas }) => {
     canvas.rows.splice(2);

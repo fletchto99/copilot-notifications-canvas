@@ -468,3 +468,114 @@ test("late Read acknowledgements cannot clear a newer Done action or report a co
     assert.deepEqual(ui.deletions, ["/notifications/threads/1"]);
   }
 });
+
+test("lost acknowledgements recover queued Read and Done outcomes instead of reporting transport failures", async t => {
+  for (const action of ["read", "done"]) {
+    for (const matchGitHubInbox of [false, true]) {
+      for (const failWrite of [false, true]) {
+        let release;
+        const ui = await renderer({ initialRows: [thread("1"), thread("2")], storedSettings: { matchGitHubInbox },
+          onActionResponse: () => { throw new Error("Synthetic lost acknowledgement"); },
+          onWrite: () => new Promise(resolve => {
+            release = () => resolve(failWrite ? http({}, {}, 500) : `HTTP/2 ${action === "done" ? 204 : 205} Synthetic\r\n\r\n`);
+          }),
+        });
+        t.after(() => { release?.(); ui.window.events.pagehide(); ui.inbox.close(); });
+        const button = ui.ids.get("groups").querySelectorAll("button").find(button => button.dataset.focusKey === `${action}:1`);
+        button.focus();
+        await button.events.click();
+        await settle();
+        assert.equal(ui.ids.get("notice").hidden, true);
+        assert.equal(runInContext('Boolean(marking.get("1").token)', ui.context), true);
+        await runInContext('update("filters", { query: "notification 2" })', ui.context);
+        assert.equal(runInContext('marking.has("1")', ui.context), true, "filtering out the row is not completion");
+        release();
+        await finishRows(ui);
+        assert.equal(runInContext("marking.size", ui.context), 0);
+        assert.equal(ui.ids.get("notice").hidden, !failWrite);
+        if (failWrite) {
+          assert.match(ui.ids.get("notice").textContent, /HTTP 500/);
+          assert.doesNotMatch(ui.ids.get("notice").textContent, /lost acknowledgement/);
+        } else {
+          await runInContext("update()", ui.context);
+          assert.deepEqual(ui.inbox.batch.snapshots(), [], "the next state poll acknowledges the rendered receipt");
+        }
+        assert.equal(ui.patches.length + ui.deletions.length, 1);
+      }
+    }
+  }
+});
+
+test("completed Done receipts resolve tokenless actions before lost acknowledgements without stealing moved focus", async t => {
+  for (const moveFocus of [false, true]) {
+    let rejectAcknowledgement;
+    const ui = await renderer({ initialRows: [thread("1"), thread("2")],
+      onActionResponse: () => new Promise((_resolve, reject) => { rejectAcknowledgement = reject; }) });
+    t.after(() => { rejectAcknowledgement?.(new Error("Synthetic shutdown")); ui.window.events.pagehide(); ui.inbox.close(); });
+    const first = ui.ids.get("groups").querySelectorAll(".row-link")[0];
+    first.focus();
+    const pending = runInContext('markThread("1", "done", true)', ui.context);
+    await settle();
+    await ui.inbox.batch.done;
+    if (moveFocus) ui.ids.get("search").focus();
+    await runInContext("update()", ui.context);
+    const expected = moveFocus ? ui.ids.get("search") : ui.ids.get("groups").querySelectorAll(".row-link")[0];
+    assert.equal(ui.document.activeElement, expected);
+    assert.equal(runInContext("marking.size", ui.context), 0);
+    rejectAcknowledgement(new Error("Synthetic lost acknowledgement"));
+    await pending;
+    assert.equal(ui.ids.get("notice").hidden, true);
+    assert.equal(ui.document.activeElement, expected);
+    assert.deepEqual(ui.deletions, ["/notifications/threads/1"]);
+  }
+});
+
+test("tracking survives failed acknowledgement recovery until a later snapshot identifies the outcome", async t => {
+  let release;
+  let failState = false;
+  const ui = await renderer({ initialRows: [thread("1"), thread("2")],
+    onWrite: () => new Promise(resolve => { release = () => resolve("HTTP/2 204 No Content\r\n\r\n"); }),
+    onActionResponse: () => { failState = true; throw new Error("Synthetic lost acknowledgement"); },
+    onState: () => { if (failState) throw new Error("Synthetic failed recovery"); },
+  });
+  t.after(() => { release?.(); ui.window.events.pagehide(); ui.inbox.close(); });
+  await runInContext('markThread("1", "done")', ui.context);
+  await settle();
+  assert.equal(runInContext('marking.has("1")', ui.context), true);
+  assert.match(ui.ids.get("notice").textContent, /Could not confirm.*Could not reconnect/);
+  release();
+  await ui.inbox.batch.done;
+  failState = false;
+  await runInContext("update()", ui.context);
+  assert.equal(runInContext("marking.size", ui.context), 0);
+  assert.equal(ui.ids.get("notice").hidden, true);
+});
+
+test("an unaccepted action stays an explicit failure when filtering hides the row", async t => {
+  const ui = await renderer({ initialRows: [thread("1"), thread("2")] });
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  ui.setOffline(true);
+  await runInContext('markThread("1", "done")', ui.context);
+  assert.equal(runInContext('marking.has("1")', ui.context), true);
+  ui.setOffline(false);
+  await runInContext('update("filters", { query: "notification 2" })', ui.context);
+  assert.equal(runInContext("marking.size", ui.context), 0);
+  assert.match(ui.ids.get("notice").textContent, /Could not confirm.*Synthetic connection failure/);
+  assert.deepEqual(ui.deletions, []);
+});
+
+test("a successful group action clears the old row failure notice without a refresh", async t => {
+  const ui = await renderer({ initialRows: [thread("1"), thread("2")],
+    onWrite: (_path, count) => count === 1 ? http({}, {}, 500) : "HTTP/2 204 No Content\r\n\r\n" });
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  await runInContext('markThread("1", "done")', ui.context);
+  await finishRows(ui);
+  assert.match(ui.ids.get("notice").textContent, /Could not mark.*HTTP 500/);
+  ui.advance();
+  await runInContext("update()", ui.context);
+  await controls(ui).done.events.click();
+  await ui.inbox.batch.done;
+  await runInContext("update()", ui.context);
+  assert.equal(ui.ids.get("notice").hidden, true);
+  assert.deepEqual(ui.deletions, ["/notifications/threads/1", "/notifications/threads/1", "/notifications/threads/2"]);
+});
