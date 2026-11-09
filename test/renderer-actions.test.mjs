@@ -269,6 +269,33 @@ test("row reads focus the retained row's Done action across browser focus behavi
   }
 });
 
+test("a settings response cannot redirect focus from a pending row action to Search", async t => {
+  for (const retainDisabledFocus of [false, true]) {
+    let releaseSettings;
+    let releaseWrite;
+    let holdSettings = false;
+    const ui = await renderer({
+      retainDisabledFocus,
+      onSettings: () => holdSettings && new Promise(resolve => { releaseSettings = resolve; }),
+      onWrite: () => new Promise(resolve => {
+        releaseWrite = () => resolve("HTTP/2 205 Reset Content\r\n\r\n");
+      }),
+    });
+    t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+    const read = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.focusKey === "read:1");
+    read.focus();
+    holdSettings = true;
+    const settings = runInContext("settingsRequest()", ui.context);
+    await read.events.click();
+    releaseSettings();
+    await settings;
+    assert.notEqual(ui.document.activeElement, ui.ids.get("search"));
+    releaseWrite();
+    await finishRows(ui);
+    assert.equal(ui.document.activeElement.dataset.focusKey, "done:1");
+  }
+});
+
 test("row reads retain focus in their group without expanding another collapsed group", async t => {
   for (const groupBy of ["repo", "date"]) {
     for (const retainDisabledFocus of [false, true]) {

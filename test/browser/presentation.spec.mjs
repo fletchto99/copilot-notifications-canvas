@@ -156,9 +156,24 @@ for (const packaged of [false, true]) {
       await page.clock.pauseAt(new Date(Date.now() + 1000));
       await first.focus();
       const original = await first.elementHandle();
+      const acknowledged = [];
+      page.on("request", request => {
+        if (new URL(request.url()).pathname === "/api/state") {
+          acknowledged.push(Number(request.headers()["x-notification-acknowledged-version"]));
+        }
+      });
       const poll = page.waitForResponse(response => response.url().endsWith("/api/state"));
       await page.clock.runFor(5000);
-      await poll;
+      const response = await poll;
+      let snapshotVersion;
+      // The next state request acknowledges only snapshots the renderer has finished rendering.
+      await Promise.all([
+        response.json().then(snapshot => { snapshotVersion = snapshot.snapshotVersion; }),
+        expect.poll(async () => {
+          await page.clock.runFor(5000);
+          return snapshotVersion !== undefined && acknowledged.some(version => version >= snapshotVersion);
+        }).toBe(true),
+      ]);
       await expect(first).toBeFocused();
       expect(await original.evaluate(node => node.isConnected)).toBe(true);
       expect(canvas.requests.filter(path => path.startsWith("/notifications?"))).toHaveLength(2);
