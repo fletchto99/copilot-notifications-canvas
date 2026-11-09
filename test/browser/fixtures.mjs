@@ -1,7 +1,18 @@
+/* global document */
 import { test as base, expect } from "@playwright/test";
 import { createCanvasFixture } from "../canvas-fixtures.mjs";
 
 export { expect };
+
+export async function openSettings(page) {
+  await Promise.all([
+    page.evaluate(() => new Promise(resolve => {
+      document.getElementById("settings").addEventListener("toggle", () => resolve(), { once: true });
+    })),
+    page.locator("#settings-toggle").click(),
+  ]);
+  await expect(page.locator("#theme")).toBeEnabled();
+}
 
 export const test = base.extend({
   assetFailure: [false, { option: true }],

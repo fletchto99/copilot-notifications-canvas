@@ -41,7 +41,7 @@ for (const packaged of [false, true]) {
       await page.goto(canvas.url);
       await expect(page.locator(".row")).toHaveCount(50);
       await viewportReady;
-      const results = await page.evaluate(() => {
+      const results = await page.evaluate(async () => {
         const links = [...document.querySelectorAll(".row-link")];
         const originals = links.map(link => link.getBoundingClientRect);
         let measurements = 0;
@@ -49,11 +49,14 @@ for (const packaged of [false, true]) {
           link.getBoundingClientRect = function() { measurements++; return originals[index].call(this); };
         });
         try {
-          return ["scroll", "resize"].map(event => {
+          const results = [];
+          for (const event of ["scroll", "resize"]) {
             measurements = 0;
             window.dispatchEvent(new Event(event));
-            return { event, measurements };
-          });
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            results.push({ event, measurements });
+          }
+          return results;
         } finally {
           links.forEach((link, index) => { link.getBoundingClientRect = originals[index]; });
         }
