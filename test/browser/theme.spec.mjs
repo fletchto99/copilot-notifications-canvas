@@ -1,17 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
-import { test, expect } from "./fixtures.mjs";
+import { test, expect, openSettings } from "./fixtures.mjs";
 
 const rgb = hex => `rgb(${hex.slice(1).match(/../g).map(value => parseInt(value, 16)).join(", ")})`;
-
-async function openSettings(page) {
-  await Promise.all([
-    page.evaluate(() => new Promise(resolve => {
-      document.getElementById("settings").addEventListener("toggle", () => resolve(), { once: true });
-    })),
-    page.locator("#settings-toggle").click(),
-  ]);
-  await expect(page.locator("#theme")).toBeEnabled();
-}
 
 async function expectNativeTheme(page, mode, background, foreground) {
   await expect(page.locator("html")).toHaveCSS("color-scheme", mode);

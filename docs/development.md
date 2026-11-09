@@ -277,6 +277,11 @@ computed styles for options in a closed picker. Intentionally disabled or hidden
 customizable pickers are not inspectable until enabled or shown.
 Opening Settings also waits for its native `toggle` event and settings load:
 the panel can be visible before that deferred event disables its controls.
+Hidden-polling checks observe local requests after the visibility callback and
+advance controlled clocks past a due refresh. Layout probes stay installed
+through animation frames. DOM-identity checks wait for the renderer to acknowledge
+the specific snapshot version; receiving HTTP headers alone does not prove that
+the response was consumed or rendered.
 
 Windows lock tests preserve existing files and directory links before publishing
 candidate directories: a failed directory rename is not a safe guard on Windows.
