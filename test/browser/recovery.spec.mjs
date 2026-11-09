@@ -156,6 +156,61 @@ for (const action of ["read", "done"]) {
   });
 }
 
+for (const action of ["read", "done"]) {
+  test(`row ${action} starts its spinner without waiting for the progress timer`, async ({ page, canvas }) => {
+    canvas.rows.splice(2);
+    const held = gate();
+    canvas.setRequestHook(args => args.includes("PATCH") || args.includes("DELETE") ? held.promise : undefined);
+    await page.clock.install();
+    await page.goto(canvas.url);
+    await expect(page.locator(".row")).toHaveCount(2);
+    await page.clock.pauseAt(new Date(Date.now() + 1000));
+    const button = page.locator(`[data-focus-key="${action}:1"]`);
+    try {
+      const acknowledgement = page.waitForResponse(response => response.url().endsWith(`/api/${action}`));
+      await button.click();
+      const snapshot = await (await acknowledgement).json();
+      expect(snapshot.batches.find(batch => batch.token === snapshot.rowActionToken).inFlight).toBe(false);
+      await expect(button).toHaveAttribute("data-write-state", "active");
+      expect(await button.evaluate(node => getComputedStyle(node, "::after").animationName)).toBe("refresh-spin");
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      expect(await button.evaluate(node => getComputedStyle(node, "::after").animationName)).toBe("none");
+    } finally {
+      held.release();
+    }
+  });
+}
+
+test("a row waiting for a shared write slot stays stationary until dispatched", async ({ page, canvas }) => {
+  canvas.rows.splice(11);
+  for (const [index, row] of canvas.rows.entries()) row.repository.full_name = index < 10 ? "example/widgets" : "example/other";
+  const pool = gate();
+  const row = gate();
+  const started = [];
+  canvas.setRequestHook(args => {
+    if (!args.includes("PATCH") && !args.includes("DELETE")) return;
+    const id = args.at(-1).split("/").at(-1);
+    started.push(id);
+    return id === "11" ? row.promise : pool.promise;
+  });
+  await page.goto(canvas.url);
+  try {
+    await page.locator('[data-focus-key="bulk:example/widgets"]').click();
+    await expect.poll(() => started.length).toBe(10);
+    const done = page.locator('[data-focus-key="done:11"]');
+    await done.click();
+    await expect(done).toHaveAttribute("data-write-state", "queued");
+    expect(await done.evaluate(node => getComputedStyle(node, "::after").animationName)).toBe("none");
+    expect(started).not.toContain("11");
+    pool.release();
+    await expect(done).toHaveAttribute("data-write-state", "active");
+    expect(await done.evaluate(node => getComputedStyle(node, "::after").animationName)).toBe("refresh-spin");
+  } finally {
+    pool.release();
+    row.release();
+  }
+});
+
 test("Done waits for confirmation, reports failures, and never retries automatically", async ({ page, canvas }) => {
   canvas.rows.splice(2);
   await page.clock.install();
@@ -181,9 +236,6 @@ test("Done waits for confirmation, reports failures, and never retries automatic
     await expect(done).toHaveAttribute("aria-busy", "true");
     await expect(done.locator("svg")).toHaveCount(1);
     await expect(done.locator("svg")).toBeHidden();
-    await expect(done).toHaveAttribute("data-write-state", "queued");
-    expect(await done.evaluate(node => getComputedStyle(node, "::after").animationName)).toBe("none");
-    await page.clock.fastForward(1000);
     await expect(done).toHaveAttribute("data-write-state", "active");
     await page.emulateMedia({ reducedMotion: "reduce" });
     expect(await done.evaluate(node => getComputedStyle(node, "::after").animationName)).toBe("none");
@@ -393,7 +445,7 @@ test("a read batch has no Stop control and completes every selected row", async 
     await expect(page.locator(".row.unread")).toHaveCount(0);
     await expect(page.locator(".row")).toHaveCount(2);
     await expect(page.locator("#batch-progress")).toBeHidden();
-    expect(canvas.writes).toEqual(["1", "2"]);
+    expect(canvas.writes.toSorted()).toEqual(["1", "2"]);
   } finally {
     held.release();
   }
@@ -418,6 +470,6 @@ test("failed batches keep rows and recover after the retry deadline without wide
   await retry.click();
   await expect(page.locator(".row.unread")).toHaveCount(1);
   await expect(page.locator(".row")).toHaveCount(3);
-  expect(canvas.writes).toEqual(["1", "2"]);
+  expect(canvas.writes.toSorted()).toEqual(["1", "2"]);
   await expect(page.getByRole("link", { name: /^Synthetic notification 3 / })).toBeVisible();
 });

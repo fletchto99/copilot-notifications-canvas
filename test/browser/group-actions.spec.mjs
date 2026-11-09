@@ -101,7 +101,7 @@ test("repository Done honors attention and search filters without changing the s
   await expect(page.locator(".row")).toHaveCount(1);
   await expect(mentioned).toHaveAttribute("aria-selected", "true");
   await expect(mentioned).toHaveText("Mentioned (2)");
-  expect(canvas.doneWrites).toEqual(["1", "2"]);
+  expect(canvas.doneWrites.toSorted()).toEqual(["1", "2"]);
   expect(canvas.rows.find(row => row.id === "3").unread).toBe(true);
   expect(canvas.rows.find(row => row.id === "4").unread).toBe(true);
   expect(canvas.rows.find(row => row.id === "51").unread).toBe(true);
@@ -174,8 +174,8 @@ for (const width of [320, 960]) {
       await expect(done).toBeVisible();
       await done.click();
       await expect(group).toHaveCount(0);
-      expect(canvas.doneWrites).toEqual(["1", "2"]);
-      expect(canvas.writes).toEqual(["1", "2"]);
+      expect(canvas.doneWrites.toSorted()).toEqual(["1", "2"]);
+      expect(canvas.writes.toSorted()).toEqual(["1", "2"]);
       expect(canvas.rows.find(row => row.id === "3").unread).toBe(true);
       expect(canvas.rows.find(row => row.id === "51").unread).toBe(true);
     });
@@ -208,7 +208,7 @@ test("a Done batch has no Stop control and completes only its original selection
     release();
     await expect(page.locator(".row")).toHaveCount(0);
     await expect(page.locator("#batch-progress")).toBeHidden();
-    expect(canvas.doneWrites).toEqual(["1", "2"]);
+    expect(canvas.doneWrites.toSorted()).toEqual(["1", "2"]);
     expect(canvas.rows.find(row => row.id === "3").unread).toBe(true);
   } finally {
     release();
@@ -233,7 +233,7 @@ test("failed Done batches keep their action after backoff and do not widen retri
   await expect(retry).toBeEnabled();
   await retry.click();
   await expect(page.locator(".row")).toHaveCount(1);
-  expect(canvas.doneWrites).toEqual(["1", "2"]);
+  expect(canvas.doneWrites.toSorted()).toEqual(["1", "2"]);
   await expect(page.locator(".repo-read")).toHaveAccessibleDescription("Mark 1 as read");
   await expect(page.locator(".repo-done")).toBeVisible();
   await expect(page.locator('[data-focus-key="read:3"]')).toBeVisible();
@@ -281,7 +281,7 @@ test("row and group actions lock only overlapping selections and expose independ
     await expect(page.locator('[data-focus-key="done:4"]')).toHaveCount(0);
     await expect(tools).toBeHidden();
     await expect(page.locator('[data-focus-key="done:2"]')).toBeEnabled();
-    expect(new Set(canvas.writes)).toEqual(new Set(["1", "3", "4", "5"]));
+    expect(canvas.writes.toSorted()).toEqual(["1", "3", "4", "5"]);
   } finally {
     release();
   }
@@ -360,7 +360,7 @@ for (const groupBy of ["repo", "date", "none"]) {
       await page.getByRole("searchbox").fill("Needle tool");
       await expect(page.locator(".row")).toHaveCount(1);
       release();
-      await expect.poll(() => canvas.doneWrites).toEqual(["1", "2"]);
+      await expect.poll(() => canvas.doneWrites.toSorted()).toEqual(["1", "2"]);
       await expect(page.locator(".row")).toHaveCount(1);
       await expect(page.getByRole("searchbox")).toBeFocused();
       await expect(page.getByRole("tab", { name: "Assigned (1)", exact: true })).toHaveAttribute("aria-selected", "true");

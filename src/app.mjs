@@ -606,6 +606,7 @@ async function markThread(id, action, focusRow = false) {
     }
     operation.token = snapshot.rowActionToken;
     acceptState(snapshot);
+    if (state.batches.some(batch => batch.token === operation.token && batchRunning(batch))) await update();
   } catch (error) {
     if (operation.completed) return;
     operation.error = `Could not confirm the notification action (${action}). ${error.message || "Try again."}`;

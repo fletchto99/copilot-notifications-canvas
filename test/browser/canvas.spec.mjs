@@ -520,8 +520,9 @@ test("repository group controls remain usable for a single matching notification
   await page.getByRole("button", { name: "Mark 2 as done in example/widgets; 2 shown, loaded notifications", exact: true }).click();
   await expect(page.locator(".row")).toHaveCount(0);
   await expect(page.locator(".repo-actions")).toHaveCount(0);
-  expect(canvas.writes).toEqual(["1", "1", "2"]);
-  expect(canvas.doneWrites).toEqual(["1", "2"]);
+  expect(canvas.writes[0]).toBe("1");
+  expect(canvas.writes.slice(1).toSorted()).toEqual(["1", "2"]);
+  expect(canvas.doneWrites.toSorted()).toEqual(["1", "2"]);
 });
 
 for (const groupBy of ["repo", "date", "none"]) {
@@ -585,7 +586,7 @@ test("repository actions affect only shown loaded matches, not another repositor
   await expect(page.locator(".row")).toHaveCount(3);
   await expect(page.locator(".row.unread")).toHaveCount(1);
   await expect(page.locator("#batch-progress")).toBeHidden();
-  expect(canvas.writes).toEqual(["1", "2"]);
+  expect(canvas.writes.toSorted()).toEqual(["1", "2"]);
   expect(canvas.rows.find(row => row.id === "3").unread).toBe(true);
   expect(canvas.rows.find(row => row.id === "51").unread).toBe(true);
   await expect(page.getByRole("searchbox", { name: searchName })).toBeEnabled();

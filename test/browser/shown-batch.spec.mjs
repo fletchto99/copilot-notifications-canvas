@@ -55,8 +55,8 @@ test.describe("All notifications group", () => {
       }
       await expect(action === "read" ? root.locator(".repo-toggle") : page.getByRole("searchbox")).toBeFocused();
       await expect(page.getByRole("tab", { name: `Mentioned (${action === "read" ? 4 : 1})`, exact: true })).toHaveAttribute("aria-selected", "true");
-      expect(canvas.writes).toEqual(["1", "2", "3"]);
-      expect(canvas.doneWrites).toEqual(action === "done" ? ["1", "2", "3"] : []);
+      expect(canvas.writes.toSorted()).toEqual(["1", "2", "3"]);
+      expect(canvas.doneWrites.toSorted()).toEqual(action === "done" ? ["1", "2", "3"] : []);
       expect(canvas.rows.find(row => row.id === "4").unread).toBe(true);
       expect(canvas.rows.find(row => row.id === "51").unread).toBe(true);
       expect(canvas.requests.some(path => path.startsWith("/notifications?") && !path.includes("page=1"))).toBe(false);
@@ -171,7 +171,7 @@ test("shown batches finish their original scope after switching to repository gr
     release();
     await expect(page.locator(".row")).toHaveCount(0);
     await expect(page.locator("#batch-progress")).toBeHidden();
-    expect(canvas.doneWrites).toEqual(["1", "2", "3"]);
+    expect(canvas.doneWrites.toSorted()).toEqual(["1", "2", "3"]);
   } finally {
     release();
   }
@@ -196,7 +196,7 @@ test("failed shown batches retry only their unchanged selection after backoff", 
   await retry.click();
   await expect(page.locator(".row")).toHaveCount(1);
   await expect(page.locator(shownGroup).locator(".repo-read")).toHaveAccessibleDescription("Mark 1 as read");
-  expect(canvas.doneWrites).toEqual(["1", "2"]);
+  expect(canvas.doneWrites.toSorted()).toEqual(["1", "2"]);
 });
 
 test.describe("packaged list-wide controls", () => {
@@ -215,6 +215,6 @@ test.describe("packaged list-wide controls", () => {
     await page.getByRole("button", { name: "Mark 2 as done; 2 shown, loaded notifications", exact: true }).click();
     await expect(page.locator(".row")).toHaveCount(0);
     await expect(page.locator(shownGroup)).toHaveCount(0);
-    expect(canvas.doneWrites).toEqual(["1", "2"]);
+    expect(canvas.doneWrites.toSorted()).toEqual(["1", "2"]);
   });
 });

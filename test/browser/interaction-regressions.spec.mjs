@@ -101,7 +101,7 @@ for (const packaged of [false, true]) {
         await page.keyboard.up("Enter");
         release();
       }
-      await expect.poll(() => canvas.writes).toEqual(["1", "2"]);
+      await expect.poll(() => canvas.writes.toSorted()).toEqual(["1", "2"]);
       expect(canvas.doneWrites).toEqual([]);
     });
 

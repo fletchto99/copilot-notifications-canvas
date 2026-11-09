@@ -81,7 +81,7 @@ for (const packaged of [false, true]) {
         await expect(page.locator(".repo-read")).toBeHidden();
         release();
         await expect(page.locator(".row")).toHaveCount(0);
-        expect(canvas.doneWrites).toEqual(["1", "2"]);
+        expect(canvas.doneWrites.toSorted()).toEqual(["1", "2"]);
       } finally {
         release();
       }

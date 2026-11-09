@@ -28,7 +28,7 @@ for (const packaged of [false, true]) {
         }
         await expect(page.getByRole("searchbox")).toBeFocused();
         expect(reads()).toHaveLength(1);
-        expect(canvas.doneWrites).toEqual(canvas.rows.map(row => row.id));
+        expect(canvas.doneWrites.toSorted()).toEqual(canvas.rows.map(row => row.id).toSorted());
         expect(canvas.deliveries).toEqual([]);
         const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
         expect(results.violations).toEqual([]);
@@ -59,7 +59,7 @@ for (const packaged of [false, true]) {
       await expect(page.locator("#empty")).toBeHidden();
       await expect(page.getByRole("searchbox")).toBeFocused();
       await expect(page.locator("#more")).toBeEnabled();
-      expect(canvas.writes).toEqual(["1", "2"]);
+      expect(canvas.writes.toSorted()).toEqual(["1", "2"]);
     });
 
     test("failed filters retry on the polling cadence while a foreground refresh is paused", async ({ page, canvas }) => {

@@ -56,6 +56,53 @@ test("an accepted group action remains queued when no write has been dispatched"
   await ui.inbox.batch.done;
 });
 
+test("accepted row actions check dispatch state without waiting for the progress timer", async t => {
+  for (const action of ["read", "done"]) {
+    let release;
+    const held = new Promise(resolve => { release = resolve; });
+    const ui = await renderer({ initialRows: [thread("1"), thread("2")],
+      onWrite: async (_path, _count, method) => {
+        await held;
+        return `HTTP/2 ${method === "DELETE" ? 204 : 205} Synthetic\r\n\r\n`;
+      },
+      onActionResponse: (_path, snapshot) => {
+        const row = snapshot.batches.find(batch => batch.token === snapshot.rowActionToken);
+        assert.equal(row.inFlight, false, "The acknowledgement precedes dispatch");
+      },
+    });
+    t.after(() => { release(); ui.window.events.pagehide(); ui.inbox.close(); });
+    const before = ui.calls.filter(call => call.path === "/api/state").length;
+    const button = ui.ids.get("groups").querySelectorAll("button")
+      .find(button => button.dataset.focusKey === `${action}:1`);
+    button.focus();
+    await button.events.click();
+    await settle();
+    assert.equal(ui.calls.filter(call => call.path === "/api/state").length, before + 1);
+    assert.equal(button.dataset.writeState, "active");
+    assert.equal(groupActionText(button), `Marking as ${action}`);
+    release();
+    await finishRows(ui);
+    assert.equal(ui.document.activeElement.dataset.focusKey, action === "read" ? "done:1" : "done:2");
+  }
+});
+
+test("an accepted row action remains queued when no write has been dispatched", async t => {
+  const ui = await renderer({ initialRows: [thread("1"), thread("2")] });
+  let release;
+  ui.inbox.client.pageQueue = new Promise(resolve => { release = resolve; });
+  t.after(() => { release(); ui.window.events.pagehide(); ui.inbox.close(); });
+  const before = ui.calls.filter(call => call.path === "/api/state").length;
+  const button = ui.ids.get("groups").querySelectorAll("button").find(button => button.dataset.focusKey === "done:1");
+  await button.events.click();
+  await settle();
+  assert.equal(ui.calls.filter(call => call.path === "/api/state").length, before + 1);
+  assert.equal(button.dataset.writeState, "queued");
+  assert.equal(groupActionText(button), "Queued to mark as done");
+  assert.deepEqual(ui.deletions, []);
+  release();
+  await ui.inbox.batch.done;
+});
+
 test("direct Done starts only the counted search selection and disables both actions while running", async t => {
   let release;
   const ui = await renderer({ initialRows: [thread("1"), thread("10"), thread("2")],
