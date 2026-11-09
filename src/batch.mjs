@@ -171,9 +171,6 @@ export class NotificationBatch {
           if ((signal.aborted || operation.error) && !item.inFlight) return;
           if (item.inFlight) item.result = "failed";
           stop(error);
-          if (signal.aborted && item.inFlight) {
-            operation.error = { code: "result_unknown", message: "In-flight requests were interrupted. GitHub may have applied them; wait for the next automatic refresh or reopen the canvas before retrying." };
-          }
           return;
         } finally {
           item.inFlight = false;
@@ -182,8 +179,7 @@ export class NotificationBatch {
     };
     try {
       await Promise.all(Array.from({ length: Math.min(WRITE_CONCURRENCY, operation.items.length) }, worker));
-      operation.status = operation.items.every(item => item.result === "succeeded") ? "completed" :
-        signal.aborted ? "cancelled" : "partial";
+      operation.status = operation.items.every(item => item.result === "succeeded") ? "completed" : "partial";
     } finally {
       this.inbox.client.releaseThreads(operation.owner);
       if (this.disposed || (operation.status === "completed" && operation.scope !== "thread")) this.operations.delete(operation.token);

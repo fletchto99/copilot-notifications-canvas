@@ -5,6 +5,32 @@ import { http, thread } from "../fixtures.mjs";
 const readName = "Mark 2 as read in example/widgets; 2 shown, loaded notifications";
 const doneName = "Mark 2 as done in example/widgets; 2 shown, loaded notifications";
 
+for (const action of ["read", "done"]) {
+  test(`group ${action} starts its spinner without waiting for the progress timer`, async ({ page, canvas }) => {
+    canvas.rows.splice(2);
+    let release;
+    const held = new Promise(resolve => { release = resolve; });
+    canvas.setRequestHook(args => args.includes("PATCH") || args.includes("DELETE") ? held : undefined);
+    await page.clock.install();
+    await page.goto(canvas.url);
+    await expect(page.locator(".row")).toHaveCount(2);
+    await page.clock.pauseAt(new Date(Date.now() + 1000));
+    const button = page.locator(`.repo-${action}`);
+    try {
+      const acknowledgement = page.waitForResponse(response => response.url().endsWith("/api/batch/start"));
+      await button.click();
+      expect((await (await acknowledgement).json()).batch.inFlight).toBe(false);
+      await expect(button).toHaveAttribute("data-write-state", "active");
+      await expect(button).toBeFocused();
+      expect(await button.evaluate(node => getComputedStyle(node, "::after").animationName)).toBe("refresh-spin");
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      expect(await button.evaluate(node => getComputedStyle(node, "::after").animationName)).toBe("none");
+    } finally {
+      release();
+    }
+  });
+}
+
 for (const repository of ["example/ui", "example/notifications-and-workflow-tools", `example/${"long-".repeat(30)}repository`]) {
   test(`repository header wraps by content width for ${repository}`, async ({ page, canvas }, testInfo) => {
     canvas.rows.splice(2);

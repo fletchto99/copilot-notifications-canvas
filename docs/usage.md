@@ -191,7 +191,8 @@ day. Progress and counts appear in that group's header without moving keyboard
 focus away from the chosen action. **Queued** means a write is waiting its turn;
 **Marking** means a request is in flight. Queued indicators stay still; active
 indicators spin unless reduced motion is enabled. Row action tooltips use the
-same queued/active distinction.
+same queued/active distinction. Accepted group actions immediately check their
+dispatch status instead of waiting for the next progress poll.
 
 Independent groups and rows can have actions in progress together. A group action
 locks its selected rows, not the rest of the inbox; overlapping actions are

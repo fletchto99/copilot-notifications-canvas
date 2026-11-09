@@ -11,6 +11,51 @@ function controls(ui, repository = "example/widgets") {
   return { read, done };
 }
 
+test("accepted group actions check dispatch state without waiting for the progress timer", async t => {
+  for (const action of ["read", "done"]) {
+    let release;
+    const held = new Promise(resolve => { release = resolve; });
+    const ui = await renderer({ initialRows: [thread("1"), thread("2")],
+      onWrite: async (_path, _count, method) => {
+        await held;
+        return `HTTP/2 ${method === "DELETE" ? 204 : 205} Synthetic\r\n\r\n`;
+      },
+      onActionResponse: (_path, snapshot) => {
+        assert.equal(snapshot.batch.inFlight, false, "The acknowledgement precedes dispatch");
+      },
+    });
+    t.after(() => { release(); ui.window.events.pagehide(); ui.inbox.close(); });
+    const stateReads = () => ui.calls.filter(call => call.path === "/api/state").length;
+    const before = stateReads();
+    const button = controls(ui)[action];
+    await button.events.click();
+    await settle();
+    assert.equal(stateReads(), before + 1);
+    assert.equal(button.dataset.writeState, "active");
+    assert.equal(ui.document.activeElement, button);
+    assert.equal(groupProgress(ui, "repo:example/widgets"), `Marking 0/2 as ${action}...`);
+    release();
+    await ui.inbox.batch.done;
+  }
+});
+
+test("an accepted group action remains queued when no write has been dispatched", async t => {
+  const ui = await renderer({ initialRows: [thread("1"), thread("2")] });
+  let release;
+  ui.inbox.client.pageQueue = new Promise(resolve => { release = resolve; });
+  t.after(() => { release(); ui.window.events.pagehide(); ui.inbox.close(); });
+  const before = ui.calls.filter(call => call.path === "/api/state").length;
+  const button = controls(ui).done;
+  await button.events.click();
+  await settle();
+  assert.equal(ui.calls.filter(call => call.path === "/api/state").length, before + 1);
+  assert.equal(button.dataset.writeState, "queued");
+  assert.equal(groupProgress(ui, "repo:example/widgets"), "Queued 0/2 as done...");
+  assert.deepEqual(ui.deletions, []);
+  release();
+  await ui.inbox.batch.done;
+});
+
 test("direct Done starts only the counted search selection and disables both actions while running", async t => {
   let release;
   const ui = await renderer({ initialRows: [thread("1"), thread("10"), thread("2")],
@@ -22,7 +67,7 @@ test("direct Done starts only the counted search selection and disables both act
   });
   t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
   await runInContext('update("filters", { query: "notification 1" })', ui.context);
-  const { read, done } = controls(ui);
+  let { read, done } = controls(ui);
   assert.equal(groupActionText(read), "Mark 2 as read");
   assert.equal(groupActionText(done), "Mark 2 as done");
   assert.deepEqual(read.parentNode.parentNode.children.map(anchor => anchor.children[0]), [read, done]);
@@ -34,6 +79,7 @@ test("direct Done starts only the counted search selection and disables both act
   await done.events.click();
   await started;
   await settle();
+  ({ read, done } = controls(ui));
   assert.equal(ui.inbox.batch.snapshot().action, "done");
   assert.equal(ui.inbox.batch.snapshot().total, 2);
   assert.equal(ui.document.activeElement, done);
@@ -371,7 +417,8 @@ test("batch retries ignore locked original targets that are no longer shown", as
   assert.equal(retry.disabled, false);
   assert.deepEqual(ui.inbox.batch.snapshots().find(batch => batch.scope === "repository").retryableThreadIds, ["2"]);
   await retry.events.click();
-  assert.equal(ui.inbox.batch.snapshots().find(batch => batch.scope === "repository").total, 1);
+  assert.equal(ui.inbox.batch.snapshots().find(batch => batch.scope === "repository"), undefined);
+  assert.equal(ui.inbox.batch.snapshots().find(batch => batch.scope === "thread").status, "running");
   release();
   await ui.inbox.batch.done;
   await runInContext("update()", ui.context);

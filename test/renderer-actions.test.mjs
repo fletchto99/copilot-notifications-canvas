@@ -488,7 +488,7 @@ test("repository action starts from one click with no dialog and preserves indep
   });
   const buttons = ui.ids.get("groups").querySelectorAll("button");
   const disclosure = buttons.find(node => node.dataset.disclosure);
-  const groupRead = buttons.find(node => node.dataset.focusKey === "bulk:example/widgets");
+  let groupRead = buttons.find(node => node.dataset.focusKey === "bulk:example/widgets");
   assert.match(groupActionText(groupRead), /Mark 2 as read/);
   assert.equal(disclosure.contains(groupRead), false);
   assert.equal(groupRead.contains(disclosure), false);
@@ -496,10 +496,11 @@ test("repository action starts from one click with no dialog and preserves indep
   groupRead.focus();
   await groupRead.events.click();
   await settle();
+  groupRead = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.focusKey === "bulk:example/widgets");
   assert.deepEqual(ui.patches, ["/notifications/threads/1", "/notifications/threads/2"]);
   assert.deepEqual(ui.calls.filter(call => call.path.startsWith("/api/batch/")).map(call => call.path), ["/api/batch/start"]);
   assert.equal(ui.document.activeElement, groupRead);
-  assert.equal(disclosure.attributes["aria-expanded"], "false");
+  assert.equal(ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.disclosure).attributes["aria-expanded"], "false");
   await runInContext("update()", ui.context);
   assert.match(groupActionText(groupRead), /Marking 1\/2 as read/);
   assert.equal(groupProgress(ui, "repo:example/widgets"), "Marking 1/2 as read...");
@@ -526,12 +527,13 @@ test("one-click repository read honors search, blocks duplicate clicks and retai
       : "HTTP/2 205 Reset Content\r\n\r\n",
   });
   await runInContext('update("filters", { query: "notification 1" })', ui.context);
-  const groupRead = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.focusKey.startsWith("bulk:"));
+  let groupRead = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.focusKey.startsWith("bulk:"));
   assert.equal(groupActionText(groupRead), "Mark 2 as read");
   groupRead.focus();
   const first = groupRead.events.click();
   await groupRead.events.click();
   await first;
+  groupRead = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.focusKey.startsWith("bulk:"));
   assert.equal(ui.ids.get("search").disabled, false);
   assert.equal(ui.inbox.batch.snapshot().total, 2);
   assert.equal(ui.inbox.batch.snapshot().searchActive, true);
@@ -716,9 +718,10 @@ test("changed local polls do not steal focus from pending row reads", async t =>
 
 test("a repository action clicked during local polling is not dropped and cannot receive a stale poll response afterward", async () => {
   let release;
+  let hold = true;
   const ui = await renderer({
     initialRows: [thread("1"), thread("2")],
-    onState: () => new Promise(resolve => { release = resolve; }),
+    onState: () => hold ? new Promise(resolve => { release = resolve; }) : undefined,
   });
   const button = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.repository);
   button.focus();
@@ -727,14 +730,12 @@ test("a repository action clicked during local polling is not dropped and cannot
   assert.equal(button.disabled, false);
   const reading = button.events.click();
   assert.deepEqual(ui.patches, []);
+  hold = false;
   release();
   await polling;
   await reading;
   await ui.inbox.batch.done;
-  const finalPoll = runInContext("update()", ui.context);
-  await settle();
-  release();
-  await finalPoll;
+  await runInContext("update()", ui.context);
   assert.deepEqual(ui.patches, ["/notifications/threads/1", "/notifications/threads/2"]);
   assert.equal(ui.document.querySelectorAll("article").length, 2);
   assert.equal(ui.inbox.summary().unread, 0);

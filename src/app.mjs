@@ -819,6 +819,7 @@ async function batchRequest(action, input, ids = [], returnFocusKey) {
     }
     acceptState(snapshot);
     actionError = "";
+    if (["start", "retry"].includes(action) && batchLocked()) await update();
   } catch (error) {
     failed = true;
     actionError = error.message || "The notification action failed. Try again.";
