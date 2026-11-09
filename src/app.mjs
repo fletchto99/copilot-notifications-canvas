@@ -606,6 +606,7 @@ async function markThread(id, action, focusRow = false) {
     }
     operation.token = snapshot.rowActionToken;
     acceptState(snapshot);
+    if (state.batches.some(batch => batch.token === operation.token && batchRunning(batch))) await update();
   } catch (error) {
     if (operation.completed) return;
     operation.error = `Could not confirm the notification action (${action}). ${error.message || "Try again."}`;
@@ -665,7 +666,7 @@ function batchLocked() {
 }
 
 function batchRunning(batch) {
-  return ["running", "stopping"].includes(batch.status);
+  return batch.status === "running";
 }
 
 function groupForBatch(batch) {
@@ -677,8 +678,7 @@ function groupForBatch(batch) {
 }
 
 function batchProgress(batch) {
-  return batch.status === "stopping" ? "Stopping..." :
-    `${batch.inFlight ? "Marking" : "Queued"} ${batch.succeeded}/${batch.total} as ${batch.action}...`;
+  return `${batch.inFlight ? "Marking" : "Queued"} ${batch.succeeded}/${batch.total} as ${batch.action}...`;
 }
 
 function groupFocus(origin) {
@@ -689,7 +689,7 @@ function groupFocus(origin) {
 function lockedThreads() {
   return new Set([
     ...(state?.lockedThreadIds ?? []), ...marking.keys(),
-    ...[...batchRequests.values()].flat(),
+    ...[...batchRequests.values()].flatMap(request => request.ids),
   ]);
 }
 
@@ -799,10 +799,11 @@ function restoreFocus(previous, preferred) {
 async function batchRequest(action, input, ids = [], returnFocusKey) {
   const requestKey = input.token ?? returnFocusKey;
   if (!visible() || busy || batchRequests.has(requestKey)) return;
-  if (action === "retry") ids = state.batches.find(batch => batch.token === input.token)?.retryableThreadIds ?? [];
+  const retryBatch = action === "retry" ? state.batches.find(batch => batch.token === input.token) : undefined;
+  if (action === "retry") ids = retryBatch?.retryableThreadIds ?? [];
   const locked = lockedThreads();
   if (["start", "retry"].includes(action) && (pendingFilters || ids.some(id => locked.has(id)))) return;
-  batchRequests.set(requestKey, ids);
+  batchRequests.set(requestKey, { ids, action: action === "start" ? input.action ?? "read" : retryBatch?.action });
   batchBusy++;
   let failed = false;
   const previousFocus = document.activeElement;
@@ -820,6 +821,7 @@ async function batchRequest(action, input, ids = [], returnFocusKey) {
     }
     acceptState(snapshot);
     actionError = "";
+    if (["start", "retry"].includes(action) && batchLocked()) await update();
   } catch (error) {
     failed = true;
     actionError = error.message || "The notification action failed. Try again.";
@@ -910,17 +912,14 @@ function renderBatch() {
 function renderBatchView(batch, view) {
   const previousFocus = document.activeElement;
   const controls = [view.retry, view.dismiss];
-  const cancelled = batch.status === "cancelled" && !batch.error;
   const remaining = batch.failed + batch.notAttempted;
   view.progress.hidden = false;
   view.progress.className = "batch-progress";
   const target = batch.scope === "shown" ? "Shown notifications" : batch.scope === "date" ? dateLabel(batch.date) : batch.repository;
   view.progress.setAttribute("aria-label", `Notification operation: ${target}`);
-  view.title.textContent = `${target}: ${cancelled ? "Stopped" : `Some notifications remain to mark as ${batch.action}`}`;
+  view.title.textContent = `${target}: Some notifications remain to mark as ${batch.action}`;
   view.counts.hidden = false;
-  view.counts.textContent = cancelled
-    ? `${batch.succeeded} marked ${batch.action}, ${remaining} remaining${batch.skipped ? `, ${batch.skipped} skipped` : ""}`
-    : `${batch.succeeded} succeeded / ${batch.failed} failed / ${batch.skipped} skipped / ${batch.notAttempted} not attempted (${batch.total} selected)`;
+  view.counts.textContent = `${batch.succeeded} succeeded / ${batch.failed} failed / ${batch.skipped} skipped / ${batch.notAttempted} not attempted (${batch.total} selected)`;
   const retryTime = batch.retryAt > Date.now() ? ` Retry after ${new Date(batch.retryAt).toLocaleTimeString()}.` : "";
   const detail = batch.error?.message ?? (batch.skipped ? "Skipped notifications changed or are no longer eligible in the loaded inbox. Review their current state separately." : "");
   view.error.hidden = !detail;
@@ -928,7 +927,7 @@ function renderBatchView(batch, view) {
   const pending = batchRequests.has(batch.token);
   view.buttons.hidden = false;
   view.retry.hidden = remaining === 0;
-  setControlText(view.retry, `${cancelled ? "Continue" : "Retry"} remaining (${remaining})`);
+  setControlText(view.retry, `Retry remaining (${remaining})`);
   const locked = lockedThreads();
   view.retry.disabled = pending || busy || Boolean(pendingFilters) || batch.retryAt > Date.now() ||
     batch.retryableThreadIds.some(id => locked.has(id));
@@ -1134,6 +1133,15 @@ function renderControls() {
   const actionsBlocked = busy || state?.status === "loading" || Boolean(pendingFilters);
   const locked = lockedThreads();
   const waiting = state && Date.now() < state.nextRefreshAt;
+  const pendingRows = new Map();
+  for (const { ids, action } of batchRequests.values()) {
+    for (const id of ids) pendingRows.set(id, action);
+  }
+  for (const batch of state?.batches ?? []) {
+    if (batchRunning(batch)) {
+      for (const id of batch.remainingThreadIds) pendingRows.set(id, batch.action);
+    }
+  }
   renderRefreshStatus();
   $("more").disabled = loading || state?.needsRefresh || Boolean(state?.error && waiting);
   for (const [key, view] of groupViews) {
@@ -1161,7 +1169,8 @@ function renderControls() {
     }
     if (button.dataset.threadId) {
       const write = state?.threadWrites.find(write => write.id === button.dataset.threadId && write.action === button.dataset.action);
-      const pending = write || marking.get(button.dataset.threadId)?.action === button.dataset.action;
+      const pending = write || marking.get(button.dataset.threadId)?.action === button.dataset.action ||
+        pendingRows.get(button.dataset.threadId) === button.dataset.action;
       button.setAttribute("aria-busy", String(Boolean(pending)));
       button.dataset.writeState = pending ? write?.inFlight ? "active" : "queued" : "idle";
       const label = `${pending ? write?.inFlight ? "Marking" : "Queued to mark" : "Mark"} as ${button.dataset.action}`;
@@ -1313,7 +1322,7 @@ function renderGroups(groups, fallbackFocusKey, completedRows = []) {
     const rows = element("div", "repo-items");
     const section = element("section", "repo-group");
     const header = element("div", "repo-header");
-    const status = element("p", "group-progress");
+    const status = element("p", "group-progress sr-only");
     status.setAttribute("role", "status");
     status.setAttribute("aria-live", "polite");
     status.hidden = true;

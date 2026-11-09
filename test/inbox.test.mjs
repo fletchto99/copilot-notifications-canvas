@@ -47,7 +47,8 @@ test("a 304 response cannot validate pagination invalidated by a confirmed write
   t.after(() => inbox.close());
   await inbox.refresh();
   await client.page(inbox.pages[0].next);
-  await inbox.markDone({ id: "1" });
+  inbox.queueThread({ id: "1" }, "done");
+  await inbox.batch.done;
   await inbox.refresh({ force: true });
   assert.equal(inbox.summary().needsRefresh, false);
   await assert.rejects(inbox.more(), { code: "refresh_required" });
@@ -299,7 +300,8 @@ test("tab counts follow cross-panel reads and retain loaded data after a failed 
   t.after(() => { inbox.close(); other.close(); });
   await inbox.refresh();
   await other.refresh();
-  await other.markRead({ id: "1" });
+  other.queueThread({ id: "1" }, "read");
+  await other.batch.done;
   assert.deepEqual(inbox.snapshot().attentionCounts, { all: 2, review_requested: 0, mentioned: 1, team_mentioned: 0, assigned: 1, participating: 2 });
   assert.equal(inbox.summary().unread, 1);
   fail = true;
@@ -431,10 +433,11 @@ test("closed inbox actions reject without queuing requests or restoring loaded r
     () => inbox.refresh({ force: true }),
     () => inbox.more(),
     () => inbox.setFilters({ query: "widgets" }),
-    () => inbox.markRead({ id: "1" }),
-    () => inbox.markDone({ id: "1" }),
   ]) {
     await assert.rejects(action(), { code: "closed" });
+  }
+  for (const action of ["read", "done"]) {
+    assert.throws(() => inbox.queueThread({ id: "1" }, action), { code: "closed" });
   }
   assert.equal(calls.length, 1);
   assert.equal(inbox.summary().loaded, 0);
@@ -460,8 +463,8 @@ test("pending refreshes report loading with the previous rows and reject row wri
     await ready;
     assert.equal(inbox.summary().status, "loading");
     assert.equal(inbox.summary().loaded, 1);
-    await assert.rejects(inbox.markRead({ id: "1" }), { code: "busy" });
-    await assert.rejects(inbox.markDone({ id: "1" }), { code: "busy" });
+    assert.throws(() => inbox.queueThread({ id: "1" }, "read"), { code: "busy" });
+    assert.throws(() => inbox.queueThread({ id: "1" }, "done"), { code: "busy" });
     assert.equal(calls.length, 2);
     assert.ok(calls.every(args => args.includes("GET")));
   } finally {
@@ -475,40 +478,39 @@ test("pending refreshes report loading with the previous rows and reject row wri
 
 test("active repository batches block refresh, pagination and row reads without additional requests", async () => {
   let started;
-  let finish;
+  const finishes = [];
   const ready = new Promise(resolve => { started = resolve; });
   const calls = [];
   const client = new GitHubClient({ run: async args => {
     calls.push(args);
     if (!args.includes("PATCH")) return http([thread("1"), thread("2")], { link: next });
     started();
-    return new Promise(resolve => { finish = () => resolve("HTTP/2 205 Reset Content\r\n\r\n"); });
+    return new Promise(resolve => { finishes.push(() => resolve("HTTP/2 205 Reset Content\r\n\r\n")); });
   } });
   const inbox = new Inbox(client);
   await inbox.refresh();
   const { repository, selectionKey } = inbox.groups()[0];
   inbox.batch.start({ repository, selectionKey });
-  const token = { token: inbox.batch.snapshot().token };
   try {
     await ready;
     for (const action of [
       () => inbox.refresh(),
       () => inbox.refresh({ force: true }),
       () => inbox.more(),
-      () => inbox.markRead({ id: "2" }),
-      () => inbox.markDone({ id: "2" }),
     ]) {
       await assert.rejects(action(), { code: "busy" });
     }
-    assert.equal(calls.length, 2);
+    for (const action of ["read", "done"]) {
+      assert.throws(() => inbox.queueThread({ id: "2" }, action), { code: "busy" });
+    }
+    assert.equal(calls.length, 3);
     assert.equal(inbox.summary().loaded, 2);
   } finally {
-    inbox.batch.cancel(token);
-    finish();
+    finishes.forEach(finish => finish());
     await inbox.batch.done;
     inbox.close();
   }
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3);
   assert.equal(client.threadReservations.size, 0);
   assert.equal(client.pendingThreads.size, 0);
 });

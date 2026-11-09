@@ -18,7 +18,9 @@ test("205 and documented 304 confirmation retain the read row and synchronize sh
     const two = new Inbox(client);
     await one.refresh();
     await two.refresh();
-    await one.markRead({ id: "1" });
+    one.queueThread({ id: "1" }, "read");
+    await one.batch.done;
+    assert.equal(one.batch.snapshot().status, "completed");
     for (const inbox of [one, two]) {
       assert.equal(inbox.summary().loaded, 1);
       assert.equal(inbox.summary().unread, 0);
@@ -43,7 +45,11 @@ test("failed HTTP/auth/rate/network mutations retain rows and counts", async () 
     } });
     const inbox = new Inbox(client);
     await inbox.refresh();
-    await assert.rejects(inbox.markRead({ id: "1" }));
+    inbox.queueThread({ id: "1" }, "read");
+    await inbox.batch.done;
+    assert.equal(inbox.batch.snapshot().status, "partial");
+    assert.equal(inbox.batch.snapshot().failed, 1);
+    assert.ok(inbox.batch.snapshot().error);
     assert.equal(inbox.summary().loaded, 1);
   }
 });
@@ -60,18 +66,18 @@ test("unknown or malformed IDs and duplicate pending clicks cannot issue writes"
   const inbox = new Inbox(client);
   await inbox.refresh();
   for (const input of [null, {}, { id: "../1" }, { id: 1 }, { id: "1", extra: true }, { id: "999" }]) {
-    await assert.rejects(inbox.markRead(input));
+    assert.throws(() => inbox.queueThread(input, "read"));
   }
-  const first = inbox.markRead({ id: "1" });
+  inbox.queueThread({ id: "1" }, "read");
   await new Promise(resolve => setImmediate(resolve));
-  await assert.rejects(inbox.markRead({ id: "1" }), { code: "busy" });
+  assert.throws(() => inbox.queueThread({ id: "1" }, "read"), { code: "busy" });
   assert.equal(inbox.summary().loaded, 1);
   release();
-  await first;
+  await inbox.batch.done;
   assert.equal(writes, 1);
 });
 
-test("writes share the request queue and use a one-second spacing, not the GET polling cooldown", async () => {
+test("writes do not impose artificial spacing or inherit the GET polling cooldown", async () => {
   let now = 0;
   const waits = [];
   const client = new GitHubClient({
@@ -81,8 +87,10 @@ test("writes share the request queue and use a one-second spacing, not the GET p
   });
   const inbox = new Inbox(client);
   await inbox.refresh();
-  await Promise.all([inbox.markRead({ id: "1" }), inbox.markRead({ id: "2" })]);
-  assert.deepEqual(waits, [1000]);
+  inbox.queueThread({ id: "1" }, "read");
+  inbox.queueThread({ id: "2" }, "read");
+  await inbox.batch.done;
+  assert.deepEqual(waits, []);
   assert.equal(inbox.summary().loaded, 2);
   assert.equal(inbox.summary().unread, 0);
 });
@@ -99,7 +107,8 @@ test("cached/304 pages cannot resurrect reads; later real activity can reappear,
   } });
   const inbox = new Inbox(client);
   await inbox.refresh();
-  await inbox.markRead({ id: "1" });
+  inbox.queueThread({ id: "1" }, "read");
+  await inbox.batch.done;
   await inbox.refresh();
   assert.equal(inbox.summary().loaded, 1);
   assert.equal(inbox.summary().unread, 0);
@@ -163,9 +172,9 @@ test("a mark in another panel during a multi-page refresh cannot resurrect a rea
   now = POLL_MS;
   const refresh = one.refresh();
   await new Promise(resolve => setImmediate(resolve));
-  const read = two.markRead({ id: "1" });
+  two.queueThread({ id: "1" }, "read");
   release();
-  await read;
+  await two.batch.done;
   await assert.rejects(refresh, { code: "inbox_changed" });
   assert.equal(one.loadedItems().find(item => item.id === "1").unread, false);
 });
@@ -179,8 +188,10 @@ test("rate-limited writes block subsequent writes until GitHub's retry time", as
   } });
   const inbox = new Inbox(client);
   await inbox.refresh();
-  await assert.rejects(inbox.markRead({ id: "1" }), { code: "rate_limited" });
-  await assert.rejects(inbox.markRead({ id: "2" }), { code: "rate_limited" });
+  inbox.queueThread({ id: "1" }, "read");
+  await inbox.batch.done;
+  assert.equal(inbox.batch.snapshot().error.code, "rate_limited");
+  assert.throws(() => inbox.queueThread({ id: "2" }, "read"), { code: "rate_limited" });
   assert.equal(writes, 1);
   assert.equal(inbox.summary().loaded, 2);
 });
@@ -204,11 +215,11 @@ test("a read in another panel invalidates queued pagination without losing the r
   const two = new Inbox(client);
   await one.refresh();
   await two.refresh();
-  const marking = two.markRead({ id: "1" });
+  two.queueThread({ id: "1" }, "read");
   await ready;
   const loading = assert.rejects(one.more(), { code: "inbox_changed" });
   finish();
-  await marking;
+  await two.batch.done;
   await loading;
   assert.deepEqual(one.loadedItems().map(item => item.id), ["1", "2"]);
   assert.equal(one.loadedItems()[0].unread, false);

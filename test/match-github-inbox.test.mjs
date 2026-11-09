@@ -49,7 +49,8 @@ test("switching cached views after Done never skips a shifted pagination boundar
       t.after(() => inbox.close());
       await inbox.refresh();
       if (cachedSecondPage) await inbox.more();
-      await inbox.markDone({ id: "1" });
+      inbox.queueThread({ id: "1" }, "done");
+      await inbox.batch.done;
       if (switchMode) {
         await inbox.setFilters({ mode: "unread" });
         await inbox.setFilters({ mode: "inbox" });
@@ -163,11 +164,13 @@ test("read and Done confirmations update inbox and unread caches across both tog
   await unread.refresh();
   assert.deepEqual([inbox.summary().loaded, unmatched.summary().loaded, unread.summary().loaded], [2, 1, 1]);
   assert.equal(client.cache.size, 2);
-  await inbox.markRead({ id: "1" });
+  inbox.queueThread({ id: "1" }, "read");
+  await inbox.batch.done;
   assert.deepEqual([inbox.summary().loaded, unmatched.summary().loaded, unread.summary().loaded], [2, 0, 0]);
   assert.equal(inbox.summary().unread, 0);
-  await assert.rejects(inbox.markRead({ id: "1" }), { code: "unknown_thread" });
-  await inbox.markDone({ id: "2" });
+  assert.throws(() => inbox.queueThread({ id: "1" }, "read"), { code: "unknown_thread" });
+  inbox.queueThread({ id: "2" }, "done");
+  await inbox.batch.done;
   assert.deepEqual([inbox.summary().loaded, unmatched.summary().loaded], [1, 0]);
   for (const panel of [inbox, unmatched, unread]) {
     assert.equal(panel.summary().needsRefresh, true);
@@ -272,11 +275,17 @@ test("mixed-state batches select unread items for Read and all shown items for D
 });
 
 test("changing Match GitHub Inbox cannot widen or interrupt a running batch", async t => {
-  const { client, calls } = fixture();
+  const { client, calls, advance } = fixture();
   const run = client.run;
-  let finish;
+  const finishes = [];
   client.run = async args => {
-    if (args.includes("DELETE")) await new Promise(resolve => { finish = resolve; });
+    if (args.includes("DELETE")) {
+      await new Promise(resolve => { finishes.push(resolve); });
+      if (args.at(-1).endsWith("/2")) {
+        calls.push(args);
+        return http({}, {}, 500);
+      }
+    }
     return run(args);
   };
   const inbox = new Inbox(client);
@@ -287,14 +296,15 @@ test("changing Match GitHub Inbox cannot widen or interrupt a running batch", as
   inbox.setMatchGitHubInbox(false);
   await assert.rejects(inbox.refresh(), { code: "busy" });
   const token = inbox.batch.snapshot().token;
-  inbox.batch.cancel({ token });
-  finish();
+  finishes.forEach(finish => finish());
   await inbox.batch.done;
   assert.equal(inbox.batch.snapshot().total, 2);
   assert.equal(inbox.batch.snapshot().succeeded, 1);
-  assert.equal(inbox.batch.snapshot().notAttempted, 1);
+  assert.equal(inbox.batch.snapshot().failed, 1);
   assert.equal(inbox.snapshot().matchGitHubInbox, true);
   client.run = run;
+  advance();
+  advance();
   await inbox.refresh();
   assert.equal(inbox.snapshot().matchGitHubInbox, false);
   assert.throws(() => inbox.batch.retry({ token }), { code: "no_remaining" });
@@ -304,7 +314,7 @@ test("changing Match GitHub Inbox cannot widen or interrupt a running batch", as
   assert.equal(inbox.batch.snapshot().total, 1);
   await inbox.batch.done;
   assert.deepEqual(calls.filter(args => args.includes("DELETE")).map(args => args.at(-1)),
-    ["/notifications/threads/1", "/notifications/threads/2"]);
+    ["/notifications/threads/1", "/notifications/threads/2", "/notifications/threads/2"]);
   assert.equal(inbox.summary().loaded, 0);
 });
 
@@ -326,6 +336,31 @@ test("older caches in other views cannot veto the latest selected read state", a
   }
 });
 
+test("queued row writes block mode switches until they finish", async t => {
+  for (const action of ["read", "done"]) {
+    const { client } = fixture();
+    const run = client.run;
+    let finish;
+    const held = new Promise(resolve => { finish = resolve; });
+    client.run = async args => {
+      if (!args.includes("GET")) await held;
+      return run(args);
+    };
+    const inbox = new Inbox(client);
+    t.after(() => { finish(); inbox.close(); });
+    await inbox.refresh();
+    inbox.queueThread({ id: "1" }, action);
+    await assert.rejects(inbox.setFilters({ mode: "unread" }), { code: "busy" });
+    assert.equal(inbox.filters.mode, "inbox");
+    finish();
+    await inbox.batch.done;
+    assert.equal(inbox.batch.snapshot().status, "completed");
+    await inbox.setFilters({ mode: "unread" });
+    assert.equal(inbox.filters.mode, "unread");
+    assert.equal(inbox.summary().loaded, 0);
+  }
+});
+
 test("mode switches retain previous data on failure and reject changed or closed responses", async t => {
   for (const change of ["failure", "revision", "closed", "setting"]) {
     const { client } = fixture();
@@ -333,9 +368,6 @@ test("mode switches retain previous data on failure and reject changed or closed
     t.after(() => inbox.close());
     await inbox.refresh();
     const before = inbox.snapshot().groups;
-    inbox.marking.add("1");
-    await assert.rejects(inbox.setFilters({ mode: "unread" }), { code: "busy" });
-    inbox.marking.clear();
     const run = client.run;
     client.run = async args => {
       if (change === "failure") return http({}, {}, 500);

@@ -185,8 +185,8 @@ repeatedly reserve and restore the same checkpoint while it waits. Foreground
 cache reuse remains available. With alerts enabled and supported, shared
 deadlines are checked in the API client before dispatch, covering panel and
 agent reads, Read/Done writes, each queued batch item, and subject-status
-lookups. Writes recheck after their spacing delay and are only marked in flight
-once preparation succeeds. A longer inherited rate-limit wait replaces stale
+lookups. Writes recheck after waiting for a shared concurrency slot and are only
+marked in flight once preparation succeeds. A longer inherited rate-limit wait replaces stale
 local error messages, but a longer local failure retains its own message.
 Fresh cached check status, run matches, and failed-job links remain usable for
 the same notification activity during backoff, without extending their freshness.
