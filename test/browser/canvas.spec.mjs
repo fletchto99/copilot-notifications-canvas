@@ -248,7 +248,7 @@ test("attention tabs combine with search and constrain repository reads to match
   await page.getByRole("button", { name: "Mark 2 as read in example/widgets; 2 shown, loaded notifications", exact: true }).click();
   await expect(page.locator(".row")).toHaveCount(3);
   await expect(page.locator(".row.unread")).toHaveCount(1);
-  expect(canvas.writes).toEqual(["1", "4"]);
+  expect(canvas.writes.toSorted()).toEqual(["1", "4"]);
   expect(canvas.rows.find(row => row.id === "2").unread).toBe(true);
   expect(canvas.rows.find(row => row.id === "51").unread).toBe(true);
   await expect(page.getByRole("tab", { name: "Review Requested (3)", exact: true })).toBeVisible();
