@@ -413,7 +413,8 @@ function renderSettings() {
 async function settingsRequest(input, quiet = false, path = "settings") {
   if (!visible()) return;
   const active = document.activeElement;
-  const previousFocus = active?.closest("select") ?? active;
+  // Settings must not restore a row action's focus while that action is pending.
+  const previousFocus = $("settings").contains(active) ? active?.closest("select") ?? active : null;
   if (settingsBusy) {
     if (input && !pendingSettings) {
       pendingSettings = { input, path, focus: previousFocus };
@@ -422,7 +423,7 @@ async function settingsRequest(input, quiet = false, path = "settings") {
     return;
   }
   // WebKit can retain a picker's option focus through disabling and re-enabling its select.
-  if (input && previousFocus !== active) previousFocus.focus({ preventScroll: true });
+  if (input && previousFocus && previousFocus !== active) previousFocus.focus({ preventScroll: true });
   let refreshInbox = false;
   settingsBusy = true;
   if (!quiet) {

@@ -269,6 +269,15 @@ Each browser job has a 15-minute limit for container startup, packaging, tests,
 and report uploads; Playwright's per-test timeout remains 30 seconds.
 PR/main CI validates packaging but never publishes releases.
 
+Browser race regressions use held synthetic responses to control request order,
+not sleeps or retries. Settings reads must not take focus from pending row
+actions. Theme checks wait for temporarily disabled controls and open
+customizable pickers before inspecting their options; WebKit can retain stale
+computed styles for options in a closed picker. Intentionally disabled or hidden
+customizable pickers are not inspectable until enabled or shown.
+Opening Settings also waits for its native `toggle` event and settings load:
+the panel can be visible before that deferred event disables its controls.
+
 Windows lock tests preserve existing files and directory links before publishing
 candidate directories: a failed directory rename is not a safe guard on Windows.
 
