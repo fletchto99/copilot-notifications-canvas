@@ -4,11 +4,12 @@ import { test, expect } from "./fixtures.mjs";
 for (const packaged of [false, true]) {
   test.describe(`notification view control (${packaged ? "packaged" : "source"})`, () => {
     test.use({ packaged });
-    test("hover and focus leave the next setting unobstructed without help text", async ({ page, canvas }) => {
+    test("Group By follows Show notifications in layout and keyboard order without obstruction", async ({ page, canvas }) => {
       canvas.rows.splice(1);
       await page.goto(canvas.url);
       const settings = page.getByLabel("Settings", { exact: true });
       const select = page.getByRole("combobox", { name: "Show notifications", exact: true });
+      const grouping = page.getByRole("combobox", { name: "Group By", exact: true });
       const hideEmptyTabs = page.getByRole("switch", { name: "Hide empty tabs", exact: true });
       for (const width of [320, 960]) {
         await page.setViewportSize({ width, height: 640 });
@@ -23,7 +24,7 @@ for (const packaged of [false, true]) {
           await expect(select).not.toHaveAttribute("title");
           await expect(page.locator("#show-notifications-help, #show-notifications-tooltip")).toHaveCount(0);
           const controlBounds = await select.locator("..").boundingBox();
-          const nextBounds = await hideEmptyTabs.boundingBox();
+          const nextBounds = await grouping.locator("..").boundingBox();
           expect(nextBounds.y - controlBounds.y - controlBounds.height).toBeCloseTo(8, 1);
           await select.selectOption("unread");
           await expect(select).toBeEnabled();
@@ -37,13 +38,15 @@ for (const packaged of [false, true]) {
           await select.selectOption("all");
           await expect(select).toBeEnabled();
           await select.hover();
-          expect(await hideEmptyTabs.evaluate(node => {
+          expect(await grouping.evaluate(node => {
             const bounds = node.getBoundingClientRect();
             return node.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2));
           })).toBe(true);
           expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
           await select.focus();
           await select.press("Tab");
+          await expect(grouping).toBeFocused();
+          await grouping.press("Tab");
           await expect(hideEmptyTabs).toBeFocused();
           await hideEmptyTabs.click();
           await expect(hideEmptyTabs).toHaveAttribute("aria-checked", "false");
