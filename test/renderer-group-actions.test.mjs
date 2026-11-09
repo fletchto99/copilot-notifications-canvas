@@ -419,7 +419,7 @@ test("parallel group requests have scoped locks and independent progress without
   await runInContext("update()", ui.context);
   assert.equal(ui.ids.get("additional-batches").querySelectorAll("section").length, 0);
   assert.deepEqual(ui.patches, ["/notifications/threads/1", "/notifications/threads/2"]);
-  assert.deepEqual(new Set(ui.deletions), new Set(["/notifications/threads/3", "/notifications/threads/4", "/notifications/threads/5"]));
+  assert.deepEqual(ui.deletions.toSorted(), ["/notifications/threads/3", "/notifications/threads/4", "/notifications/threads/5"]);
 });
 
 test("finishing a focused batch leaves focus usable while another batch is running", async t => {

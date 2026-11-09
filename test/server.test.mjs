@@ -445,7 +445,7 @@ test("a server deadline published during batch preparation blocks the next write
   const group = inbox.groups()[0];
   inbox.batch.start({ repository: group.repository, selectionKey: group.selectionKey });
   await inbox.batch.done;
-  assert.deepEqual(new Set(writes), new Set(Array.from({ length: 10 }, (_, i) => `/notifications/threads/${i + 1}`)));
+  assert.deepEqual(writes.toSorted(), Array.from({ length: 10 }, (_, i) => `/notifications/threads/${i + 1}`).toSorted());
   const batch = inbox.batch.snapshot();
   assert.equal(batch.succeeded, 10);
   assert.equal(batch.failed, 0);
