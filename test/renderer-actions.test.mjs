@@ -469,13 +469,13 @@ test("repository action starts from one click with no dialog and preserves indep
   groupRead.focus();
   await groupRead.events.click();
   await settle();
-  assert.deepEqual(ui.patches, ["/notifications/threads/1"]);
+  assert.deepEqual(ui.patches, ["/notifications/threads/1", "/notifications/threads/2"]);
   assert.deepEqual(ui.calls.filter(call => call.path.startsWith("/api/batch/")).map(call => call.path), ["/api/batch/start"]);
   assert.equal(ui.document.activeElement, groupRead);
   assert.equal(disclosure.attributes["aria-expanded"], "false");
   await runInContext("update()", ui.context);
-  assert.match(groupActionText(groupRead), /Marking 0\/2 as read/);
-  assert.equal(groupProgress(ui, "repo:example/widgets"), "Marking 0/2 as read...");
+  assert.match(groupActionText(groupRead), /Marking 1\/2 as read/);
+  assert.equal(groupProgress(ui, "repo:example/widgets"), "Marking 1/2 as read...");
   assert.equal(groupRead.attributes["aria-busy"], "true");
   assert.doesNotMatch(html, /batch-confirm|batch-start|batch-cancel|batch-stop/);
   assert.doesNotMatch(script, /batch\/prepare|Repository action finished/);
@@ -511,7 +511,7 @@ test("one-click repository read honors search, blocks duplicate clicks and retai
   assert.equal(ui.document.activeElement, groupRead);
   await settle();
   await runInContext("update()", ui.context);
-  assert.match(groupActionText(groupRead), /Marking 0\/2/);
+  assert.match(groupActionText(groupRead), /Marking 1\/2/);
   assert.equal(ui.ids.has("refresh"), false);
   assert.equal(ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "1").disabled, true);
   release();
@@ -538,9 +538,9 @@ test("partial batch progress shows retryable remaining counts without repeating 
   await ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.focusKey.startsWith("bulk:")).events.click();
   await ui.inbox.batch.done;
   await runInContext("update()", ui.context);
-  assert.match(ui.ids.get("batch-counts").textContent, /1 succeeded \/ 1 failed \/ 0 skipped \/ 1 not attempted/);
+  assert.match(ui.ids.get("batch-counts").textContent, /2 succeeded \/ 1 failed \/ 0 skipped \/ 0 not attempted/);
   assert.equal(ui.ids.get("batch-retry").hidden, false);
-  assert.equal(ui.ids.get("batch-retry").textContent, "Retry remaining (2)");
+  assert.equal(ui.ids.get("batch-retry").textContent, "Retry remaining (1)");
   assert.equal(ui.ids.get("batch-retry").disabled, true);
   assert.match(ui.ids.get("batch-error").textContent, /HTTP 500/);
   failures = false;
@@ -551,7 +551,7 @@ test("partial batch progress shows retryable remaining counts without repeating 
   await ui.ids.get("batch-retry").events.click();
   await ui.inbox.batch.done;
   await runInContext("update()", ui.context);
-  assert.deepEqual(ui.patches, ["/notifications/threads/1", "/notifications/threads/2", "/notifications/threads/2", "/notifications/threads/3"]);
+  assert.deepEqual(ui.patches, ["/notifications/threads/1", "/notifications/threads/2", "/notifications/threads/3", "/notifications/threads/2"]);
   assert.equal(ui.document.querySelectorAll("article").length, 3);
   assert.equal(ui.inbox.summary().unread, 0);
   assert.equal(ui.ids.get("batch-progress").hidden, true);

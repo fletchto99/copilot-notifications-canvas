@@ -117,11 +117,11 @@ test("read and Done clicks share duplicate protection across panels and block ov
 });
 
 test("Done cannot take a later thread reserved by another panel's repository read batch", async t => {
-  let finish;
+  const finishes = [];
   const client = new GitHubClient({ run: async args => {
     if (args.includes("GET")) return http([thread("1"), thread("2")]);
     assert.ok(args.includes("PATCH"));
-    await new Promise(resolve => { finish = resolve; });
+    await new Promise(resolve => { finishes.push(resolve); });
     return "HTTP/2 205 Reset Content\r\n\r\n";
   } });
   const one = new Inbox(client);
@@ -133,13 +133,12 @@ test("Done cannot take a later thread reserved by another panel's repository rea
   one.batch.start({ repository, selectionKey });
   await settle();
   await assert.rejects(two.markDone({ id: "2" }), { code: "busy" });
-  one.batch.cancel({ token: one.batch.snapshot().token });
-  finish();
+  finishes.forEach(finish => finish());
   await one.batch.done;
   assert.equal(client.threadReservations.size, 0);
 });
 
-test("Done shares write spacing and rate backoff with reads without automatic retries", async t => {
+test("Done shares rate backoff with reads without artificial spacing or automatic retries", async t => {
   let now = 0;
   const waits = [];
   const methods = [];
@@ -162,7 +161,7 @@ test("Done shares write spacing and rate backoff with reads without automatic re
   await assert.rejects(inbox.markDone({ id: "3" }), { code: "rate_limited" });
   await assert.rejects(inbox.markRead({ id: "4" }), { code: "rate_limited" });
   assert.deepEqual(methods, ["DELETE", "PATCH", "DELETE"]);
-  assert.deepEqual(waits, [1000, 1000, 1000]);
+  assert.deepEqual(waits, []);
   assert.deepEqual(inbox.loadedItems().map(item => item.id), ["2", "3", "4"]);
   assert.equal(inbox.summary().unread, 2);
 });

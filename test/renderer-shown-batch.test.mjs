@@ -175,8 +175,8 @@ test("shown batches complete their original scope after grouping changes without
   await controls(ui).done.events.click();
   await settle();
   await runInContext("update()", ui.context);
-  assert.equal(groupProgress(ui, "shown"), "Marking 0/3 as done...");
-  assert.equal(groupActionText(controls(ui).done), "Marking 0/3 as done...");
+  assert.equal(groupProgress(ui, "shown"), "Marking 2/3 as done...");
+  assert.equal(groupActionText(controls(ui).done), "Marking 2/3 as done...");
   assert.equal(disabled(controls(ui).read), true);
   assert.equal(disabled(controls(ui).done), true);
   assert.equal(ui.ids.get("search").disabled, false);

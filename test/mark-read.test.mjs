@@ -71,7 +71,7 @@ test("unknown or malformed IDs and duplicate pending clicks cannot issue writes"
   assert.equal(writes, 1);
 });
 
-test("writes share the request queue and use a one-second spacing, not the GET polling cooldown", async () => {
+test("writes do not impose artificial spacing or inherit the GET polling cooldown", async () => {
   let now = 0;
   const waits = [];
   const client = new GitHubClient({
@@ -82,7 +82,7 @@ test("writes share the request queue and use a one-second spacing, not the GET p
   const inbox = new Inbox(client);
   await inbox.refresh();
   await Promise.all([inbox.markRead({ id: "1" }), inbox.markRead({ id: "2" })]);
-  assert.deepEqual(waits, [1000]);
+  assert.deepEqual(waits, []);
   assert.equal(inbox.summary().loaded, 2);
   assert.equal(inbox.summary().unread, 0);
 });

@@ -138,11 +138,11 @@ test("row HTTP requests acknowledge queued writes promptly and report delayed ou
   const first = await queue("read", "1");
   const second = await queue("done", "2");
   assert.notEqual(first.rowActionToken, second.rowActionToken);
-  assert.equal(releases.length, 1);
+  assert.equal(releases.length, 2);
   const snapshot = async version => (await fetch(`${url.origin}/api/state`, {
     headers: { ...headers, ...(version === undefined ? {} : { "X-Notification-Acknowledged-Version": String(version) }) },
   })).json();
-  assert.deepEqual((await snapshot()).threadWrites.map(write => write.inFlight), [true, false]);
+  assert.deepEqual((await snapshot()).threadWrites.map(write => write.inFlight), [true, true]);
   now += 29_000;
   releases[0](http(null, {}, 205));
   await new Promise(resolve => setImmediate(resolve));
@@ -397,30 +397,33 @@ test("all HTTP notification request paths inherit another client's server deadli
   }
 });
 
-test("a server deadline published during batch spacing blocks the next write before it is in flight", async t => {
+test("a server deadline published during batch preparation blocks the next write before it is in flight", async t => {
   const directory = await mkdtemp(join(tmpdir(), "notification-queued-backoff-"));
   const preferences = new Preferences({ directory });
   await preferences.update({ desktopNotifications: true });
   let now = Date.parse("2026-01-10T12:00:00Z");
   let limited = false;
-  const rows = [thread("1"), thread("2")];
+  const rows = Array.from({ length: 11 }, (_, i) => thread(String(i + 1)));
   const writerClient = new GitHubClient({ now: () => now,
     run: async () => limited ? http({}, { "retry-after": "600" }, 429) : http(rows) });
   const options = { preferences, now: () => now, schedule: () => 0, cancel: () => {},
     notify: async () => assert.fail("This scenario must not deliver notifications") };
   const writer = new DesktopNotifications({ ...options, client: writerClient });
   const writes = [];
+  let published;
+  const deadlinePublished = new Promise(resolve => { published = resolve; });
   const readerClient = new GitHubClient({
     now: () => now,
-    sleep: async delay => {
-      now += delay;
-      limited = true;
-      await assert.rejects(writerClient.page(firstPage(), undefined, { force: true }), { code: "rate_limited" });
-      await writer.check();
-    },
     run: async args => {
       if (args.includes("PATCH")) {
         writes.push(args.at(-1));
+        if (writes.length === 10) {
+          limited = true;
+          await assert.rejects(writerClient.page(firstPage(), undefined, { force: true }), { code: "rate_limited" });
+          await writer.check();
+          published();
+        }
+        await deadlinePublished;
         return http(null, {}, 205);
       }
       return http(rows);
@@ -442,9 +445,9 @@ test("a server deadline published during batch spacing blocks the next write bef
   const group = inbox.groups()[0];
   inbox.batch.start({ repository: group.repository, selectionKey: group.selectionKey });
   await inbox.batch.done;
-  assert.deepEqual(writes, ["/notifications/threads/1"]);
+  assert.deepEqual(new Set(writes), new Set(Array.from({ length: 10 }, (_, i) => `/notifications/threads/${i + 1}`)));
   const batch = inbox.batch.snapshot();
-  assert.equal(batch.succeeded, 1);
+  assert.equal(batch.succeeded, 10);
   assert.equal(batch.failed, 0);
   assert.equal(batch.notAttempted, 1);
   assert.equal(batch.inFlight, false);

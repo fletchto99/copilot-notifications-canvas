@@ -39,10 +39,10 @@ test("direct Done starts only the counted search selection and disables both act
   assert.equal(ui.document.activeElement, done);
   assert.equal(ui.ids.get("batch-progress").hidden, true);
   await runInContext("update()", ui.context);
-  assert.equal(groupProgress(ui, "repo:example/widgets"), "Marking 0/2 as done...");
+  assert.equal(groupProgress(ui, "repo:example/widgets"), "Marking 1/2 as done...");
   assert.equal(disabled(read), true);
   assert.equal(disabled(done), true);
-  assert.deepEqual(ui.deletions, ["/notifications/threads/1"]);
+  assert.deepEqual(ui.deletions, ["/notifications/threads/1", "/notifications/threads/10"]);
   assert.deepEqual(ui.patches, []);
   release();
   await ui.inbox.batch.done;
@@ -116,14 +116,14 @@ test("failed Done batches show their action and retry as Done without changing t
   await ui.inbox.batch.done;
   await runInContext("update()", ui.context);
   assert.match(ui.ids.get("batch-title").textContent, /remain to mark as done/);
-  assert.equal(groupActionText(controls(ui).read), "Mark 2 as read");
+  assert.equal(groupActionText(controls(ui).read), "Mark 1 as read");
   assert.equal(ui.ids.get("batch-retry").disabled, true);
   ui.advance();
   await runInContext("update()", ui.context);
   await ui.ids.get("batch-retry").events.click();
   await ui.inbox.batch.done;
   await runInContext("update()", ui.context);
-  assert.deepEqual(ui.deletions, ["/notifications/threads/1", "/notifications/threads/1", "/notifications/threads/2"]);
+  assert.deepEqual(ui.deletions, ["/notifications/threads/1", "/notifications/threads/2", "/notifications/threads/1"]);
   assert.deepEqual(ui.patches, []);
   assert.equal(ui.ids.get("batch-progress").hidden, true);
 });
@@ -150,7 +150,7 @@ test("metadata omits the redundant unread label and uses decorative middle-dot s
 
 test("batch retry waits for pending search without expanding its original scope", async t => {
   const ui = await renderer({ initialRows: [thread("1"), thread("2")],
-    onWrite: (_path, count) => count === 1 ? http({}, {}, 500) : "HTTP/2 204 No Content\r\n\r\n",
+    onWrite: (_path, count) => count <= 2 ? http({}, {}, 500) : "HTTP/2 204 No Content\r\n\r\n",
   });
   t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
   await controls(ui).done.events.click();
@@ -166,12 +166,12 @@ test("batch retry waits for pending search without expanding its original scope"
   await runInContext("render()", ui.context);
   assert.equal(retry.disabled, true);
   await retry.events.click();
-  assert.deepEqual(ui.deletions, ["/notifications/threads/1"]);
+  assert.deepEqual(ui.deletions, ["/notifications/threads/1", "/notifications/threads/2"]);
   await ui.fireTimer(250);
   assert.equal(retry.disabled, false);
   await retry.events.click();
   await ui.inbox.batch.done;
-  assert.deepEqual(ui.deletions, ["/notifications/threads/1", "/notifications/threads/2"]);
+  assert.deepEqual(ui.deletions, ["/notifications/threads/1", "/notifications/threads/2", "/notifications/threads/2"]);
   assert.deepEqual(ui.patches, []);
 });
 
@@ -204,30 +204,31 @@ test("pending row responses lock only their row and cannot overwrite a newer com
 });
 
 test("parallel group requests have scoped locks and independent progress without Stop controls", async t => {
-  let releaseWrite;
+  const releases = [];
   let releaseResponse;
   const ui = await renderer({ initialRows: [
     thread("1"), thread("2"),
     thread("3", { repository: { full_name: "example/other" } }),
     thread("4", { repository: { full_name: "example/other" } }),
     thread("5", { repository: { full_name: "example/solo" } }),
-  ], onWrite: (_path, count, method) => count === 1
-    ? new Promise(resolve => { releaseWrite = () => resolve("HTTP/2 205 Reset Content\r\n\r\n"); })
-    : `HTTP/2 ${method === "DELETE" ? 204 : 205} Synthetic\r\n\r\n`,
+  ], onWrite: (_path, _count, method) =>
+    new Promise(resolve => { releases.push(() => resolve(`HTTP/2 ${method === "DELETE" ? 204 : 205} Synthetic\r\n\r\n`)); }),
   onActionResponse: (path, state) => path === "/api/batch/start" && state.batches.length === 1
     ? new Promise(resolve => { releaseResponse = resolve; }) : undefined,
   });
-  t.after(() => { releaseWrite?.(); releaseResponse?.(); ui.window.events.pagehide(); ui.inbox.close(); });
+  t.after(() => { releases.forEach(release => release()); releaseResponse?.(); ui.window.events.pagehide(); ui.inbox.close(); });
   const first = controls(ui).read.events.click();
   await settle();
   assert.equal(disabled(controls(ui).done), true);
   assert.equal(controls(ui, "example/other").done.disabled, false);
   await controls(ui, "example/other").done.events.click();
+  await settle();
+  await runInContext("update()", ui.context);
   assert.equal(ui.inbox.batch.snapshots().length, 2);
   assert.equal(ui.ids.get("additional-batches").querySelectorAll("section").length, 0);
   const second = controls(ui, "example/other").done;
   assert.equal(groupProgress(ui, "repo:example/widgets"), "Marking 0/2 as read...");
-  assert.equal(groupProgress(ui, "repo:example/other"), "Queued 0/2 as done...");
+  assert.equal(groupProgress(ui, "repo:example/other"), "Marking 0/2 as done...");
   assert.equal(ui.document.activeElement, second);
   releaseResponse();
   await first;
@@ -236,7 +237,8 @@ test("parallel group requests have scoped locks and independent progress without
   assert.equal(ui.inbox.batch.snapshots()[0].status, "running");
   assert.equal(ui.inbox.batch.snapshots()[1].status, "running");
   await controls(ui, "example/solo").done.events.click();
-  releaseWrite();
+  await settle();
+  releases.forEach(release => release());
   await ui.inbox.batch.done;
   await runInContext("update()", ui.context);
   assert.equal(ui.ids.get("additional-batches").querySelectorAll("section").length, 0);
@@ -269,7 +271,7 @@ test("finishing a focused batch leaves focus usable while another batch is runni
 
 test("inline failures follow the group and remain retryable when filtering or regrouping hides it", async t => {
   const ui = await renderer({ initialRows: [thread("1"), thread("2"), thread("3", { repository: { full_name: "example/other" } })],
-    onWrite: (_path, count) => count === 1 ? http({}, {}, 500) : "HTTP/2 204 No Content\r\n\r\n" });
+    onWrite: (_path, count) => count <= 2 ? http({}, {}, 500) : "HTTP/2 204 No Content\r\n\r\n" });
   t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
   await controls(ui).done.events.click();
   await ui.inbox.batch.done;
@@ -293,7 +295,7 @@ test("inline failures follow the group and remain retryable when filtering or re
   await ui.ids.get("batch-retry").events.click();
   await ui.inbox.batch.done;
   await runInContext("update()", ui.context);
-  assert.deepEqual(ui.deletions, ["/notifications/threads/1", "/notifications/threads/2"]);
+  assert.deepEqual(ui.deletions, ["/notifications/threads/1", "/notifications/threads/2", "/notifications/threads/2"]);
   assert.equal(result.hidden, true);
 });
 
@@ -308,8 +310,8 @@ test("row actions expose queued and active status while search remains usable", 
   assert.deepEqual(buttons().map(button => button.dataset.writeState), ["queued", "queued"]);
   await settle();
   await runInContext("update()", ui.context);
-  assert.deepEqual(buttons().map(button => button.dataset.writeState), ["active", "queued"]);
-  assert.equal(groupActionText(buttons()[1]), "Queued to mark as read");
+  assert.deepEqual(buttons().map(button => button.dataset.writeState), ["active", "active"]);
+  assert.equal(groupActionText(buttons()[1]), "Marking as read");
   assert.equal(ui.ids.get("search").disabled, false);
   releases[0]();
   await first;
@@ -323,14 +325,14 @@ test("row actions expose queued and active status while search remains usable", 
 });
 
 test("parallel failures keep independent inline results and dismissing one preserves the other", async t => {
-  let release;
+  const releases = [];
   const ui = await renderer({ initialRows: [thread("1"), thread("2", { repository: { full_name: "example/other" } })],
-    onWrite: () => new Promise(resolve => { release = () => resolve(http({}, {}, 500)); }) });
-  t.after(() => { release?.(); ui.window.events.pagehide(); ui.inbox.close(); });
+    onWrite: () => new Promise(resolve => { releases.push(() => resolve(http({}, {}, 500))); }) });
+  t.after(() => { releases.forEach(release => release()); ui.window.events.pagehide(); ui.inbox.close(); });
   await controls(ui).done.events.click();
   await controls(ui, "example/other").done.events.click();
   await settle();
-  release();
+  releases.forEach(release => release());
   await ui.inbox.batch.done;
   await runInContext("update()", ui.context);
   const results = ui.ids.get("groups").querySelectorAll(".group-results");
@@ -353,7 +355,7 @@ test("parallel failures keep independent inline results and dismissing one prese
 test("batch retries ignore locked original targets that are no longer shown", async t => {
   let release;
   const ui = await renderer({ initialRows: [thread("1"), thread("2")],
-    onWrite: (_path, count) => count === 1 ? http({}, {}, 500) : count === 2
+    onWrite: (_path, count) => count <= 2 ? http({}, {}, 500) : count === 3
       ? new Promise(resolve => { release = () => resolve("HTTP/2 204 No Content\r\n\r\n"); })
       : "HTTP/2 204 No Content\r\n\r\n" });
   t.after(() => { release?.(); ui.window.events.pagehide(); ui.inbox.close(); });
@@ -373,7 +375,7 @@ test("batch retries ignore locked original targets that are no longer shown", as
   release();
   await ui.inbox.batch.done;
   await runInContext("update()", ui.context);
-  assert.deepEqual(ui.deletions, ["/notifications/threads/1", "/notifications/threads/1", "/notifications/threads/2"]);
+  assert.deepEqual(ui.deletions, ["/notifications/threads/1", "/notifications/threads/2", "/notifications/threads/1", "/notifications/threads/2"]);
 });
 
 test("status polls hand off shortcut focus before a delayed acknowledgement without overriding newer focus", async t => {

@@ -239,7 +239,7 @@ test("queued row acknowledgements survive more than the action request deadline 
       expect((await response.json()).rowActionToken).toMatch(/^[a-f0-9-]{36}$/);
     }
     await page.clock.fastForward(29_000);
-    await expect(page.locator('[data-focus-key="done:2"]')).toHaveAttribute("data-write-state", "queued");
+    await expect(page.locator('[data-focus-key="done:2"]')).toHaveAttribute("data-write-state", "active");
     first.release();
     await enteredSecond.promise;
     await page.clock.fastForward(29_000);

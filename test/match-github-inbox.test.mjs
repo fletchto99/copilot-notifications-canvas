@@ -272,11 +272,17 @@ test("mixed-state batches select unread items for Read and all shown items for D
 });
 
 test("changing Match GitHub Inbox cannot widen or interrupt a running batch", async t => {
-  const { client, calls } = fixture();
+  const { client, calls, advance } = fixture();
   const run = client.run;
-  let finish;
+  const finishes = [];
   client.run = async args => {
-    if (args.includes("DELETE")) await new Promise(resolve => { finish = resolve; });
+    if (args.includes("DELETE")) {
+      await new Promise(resolve => { finishes.push(resolve); });
+      if (args.at(-1).endsWith("/2")) {
+        calls.push(args);
+        return http({}, {}, 500);
+      }
+    }
     return run(args);
   };
   const inbox = new Inbox(client);
@@ -287,14 +293,15 @@ test("changing Match GitHub Inbox cannot widen or interrupt a running batch", as
   inbox.setMatchGitHubInbox(false);
   await assert.rejects(inbox.refresh(), { code: "busy" });
   const token = inbox.batch.snapshot().token;
-  inbox.batch.cancel({ token });
-  finish();
+  finishes.forEach(finish => finish());
   await inbox.batch.done;
   assert.equal(inbox.batch.snapshot().total, 2);
   assert.equal(inbox.batch.snapshot().succeeded, 1);
-  assert.equal(inbox.batch.snapshot().notAttempted, 1);
+  assert.equal(inbox.batch.snapshot().failed, 1);
   assert.equal(inbox.snapshot().matchGitHubInbox, true);
   client.run = run;
+  advance();
+  advance();
   await inbox.refresh();
   assert.equal(inbox.snapshot().matchGitHubInbox, false);
   assert.throws(() => inbox.batch.retry({ token }), { code: "no_remaining" });
@@ -304,7 +311,7 @@ test("changing Match GitHub Inbox cannot widen or interrupt a running batch", as
   assert.equal(inbox.batch.snapshot().total, 1);
   await inbox.batch.done;
   assert.deepEqual(calls.filter(args => args.includes("DELETE")).map(args => args.at(-1)),
-    ["/notifications/threads/1", "/notifications/threads/2"]);
+    ["/notifications/threads/1", "/notifications/threads/2", "/notifications/threads/2"]);
   assert.equal(inbox.summary().loaded, 0);
 });
 

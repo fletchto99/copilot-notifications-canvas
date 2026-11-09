@@ -222,7 +222,7 @@ test("row and group actions lock only overlapping selections and expose independ
   let release;
   const held = new Promise(resolve => { release = resolve; });
   canvas.setRequestHook(async args => {
-    if (args.includes("PATCH") && args.at(-1).endsWith("/threads/1")) await held;
+    if (args.includes("PATCH") || args.includes("DELETE")) await held;
   });
   try {
     const rowRead = page.locator('[data-focus-key="read:1"]');
@@ -233,8 +233,8 @@ test("row and group actions lock only overlapping selections and expose independ
     await expect(page.locator('[data-focus-key="bulk:example/widgets"]')).toBeDisabled();
     await page.locator('[data-focus-key="bulk-done:example/tools"]').click();
     const tools = page.locator(".repo-group").filter({ has: page.locator('[data-focus-key="repo:example/tools"]') });
-    await expect(tools.locator(".group-progress")).toHaveText("Queued 0/2 as done...");
-    await expect(tools.locator(".repo-done")).toHaveAttribute("data-write-state", "queued");
+    await expect(tools.locator(".group-progress")).toHaveText("Marking 0/2 as done...");
+    await expect(tools.locator(".repo-done")).toHaveAttribute("data-write-state", "active");
     await expect(tools.locator(".repo-done")).toBeFocused();
     await expect(page.locator("#batch-progress")).toBeHidden();
     await expect(page.locator('[data-focus-key="done:3"]')).toBeDisabled();
@@ -243,8 +243,8 @@ test("row and group actions lock only overlapping selections and expose independ
     const solo = page.locator(".repo-group").filter({ has: page.locator('[data-focus-key="repo:example/solo"]') });
     await expect(solo.locator(".repo-done")).toBeFocused();
     await expect(page.getByRole("button", { name: "Stop remaining", exact: true })).toHaveCount(0);
-    await expect(tools.locator(".group-progress")).toHaveText("Queued 0/2 as done...");
-    await expect(solo.locator(".group-progress")).toHaveText("Queued 0/1 as done...");
+    await expect(tools.locator(".group-progress")).toHaveText("Marking 0/2 as done...");
+    await expect(solo.locator(".group-progress")).toHaveText("Marking 0/1 as done...");
     const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
     expect(results.violations).toEqual([]);
     release();
@@ -255,7 +255,7 @@ test("row and group actions lock only overlapping selections and expose independ
     await expect(page.locator('[data-focus-key="done:4"]')).toHaveCount(0);
     await expect(tools).toBeHidden();
     await expect(page.locator('[data-focus-key="done:2"]')).toBeEnabled();
-    expect(canvas.writes).toEqual(["1", "3", "5", "4"]);
+    expect(new Set(canvas.writes)).toEqual(new Set(["1", "3", "4", "5"]));
   } finally {
     release();
   }
@@ -277,7 +277,7 @@ test("completing one batch keeps keyboard focus usable in another running batch"
     const tools = page.locator(".repo-group").filter({ has: page.locator('[data-focus-key="repo:example/tools"]') });
     await tools.locator(".repo-read").focus();
     await expect(widgets.locator(".group-progress")).toHaveText("Marking 0/1 as read...");
-    await expect(tools.locator(".group-progress")).toHaveText("Queued 0/1 as read...");
+    await expect(tools.locator(".group-progress")).toHaveText("Marking 0/1 as read...");
     releaseFirst();
     await expect(widgets.locator(".group-progress")).toBeHidden();
     await expect(page.getByRole("searchbox")).toBeEnabled();
@@ -304,11 +304,17 @@ for (const groupBy of ["repo", "date", "none"]) {
     await page.goto(canvas.url);
     let release;
     const held = new Promise(resolve => { release = resolve; });
-    canvas.setRequestHook(args => args.includes("DELETE") && args.at(-1).endsWith("/threads/1") ? held : undefined);
+    let active = 0;
+    canvas.setRequestHook(args => {
+      if (!args.includes("DELETE")) return;
+      active++;
+      return held;
+    });
     try {
       await page.getByRole("tab", { name: "Mentioned (2)", exact: true }).click();
       await expect(page.locator(".row")).toHaveCount(2);
       await page.locator(".repo-done").click();
+      await expect.poll(() => active).toBe(2);
       await expect(page.locator(".repo-done")).toBeFocused();
       await expect(page.locator(".repo-done")).toBeDisabled();
       await expect(page.locator(".group-progress")).toHaveText("Marking 0/2 as done...");
@@ -381,10 +387,10 @@ test("a filtered batch retry can run beside a write to an excluded original targ
     await expect(page.locator(".row")).toHaveCount(1);
     await expect(page.locator("#batch-retry")).toBeEnabled();
     await page.locator("#batch-retry").click();
-    await expect(page.locator(".group-progress")).toHaveText("Queued 0/1 as done...");
-    release();
     await expect(page.locator(".row")).toHaveCount(0);
-    expect(canvas.doneWrites).toEqual(["1", "2"]);
+    expect(canvas.doneWrites).toEqual(["2"]);
+    release();
+    await expect.poll(() => canvas.doneWrites).toEqual(["2", "1"]);
   } finally {
     release();
   }

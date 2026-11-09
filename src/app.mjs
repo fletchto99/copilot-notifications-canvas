@@ -664,7 +664,7 @@ function batchLocked() {
 }
 
 function batchRunning(batch) {
-  return ["running", "stopping"].includes(batch.status);
+  return batch.status === "running";
 }
 
 function groupForBatch(batch) {
@@ -676,8 +676,7 @@ function groupForBatch(batch) {
 }
 
 function batchProgress(batch) {
-  return batch.status === "stopping" ? "Stopping..." :
-    `${batch.inFlight ? "Marking" : "Queued"} ${batch.succeeded}/${batch.total} as ${batch.action}...`;
+  return `${batch.inFlight ? "Marking" : "Queued"} ${batch.succeeded}/${batch.total} as ${batch.action}...`;
 }
 
 function groupFocus(origin) {

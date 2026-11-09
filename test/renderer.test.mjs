@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { runInContext } from "node:vm";
 import { http, inboxNext as next, thread } from "./fixtures.mjs";
-import { renderer, script, html, styles, settle } from "./renderer-fixtures.mjs";
+import { renderer, script, html, styles, settle, finishRows } from "./renderer-fixtures.mjs";
 
 test("renderer public controls survive bundling and minification", async () => {
   const ui = await renderer({
@@ -625,6 +625,7 @@ test("counts return on arrivals and hide immediately after completing the last n
   assert.equal(ui.ids.get("count").hidden, false);
   assert.equal(ui.ids.get("count").textContent, "1 total \u00b7 1 unread");
   await ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.focusKey === "done:1").events.click();
+  await finishRows(ui);
   assert.equal(ui.ids.get("count").textContent, "0 total \u00b7 0 unread");
   assert.equal(ui.ids.get("empty-title").textContent, "All caught up \u{1F389}");
   assert.equal(ui.ids.get("empty-refresh").hidden, true);
@@ -659,6 +660,7 @@ test("Load more still fetches another page of 50 and disappears when the inbox e
 test("Load more explains when a refresh is needed after a read", async () => {
   const ui = await renderer({ onFetch: () => http([thread("1"), thread("2")], { link: next }) });
   await ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "1").events.click();
+  await finishRows(ui);
   assert.equal(ui.ids.get("more").disabled, true);
   assert.equal(ui.ids.get("more").title, "Refresh notifications before loading more.");
   ui.window.events.pagehide();

@@ -18,14 +18,14 @@ const rows = [
   thread("3", { repository: { full_name: "example/gamma" }, reason: "assign", updated_at: "2026-01-11T12:00:00Z" }),
 ];
 
-async function fixture({ items = rows, run, sleep } = {}) {
+async function fixture({ items = rows, run } = {}) {
   let now = 0;
   const calls = [];
   const writes = [];
   const waits = [];
   const client = new GitHubClient({
     now: () => now,
-    sleep: sleep ?? (async delay => { waits.push(delay); now += delay; }),
+    sleep: async delay => { waits.push(delay); now += delay; },
     run: async (args, options) => {
       const method = args[args.indexOf("--method") + 1];
       const endpoint = args.at(-1);
@@ -76,7 +76,7 @@ test("shown read and Done batches capture only loaded filter matches across repo
     assert.doesNotMatch(JSON.stringify(inbox.summary()), /selectionKey|"token"|example\/|Synthetic notification|"items"/);
     await inbox.batch.done;
     assert.deepEqual(writes, ["1", "2", "5"].map(id => ({ id, method: action === "done" ? "DELETE" : "PATCH" })));
-    assert.deepEqual(waits, [1000, 1000]);
+    assert.deepEqual(waits, []);
     assert.equal(calls.filter(call => call.method === "GET").length, 2);
     for (const panel of [inbox, other]) {
       assert.deepEqual(panel.loadedItems().filter(item => action === "done" || item.unread).map(item => item.id), ["3", "4"]);
@@ -111,25 +111,24 @@ test("shown selection keys bind scope, filters, and repository identity and neve
   assert.deepEqual(writes, []);
 });
 
-test("shown batches still default to read and can be cancelled before dispatch", async t => {
+test("shown batches still default to read and panel close cancels them before dispatch", async t => {
   const { inbox, writes } = await fixture();
   t.after(() => inbox.close());
   inbox.batch.start({ scope: "shown", selectionKey: inbox.snapshot().selectionKey });
   assert.equal(inbox.batch.snapshot().action, "read");
-  inbox.batch.cancel({ token: inbox.batch.snapshot().token });
+  inbox.close();
   await inbox.batch.done;
-  assert.equal(inbox.batch.snapshot().status, "cancelled");
-  assert.equal(inbox.batch.snapshot().scope, "shown");
+  assert.equal(inbox.batch.snapshot(), null);
   assert.deepEqual(writes, []);
 });
 
 test("shown batches and repository or row writes cannot reserve overlapping threads in either direction", async t => {
   for (const first of ["shown", "repository", "row"]) {
-    let release;
+    const releases = [];
     const { inbox, client, writes } = await fixture({ run: async args => {
       const method = args[args.indexOf("--method") + 1];
       if (method === "GET") return http(rows.slice(0, 2));
-      await new Promise(resolve => { release = resolve; });
+      await new Promise(resolve => { releases.push(resolve); });
       return confirmed(method);
     } });
     const other = new Inbox(client);
@@ -153,10 +152,9 @@ test("shown batches and repository or row writes cannot reserve overlapping thre
       await assert.rejects(other.markRead({ id: "2" }), { code: "busy" });
       await assert.rejects(other.markDone({ id: "2" }), { code: "busy" });
     }
-    if (first !== "row") inbox.batch.cancel({ token: inbox.batch.snapshot().token });
-    release();
+    releases.forEach(release => release());
     await pending;
-    assert.equal(writes.length, 1);
+    assert.equal(writes.length, first === "shown" ? 2 : 1);
     assert.equal(client.threadReservations.size, 0);
     assert.equal(client.pendingThreads.size, 0);
   }
@@ -166,15 +164,15 @@ test("shown retries keep their scope and action while excluding successes, new a
   let attempts = 0;
   const { inbox, client, writes, advance } = await fixture({ run: async args => {
     if (args.includes("GET")) return http(rows);
-    return ++attempts === 2 ? http({}, {}, 500) : confirmed("DELETE");
+    return [2, 3].includes(++attempts) ? http({}, {}, 500) : confirmed("DELETE");
   } });
   t.after(() => inbox.close());
   inbox.batch.start(selection(inbox));
   const token = { token: inbox.batch.snapshot().token };
   await inbox.batch.done;
   assert.equal(inbox.batch.snapshot().succeeded, 1);
-  assert.equal(inbox.batch.snapshot().failed, 1);
-  assert.equal(inbox.batch.snapshot().notAttempted, 1);
+  assert.equal(inbox.batch.snapshot().failed, 2);
+  assert.equal(inbox.batch.snapshot().notAttempted, 0);
   assert.throws(() => inbox.batch.retry({ ...token, scope: "repository" }), { code: "invalid_batch" });
   assert.throws(() => inbox.batch.retry(token), { code: "github_http" });
   inbox.pages[0].items.push(...normalizeThreads([thread("30")]));
@@ -185,16 +183,16 @@ test("shown retries keep their scope and action while excluding successes, new a
   assert.equal(inbox.batch.snapshot().action, "done");
   assert.equal(inbox.batch.snapshot().total, 1);
   await inbox.batch.done;
-  assert.deepEqual(writes, ["1", "2", "3"].map(id => ({ method: "DELETE", id })));
+  assert.deepEqual(writes, ["1", "2", "3", "3"].map(id => ({ method: "DELETE", id })));
   assert.deepEqual(inbox.loadedItems().map(item => item.id).sort(), ["2", "30"]);
   assert.equal(client.threadReservations.size, 0);
 });
 
-test("shown batches recheck repository identity after queued spacing and do not follow transferred threads", async t => {
+test("shown batches recheck repository identity after a queued page and do not follow transferred threads", async t => {
   let release;
-  const { inbox, client, writes } = await fixture({ sleep: () => new Promise(resolve => { release = resolve; }) });
+  const { inbox, client, writes } = await fixture();
   t.after(() => inbox.close());
-  client.writeAvailableAt = 1000;
+  client.pageQueue = new Promise(resolve => { release = resolve; });
   inbox.batch.start(selection(inbox));
   await settle();
   for (const page of client.cache.values()) {

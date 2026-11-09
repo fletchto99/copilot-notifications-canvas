@@ -475,20 +475,19 @@ test("pending refreshes report loading with the previous rows and reject row wri
 
 test("active repository batches block refresh, pagination and row reads without additional requests", async () => {
   let started;
-  let finish;
+  const finishes = [];
   const ready = new Promise(resolve => { started = resolve; });
   const calls = [];
   const client = new GitHubClient({ run: async args => {
     calls.push(args);
     if (!args.includes("PATCH")) return http([thread("1"), thread("2")], { link: next });
     started();
-    return new Promise(resolve => { finish = () => resolve("HTTP/2 205 Reset Content\r\n\r\n"); });
+    return new Promise(resolve => { finishes.push(() => resolve("HTTP/2 205 Reset Content\r\n\r\n")); });
   } });
   const inbox = new Inbox(client);
   await inbox.refresh();
   const { repository, selectionKey } = inbox.groups()[0];
   inbox.batch.start({ repository, selectionKey });
-  const token = { token: inbox.batch.snapshot().token };
   try {
     await ready;
     for (const action of [
@@ -500,15 +499,14 @@ test("active repository batches block refresh, pagination and row reads without 
     ]) {
       await assert.rejects(action(), { code: "busy" });
     }
-    assert.equal(calls.length, 2);
+    assert.equal(calls.length, 3);
     assert.equal(inbox.summary().loaded, 2);
   } finally {
-    inbox.batch.cancel(token);
-    finish();
+    finishes.forEach(finish => finish());
     await inbox.batch.done;
     inbox.close();
   }
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3);
   assert.equal(client.threadReservations.size, 0);
   assert.equal(client.pendingThreads.size, 0);
 });

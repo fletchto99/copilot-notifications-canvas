@@ -178,16 +178,16 @@ test("failed filters wait for the polling cadence while a foreground refresh is 
 
 test("failed filters do not spin while an active write prevents a queued refresh", async t => {
   for (const batch of [false, true]) {
-    let release;
+    const releases = [];
     let attempts = 0;
     let fail = true;
     const ui = await renderer({ initialRows: [thread("1"), thread("2")],
-      onWrite: () => new Promise(resolve => { release = () => resolve("HTTP/2 204 No Content\r\n\r\n"); }),
+      onWrite: () => new Promise(resolve => { releases.push(() => resolve("HTTP/2 204 No Content\r\n\r\n")); }),
       onFilters: () => {
         if (++attempts === 4) ui.intersect(false);
         if (fail) throw new Error("Synthetic filter failure");
       } });
-    t.after(() => { release?.(); ui.window.events.pagehide(); ui.inbox.close(); });
+    t.after(() => { releases.forEach(release => release()); ui.window.events.pagehide(); ui.inbox.close(); });
     await runInContext(batch ? 'batchRequest("start", {repository: "example/widgets", selectionKey: state.groups[0].selectionKey, action: "done"}, ["1", "2"], "bulk-done:example/widgets")'
       : 'markThread("1", "done")', ui.context);
     await settle();
@@ -201,8 +201,7 @@ test("failed filters do not spin while an active write prevents a queued refresh
     await ui.fireTimer(1000);
     assert.equal(attempts, 3);
     assert.equal(ui.inbox.filters.query, "notification 2");
-    if (batch) ui.inbox.batch.cancel({ token: ui.inbox.batch.snapshot().token });
-    release();
+    releases.forEach(release => release());
     await ui.inbox.batch.done;
     await runInContext("update()", ui.context);
   }

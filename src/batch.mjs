@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { WRITE_CONCURRENCY } from "./github.mjs";
 import { groupThreadsByDate, InboxError, uniqueThreads } from "./model.mjs";
 
 export function selectionKey(group, filters) {
@@ -37,7 +38,7 @@ export class NotificationBatch {
   }
 
   isRunning(operation) {
-    return ["running", "stopping"].includes(operation.status);
+    return operation.status === "running";
   }
 
   assertAvailable() {
@@ -97,8 +98,8 @@ export class NotificationBatch {
       token: randomUUID(), repository, scope, action, status: "running",
       ...(scope === "date" ? { date, timeZone } : {}),
       searchActive: Boolean(this.inbox.filters.query.trim()),
-      items: items.map(({ id, updatedAt, repository, unread }) => ({ id, updatedAt, repository, unread, result: "pending" })),
-      inFlight: false, cancelled: false, error: null, owner, controller: new AbortController(),
+      items: items.map(({ id, updatedAt, repository, unread }) => ({ id, updatedAt, repository, unread, result: "pending", inFlight: false })),
+      error: null, owner, controller: new AbortController(), queueController: new AbortController(),
     };
     this.operations.set(operation.token, operation);
     const done = this.run(operation);
@@ -134,9 +135,18 @@ export class NotificationBatch {
 
   async run(operation) {
     const signal = AbortSignal.any([this.inbox.controller.signal, operation.controller.signal]);
-    try {
-      for (const item of operation.items) {
-        if (operation.cancelled || signal.aborted) break;
+    const queueSignal = AbortSignal.any([signal, operation.queueController.signal]);
+    const items = operation.items.values();
+    const stop = error => {
+      if (error instanceof InboxError && error.code === "selection_changed") return;
+      operation.error ??= error instanceof InboxError
+        ? { code: error.code, message: error.message }
+        : { code: "batch_failed", message: "An unexpected batch error occurred. Wait for the next automatic refresh before retrying remaining notifications." };
+      operation.queueController.abort();
+    };
+    const worker = async () => {
+      for (const item of items) {
+        if (signal.aborted || operation.error) return;
         try {
           if (!this.eligible(operation, item)) {
             item.result = "skipped";
@@ -145,10 +155,11 @@ export class NotificationBatch {
           const method = operation.action === "done" ? "markDone" : "markRead";
           await this.inbox.client[method](item.id, signal, {
             owner: operation.owner,
+            queueSignal,
+            onWriteError: stop,
             beforeWrite: () => {
-              if (operation.cancelled || signal.aborted) throw new InboxError("batch_cancelled", "Remaining work was cancelled.", 409);
               if (!this.eligible(operation, item)) throw new InboxError("selection_changed", "A selected notification changed.", 409);
-              operation.inFlight = true;
+              item.inFlight = true;
             },
           });
           item.result = "succeeded";
@@ -157,34 +168,25 @@ export class NotificationBatch {
             item.result = "skipped";
             continue;
           }
-          if ((operation.cancelled || signal.aborted) && !operation.inFlight) break;
-          if (operation.inFlight) item.result = "failed";
-          operation.error = error instanceof InboxError
-            ? { code: error.code, message: error.message }
-            : { code: "batch_failed", message: "An unexpected batch error occurred. Wait for the next automatic refresh before retrying remaining notifications." };
-          if (signal.aborted && operation.inFlight) {
-            operation.error = { code: "result_unknown", message: "The in-flight request was interrupted. GitHub may have applied it; wait for the next automatic refresh or reopen the canvas before retrying." };
+          if ((signal.aborted || operation.error) && !item.inFlight) return;
+          if (item.inFlight) item.result = "failed";
+          stop(error);
+          if (signal.aborted && item.inFlight) {
+            operation.error = { code: "result_unknown", message: "In-flight requests were interrupted. GitHub may have applied them; wait for the next automatic refresh or reopen the canvas before retrying." };
           }
-          break;
+          return;
         } finally {
-          operation.inFlight = false;
+          item.inFlight = false;
         }
       }
+    };
+    try {
+      await Promise.all(Array.from({ length: Math.min(WRITE_CONCURRENCY, operation.items.length) }, worker));
       operation.status = operation.items.every(item => item.result === "succeeded") ? "completed" :
-        operation.cancelled || signal.aborted ? "cancelled" : "partial";
+        signal.aborted ? "cancelled" : "partial";
     } finally {
       this.inbox.client.releaseThreads(operation.owner);
       if (this.disposed || (operation.status === "completed" && operation.scope !== "thread")) this.operations.delete(operation.token);
-    }
-  }
-
-  cancel(input) {
-    const operation = this.identify(input);
-    if (["running", "stopping"].includes(operation.status)) {
-      operation.cancelled = true;
-      operation.status = "stopping";
-      // Let an already-sent request report its outcome; cancel queued and not-yet-sent work.
-      if (!operation.inFlight) operation.controller.abort();
     }
   }
 
@@ -244,13 +246,14 @@ export class NotificationBatch {
   snapshot(operation = [...this.operations.values()].at(-1), context) {
     if (!operation) return null;
     const count = result => operation.items.filter(item => item.result === result).length;
+    const inFlight = operation.items.filter(item => item.inFlight).length;
     return {
       token: operation.token, repository: operation.repository, scope: operation.scope, action: operation.action, status: operation.status,
       ...(operation.scope === "date" ? { date: operation.date, timeZone: operation.timeZone } : {}),
       ...(operation.scope === "thread" ? { threadId: operation.items[0].id } : {}),
       total: operation.items.length, succeeded: count("succeeded"), failed: count("failed"),
-      skipped: count("skipped"), notAttempted: count("pending") - Number(operation.inFlight),
-      inFlight: operation.inFlight, searchActive: operation.searchActive,
+      skipped: count("skipped"), notAttempted: count("pending") - inFlight,
+      inFlight: inFlight > 0, searchActive: operation.searchActive,
       remainingThreadIds: operation.items.filter(item => ["pending", "failed"].includes(item.result)).map(item => item.id),
       retryableThreadIds: this.isRunning(operation) || operation.status === "completed" ? [] : this.retryItems(operation, context).map(item => item.id),
       error: operation.error, retryAt: this.inbox.client.blockedUntil,
@@ -272,7 +275,6 @@ export class NotificationBatch {
     this.disposed = true;
     for (const operation of this.operations.values()) {
       if (this.isRunning(operation)) {
-        operation.cancelled = true;
         operation.controller.abort();
       } else {
         this.operations.delete(operation.token);

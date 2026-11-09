@@ -369,7 +369,7 @@ test("request preparation gates reads and writes without counting blocked writes
     assert.equal(prepared, 1);
     assert.equal(dispatched, 0);
     assert.equal(calls, 0);
-    assert.equal(client.writeAvailableAt, 0);
+    assert.equal(client.threadWrites.size, 0);
     assert.equal(client.pendingThreads.size, 0);
     assert.equal(client.failures.size, 0);
   }
@@ -387,7 +387,7 @@ test("cancellation during asynchronous request preparation prevents reads and wr
       method === "PATCH" ? client.markRead("1", controller.signal, options) : client.markDone("1", controller.signal, options),
     { code: "closed" });
     assert.equal(client.sequence, 0);
-    assert.equal(client.writeAvailableAt, 0);
+    assert.equal(client.threadWrites.size, 0);
     assert.equal(client.failures.size, 0);
     assert.equal(client.pendingThreads.size, 0);
   }
@@ -402,7 +402,7 @@ test("eligible desktop cache reads remain available without asynchronous request
   assert.equal(calls, 1);
 });
 
-test("write eligibility is rechecked after preparation without reserving spacing for an unsent write", async () => {
+test("write eligibility is rechecked after preparation without retaining an unsent write", async () => {
   const events = [];
   const client = new GitHubClient({
     now: () => 0,
@@ -414,7 +414,7 @@ test("write eligibility is rechecked after preparation without reserving spacing
     throw new InboxError("selection_changed", "Synthetic selection changed", 409);
   } }), { code: "selection_changed" });
   assert.deepEqual(events, ["prepared", "rechecked"]);
-  assert.equal(client.writeAvailableAt, 0);
+  assert.equal(client.threadWrites.size, 0);
   assert.equal(client.revision, 0);
   assert.equal(client.pendingThreads.size, 0);
   assert.equal(client.failures.size, 0);
