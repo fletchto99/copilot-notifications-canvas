@@ -29,6 +29,8 @@ for (const action of ["read", "done"]) {
     await expect(page.locator(".row")).toHaveCount(14);
     await page.clock.pauseAt(new Date(Date.now() + 1000));
     const group = page.locator(".repo-group").filter({ has: page.locator('[data-focus-key="repo:example/widgets"]') });
+    const header = group.locator(".repo-header");
+    const headerHeight = (await header.boundingBox()).height;
     const selected = group.locator(`.mark-${action}`);
     const other = page.locator('[data-focus-key="done:14"]');
     const animationNames = () => selected.evaluateAll(buttons =>
@@ -38,6 +40,13 @@ for (const action of ["read", "done"]) {
       await group.locator(`.repo-${action}`).click();
       await expect(selected).toHaveCount(count);
       await expect.poll(animationNames).toEqual(Array(count).fill("refresh-spin"));
+      const progress = group.getByRole("status");
+      await expect(progress).toHaveText(`Queued to mark as ${action}...`);
+      await expect(progress).toHaveAttribute("aria-live", "polite");
+      await expect(progress).toHaveCSS("position", "absolute");
+      await expect(progress).toHaveCSS("width", "1px");
+      await expect(progress).toHaveCSS("height", "1px");
+      await expect.poll(async () => (await header.boundingBox()).height).toBeCloseTo(headerHeight, 1);
       await expect(other).toHaveAttribute("aria-busy", "false");
       expect(started).toEqual([]);
       await page.emulateMedia({ reducedMotion: "reduce" });
@@ -47,6 +56,8 @@ for (const action of ["read", "done"]) {
       await expect.poll(() => started.length).toBe(10);
       await expect(page.locator(`[data-focus-key="${action}:1"]`)).toHaveAttribute("data-write-state", "active");
       await expect(page.locator(`[data-focus-key="${action}:13"]`)).toHaveAttribute("data-write-state", "queued");
+      await expect(progress).toHaveText(`Marking 0/${count} as ${action}...`);
+      await expect.poll(async () => (await header.boundingBox()).height).toBeCloseTo(headerHeight, 1);
       await expect.poll(animationNames).toEqual(Array(count).fill("refresh-spin"));
       expect(started).not.toContain("13");
       expect(started).not.toContain("14");

@@ -159,7 +159,7 @@ test("shown batches finish their original scope after switching to repository gr
   try {
     await page.getByRole("button", { name: "Mark 3 as done; 3 shown, loaded notifications", exact: true }).click();
     await started;
-    await expect(page.locator(".group-progress:visible")).toHaveText("Marking 0/3 as done...");
+    await expect(page.locator(".group-progress:not([hidden])")).toHaveText("Marking 0/3 as done...");
     await expect(page.getByRole("searchbox")).toBeEnabled();
     await expect(page.locator(shownGroup).locator(".repo-done")).toBeDisabled();
     await page.getByLabel("Settings", { exact: true }).click();

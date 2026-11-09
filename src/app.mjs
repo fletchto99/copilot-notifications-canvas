@@ -1322,7 +1322,7 @@ function renderGroups(groups, fallbackFocusKey, completedRows = []) {
     const rows = element("div", "repo-items");
     const section = element("section", "repo-group");
     const header = element("div", "repo-header");
-    const status = element("p", "group-progress");
+    const status = element("p", "group-progress sr-only");
     status.setAttribute("role", "status");
     status.setAttribute("aria-live", "polite");
     status.hidden = true;

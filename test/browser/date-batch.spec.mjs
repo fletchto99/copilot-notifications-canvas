@@ -113,7 +113,7 @@ test.describe("date-scoped actions", () => {
     try {
       await page.getByRole("button", { name: actionName("done"), exact: true }).click();
       await started;
-      await expect(page.locator(".group-progress:visible")).toHaveText("Marking 0/2 as done...");
+      await expect(page.locator(".group-progress:not([hidden])")).toHaveText("Marking 0/2 as done...");
       await expect(page.locator(`[data-focus-key="bulk-done:date:${date}"]`)).toHaveAccessibleDescription("Marking 0/2 as done...");
       await expect(page.locator('[data-focus-key="bulk:date:2026-01-13"]')).toHaveAccessibleDescription("Mark 1 as read");
       await expect(page.locator('[data-focus-key="bulk:date:2026-01-13"]')).toHaveAttribute("aria-busy", "false");
