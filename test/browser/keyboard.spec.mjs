@@ -367,8 +367,8 @@ for (const packaged of [false, true]) {
         release();
         await expect(page.locator(".row")).toHaveCount(1);
         await expect(page.getByRole("searchbox")).toBeFocused();
-        await expect.poll(() => canvas.writes).toEqual(["1", "2"]);
-        expect(canvas.doneWrites).toEqual(["1", "2"]);
+        await expect.poll(() => canvas.writes.toSorted()).toEqual(["1", "2"]);
+        expect(canvas.doneWrites.toSorted()).toEqual(["1", "2"]);
       } finally {
         release();
       }

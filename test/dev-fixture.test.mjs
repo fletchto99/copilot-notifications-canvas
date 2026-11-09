@@ -167,7 +167,7 @@ test("synthetic preview uses the protected server, temporary preferences and in-
   const settleRows = async () => {
     for (let attempt = 0; attempt < 300; attempt++) {
       const state = await (await get("/api/state")).json();
-      if (!state.batches.some(batch => ["running", "stopping"].includes(batch.status))) return state;
+      if (!state.batches.some(batch => batch.status === "running")) return state;
       await delay(10);
     }
     assert.fail("Synthetic queued row actions did not finish");

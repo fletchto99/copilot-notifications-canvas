@@ -303,6 +303,7 @@ test("selected tabs stay visible when emptied by read or done until another tab 
     const control = ui.ids.get("groups").querySelectorAll("button").find(button => button.dataset.action === action);
     control.focus();
     await control.events.click();
+    await finishRows(ui);
     assert.equal(selected.textContent, "Mentioned (0)");
     assert.equal(selected.hidden, false);
     assert.equal(selected.getAttribute("aria-selected"), "true");

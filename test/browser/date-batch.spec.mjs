@@ -52,8 +52,8 @@ test.describe("date-scoped actions", () => {
         await expect(group.locator(".repo-read")).toBeDisabled();
         await expect(group.locator(".repo-read")).toHaveAccessibleDescription("Mark 0 as read");
       } else await expect(page.locator(".repo-name")).toHaveText("January 13, 2026");
-      expect(canvas.writes).toEqual(["1", "2"]);
-      expect(canvas.doneWrites).toEqual(action === "done" ? ["1", "2"] : []);
+      expect(canvas.writes.toSorted()).toEqual(["1", "2"]);
+      expect(canvas.doneWrites.toSorted()).toEqual(action === "done" ? ["1", "2"] : []);
       for (const id of ["3", "4", "5", "51"]) expect(canvas.rows.find(row => row.id === id).unread).toBe(true);
       expect(canvas.requests.some(endpoint => endpoint.includes("page=2"))).toBe(false);
       await expect(page.getByRole("tab", { name: `Mentioned (${action === "read" ? 4 : 2})`, exact: true })).toHaveAttribute("aria-selected", "true");
@@ -113,7 +113,7 @@ test.describe("date-scoped actions", () => {
     try {
       await page.getByRole("button", { name: actionName("done"), exact: true }).click();
       await started;
-      await expect(page.locator(".group-progress:visible")).toHaveText("Marking 0/2 as done...");
+      await expect(page.locator(".group-progress:not([hidden])")).toHaveText("Marking 0/2 as done...");
       await expect(page.locator(`[data-focus-key="bulk-done:date:${date}"]`)).toHaveAccessibleDescription("Marking 0/2 as done...");
       await expect(page.locator('[data-focus-key="bulk:date:2026-01-13"]')).toHaveAccessibleDescription("Mark 1 as read");
       await expect(page.locator('[data-focus-key="bulk:date:2026-01-13"]')).toHaveAttribute("aria-busy", "false");
@@ -127,7 +127,7 @@ test.describe("date-scoped actions", () => {
       release();
       await expect(page.locator(".row")).toHaveCount(1);
       await expect(page.locator("#batch-progress")).toBeHidden();
-      expect(canvas.doneWrites).toEqual(["1", "2"]);
+      expect(canvas.doneWrites.toSorted()).toEqual(["1", "2"]);
       expect(canvas.rows.find(row => row.id === "3").unread).toBe(true);
       await expect(page.locator('[data-focus-key="bulk:shown"]')).toHaveAccessibleDescription("Mark 1 as read");
     } finally {
@@ -152,7 +152,7 @@ test.describe("date-scoped actions", () => {
     await expect(retry).toBeEnabled();
     await retry.click();
     await expect(page.locator(".row")).toHaveCount(2);
-    expect(canvas.doneWrites).toEqual(["1", "2"]);
+    expect(canvas.doneWrites.toSorted()).toEqual(["1", "2"]);
     expect(canvas.rows.find(row => row.id === "3").unread).toBe(true);
     expect(canvas.rows.find(row => row.id === "4").unread).toBe(true);
   });
@@ -172,6 +172,6 @@ test.describe("packaged date-specific controls", () => {
     await page.getByRole("button", { name: actionName("done"), exact: true }).click();
     await expect(page.locator(".row")).toHaveCount(1);
     await expect(page.locator(".repo-name")).toHaveText("January 13, 2026");
-    expect(canvas.doneWrites).toEqual(["1", "2"]);
+    expect(canvas.doneWrites.toSorted()).toEqual(["1", "2"]);
   });
 });

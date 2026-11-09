@@ -6,7 +6,7 @@ for (const packaged of [false, true]) {
   test.describe(`compact ordered views (${packaged ? "packaged" : "source"})`, () => {
     test.use({ packaged, timezoneId: "UTC" });
 
-    test("date and flat views preserve interleaved API order and date actions follow displayed order", async ({ page, canvas }) => {
+    test("date and flat views preserve interleaved API order and date actions target the displayed day", async ({ page, canvas }) => {
       canvas.rows.splice(3);
       canvas.rows[0].repository.full_name = "example/zulu";
       canvas.rows[1].repository.full_name = "example/alpha";
@@ -25,7 +25,7 @@ for (const packaged of [false, true]) {
       await page.keyboard.press("Escape");
       await page.locator('[data-focus-key="bulk-done:date:2026-01-12"]').click();
       await expect(page.locator(".row")).toHaveCount(1);
-      expect(canvas.doneWrites).toEqual(["2", "3"]);
+      expect(canvas.doneWrites.toSorted()).toEqual(["2", "3"]);
       await expect(page.locator('[data-focus-key="done:1"]')).toBeVisible();
     });
 

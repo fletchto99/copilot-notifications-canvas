@@ -178,16 +178,16 @@ test("failed filters wait for the polling cadence while a foreground refresh is 
 
 test("failed filters do not spin while an active write prevents a queued refresh", async t => {
   for (const batch of [false, true]) {
-    let release;
+    const releases = [];
     let attempts = 0;
     let fail = true;
     const ui = await renderer({ initialRows: [thread("1"), thread("2")],
-      onWrite: () => new Promise(resolve => { release = () => resolve("HTTP/2 204 No Content\r\n\r\n"); }),
+      onWrite: () => new Promise(resolve => { releases.push(() => resolve("HTTP/2 204 No Content\r\n\r\n")); }),
       onFilters: () => {
         if (++attempts === 4) ui.intersect(false);
         if (fail) throw new Error("Synthetic filter failure");
       } });
-    t.after(() => { release?.(); ui.window.events.pagehide(); ui.inbox.close(); });
+    t.after(() => { releases.forEach(release => release()); ui.window.events.pagehide(); ui.inbox.close(); });
     await runInContext(batch ? 'batchRequest("start", {repository: "example/widgets", selectionKey: state.groups[0].selectionKey, action: "done"}, ["1", "2"], "bulk-done:example/widgets")'
       : 'markThread("1", "done")', ui.context);
     await settle();
@@ -201,8 +201,7 @@ test("failed filters do not spin while an active write prevents a queued refresh
     await ui.fireTimer(1000);
     assert.equal(attempts, 3);
     assert.equal(ui.inbox.filters.query, "notification 2");
-    if (batch) ui.inbox.batch.cancel({ token: ui.inbox.batch.snapshot().token });
-    release();
+    releases.forEach(release => release());
     await ui.inbox.batch.done;
     await runInContext("update()", ui.context);
   }
@@ -229,19 +228,22 @@ test("row failures immediately reconcile backoff and failed reconciliation remai
   }
 });
 
-test("stopped batches keep nonzero skipped counts and preserve failure details when present", async t => {
-  const ui = await renderer();
-  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
-  await runInContext(`state.batches = [{
-    token: "synthetic", scope: "shown", action: "done", status: "cancelled", total: 4,
-    succeeded: 1, failed: 0, skipped: 1, notAttempted: 2, retryAt: 0, remainingThreadIds: ["2", "3"], retryableThreadIds: ["2", "3"]
-  }]; render()`, ui.context);
-  assert.equal(ui.ids.get("batch-counts").textContent, "1 marked done, 2 remaining, 1 skipped");
-  assert.equal(ui.ids.get("batch-retry").textContent, "Continue remaining (2)");
-  await runInContext('state.batches[0].error = { message: "Outcome unknown" }; render()', ui.context);
-  assert.equal(ui.ids.get("batch-retry").textContent, "Retry remaining (2)");
-  assert.match(ui.ids.get("batch-counts").textContent, /1 succeeded \/ 0 failed \/ 1 skipped \/ 2 not attempted/);
-  assert.equal(ui.ids.get("batch-error").textContent, "Outcome unknown");
+test("partial batches show skipped counts and preserve real failure details when present", async t => {
+  for (const fail of [false, true]) {
+    const ui = await renderer({ initialRows: [thread("1"), thread("2"), thread("3")],
+      onWrite: path => fail && path.endsWith("/2") ? http({}, {}, 500) : "HTTP/2 204 No Content\r\n\r\n" });
+    t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+    ui.inbox.batch.start({ scope: "shown", action: "done", selectionKey: ui.inbox.snapshot().selectionKey });
+    ui.inbox.pages[0].items.find(item => item.id === "3").updatedAt = "2026-01-11T12:00:00Z";
+    await ui.inbox.batch.done;
+    await runInContext("update()", ui.context);
+    assert.equal(ui.inbox.batch.snapshot().status, "partial");
+    assert.equal(ui.ids.get("batch-counts").textContent,
+      `${fail ? 1 : 2} succeeded / ${fail ? 1 : 0} failed / 1 skipped / 0 not attempted (3 selected)`);
+    assert.equal(ui.ids.get("batch-retry").textContent, `Retry remaining (${fail ? 1 : 0})`);
+    assert.equal(ui.ids.get("batch-retry").hidden, !fail);
+    assert.match(ui.ids.get("batch-error").textContent, fail ? /HTTP 500/ : /Skipped notifications changed/);
+  }
 });
 
 test("shared action errors use scope-neutral and read-or-Done wording", async t => {
@@ -251,7 +253,7 @@ test("shared action errors use scope-neutral and read-or-Done wording", async t 
   const owner = client.reserveThreads(["1"]);
   assert.throws(() => client.markDone("1"), { code: "busy", message: "This notification belongs to an active batch." });
   client.releaseThreads(owner);
-  await assert.rejects(ui.inbox.markDone({ id: "bad" }), {
+  assert.throws(() => ui.inbox.queueThread({ id: "bad" }, "done"), {
     code: "invalid_thread", message: "Choose one valid notification to mark as read or done.",
   });
   ui.inbox.needsRefresh = true;
