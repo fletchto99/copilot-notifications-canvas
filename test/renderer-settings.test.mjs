@@ -87,9 +87,10 @@ test("inbox, keyboard shortcuts and Settings tooltips share hover, focus and Esc
   ui.window.events.pagehide();
 });
 
-test("notification view uses a labeled native select without help text or a tooltip", () => {
+test("notification view uses a labeled native select directly before grouping without help text or a tooltip", () => {
   assert.match(html, /<label for="show-notifications">Show notifications<\/label>\s*<select id="show-notifications" disabled>/);
   assert.match(html, /<option value="all" selected>All<\/option>\s*<option value="unread">Unread only<\/option>/);
+  assert.match(html, /<select id="show-notifications"[^>]*>(?:\s*<option\b[^>]*>[^<]*<\/option>)+\s*<\/select>\s*<\/div>\s*<div class="select-setting">\s*<label for="group-by">/);
   assert.doesNotMatch(html, /id="match-github-inbox|id="show-notifications-(?:tooltip|help)"/);
 });
 
@@ -1002,7 +1003,6 @@ test("row reads in none and date modes retain rows and focus their Done action",
 test("Theme offers Match Copilot, Dark and Light while preserving saved values", async () => {
   assert.match(html, /<div class="select-setting">\s*<label for="theme">Theme<\/label>\s*<select id="theme" disabled>/);
   assert.match(html, /<option value="system" selected>Match Copilot<\/option>\s*<option value="dark">Dark<\/option>\s*<option value="light">Light<\/option>/);
-  assert.match(html, /<select id="theme"[^>]*>[\s\S]*?<\/select>\s*<\/div>\s*<div class="select-setting">\s*<label for="group-by">/);
   assert.doesNotMatch(html, /id="dark-mode"/);
   for (const [darkMode, theme] of [[undefined, "system"], [null, "system"], [true, "dark"], [false, "light"]]) {
     const storedSettings = darkMode === undefined ? {} : { darkMode };
