@@ -11,6 +11,89 @@ function controls(ui, repository = "example/widgets") {
   return { read, done };
 }
 
+test("group actions mark every eligible selected row busy before acknowledgement and beyond the write cap", async t => {
+  for (const groupBy of ["repo", "date", "none"]) {
+    for (const action of ["read", "done"]) {
+      let acknowledge;
+      let release;
+      const acknowledgement = new Promise(resolve => { acknowledge = resolve; });
+      const writes = new Promise(resolve => { release = resolve; });
+      const rows = Array.from({ length: 13 }, (_, index) => thread(String(index + 1), {
+        reason: "mention", unread: index !== 1,
+      }));
+      const ui = await renderer({
+        storedSettings: { groupBy },
+        initialRows: [...rows,
+          thread("14", { reason: "mention", subject: { title: "Excluded", type: "Issue", url: null } }),
+          thread("15", { reason: "review_requested" })],
+        onWrite: async (_path, _count, method) => {
+          await writes;
+          return `HTTP/2 ${method === "DELETE" ? 204 : 205} Synthetic\r\n\r\n`;
+        },
+        onActionResponse: () => acknowledgement,
+      });
+      t.after(() => { acknowledge(); release(); ui.window.events.pagehide(); ui.inbox.close(); });
+      await runInContext('update("filters", { attention: "mentioned", query: "notification" })', ui.context);
+      const buttons = () => ui.ids.get("groups").querySelectorAll("button");
+      const targets = () => buttons().filter(button => button.dataset.action === action);
+      const expected = rows.filter(row => action === "done" || row.unread).map(row => `/notifications/threads/${row.id}`);
+      const group = buttons().find(button => button.dataset.batchAction === action);
+      const clicked = group.events.click();
+      assert.equal(targets().length, expected.length);
+      assert.ok(targets().every(button => button.getAttribute("aria-busy") === "true"));
+      assert.ok(targets().every(button => button.dataset.writeState === "queued"));
+      assert.ok(buttons().filter(button => button.dataset.action && button.dataset.action !== action)
+        .every(button => button.getAttribute("aria-busy") === "false"));
+      assert.deepEqual([...ui.patches, ...ui.deletions], []);
+      await settle();
+      assert.equal(ui.inbox.client.threadWrites.size, 10);
+      acknowledge();
+      await clicked;
+      await settle();
+      assert.ok(targets().every(button => button.getAttribute("aria-busy") === "true"));
+      const queued = buttons().find(button => button.dataset.focusKey === `${action}:13`);
+      assert.equal(queued.dataset.writeState, "queued");
+      assert.equal(queued.getAttribute("aria-busy"), "true");
+      assert.equal(ui.inbox.client.threadWrites.has("13"), false);
+      release();
+      await ui.inbox.batch.done;
+      await runInContext("update()", ui.context);
+      assert.deepEqual([...ui.patches, ...ui.deletions].toSorted(), expected.toSorted());
+      assert.ok(buttons().filter(button => button.dataset.threadId)
+        .every(button => button.getAttribute("aria-busy") === "false"));
+    }
+  }
+});
+
+test("retry busy indicators include only original unfinished targets, not new arrivals", async t => {
+  let failing = true;
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  const ui = await renderer({ initialRows: [thread("1"), thread("2"), thread("3")],
+    onWrite: async path => {
+      if (failing) return path.endsWith("/3") ? "HTTP/2 204 No Content\r\n\r\n" : http({}, {}, 500);
+      await held;
+      return "HTTP/2 204 No Content\r\n\r\n";
+    } });
+  t.after(() => { release(); ui.window.events.pagehide(); ui.inbox.close(); });
+  await controls(ui).done.events.click();
+  await ui.inbox.batch.done;
+  ui.inbox.pages[0].items.push({ ...ui.inbox.loadedItems()[0], id: "4", title: "New arrival" });
+  ui.advance();
+  failing = false;
+  await runInContext("update()", ui.context);
+  const buttons = () => ui.ids.get("groups").querySelectorAll("button").filter(button => button.dataset.action === "done");
+  const retrying = ui.ids.get("batch-retry").events.click();
+  assert.deepEqual(buttons().filter(button => button.getAttribute("aria-busy") === "true").map(button => button.dataset.threadId), ["1", "2"]);
+  assert.equal(buttons().find(button => button.dataset.threadId === "4").getAttribute("aria-busy"), "false");
+  await retrying;
+  assert.equal(buttons().find(button => button.dataset.threadId === "4").getAttribute("aria-busy"), "false");
+  release();
+  await ui.inbox.batch.done;
+  await runInContext("update()", ui.context);
+  assert.deepEqual(ui.inbox.loadedItems().map(item => item.id), ["4"]);
+});
+
 test("accepted group actions check dispatch state without waiting for the progress timer", async t => {
   for (const action of ["read", "done"]) {
     let release;

@@ -188,10 +188,11 @@ read and unread. Read hides when none are eligible without moving or activating 
 **Only that group's loaded tab/search matches are included**, even when collapsed.
 Filtered-out and unloaded items are excluded; date actions cover just the selected
 day. Progress and counts appear in that group's header without moving keyboard
-focus away from the chosen action. **Queued** means a write is waiting its turn;
-**Marking** means a request is in flight. Queued indicators stay still; active
-indicators spin unless reduced motion is enabled. Row action tooltips use the
-same queued/active distinction. Accepted row and group actions immediately check
+focus away from the chosen action. The group button and every targeted row show
+a busy spinner immediately, including rows waiting for a shared request slot.
+Spinners respect reduced motion. **Queued** means a write is waiting its turn;
+**Marking** means a request is in flight. Row action tooltips use the same
+queued/active distinction. Accepted row and group actions immediately check
 their dispatch status instead of waiting for the next progress poll.
 
 Independent groups and rows can have actions in progress together. A group action

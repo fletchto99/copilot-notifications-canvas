@@ -6,6 +6,59 @@ const readName = "Mark 2 as read in example/widgets; 2 shown, loaded notificatio
 const doneName = "Mark 2 as done in example/widgets; 2 shown, loaded notifications";
 
 for (const action of ["read", "done"]) {
+  test(`group ${action} spins every targeted row before dispatch and while waiting for a slot`, async ({ page, canvas }) => {
+    canvas.rows.splice(14);
+    for (const [index, row] of canvas.rows.entries()) row.repository.full_name = index < 13 ? "example/widgets" : "example/other";
+    canvas.rows[1].unread = false;
+    let send;
+    let finish;
+    const request = new Promise(resolve => { send = resolve; });
+    const writes = new Promise(resolve => { finish = resolve; });
+    const started = [];
+    canvas.setRequestHook(args => {
+      if (!args.includes("PATCH") && !args.includes("DELETE")) return;
+      started.push(args.at(-1).split("/").at(-1));
+      return writes;
+    });
+    await page.route("**/api/batch/start", async route => {
+      await request;
+      await route.continue();
+    });
+    await page.clock.install();
+    await page.goto(canvas.url);
+    await expect(page.locator(".row")).toHaveCount(14);
+    await page.clock.pauseAt(new Date(Date.now() + 1000));
+    const group = page.locator(".repo-group").filter({ has: page.locator('[data-focus-key="repo:example/widgets"]') });
+    const selected = group.locator(`.mark-${action}`);
+    const other = page.locator('[data-focus-key="done:14"]');
+    const animationNames = () => selected.evaluateAll(buttons =>
+      buttons.map(button => getComputedStyle(button, "::after").animationName));
+    const count = action === "done" ? 13 : 12;
+    try {
+      await group.locator(`.repo-${action}`).click();
+      await expect(selected).toHaveCount(count);
+      await expect.poll(animationNames).toEqual(Array(count).fill("refresh-spin"));
+      await expect(other).toHaveAttribute("aria-busy", "false");
+      expect(started).toEqual([]);
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      await expect.poll(animationNames).toEqual(Array(count).fill("none"));
+      await page.emulateMedia({ reducedMotion: "no-preference" });
+      send();
+      await expect.poll(() => started.length).toBe(10);
+      await expect(page.locator(`[data-focus-key="${action}:1"]`)).toHaveAttribute("data-write-state", "active");
+      await expect(page.locator(`[data-focus-key="${action}:13"]`)).toHaveAttribute("data-write-state", "queued");
+      await expect.poll(animationNames).toEqual(Array(count).fill("refresh-spin"));
+      expect(started).not.toContain("13");
+      expect(started).not.toContain("14");
+      finish();
+      const expected = canvas.rows.slice(0, 13).filter(row => action === "done" || row.id !== "2").map(row => row.id);
+      await expect.poll(() => canvas.writes.toSorted()).toEqual(expected.toSorted());
+    } finally {
+      send();
+      finish();
+    }
+  });
+
   test(`group ${action} starts its spinner without waiting for the progress timer`, async ({ page, canvas }) => {
     canvas.rows.splice(2);
     let release;

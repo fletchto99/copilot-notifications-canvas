@@ -181,7 +181,7 @@ for (const action of ["read", "done"]) {
   });
 }
 
-test("a row waiting for a shared write slot stays stationary until dispatched", async ({ page, canvas }) => {
+test("a row waiting for a shared write slot spins while its label stays queued", async ({ page, canvas }) => {
   canvas.rows.splice(11);
   for (const [index, row] of canvas.rows.entries()) row.repository.full_name = index < 10 ? "example/widgets" : "example/other";
   const pool = gate();
@@ -200,7 +200,7 @@ test("a row waiting for a shared write slot stays stationary until dispatched", 
     const done = page.locator('[data-focus-key="done:11"]');
     await done.click();
     await expect(done).toHaveAttribute("data-write-state", "queued");
-    expect(await done.evaluate(node => getComputedStyle(node, "::after").animationName)).toBe("none");
+    expect(await done.evaluate(node => getComputedStyle(node, "::after").animationName)).toBe("refresh-spin");
     expect(started).not.toContain("11");
     pool.release();
     await expect(done).toHaveAttribute("data-write-state", "active");

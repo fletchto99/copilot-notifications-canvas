@@ -689,7 +689,7 @@ function groupFocus(origin) {
 function lockedThreads() {
   return new Set([
     ...(state?.lockedThreadIds ?? []), ...marking.keys(),
-    ...[...batchRequests.values()].flat(),
+    ...[...batchRequests.values()].flatMap(request => request.ids),
   ]);
 }
 
@@ -799,10 +799,11 @@ function restoreFocus(previous, preferred) {
 async function batchRequest(action, input, ids = [], returnFocusKey) {
   const requestKey = input.token ?? returnFocusKey;
   if (!visible() || busy || batchRequests.has(requestKey)) return;
-  if (action === "retry") ids = state.batches.find(batch => batch.token === input.token)?.retryableThreadIds ?? [];
+  const retryBatch = action === "retry" ? state.batches.find(batch => batch.token === input.token) : undefined;
+  if (action === "retry") ids = retryBatch?.retryableThreadIds ?? [];
   const locked = lockedThreads();
   if (["start", "retry"].includes(action) && (pendingFilters || ids.some(id => locked.has(id)))) return;
-  batchRequests.set(requestKey, ids);
+  batchRequests.set(requestKey, { ids, action: action === "start" ? input.action ?? "read" : retryBatch?.action });
   batchBusy++;
   let failed = false;
   const previousFocus = document.activeElement;
@@ -1132,6 +1133,15 @@ function renderControls() {
   const actionsBlocked = busy || state?.status === "loading" || Boolean(pendingFilters);
   const locked = lockedThreads();
   const waiting = state && Date.now() < state.nextRefreshAt;
+  const pendingRows = new Map();
+  for (const { ids, action } of batchRequests.values()) {
+    for (const id of ids) pendingRows.set(id, action);
+  }
+  for (const batch of state?.batches ?? []) {
+    if (batchRunning(batch)) {
+      for (const id of batch.remainingThreadIds) pendingRows.set(id, batch.action);
+    }
+  }
   renderRefreshStatus();
   $("more").disabled = loading || state?.needsRefresh || Boolean(state?.error && waiting);
   for (const [key, view] of groupViews) {
@@ -1159,7 +1169,8 @@ function renderControls() {
     }
     if (button.dataset.threadId) {
       const write = state?.threadWrites.find(write => write.id === button.dataset.threadId && write.action === button.dataset.action);
-      const pending = write || marking.get(button.dataset.threadId)?.action === button.dataset.action;
+      const pending = write || marking.get(button.dataset.threadId)?.action === button.dataset.action ||
+        pendingRows.get(button.dataset.threadId) === button.dataset.action;
       button.setAttribute("aria-busy", String(Boolean(pending)));
       button.dataset.writeState = pending ? write?.inFlight ? "active" : "queued" : "idle";
       const label = `${pending ? write?.inFlight ? "Marking" : "Queued to mark" : "Mark"} as ${button.dataset.action}`;
