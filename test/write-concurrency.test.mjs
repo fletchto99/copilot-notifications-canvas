@@ -78,7 +78,7 @@ test("Read and Done share ten slots across groups and panels and refill without 
   assert.equal(f.first.batch.snapshot().notAttempted, 5);
   assert.equal(f.second.batch.snapshot().notAttempted, 15);
   assert.equal(f.second.batch.snapshot().inFlight, false);
-  await assert.rejects(f.second.markDone({ id: "11" }), { code: "busy" });
+  assert.throws(() => f.second.queueThread({ id: "11" }, "done"), { code: "busy" });
   f.releases.get("2")();
   await settle();
   assert.equal(f.active, 10);

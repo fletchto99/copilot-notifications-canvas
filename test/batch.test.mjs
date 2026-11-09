@@ -510,13 +510,13 @@ test("duplicate groups, overlapping per-row reads and other-panel batches are bl
   await other.refresh();
   start(inbox);
   assert.throws(() => start(inbox), { code: "busy" });
-  await assert.rejects(inbox.markRead({ id: "1" }), { code: "busy" });
-  await assert.rejects(inbox.markDone({ id: "1" }), { code: "busy" });
+  assert.throws(() => inbox.queueThread({ id: "1" }, "read"), { code: "busy" });
+  assert.throws(() => inbox.queueThread({ id: "1" }, "done"), { code: "busy" });
   await inbox.setFilters({ query: "changed" });
   await assert.rejects(inbox.setFilters({ mode: "unread" }), { code: "busy" });
   await settle();
-  await assert.rejects(other.markRead({ id: "1" }), { code: "busy" });
-  await assert.rejects(other.markDone({ id: "1" }), { code: "busy" });
+  assert.throws(() => other.queueThread({ id: "1" }, "read"), { code: "busy" });
+  assert.throws(() => other.queueThread({ id: "1" }, "done"), { code: "busy" });
   assert.throws(() => start(other), { code: "busy" });
   assert.equal(other.batch.snapshot(), null);
   release();
@@ -529,11 +529,11 @@ test("a group click cannot overlap a previously issued per-row mutation", async 
   const { inbox } = await fixture({
     run: async args => args.includes("PATCH") ? new Promise(resolve => { release = () => resolve(ok); }) : http([thread("1")]),
   });
-  const pending = inbox.markRead({ id: "1" });
+  inbox.queueThread({ id: "1" }, "read");
   assert.throws(() => start(inbox), { code: "busy" });
   await settle();
   release();
-  await pending;
+  await inbox.batch.done;
 });
 
 test("disjoint batches and rows run together with isolated failures, retries, and shared reservations", async t => {
@@ -555,20 +555,21 @@ test("disjoint batches and rows run together with isolated failures, retries, an
   t.after(() => { release?.(); inbox.close(); other.close(); });
   await other.refresh();
   const first = start(inbox);
-  const row = inbox.markDone({ id: "5" });
+  inbox.queueThread({ id: "5" }, "done");
   const second = start(inbox, "example/other", "done");
-  assert.equal(inbox.batch.snapshots().length, 2);
+  assert.equal(inbox.batch.snapshots().length, 3);
   assert.equal(inbox.batch.locked, true);
   assert.deepEqual(new Set(inbox.snapshot().lockedThreadIds), new Set(["1", "2", "3", "4", "5", "6"]));
   assert.deepEqual(new Set(other.snapshot().lockedThreadIds), new Set(["1", "2", "3", "4", "5", "6"]));
   assert.doesNotMatch(JSON.stringify(inbox.summary()), /example\/|token|selectionKey|lockedThreadIds|remainingThreadIds|snapshotVersion|Synthetic notification/);
   assert.throws(() => start(other, "example/other"), { code: "busy" });
+  assert.throws(() => inbox.queueThread({ id: "6" }, "done"), { code: "busy" });
+  assert.throws(() => other.queueThread({ id: "2" }, "done"), { code: "busy" });
   await settle();
-  await assert.rejects(inbox.markDone({ id: "6" }), { code: "busy" });
-  await assert.rejects(other.markDone({ id: "2" }), { code: "busy" });
   assert.equal(inbox.batch.snapshots().find(batch => batch.token === first.token).status, "running");
   release();
-  await Promise.all([inbox.batch.done, row]);
+  await inbox.batch.done;
+  inbox.batch.acknowledge(String(inbox.snapshot().snapshotVersion));
   assert.deepEqual(writes, ["/notifications/threads/1", "/notifications/threads/2", "/notifications/threads/5",
     "/notifications/threads/3", "/notifications/threads/4"]);
   assert.deepEqual(methods, ["PATCH", "PATCH", "DELETE", "DELETE", "DELETE"]);
@@ -666,7 +667,10 @@ test("successful writes clear only that thread's stale failures in every panel",
       advance(120_000);
       fail = false;
       const writer = otherPanel ? other : inbox;
-      if (otherPanel) await writer[action === "read" ? "markRead" : "markDone"]({ id: "1" });
+      if (otherPanel) {
+        writer.queueThread({ id: "1" }, action);
+        await writer.batch.done;
+      }
       else {
         await writer.setFilters({ query: "notification 1" });
         start(writer, "example/widgets", action);
@@ -738,8 +742,9 @@ test("protected snapshots distinguish queued rows from dispatched writes without
     new Promise(resolve => { releases.push(() => resolve(args.includes("PATCH") ? ok : "HTTP/2 204 No Content\r\n\r\n")); }),
   });
   t.after(() => { releases.forEach(release => release()); inbox.close(); });
-  const read = inbox.markRead({ id: "1" });
-  const done = inbox.markDone({ id: "2" });
+  inbox.queueThread({ id: "1" }, "read");
+  const read = inbox.batch.done;
+  inbox.queueThread({ id: "2" }, "done");
   assert.deepEqual(inbox.snapshot().threadWrites, [
     { id: "1", action: "read", inFlight: false }, { id: "2", action: "done", inFlight: false },
   ]);
@@ -753,7 +758,7 @@ test("protected snapshots distinguish queued rows from dispatched writes without
   assert.deepEqual(inbox.snapshot().threadWrites, [{ id: "2", action: "done", inFlight: true }]);
   assert.equal(old.threadWrites[1].inFlight, true);
   releases[1]();
-  await done;
+  await inbox.batch.done;
   assert.equal(client.threadWrites.size, 0);
 });
 

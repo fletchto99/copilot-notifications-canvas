@@ -909,17 +909,14 @@ function renderBatch() {
 function renderBatchView(batch, view) {
   const previousFocus = document.activeElement;
   const controls = [view.retry, view.dismiss];
-  const cancelled = batch.status === "cancelled" && !batch.error;
   const remaining = batch.failed + batch.notAttempted;
   view.progress.hidden = false;
   view.progress.className = "batch-progress";
   const target = batch.scope === "shown" ? "Shown notifications" : batch.scope === "date" ? dateLabel(batch.date) : batch.repository;
   view.progress.setAttribute("aria-label", `Notification operation: ${target}`);
-  view.title.textContent = `${target}: ${cancelled ? "Stopped" : `Some notifications remain to mark as ${batch.action}`}`;
+  view.title.textContent = `${target}: Some notifications remain to mark as ${batch.action}`;
   view.counts.hidden = false;
-  view.counts.textContent = cancelled
-    ? `${batch.succeeded} marked ${batch.action}, ${remaining} remaining${batch.skipped ? `, ${batch.skipped} skipped` : ""}`
-    : `${batch.succeeded} succeeded / ${batch.failed} failed / ${batch.skipped} skipped / ${batch.notAttempted} not attempted (${batch.total} selected)`;
+  view.counts.textContent = `${batch.succeeded} succeeded / ${batch.failed} failed / ${batch.skipped} skipped / ${batch.notAttempted} not attempted (${batch.total} selected)`;
   const retryTime = batch.retryAt > Date.now() ? ` Retry after ${new Date(batch.retryAt).toLocaleTimeString()}.` : "";
   const detail = batch.error?.message ?? (batch.skipped ? "Skipped notifications changed or are no longer eligible in the loaded inbox. Review their current state separately." : "");
   view.error.hidden = !detail;
@@ -927,7 +924,7 @@ function renderBatchView(batch, view) {
   const pending = batchRequests.has(batch.token);
   view.buttons.hidden = false;
   view.retry.hidden = remaining === 0;
-  setControlText(view.retry, `${cancelled ? "Continue" : "Retry"} remaining (${remaining})`);
+  setControlText(view.retry, `Retry remaining (${remaining})`);
   const locked = lockedThreads();
   view.retry.disabled = pending || busy || Boolean(pendingFilters) || batch.retryAt > Date.now() ||
     batch.retryableThreadIds.some(id => locked.has(id));

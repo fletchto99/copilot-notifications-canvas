@@ -135,7 +135,10 @@ test("shown batches and repository or row writes cannot reserve overlapping thre
     t.after(() => { inbox.close(); other.close(); });
     await other.refresh();
     let pending;
-    if (first === "row") pending = inbox.markRead({ id: "1" });
+    if (first === "row") {
+      inbox.queueThread({ id: "1" }, "read");
+      pending = inbox.batch.done;
+    }
     else {
       const group = inbox.groups()[0];
       inbox.batch.start(first === "shown" ? selection(inbox) : {
@@ -149,8 +152,8 @@ test("shown batches and repository or row writes cannot reserve overlapping thre
     if (first === "shown") {
       const group = other.groups()[1];
       assert.throws(() => other.batch.start({ repository: group.repository, selectionKey: group.selectionKey }), { code: "busy" });
-      await assert.rejects(other.markRead({ id: "2" }), { code: "busy" });
-      await assert.rejects(other.markDone({ id: "2" }), { code: "busy" });
+      assert.throws(() => other.queueThread({ id: "2" }, "read"), { code: "busy" });
+      assert.throws(() => other.queueThread({ id: "2" }, "done"), { code: "busy" });
     }
     releases.forEach(release => release());
     await pending;

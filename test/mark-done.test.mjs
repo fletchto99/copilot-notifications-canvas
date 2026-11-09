@@ -26,7 +26,10 @@ test("Done uses DELETE and a 204 confirmation synchronizes loaded panels without
   t.after(() => { one.close(); two.close(); });
   await one.refresh();
   await two.refresh();
-  const summary = await one.markDone({ id: "1" });
+  one.queueThread({ id: "1" }, "done");
+  await one.batch.done;
+  assert.equal(one.batch.snapshot().status, "completed");
+  const summary = one.summary();
   assert.equal(summary.loaded, 1);
   assert.equal(summary.unread, 1);
   assert.doesNotMatch(JSON.stringify(summary), /Synthetic notification|example\/widgets|doneHistory/);
@@ -55,12 +58,16 @@ test("only 204 confirms Done; failed or ambiguous responses retain the row and r
     const inbox = new Inbox(client);
     t.after(() => inbox.close());
     await inbox.refresh();
-    await assert.rejects(inbox.markDone({ id: "1" }));
+    inbox.queueThread({ id: "1" }, "done");
+    await inbox.batch.done;
+    assert.equal(inbox.batch.snapshot().status, "partial");
+    assert.equal(inbox.batch.snapshot().failed, 1);
+    assert.ok(inbox.batch.snapshot().error);
     assert.equal(inbox.summary().loaded, 1);
     assert.equal(inbox.summary().needsRefresh, false);
     assert.equal(client.revision, 0);
     assert.equal(client.pendingThreads.size, 0);
-    assert.equal(inbox.marking.size, 0);
+    assert.equal(client.threadReservations.size, 0);
   }
 });
 
@@ -76,18 +83,19 @@ test("Done rejects malformed and unloaded IDs but accepts read inbox items", asy
   await inbox.refresh();
   for (const input of [null, [], {}, { id: 1 }, { id: "0" }, { id: "01" }, { id: "../1" },
     { id: "1", extra: true }, { id: "9".repeat(65) }]) {
-    await assert.rejects(inbox.markDone(input), { code: "invalid_thread" });
+    assert.throws(() => inbox.queueThread(input, "done"), { code: "invalid_thread" });
   }
-  await assert.rejects(inbox.markDone({ id: "999" }), { code: "unknown_thread" });
+  assert.throws(() => inbox.queueThread({ id: "999" }, "done"), { code: "unknown_thread" });
   assert.throws(() => client.markDone("../1"), { code: "invalid_thread" });
   assert.equal(calls.length, 1);
-  await inbox.markDone({ id: "2" });
+  inbox.queueThread({ id: "2" }, "done");
+  await inbox.batch.done;
   assert.ok(calls[1].includes("DELETE"));
   assert.deepEqual(inbox.loadedItems().map(item => item.id), ["1"]);
 });
 
 test("read and Done clicks share duplicate protection across panels and block overlapping batches", async t => {
-  for (const action of ["markRead", "markDone"]) {
+  for (const action of ["read", "done"]) {
     const writes = [];
     let finish;
     const client = new GitHubClient({ run: async args => {
@@ -101,16 +109,16 @@ test("read and Done clicks share duplicate protection across panels and block ov
     t.after(() => { one.close(); two.close(); });
     await one.refresh();
     await two.refresh();
-    const pending = one[action]({ id: "1" });
+    one.queueThread({ id: "1" }, action);
     await settle();
     for (const inbox of [one, two]) {
-      await assert.rejects(inbox.markRead({ id: "1" }), { code: "busy" });
-      await assert.rejects(inbox.markDone({ id: "1" }), { code: "busy" });
+      assert.throws(() => inbox.queueThread({ id: "1" }, "read"), { code: "busy" });
+      assert.throws(() => inbox.queueThread({ id: "1" }, "done"), { code: "busy" });
       const { repository, selectionKey } = inbox.groups()[0];
       assert.throws(() => inbox.batch.start({ repository, selectionKey }), { code: "busy" });
     }
     finish();
-    await pending;
+    await one.batch.done;
     assert.equal(writes.length, 1);
     assert.equal(client.pendingThreads.size, 0);
   }
@@ -132,7 +140,7 @@ test("Done cannot take a later thread reserved by another panel's repository rea
   const { repository, selectionKey } = one.groups()[0];
   one.batch.start({ repository, selectionKey });
   await settle();
-  await assert.rejects(two.markDone({ id: "2" }), { code: "busy" });
+  assert.throws(() => two.queueThread({ id: "2" }, "done"), { code: "busy" });
   finishes.forEach(finish => finish());
   await one.batch.done;
   assert.equal(client.threadReservations.size, 0);
@@ -156,10 +164,14 @@ test("Done shares rate backoff with reads without artificial spacing or automati
   const inbox = new Inbox(client);
   t.after(() => inbox.close());
   await inbox.refresh();
-  await inbox.markDone({ id: "1" });
-  await inbox.markRead({ id: "2" });
-  await assert.rejects(inbox.markDone({ id: "3" }), { code: "rate_limited" });
-  await assert.rejects(inbox.markRead({ id: "4" }), { code: "rate_limited" });
+  inbox.queueThread({ id: "1" }, "done");
+  await inbox.batch.done;
+  inbox.queueThread({ id: "2" }, "read");
+  await inbox.batch.done;
+  inbox.queueThread({ id: "3" }, "done");
+  await inbox.batch.done;
+  assert.equal(inbox.batch.snapshot().error.code, "rate_limited");
+  assert.throws(() => inbox.queueThread({ id: "4" }, "read"), { code: "rate_limited" });
   assert.deepEqual(methods, ["DELETE", "PATCH", "DELETE"]);
   assert.deepEqual(waits, []);
   assert.deepEqual(inbox.loadedItems().map(item => item.id), ["2", "3", "4"]);
@@ -173,7 +185,8 @@ test("Done invalidates cached pages without hiding new unread activity behind a 
   const inbox = new Inbox(client);
   t.after(() => inbox.close());
   await inbox.refresh();
-  await inbox.markDone({ id: "1" });
+  inbox.queueThread({ id: "1" }, "done");
+  await inbox.batch.done;
   await inbox.refresh();
   assert.equal(inbox.summary().loaded, 0);
   now += POLL_MS;
@@ -203,10 +216,10 @@ test("Done during another panel's multi-page refresh cannot resurrect the comple
   now = POLL_MS;
   const refresh = one.refresh();
   await settle();
-  const done = two.markDone({ id: "1" });
+  two.queueThread({ id: "1" }, "done");
   const rejected = assert.rejects(refresh, { code: "inbox_changed" });
   finish();
-  await done;
+  await two.batch.done;
   await rejected;
   assert.deepEqual(one.loadedItems().map(item => item.id), ["2"]);
 });
@@ -223,15 +236,16 @@ test("closing a panel cancels queued and in-flight Done actions without confirmi
     } });
     const inbox = new Inbox(client);
     await inbox.refresh();
-    const done = inbox.markDone({ id: "1" });
-    const rejected = assert.rejects(done, { code: "closed" });
+    inbox.queueThread({ id: "1" }, "done");
     if (inFlight) await settle();
     inbox.close();
     finish?.();
-    await rejected;
+    await inbox.batch.done;
+    assert.deepEqual(inbox.batch.snapshots(), []);
     assert.equal(writes, Number(inFlight));
     assert.equal(client.revision, 0);
     assert.equal(client.pendingThreads.size, 0);
+    assert.equal(client.threadReservations.size, 0);
     assert.equal(client.threadListeners.size, 0);
     assert.equal(inbox.summary().loaded, 0);
   }

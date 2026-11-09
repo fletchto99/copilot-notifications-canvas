@@ -10,7 +10,6 @@ export class Inbox {
     this.requestedMatchGitHubInbox = true;
     this.pages = [];
     this.busy = false;
-    this.marking = new Set();
     this.snapshotVersion = 0;
     this.batch = new NotificationBatch(this);
     this.error = null;
@@ -205,7 +204,6 @@ export class Inbox {
     if (this.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
     if (this.busy) throw new InboxError("busy", "An inbox request is already running.", 409);
     if (input.mode !== undefined && input.mode !== this.filters.mode) {
-      if (this.marking.size) throw new InboxError("busy", "Wait for the current notification update to finish.", 409);
       return this.execute(async () => {
         const revision = this.client.revision;
         const matchGitHubInbox = this.requestedMatchGitHubInbox;
@@ -223,22 +221,14 @@ export class Inbox {
     return this.summary();
   }
 
-  markRead(input) {
-    return this.#markThread(input, "markRead");
-  }
-
-  markDone(input) {
-    return this.#markThread(input, "markDone");
-  }
-
   queueThread(input, action) {
-    const item = this.#thread(input, action === "done" ? "markDone" : "markRead");
+    const item = this.#thread(input, action);
     const token = this.batch.launch(item.repository, [item], action, "thread");
     this.batch.clearRowResults(item.id, token);
     return token;
   }
 
-  #thread(input, method) {
+  #thread(input, action) {
     if (!input || typeof input !== "object" || Array.isArray(input) ||
         Object.keys(input).length !== 1 || typeof input.id !== "string" ||
         !/^[1-9]\d{0,63}$/.test(input.id)) {
@@ -246,23 +236,11 @@ export class Inbox {
     }
     if (this.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
     if (this.busy) throw new InboxError("busy", "Wait for the current inbox request to finish.", 409);
-    if (this.marking.has(input.id)) throw new InboxError("busy", "This notification is already being updated.", 409);
-    const item = this.loadedItems().find(item => item.id === input.id && (method === "markDone" || item.unread));
+    const item = this.loadedItems().find(item => item.id === input.id && (action === "done" || item.unread));
     if (!item) {
       throw new InboxError("unknown_thread", "This notification is no longer in the loaded inbox. Let the view update automatically before trying again.", 404);
     }
     return item;
-  }
-
-  async #markThread(input, method) {
-    this.#thread(input, method);
-    this.marking.add(input.id);
-    try {
-      await this.client[method](input.id, this.controller.signal);
-    } finally {
-      this.marking.delete(input.id);
-    }
-    return this.summary();
   }
 
   close() {
