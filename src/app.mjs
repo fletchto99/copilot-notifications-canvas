@@ -1425,7 +1425,8 @@ function renderCopilot() {
   $("copilot-status").textContent = operation.message ?? inferred + (operation.status === "preparing" ? "Checking the selected item and available sessions..." :
     operation.status === "starting" ? "Opening Copilot. Check the app for any permission or repository trust requests." :
       operation.sessions?.length ? "A matching session already exists. Open it without sending instructions, or start a separate summary-first session if you need a fresh start. Existing sessions and their work are left untouched." :
-        "Copilot will summarize this item first, then investigate read-only. Implementation and GitHub changes require your approval.");
+        operation.action === "discussion" ? "Copilot will summarize this discussion, then stop and wait for further instructions." :
+          "Copilot will summarize this item first, then investigate read-only. Implementation and GitHub changes require your approval.");
   $("copilot-status").setAttribute("role", operation.status === "error" ? "alert" : "status");
   $("copilot-reference").textContent = operation.url ?? "";
   $("copilot-reference").hidden = !operation.url;
