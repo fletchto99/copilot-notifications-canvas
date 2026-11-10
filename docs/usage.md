@@ -40,6 +40,7 @@ The Copilot button's tooltip and accessible label describe the task:
 | Item | Task |
 | --- | --- |
 | Issue | Investigate with Copilot |
+| Open or closed discussion, including answered discussions | Summarize with Copilot |
 | Your open or draft PR | Continue with Copilot |
 | Another person's open or draft PR | Review with Copilot |
 | Resolved or uniquely matched failed, timed-out, or startup-failed CI run | Investigate CI failures with Copilot |
@@ -69,7 +70,7 @@ Run summaries also include the attempt whenever GitHub supplies it.
 By default, click the icon to inspect the selected reference and available sessions.
 **Start session** creates an independent, root-level session in the selected
 repository, not a child of the session containing the canvas. It uses a worktree
-at the repository's configured base for issues, the verified PR head commit
+at the repository's configured base for issues and discussions, the verified PR head commit
 (including fork PRs), or the failed run's immutable commit.
 These generic sessions do not have the app's native issue/PR linkage.
 PR metadata is refreshed for each preparation rather than reusing an older
@@ -91,6 +92,12 @@ the next investigation steps. It can then investigate read-only; implementation,
 commits, pushes, workflow reruns, and GitHub changes need explicit approval.
 Reviews remain drafts.
 
+Discussion sessions read the thread, comments, and replies, then summarize its
+open or closed state, main viewpoints, decisions or accepted answer, and unresolved
+questions. They distinguish agreed outcomes from proposals and disclose any
+access or pagination limits. They stop after the summary and wait for further
+instructions, without investigating code or changing GitHub state.
+
 To avoid the routine popup, turn on **Skip routine confirmations** before
 confirming. Cancel does not save that choice. Future row clicks start a new
 summary-first session directly when no matching session exists. A spinner and
@@ -107,14 +114,14 @@ For a PR authored by someone else, the new session pauses after its summary to
 ask which review skill to use. It suggests `review` when that skill is available,
 or lets you choose another available skill, and waits for your answer before
 reviewing or drafting findings. If no suitable skill is available, it asks how
-to proceed instead of assuming or installing one. Your own PRs, issues, and CI
+to proceed instead of assuming or installing one. Your own PRs, issues, discussions, and CI
 investigations keep their existing flow.
 
 If a matching session exists, the popup offers **Open existing session** and
 **Start a new session**, even with routine confirmations off. Opening only
 navigates: it does not send another prompt, change its mode, or interrupt its
 current work or sidebar placement. New sessions are matched by repository and
-their generated issue, PR, or run/attempt name; renaming one prevents that
+their generated issue, discussion, PR, or run/attempt name; renaming one prevents that
 name-based reuse. Existing native issue/PR links are also recognized.
 Choose **Start a new session** for a fresh start, including after an earlier
 workspace initialization failed. This creates a separate summary-first session;

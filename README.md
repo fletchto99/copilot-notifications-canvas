@@ -10,10 +10,10 @@ Your GitHub inbox in the GitHub Copilot app, grouped by repository or date, or
 shown as a single newest-first list. **Show notifications** defaults to **All**,
 showing read and unread inbox items; choose **Unread only** to narrow the view. Completed items
 stay hidden in both views. Search, mark rows
-or groups as read or done, start a focused Copilot investigation or review,
+or groups as read or done, start a focused Copilot investigation, review, or discussion summary,
 and opt into desktop notifications or auto-open.
 
-![GitHub Notifications canvas with search and attention tabs above ten synthetic notifications, seven unread, across three example repositories, issue and PR status icons, a failed check run, and fixed Copilot, read, and done columns with disabled Copilot icons on merged and queued PRs and dimmed envelopes on already-read rows](docs/images/github-notifications.png)
+![GitHub Notifications canvas with search and attention tabs above ten synthetic notifications, seven unread, across three example repositories, issue and PR status icons, a failed check run, and fixed Copilot, read, and done columns with summary actions on closed and answered discussions, disabled Copilot icons on merged and queued PRs, and dimmed envelopes on already-read rows](docs/images/github-notifications.png)
 
 ## Prerequisites
 
@@ -73,7 +73,9 @@ full procedure, verification requirements, and troubleshooting.
   Already-read rows keep a dimmed, disabled envelope labeled **Already read**.
   Each group header offers the same bulk actions.
 - Use the Copilot button before Read to investigate an issue or failed CI run,
-  continue your own PR, or review another PR. Confirm the selected reference
+  continue your own PR, review another PR, or summarize an open or closed discussion.
+  Discussion summaries include replies, decisions, and unresolved questions, then stop.
+  Confirm the selected reference
   before starting a summary-first, read-only root-level session in that repository,
   independent of the session containing the canvas. Existing sessions are
   offered without interrupting them; unconfigured repositories require explicit
@@ -105,7 +107,7 @@ to its own files. Ordinary agent-facing canvas actions expose counts, not inbox
 content. There is no telemetry or remote asset loading.
 
 **Starting a Copilot action shares the selected GitHub reference and task
-instructions with Copilot**, including the repository and issue/PR/run identifier
+instructions with Copilot**, including the repository and issue/discussion/PR/run identifier
 (and a PR's head commit or a failed run's commit and attempt). These are retained
 in Copilot's session history, and the destination agent fetches the item's
 details. Notification titles, bodies, and the rest of the inbox are not copied
