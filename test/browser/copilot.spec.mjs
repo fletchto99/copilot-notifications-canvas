@@ -44,35 +44,52 @@ for (const packaged of [false, true]) {
 
     for (const supported of [true, false]) {
       test(`cold discovery ${supported ? "recovers after the first minute" : "shows unavailable tooling after three minutes"}`, async ({ page, canvas }) => {
-        test.setTimeout(210_000);
         canvas.rows.splice(1);
         canvas.rows[0].subject.url = "https://api.github.com/repos/example/widgets/issues/1";
         const metadata = await canvas.copilotHost.rpc.getCurrentMetadata();
+        const start = Date.now();
+        let elapsed = 0;
+        const setTime = async time => {
+          await canvas.setCopilotTime(start + time);
+          elapsed = time;
+        };
+        await setTime(0);
         let calls = 0;
         canvas.copilotHost.rpc.getCurrentMetadata = async () => {
           calls++;
-          return supported && calls > 15 ? metadata : { tools: [] };
+          return supported && elapsed >= 68_000 ? metadata : { tools: [] };
         };
         await page.goto(canvas.url);
         const action = page.locator(".copilot-action");
-        await expect.poll(() => calls, { timeout: 15_000 }).toBe(4);
+        for (const [index, time] of [0, 1000, 3000, 8000].entries()) {
+          await setTime(time);
+          await expect.poll(() => calls).toBe(index + 1);
+        }
         await expect(action).toBeVisible();
         await expect(action).toBeDisabled();
         await expect(action).toHaveAttribute("aria-busy", "true");
         const link = page.locator(".row-link");
         await link.focus();
+        await setTime(supported ? 60_000 : 179_999);
+        await expect.poll(() => calls).toBe(5);
+        const request = await page.waitForRequest(request => new URL(request.url()).pathname === "/api/state");
+        const snapshot = await (await request.response()).json();
+        expect(snapshot.copilotLoading).toBe(true);
+        await expect(action).toBeDisabled();
+        await expect(action).toHaveAccessibleName(/^Waiting on copilot SDK Availability/);
+        await expect(action).toHaveAttribute("aria-busy", "true");
+        await setTime(supported ? 68_000 : 180_000);
         if (supported) {
-          await expect(action).toBeEnabled({ timeout: 75_000 });
-          expect(calls).toBe(16);
+          await expect(action).toBeEnabled();
         } else {
-          await expect(action).toHaveAccessibleName(/^Copilot tooling unavailable:/, { timeout: 185_000 });
+          await expect(action).toHaveAccessibleName(/^Copilot tooling unavailable:/);
           await expect(action).toBeDisabled();
           await expect(action).toHaveAttribute("aria-busy", "false");
           await action.locator("..").hover();
           await expect(action.locator("..").getByRole("tooltip")).toHaveText("Copilot tooling unavailable");
           expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
-          expect(calls).toBeGreaterThan(4);
         }
+        expect(calls).toBe(6);
         await expect(link).toBeFocused();
         await expect(page.locator(".mark-read")).toBeEnabled();
         await expect(page.locator(".mark-done")).toBeEnabled();

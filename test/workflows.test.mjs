@@ -28,8 +28,8 @@ test("browser CI pins the locked Playwright version without installing browsers 
     readFile(new URL("../.github/workflows/tests.yml", import.meta.url), "utf8"),
     readFile(new URL("../package-lock.json", import.meta.url), "utf8").then(JSON.parse),
   ]);
-  assert.ok(workflow.includes("\n  browser:"));
-  const browser = workflow.slice(workflow.indexOf("\n  browser:"));
+  const browser = workflow.match(/\n {2}browser:\n([\s\S]*?)(?=\n {2}[a-z][\w-]*:|$)/)?.[1];
+  assert.ok(browser);
   assert.match(browser, /runs-on: ubuntu-latest/);
   assert.match(browser, /^\s+timeout-minutes: 15$/m);
   const image = browser.match(/^\s+image: mcr\.microsoft\.com\/playwright:v(\d+\.\d+\.\d+)-noble@sha256:[a-f0-9]{64}$/m);
@@ -40,6 +40,46 @@ test("browser CI pins the locked Playwright version without installing browsers 
   assert.match(browser, /browser: \[chromium, webkit\]/);
   assert.match(browser, /npm run test:browser -- --project="\$\{\{ matrix\.browser \}\}"/);
   assert.doesNotMatch(browser, /playwright install|apt-get/);
+});
+
+test("browser CI runs four shards per engine with distinct reports and packaging checks", async () => {
+  const [workflow, config] = await Promise.all([
+    readFile(new URL("../.github/workflows/tests.yml", import.meta.url), "utf8"),
+    readFile(new URL("../playwright.config.mjs", import.meta.url), "utf8"),
+  ]);
+  const browser = workflow.match(/\n {2}browser:\n([\s\S]*?)(?=\n {2}[a-z][\w-]*:|$)/)?.[1];
+  assert.ok(browser);
+  assert.match(browser, /name: Browser \(\$\{\{ matrix\.browser \}\}, shard \$\{\{ matrix\.shard \}\}\/4\)/);
+  assert.match(browser, /fail-fast: false/);
+  assert.match(browser, /matrix:\n\s+browser: \[chromium, webkit\]\n\s+shard: \[1, 2, 3, 4\]/);
+  assert.match(browser, /^\s+run: npm run test:browser -- --project="\$\{\{ matrix\.browser \}\}" --shard="\$\{\{ matrix\.shard \}\}\/4"$/m);
+  assert.match(browser, /run: \|\n\s+npm run build\n\s+npm run test:package/);
+  assert.match(browser, /if: \$\{\{ !cancelled\(\) \}\}\n\s+uses: actions\/upload-artifact@[a-f0-9]{40}/);
+  assert.match(browser, /name: browser-results-\$\{\{ matrix\.browser \}\}-\$\{\{ matrix\.shard \}\}\n\s+path: \|\n\s+playwright-report\/\n\s+test-results\//);
+  assert.match(config, /fullyParallel: true/);
+  assert.match(config, /workers: process\.env\.CI \? 2 : undefined/);
+});
+
+test("the stable browser check runs after all shards and rejects every non-success result", async () => {
+  const workflow = (await readFile(new URL("../.github/workflows/tests.yml", import.meta.url), "utf8"))
+    .replaceAll("\r\n", "\n");
+  const gate = workflow.match(/\n {2}browser-check:\n([\s\S]*?)(?=\n {2}[a-z][\w-]*:|$)/)?.[1];
+  assert.ok(gate);
+  assert.match(gate, /^\s+name: Browser tests$/m);
+  assert.match(gate, /^\s+needs: browser$/m);
+  assert.match(gate, /^\s+if: \$\{\{ always\(\) \}\}$/m);
+  assert.match(gate, /runs-on: ubuntu-slim/);
+  assert.match(gate, /BROWSER_RESULT: \$\{\{ needs\.browser\.result \}\}/);
+  assert.doesNotMatch(gate, /strategy:|matrix\.|continue-on-error:|uses:|npm /);
+  const script = gate.match(/ {8}run: \|\n([\s\S]+)$/)?.[1].replace(/^ {10}/gm, "");
+  assert.ok(script);
+  const run = result => execFileSync("bash", ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script], {
+    env: { ...process.env, BROWSER_RESULT: result }, encoding: "utf8", stdio: "pipe",
+  });
+  assert.match(run("success"), /Browser shard result: success/);
+  for (const result of ["failure", "cancelled", "skipped", "", "unknown"]) {
+    assert.throws(() => run(result), error => error.status === 1, result);
+  }
 });
 
 test("CI uses the preferred Node version for tooling while preserving Node 22 runtime coverage", async () => {

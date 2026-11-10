@@ -155,8 +155,14 @@ for (const packaged of [false, true]) {
           const duplicateIcon = issueIcons.nth(3);
           await expect(duplicateIcon.locator("path")).toHaveAttribute("d", await notPlannedIcon.locator("path").getAttribute("d"));
           await expect(duplicateIcon.locator("path")).not.toHaveAttribute("d", await completedIcon.locator("path").getAttribute("d"));
-          await expect(duplicateIcon).toHaveCSS("color", await notPlannedIcon.evaluate(node => getComputedStyle(node).color));
-          await expect(duplicateIcon).not.toHaveCSS("color", await completedIcon.evaluate(node => getComputedStyle(node).color));
+          await expect.poll(() => issueIcons.evaluateAll(nodes => {
+            const [, completed, notPlanned, duplicate] = nodes.map(node => getComputedStyle(node).color);
+            return {
+              resolved: nodes.length === 4 && Boolean(completed && notPlanned && duplicate),
+              matchesNotPlanned: duplicate === notPlanned,
+              differsFromCompleted: duplicate !== completed,
+            };
+          })).toEqual({ resolved: true, matchesNotPlanned: true, differsFromCompleted: true });
           const queuedIcon = page.locator(".subject-merge-queued .subject-icon");
           await expect(queuedIcon).toHaveCSS("color", theme === "light" ? "rgb(154, 103, 0)" : "rgb(210, 153, 34)");
           for (const width of [320, 960]) {

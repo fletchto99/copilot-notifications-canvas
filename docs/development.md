@@ -265,9 +265,36 @@ required-check rules separately if workflow check names change.
 **Browser CI:** both engines run in a version/digest-pinned Playwright image
 with browsers and libraries preinstalled. Update its version and verified digest
 with the locked `@playwright/test` dependency; alignment is tested.
-Each browser job has a 15-minute limit for container startup, packaging, tests,
-and report uploads; Playwright's per-test timeout remains 30 seconds.
+Each engine runs in four parallel shards, for eight browser jobs total, with two
+Playwright workers per job. With `fullyParallel` enabled, Playwright distributes
+individual tests across shards by count, not duration; new tests are included
+automatically without category lists. Every shard validates packaging and uploads
+its own HTML report and failure traces as `browser-results-<browser>-<shard>`.
+Failures do not cancel the other shards.
+
+Each shard has a 15-minute limit for container startup, packaging, tests, and
+report uploads; Playwright's per-test timeout remains 30 seconds.
+After `npm run build`, reproduce a shard locally with
+`npm run test:browser -- --project=chromium --shard=1/4 --workers=2`, substituting
+the browser and shard number. Omit `--shard` to run the full selected suite.
+Use **Browser tests** as the required browser check in branch protection or
+rulesets, replacing any requirements for individual browser/shard jobs.
+This lightweight aggregate job depends on the entire browser matrix and passes
+only when every shard succeeds; failed, cancelled, or skipped browser jobs cannot
+produce a green aggregate check. Its name stays unchanged when the shard count
+changes. Individual shard jobs and reports remain available for diagnosis.
+Keep any required Node and lint checks separately; this check covers browsers only.
 PR/main CI validates packaging but never publishes releases.
+
+Copilot discovery browser tests advance a test-only provider clock instead of
+waiting real minutes. Source fixtures inject `CopilotHost.now`; packaged fixtures
+control `Date.now` inside their isolated child process and acknowledge clock changes
+over IPC. Clock updates wait for pending discovery to settle and its provider-side
+completion handlers to finish; parent-side callback counts alone do not prove
+the next retry deadline has been scheduled. Renderer polling and provider timers
+still run normally. These tests
+keep the default per-test timeout and check late recovery plus the 179,999/180,000 ms
+boundary; unit tests cover every retry deadline. Production timing is unchanged.
 
 Browser race regressions use held synthetic responses to control request order,
 not sleeps or retries. Settings reads must not take focus from pending row
@@ -285,6 +312,12 @@ advance controlled clocks past a due refresh. Layout probes stay installed
 through animation frames. DOM-identity checks wait for the renderer to acknowledge
 the specific snapshot version; receiving HTTP headers alone does not prove that
 the response was consumed or rendered.
+View-persistence tests wait for the selected view's status-selection version in
+a completed state response before reloading. Row counts can update before that
+follow-up fetch; navigating then can produce WebKit access-control errors.
+Compare related computed styles in one retried DOM snapshot, requiring nonempty
+values. A one-time style read during regrouping can capture an empty value that
+no amount of retrying the other element will satisfy.
 
 Windows lock tests preserve existing files and directory links before publishing
 candidate directories: a failed directory rename is not a safe guard on Windows.
