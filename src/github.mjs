@@ -446,8 +446,16 @@ export class GitHubClient {
   }
 
   async refreshAuthorship(items, signal) {
-    const authors = () => (typeof items === "function" ? items() : items)
-      .filter(item => authorshipTypes.includes(item.type));
+    let previousItems;
+    let selected;
+    const authors = () => {
+      const current = typeof items === "function" ? items() : items;
+      if (current !== previousItems) {
+        previousItems = current;
+        selected = current.filter(item => authorshipTypes.includes(item.type));
+      }
+      return selected;
+    };
     const needsViewer = () => authors().some(item => item.type !== "Discussion" && subjectEndpoint(item, this.target));
     if (needsViewer()) {
       await this.#withRequestSlot(() => this.#refreshSubject("/user", { type: "Viewer", updatedAt: "" },

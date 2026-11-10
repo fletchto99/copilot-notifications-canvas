@@ -52,6 +52,97 @@ test("authorship reuses REST details, compares IDs, and resolves discussions wit
   assert.deepEqual(client.authorshipSnapshot({ ...items[0], type: "Release" }), {});
 });
 
+test("background authorship scans cached loaded selections linearly", async () => {
+  const measurements = [];
+  for (const size of [100, 400]) {
+    let typeReads = 0;
+    let loadedSnapshots = 0;
+    let requests = 0;
+    const client = new GitHubClient({ now: () => 0, run: async args => {
+      requests++;
+      return http(args.at(-1) === "/user" ? { id: 100 } : details());
+    } });
+    const inbox = new Inbox(client);
+    const items = normalizeThreads(Array.from({ length: size }, (_, index) => row(String(index + 1))))
+      .map(item => ({ ...item, get type() { typeReads++; return item.type; } }));
+    inbox.pages = [{ items, sequence: 1 }];
+    await client.refreshSubjects(items);
+    const loadedItems = inbox.loadedItems.bind(inbox);
+    inbox.loadedItems = () => { loadedSnapshots++; return loadedItems(); };
+    const refreshAuthorship = client.refreshAuthorship.bind(client);
+    let loading;
+    client.refreshAuthorship = (...args) => loading = refreshAuthorship(...args);
+    const server = await startServer(inbox, { development: false });
+    try {
+      const url = new URL(server.url);
+      typeReads = 0;
+      const response = await fetch(`${url.origin}/api/state`, {
+        headers: { Authorization: `Bearer ${url.hash.slice(1)}`, "X-Notification-Subjects": "manual" },
+      });
+      assert.equal(response.status, 200);
+      await response.json();
+      assert.ok(loading);
+      await loading;
+      measurements.push(typeReads);
+      assert.ok(loadedSnapshots <= 6, "Per-item scheduling must not rebuild the loaded inbox");
+      assert.equal(requests, size + 1, "The warm authorship pass needs only the viewer request");
+      assert.equal(inbox.snapshot().attentionCounts.mine, size);
+    } finally {
+      await server.close();
+    }
+  }
+  assert.ok(measurements[1] <= measurements[0] * 5,
+    `Quadrupling the inbox must not cause quadratic selection scans: ${measurements.join(", ")}`);
+});
+
+test("cached authorship selections follow pagination and triage while requests are in flight", async () => {
+  const rows = Array.from({ length: 50 }, (_, index) => row(String(index + 1)));
+  const requested = [];
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  let entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const client = new GitHubClient({ run: async args => {
+    const endpoint = args.at(-1);
+    if (endpoint.startsWith("/notifications?")) return endpoint.includes("page=2")
+      ? http([row("51"), row("52")]) : http(rows, { link: inboxNext.replace("all=true&is_done=false", "all=false") });
+    if (endpoint === "/user") return http({ id: 100 });
+    requested.push(endpoint);
+    if (requested.length === 20) entered();
+    if (requested.length <= 20) await held;
+    return http(details());
+  } });
+  const inbox = new Inbox(client, { mode: "unread" });
+  await inbox.refresh();
+  const refreshAuthorship = client.refreshAuthorship.bind(client);
+  let loading;
+  client.refreshAuthorship = (...args) => loading = refreshAuthorship(...args);
+  const server = await startServer(inbox, { development: false });
+  try {
+    const url = new URL(server.url);
+    const response = await fetch(`${url.origin}/api/state`, {
+      headers: { Authorization: `Bearer ${url.hash.slice(1)}`, "X-Notification-Subjects": "manual" },
+    });
+    assert.equal(response.status, 200);
+    await response.json();
+    await started;
+    await inbox.more();
+    await inbox.setFilters({ query: "no matches", attention: "mentioned" });
+    inbox.onThreadUpdated("21", "read");
+    inbox.onThreadUpdated("22", "done");
+    release();
+    await loading;
+    const expected = [...rows.map(item => item.id), "51", "52"].filter(id => !["21", "22"].includes(id))
+      .map(id => `/repos/example/widgets/issues/${id}`);
+    assert.deepEqual(requested, expected);
+    assert.equal(inbox.snapshot().attentionCounts.mine, 50);
+    assert.equal(inbox.snapshot().matching, 0, "Display filters do not narrow authorship resolution");
+  } finally {
+    release();
+    await server.close();
+  }
+});
+
 test("Mine matches confirmed authorship rather than notification reasons, preserving read rows, search and API order", () => {
   const items = normalizeThreads([
     row("1", "Issue", { unread: false }), row("2", "PullRequest", { reason: "author" }),

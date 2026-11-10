@@ -125,6 +125,15 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
   let authorshipRefresh;
   let authorshipFailure = null;
   let authorshipRetryAt = 0;
+  let authorshipSelection;
+  const loadedAuthorship = () => {
+    const inboxMode = inbox.filters.mode === "inbox" && inbox.matchGitHubInbox;
+    // Inbox mutations replace pages; query and grouping changes do not.
+    if (authorshipSelection?.pages !== inbox.pages || authorshipSelection.inboxMode !== inboxMode) {
+      authorshipSelection = { pages: inbox.pages, inboxMode, items: inbox.loadedItems() };
+    }
+    return authorshipSelection.items;
+  };
   let subjectView = { groupBy: "repo", timeZone: null };
   let subjectSelection = null;
   let subjectSelectionVersion = 0;
@@ -205,8 +214,8 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
       }).finally(() => { subjectRefresh = undefined; });
     }
     if (!authorshipRefresh && !signal.aborted && inbox.client.now() >= authorshipRetryAt &&
-        inbox.client.authorshipNeedsRefresh(inbox.loadedItems())) {
-      authorshipRefresh = inbox.client.refreshAuthorship(() => inbox.loadedItems(), signal).then(() => {
+        inbox.client.authorshipNeedsRefresh(loadedAuthorship())) {
+      authorshipRefresh = inbox.client.refreshAuthorship(loadedAuthorship, signal).then(() => {
         authorshipFailure = null;
       }).catch(error => {
         if (error instanceof InboxError && error.code === "closed") return;
@@ -499,6 +508,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
       await inbox.batch.done;
       await subjectRefresh;
       await authorshipRefresh;
+      authorshipSelection = undefined;
     },
   };
 }

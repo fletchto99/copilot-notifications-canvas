@@ -131,6 +131,8 @@ output. Development loads source without a build; release builds bundle
 - Mine matches confirmed authorship of loaded issues, PRs, and discussions, not
   the notification reason. Resolve authorship even for filtered or collapsed
   rows, share the bounded detail cache, and expose incomplete counts explicitly.
+  Runtime updates must replace `Inbox.pages`, not mutate its arrays in place,
+  so authorship selections stay stable until loaded pages or inbox mode change.
   Keep author/viewer IDs provider-only and in memory; no per-item authorship in
   agent results or desktop polling.
 - All views preserve API row order. REST `updated_at` is not the inbox ordering
