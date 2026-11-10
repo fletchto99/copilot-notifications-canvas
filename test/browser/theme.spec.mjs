@@ -39,6 +39,8 @@ for (const [target, attribute] of [
 ]) {
   test(`Match Copilot follows ${target} ${attribute} and palette tokens rather than the OS`, async ({ page, canvas }) => {
     canvas.rows.splice(1);
+    await page.clock.install();
+    await page.clock.pauseAt(new Date(Date.now() + 1000));
     await page.setViewportSize({ width: 320, height: 800 });
     await page.emulateMedia({ colorScheme: "light" });
     await page.goto(canvas.url);
@@ -74,9 +76,13 @@ for (const [target, attribute] of [
       await expect(page.locator(".status-line")).toHaveCSS("color", rgb(muted));
       await theme.click();
       await expect(page.locator("#theme:open")).toBeVisible();
+      // Axe needs timers; picker-style assertions must not race periodic settings reads.
+      await page.clock.resume();
       expect((await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze()).violations).toEqual([]);
-      await page.keyboard.press("Escape");
+      await page.clock.pauseAt(new Date(await page.evaluate(() => Date.now() + 1000)));
+      if (await theme.evaluate(node => node.matches(":open"))) await page.keyboard.press("Escape");
       await expect(page.locator("#theme:open")).toHaveCount(0);
+      await expect(page.locator("#settings-panel")).toBeVisible();
       await page.evaluate(() => {
         document.getElementById("synthetic-theme-defaults").textContent += ":root { --background-color-default: #213447; }";
       });
