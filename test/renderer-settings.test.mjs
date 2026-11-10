@@ -797,7 +797,7 @@ test("date groups by local calendar day across repositories, newest first, with 
     [["thread:2", "thread:3"], ["thread:1", "thread:4"], ["thread:5"]]);
   assert.equal(disclosures()[0].children[0].textContent,
     new Date(2026, 1, 1).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" }));
-  assert.equal(disclosures()[0].children[1].textContent, "2 total \u00b7 2 unread");
+  assert.equal(disclosures()[0].children[1].textContent, "2 loaded \u00b7 2 unread");
   assert.equal(list.querySelectorAll("button").some(node => node.dataset.repository), false);
   assert.equal(list.querySelectorAll("span").filter(node => node.className === "repository").length, 5);
   assert.equal(list.attributes["aria-label"], "Notifications by date");
@@ -956,7 +956,7 @@ test("none and date regroup loaded read and unread results without including unl
     assert.deepEqual(order(), groupBy === "none" ? ["thread:1", "thread:2"] : ["thread:2", "thread:1"]);
     await ui.ids.get("more").events.click();
     assert.deepEqual(order(), groupBy === "none" ? ["thread:1", "thread:2", "thread:3", "thread:4"] : ["thread:4", "thread:3", "thread:2", "thread:1"]);
-    assert.equal(ui.ids.get("count").textContent, "4 total \u00b7 3 unread");
+    assert.equal(ui.ids.get("count").textContent, "4 loaded \u00b7 3 unread");
     await runInContext('update("filters", { query: "alpha" })', ui.context);
     assert.deepEqual(order(), groupBy === "none" ? ["thread:1", "thread:3"] : ["thread:3", "thread:1"]);
     assert.match(ui.ids.get("count").textContent, /3 unread.*2 matching/);

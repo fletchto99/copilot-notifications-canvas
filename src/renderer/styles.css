@@ -559,8 +559,21 @@ input::placeholder {
   font-size: 12px;
 }
 
-.status-line > #count {
-  flex: 1 1 auto;
+.inbox-status {
+  display: flex;
+  flex: 1 1 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+}
+
+.inbox-mode {
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  white-space: nowrap;
+  color: var(--canvas-text);
 }
 
 .retry-status {
@@ -604,6 +617,46 @@ input::placeholder {
 #copilot-dialog p {
   margin-top: 12px;
   color: var(--muted);
+}
+
+#copilot-dialog #copilot-status,
+#copilot-dialog #copilot-clone {
+  color: var(--canvas-text);
+}
+
+#copilot-reference {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+#copilot-clone {
+  padding: 10px 12px;
+  border-left: 3px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.copilot-details {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+#copilot-dialog #copilot-privacy {
+  margin-top: 0;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+#copilot-remember {
+  margin-top: 12px;
+}
+
+#copilot-dialog .batch-buttons:empty {
+  display: none;
 }
 
 .shortcuts-list {
@@ -882,10 +935,6 @@ summary::marker {
 :root[data-copilot-integration="true"] .row {
   --row-actions-width: 104px;
   --row-action-columns: 3;
-}
-
-#copilot-reference {
-  overflow-wrap: anywhere;
 }
 
 #copilot-remember .switch-toggle {
@@ -1176,10 +1225,24 @@ footer:has(#development-build[hidden]) {
   .toolbar {
     flex-wrap: wrap;
     justify-content: flex-end;
+    gap: 4px;
   }
 
   .toolbar h1 {
     flex-basis: 100%;
+    min-height: 30px;
+  }
+
+  .attention-navigation {
+    margin-top: 4px;
+  }
+
+  .attention-tabs {
+    padding-block: 2px;
+  }
+
+  .status-line {
+    margin-block: 4px;
   }
 }
 
@@ -1190,6 +1253,11 @@ footer:has(#development-build[hidden]) {
 
   .repo-header {
     padding: 0 10px;
+  }
+
+  .repo-toggle {
+    flex-basis: 0;
+    padding-block: 8px;
   }
 
   .row-link {

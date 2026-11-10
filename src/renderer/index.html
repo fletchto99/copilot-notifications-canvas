@@ -149,7 +149,7 @@
       </section>
       <label class="search">
         <span class="sr-only">Search loaded notification titles, issue or PR numbers, and repositories</span>
-        <input id="search" type="search" maxlength="200" placeholder="Search..." autocomplete="off" spellcheck="false">
+        <input id="search" type="search" maxlength="200" placeholder="Search loaded notifications..." autocomplete="off" spellcheck="false">
       </label>
       <div id="attention-navigation" class="attention-navigation">
         <button id="attention-previous" class="attention-scroll" type="button" aria-label="Scroll attention tabs left" aria-controls="attention-tabs" aria-disabled="true" hidden>
@@ -165,7 +165,10 @@
         </button>
       </div>
       <div class="status-line">
-        <span id="count" role="status" aria-live="polite" title="Counts include loaded notifications only.">Waiting for inbox...</span>
+        <div class="inbox-status">
+          <span id="inbox-mode" class="inbox-mode" role="status" hidden>Unread only</span>
+          <span id="count" role="status" aria-live="polite" title="Counts include loaded notifications only." hidden></span>
+        </div>
         <button id="collapse" class="text-button" type="button">Collapse all</button>
       </div>
       <p id="retry-status" class="retry-status" role="status" hidden></p>
@@ -207,14 +210,16 @@
       </div>
       <p id="copilot-status" role="status"></p>
       <p id="copilot-reference" hidden></p>
-      <p id="copilot-privacy">Only the selected GitHub reference and task instructions are shared with Copilot and retained in its session history. Notification titles and the rest of your inbox are not shared. Read/Done stays unchanged.</p>
       <p id="copilot-clone" hidden></p>
-      <div id="copilot-remember" hidden>
-        <button id="copilot-skip-confirmation" class="switch-toggle" type="button" role="switch" aria-checked="false" aria-describedby="copilot-confirmation-help">
-          <span>Skip routine confirmations</span>
-          <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
-        </button>
-        <p id="copilot-confirmation-help" class="settings-help">Saved when you confirm, not when you cancel. Cloning, inferred CI matches, and choosing an existing or new session still require confirmation. Copilot permissions and review-skill choices are unchanged. Restore confirmations in Settings.</p>
+      <div class="copilot-details">
+        <p id="copilot-privacy">Only the selected GitHub reference and task instructions are shared with Copilot and retained in its session history. Notification titles and the rest of your inbox are not shared. Read/Done stays unchanged.</p>
+        <div id="copilot-remember" hidden>
+          <button id="copilot-skip-confirmation" class="switch-toggle" type="button" role="switch" aria-checked="false" aria-describedby="copilot-confirmation-help">
+            <span>Skip routine confirmations</span>
+            <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+          </button>
+          <p id="copilot-confirmation-help" class="settings-help">Saved when you confirm, not when you cancel. Cloning, inferred CI matches, and choosing an existing or new session still require confirmation. Copilot permissions and review-skill choices are unchanged. Restore confirmations in Settings.</p>
+        </div>
       </div>
       <div id="copilot-sessions" class="batch-buttons"></div>
       <div class="batch-buttons">

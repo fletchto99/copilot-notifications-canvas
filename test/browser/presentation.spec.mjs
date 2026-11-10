@@ -149,8 +149,8 @@ for (const packaged of [false, true]) {
       await page.locator("#more").click();
       await expect(page.locator(".row")).toHaveCount(100);
       await expect(page.locator("#more")).toBeHidden();
-      await expect(page.locator("#count")).toHaveText("100 total \u00b7 50 unread");
-      await expect(page.locator(".repo-count")).toHaveText("100 total \u00b7 50 unread");
+      await expect(page.locator("#count")).toHaveText("100 loaded \u00b7 50 unread");
+      await expect(page.locator(".repo-count")).toHaveText("100 loaded \u00b7 50 unread");
       const first = page.locator('[data-focus-key="thread:1"]');
       await expect(first.locator(".subject-open")).toHaveCount(1);
       await page.clock.pauseAt(new Date(Date.now() + 1000));
@@ -180,7 +180,7 @@ for (const packaged of [false, true]) {
       await page.getByRole("searchbox").fill("notification 100");
       await page.clock.runFor(250);
       await expect(page.locator(".row")).toHaveCount(1);
-      await expect(page.locator("#count")).toHaveText("100 total \u00b7 50 unread \u00b7 1 matching");
+      await expect(page.locator("#count")).toHaveText("100 loaded \u00b7 50 unread \u00b7 1 matching");
       await page.getByRole("searchbox").fill("");
       await page.clock.runFor(250);
       await expect(page.locator(".row")).toHaveCount(100);

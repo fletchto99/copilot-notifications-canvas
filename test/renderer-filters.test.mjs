@@ -259,7 +259,7 @@ test("attention tabs default to All, combine with search in every grouping, and 
     search.events.input();
     await ui.fireTimer(250);
     assert.deepEqual(shown(ui), ["2"]);
-    assert.equal(ui.ids.get("count").textContent, "7 total \u00b7 7 unread \u00b7 1 matching");
+    assert.equal(ui.ids.get("count").textContent, "7 loaded \u00b7 7 unread \u00b7 1 matching");
     assert.equal(tab(ui, "all").textContent, "All (7)");
     assert.equal(tab(ui, "mentioned").textContent, "Mentioned (1)");
     assert.equal(tab(ui, "team_mentioned").textContent, "Team Mentioned (1)");
@@ -590,7 +590,7 @@ test("tabs change the displayed selection during a batch without changing its ca
   await runInContext("update()", ui.context);
   assert.equal(tab(ui, "mentioned").disabled, false);
   assert.equal(ui.ids.get("empty").hidden, true);
-  assert.equal(ui.ids.get("count").textContent, "8 total \u00b7 6 unread \u00b7 1 matching");
+  assert.equal(ui.ids.get("count").textContent, "8 loaded \u00b7 6 unread \u00b7 1 matching");
   assert.equal(tab(ui, "review_requested").textContent, "Review Requested (2)");
   assert.equal(tab(ui, "mentioned").textContent, "Mentioned (1)");
   assert.equal(tab(ui, "team_mentioned").textContent, "Team Mentioned (1)");

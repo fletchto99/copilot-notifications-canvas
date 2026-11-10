@@ -8,6 +8,9 @@
 
 The canvas shows GitHub's read and unread inbox items by default. Choose
 **Settings > Show notifications > Unread only** to narrow the view.
+An **Unread only** indicator above the list identifies that view, including when
+the **All** attention tab is selected. It describes the loaded view; a failed
+view change keeps the previous view and indicator.
 Done notifications are excluded in both views. Pages contain up to 50 items.
 **Search, counts, and bulk actions cover loaded items only.** Use **Load more**
 to include older notifications.
@@ -62,8 +65,11 @@ or included in Mine's bulk actions. New results update the count and selection;
 bulk actions still require the current selection and retries keep their original
 targets.
 
-Counters show **N total · M unread**. Read rows have no unread dot and use
-lighter-weight titles. Each row shows its type/number, reason, update time, and
+Counters show **N loaded · M unread**, never an estimate of the entire inbox.
+Before the first successful load, counts are omitted rather than shown as zero.
+A failed refresh keeps the last loaded counts and marks the view as stale.
+Read rows have no unread dot and use lighter-weight titles. Each row shows its
+type/number, reason, update time, and
 repository when absent from the group heading. Navigation hints are available
 to screen readers, never added to visible metadata.
 

@@ -13,7 +13,7 @@ for (const packaged of [false, true]) {
         await page.goto(canvas.url);
         const read = page.locator(".repo-read");
         const done = page.locator(".repo-done");
-        await expect(page.locator(".repo-count")).toHaveText("2 total \u00b7 1 unread");
+        await expect(page.locator(".repo-count")).toHaveText("2 loaded \u00b7 1 unread");
         await expect(read).toBeVisible();
         await expect(read).toHaveAccessibleDescription("Mark 1 as read");
         for (const colorScheme of ["light", "dark"]) {
@@ -40,7 +40,7 @@ for (const packaged of [false, true]) {
         const before = await done.boundingBox();
         const previousRead = await read.boundingBox();
         await page.locator('[data-focus-key="read:1"]').click();
-        await expect(page.locator(".repo-count")).toHaveText("2 total \u00b7 0 unread");
+        await expect(page.locator(".repo-count")).toHaveText("2 loaded \u00b7 0 unread");
         await expect(read).toBeHidden();
         await expect(page.getByRole("button", { name: /^Mark 0 as read/ })).toHaveCount(0);
         await expect(done).toBeVisible();

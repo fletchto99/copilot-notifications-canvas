@@ -76,7 +76,8 @@ test("inbox matching, persistence and action eligibility remain accessible", asy
   await page.goto(canvas.url);
   await expect(page.locator(".row")).toHaveCount(2);
   await expect(page.locator(".row.read")).toHaveCount(1);
-  await expect(page.locator("#count")).toHaveText("2 total \u00b7 1 unread");
+  await expect(page.locator("#count")).toHaveText("2 loaded \u00b7 1 unread");
+  await expect(page.locator("#inbox-mode")).toBeHidden();
   await expect(page.locator('[data-focus-key="read:2"]')).toBeDisabled();
   await expect(page.locator('[data-focus-key="done:2"]')).toBeEnabled();
   await page.locator('[data-focus-key="read:1"]').click();
@@ -95,14 +96,18 @@ test("inbox matching, persistence and action eligibility remain accessible", asy
   await select.selectOption("unread");
   await expect(select).toHaveValue("unread");
   await expect(page.locator(".row")).toHaveCount(0);
+  await expect(page.locator("#inbox-mode")).toHaveText("Unread only");
+  await expect(page.locator("#inbox-mode")).toBeVisible();
   expect((await canvas.preferences.read()).matchGitHubInbox).toBe(false);
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   await page.reload();
   await expect(page.locator(".row")).toHaveCount(0);
+  await expect(page.locator("#inbox-mode")).toBeVisible();
   await page.getByLabel("Settings", { exact: true }).click();
   await expect(select).toHaveValue("unread");
   await select.selectOption("all");
   await expect(page.locator(".row")).toHaveCount(1);
+  await expect(page.locator("#inbox-mode")).toBeHidden();
   await expect(page.locator('[data-focus-key="done:3"]')).toHaveCount(0);
   await expect(page.locator('[data-focus-key="done:2"]')).toHaveCount(0);
   expect(canvas.writes).toEqual(["1", "2"]);
@@ -119,6 +124,7 @@ test.describe("packaged notification views", () => {
     canvas.rows[2].done = true;
     await page.goto(canvas.url);
     await expect(page.locator(".row")).toHaveCount(2);
+    await expect(page.locator("#inbox-mode")).toBeHidden();
     await page.getByLabel("Settings", { exact: true }).click();
     const select = page.getByRole("combobox", { name: "Show notifications", exact: true });
     await expect(select).toBeEnabled();
@@ -135,16 +141,21 @@ test.describe("packaged notification views", () => {
     await select.selectOption("unread");
     await expect(page.locator(".row")).toHaveCount(1);
     await expect(select).toHaveValue("unread");
+    await expect(page.locator("#inbox-mode")).toBeVisible();
+    await expect(page.getByRole("tab", { name: "All (1)", exact: true })).toBeVisible();
     // Let the selection's follow-up fetch finish before WebKit starts navigating away.
     expect(await (await selectedState).finished()).toBeNull();
     await page.reload();
     await expect(page.locator(".row")).toHaveCount(1);
+    await expect(page.locator("#inbox-mode")).toBeVisible();
     expect((await canvas.preferences.read()).matchGitHubInbox).toBe(false);
     await page.locator('[data-focus-key="read:1"]').click();
     await expect(page.locator(".row")).toHaveCount(0);
+    await expect(page.locator("#inbox-mode")).toBeVisible();
     await page.getByLabel("Settings", { exact: true }).click();
     await select.selectOption("all");
     await expect(page.locator(".row")).toHaveCount(2);
+    await expect(page.locator("#inbox-mode")).toBeHidden();
     await expect(page.locator('[data-focus-key="done:3"]')).toHaveCount(0);
     const queries = canvas.requests.filter(path => path.startsWith("/notifications?"))
       .map(path => new URL(path, "https://api.github.com").searchParams);
