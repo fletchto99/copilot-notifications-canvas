@@ -57,6 +57,8 @@ export async function renderReadmeScreenshot(browser, expect, { create = createC
       nodes.map(node => node.getAttribute("aria-label").split(".")[0])),
     { timeout: 15_000 }).toEqual(readmeSubjectLabels);
     await expect(page.locator(".subject-loading")).toHaveCount(0);
+    await expect(page.locator("#attention-mine")).toHaveText("Mine (4)");
+    await expect(page.locator(".notification-mine:visible")).toHaveCount(4);
     await expect(page.locator('.row-link[aria-disabled="true"]')).toHaveCount(0);
     await expect(page.getByRole("button", { name: "PR merged: #237" })).toBeDisabled();
     await expect(page.getByRole("button", { name: "PR in merge queue: #248" })).toBeDisabled();

@@ -30,7 +30,7 @@ for (const packaged of [false, true]) {
           await expect(page.locator(".destination")).toHaveCount(0);
           for (const metadata of await page.locator(".metadata").all()) {
             await expect(metadata).not.toContainText(/Open (?:GitHub|repository)/);
-            await expect(metadata.locator(".metadata-item")).toHaveCount(groupBy === "repo" ? 3 : 4);
+            await expect(metadata.locator(".metadata-item:visible")).toHaveCount(groupBy === "repo" ? 3 : 4);
           }
           for (const width of [320, 375, 960]) {
             await page.setViewportSize({ width, height: 900 });

@@ -191,7 +191,7 @@ test("row metadata never includes custom destination hints for any notification 
       const groups = ui.ids.get("groups");
       assert.equal(groups.querySelectorAll(".destination").length, 0);
       for (const metadata of groups.querySelectorAll(".metadata")) {
-        assert.equal(metadata.children.length, groupBy === "repo" ? 3 : 4);
+        assert.equal(metadata.children.filter(node => !node.hidden).length, groupBy === "repo" ? 3 : 4);
         assert.equal(metadata.querySelectorAll(".sr-only").length, 0);
         assert.ok(metadata.querySelectorAll("span").every(node => !node.textContent.startsWith("Open ")));
       }

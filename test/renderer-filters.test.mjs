@@ -2,13 +2,56 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { runInContext } from "node:vm";
 import { disabled, finishRows, renderer, settle } from "./renderer-fixtures.mjs";
-import { thread } from "./fixtures.mjs";
+import { http, thread } from "./fixtures.mjs";
 
 const rows = ["review_requested", "mention", "team_mention", "assign", "author", "comment", "subscribed"]
   .map((reason, index) => thread(String(index + 1), { reason }));
 const tab = (ui, value) => ui.document.getElementById(`attention-${value}`);
 const shown = ui => ui.ids.get("groups").querySelectorAll("button")
   .filter(button => button.dataset.action === "read").map(button => button.dataset.threadId);
+
+test("Mine distinguishes pending, unavailable and confirmed authorship without replacing row controls", async t => {
+  const ui = await renderer({ initialRows: [thread("1", { reason: "mention" })] });
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  const mine = tab(ui, "mine");
+  assert.equal(mine.textContent, "Mine (0+)");
+  assert.equal(mine.hidden, false);
+  await mine.events.click();
+  assert.equal(ui.ids.get("authorship-status").hidden, false);
+  assert.match(ui.ids.get("authorship-status").textContent, /Checking authorship for 1 loaded item\./);
+  assert.equal(ui.inbox.summary().matching, 0);
+  ui.inbox.client.run = async args => args.at(-1) === "/user" ? http({ id: 100 }) :
+    http({ state: "open", merged: false, draft: true, user: { id: 100 } });
+  await ui.inbox.client.refreshAuthorship(ui.inbox.loadedItems());
+  await runInContext("update()", ui.context);
+  assert.equal(mine.textContent, "Mine (1)");
+  assert.equal(ui.ids.get("authorship-status").hidden, true);
+  assert.deepEqual(shown(ui), ["1"]);
+  const marker = ui.ids.get("groups").querySelectorAll(".notification-mine")[0];
+  assert.equal(marker.tag, "em");
+  assert.equal(marker.textContent, "mine");
+  assert.equal(marker.parentNode.hidden, false);
+  assert.equal(marker.getAttribute("aria-label"), "Authored by you");
+  const metadata = marker.parentNode.parentNode.children;
+  const markerIndex = metadata.indexOf(marker.parentNode);
+  assert.equal(metadata[markerIndex - 1].children[0].textContent, "mention");
+  assert.equal(metadata[markerIndex + 1].children[0].tag, "time");
+  await tab(ui, "all").events.click();
+  const button = ui.ids.get("groups").querySelectorAll(".mark-done")[0];
+  button.focus();
+  ui.inbox.client.invalidateSubjects(ui.inbox.loadedItems());
+  ui.inbox.client.run = async () => http({}, {}, 403);
+  await ui.inbox.client.refreshAuthorship(ui.inbox.loadedItems());
+  await runInContext("update()", ui.context);
+  assert.equal(ui.ids.get("groups").querySelectorAll(".mark-done")[0], button);
+  assert.equal(ui.document.activeElement, button);
+  assert.equal(ui.ids.get("groups").querySelectorAll(".notification-mine")[0].parentNode.hidden, true);
+  await mine.events.click();
+  assert.match(ui.ids.get("authorship-status").textContent, /Authorship unavailable for 1 loaded item\./);
+  assert.equal(ui.inbox.summary().matching, 0);
+  assert.deepEqual(ui.patches, []);
+  assert.deepEqual(ui.deletions, []);
+});
 
 test("arrivals move focused empty panels to the first group without stealing other focus", async t => {
   for (const groupBy of ["repo", "date", "none"]) {
@@ -187,9 +230,9 @@ test("attention tabs default to All, combine with search in every grouping, and 
     assert.equal(tab(ui, "all").tabIndex, 0);
     assert.equal(ui.ids.get("attention-panel").tabIndex, -1);
     assert.deepEqual(ui.ids.get("attention-tabs").children.map(button => button.textContent),
-      ["All (7)", "Assigned (1)", "Participating (6)", "Mentioned (1)", "Team Mentioned (1)", "Review Requested (1)"]);
+      ["All (7)", "Mine (0+)", "Assigned (1)", "Participating (6)", "Mentioned (1)", "Team Mentioned (1)", "Review Requested (1)"]);
     const metadata = ui.ids.get("groups").querySelectorAll("div").filter(node => node.className === "metadata");
-    assert.deepEqual(metadata[0].children.map(node => node.children[0]).filter(node => node.tag !== "time")
+    assert.deepEqual(metadata[0].children.filter(node => !node.hidden).map(node => node.children[0]).filter(node => node.tag !== "time")
       .map(node => node.querySelectorAll(".notification-type")[0]?.textContent ?? node.textContent),
       [...(groupBy === "repo" ? [] : ["example/widgets"]), "Pull Request #42", "review requested"]);
     assert.equal(metadata.some(node => node.querySelectorAll("span").some(child => child.textContent === "Unread")), false);
@@ -238,7 +281,7 @@ test("keyboard tabs wrap and support Home and End without changing focus on poll
   const ui = await renderer({ initialRows: rows });
   let current = "all";
   for (const [key, expected] of [
-    ["ArrowLeft", "review_requested"], ["ArrowRight", "all"], ["ArrowRight", "assigned"],
+    ["ArrowLeft", "review_requested"], ["ArrowRight", "all"], ["ArrowRight", "mine"], ["ArrowRight", "assigned"],
     ["End", "review_requested"], ["Home", "all"],
   ]) {
     let prevented = false;
@@ -264,7 +307,7 @@ test("empty-tab hiding follows loaded counts, ignores search and preserves All i
       storedSettings: { hideEmptyTabs: true, groupBy } });
     t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
     const visibleTabs = () => ui.ids.get("attention-tabs").children.filter(tab => !tab.hidden).map(tab => tab.textContent);
-    assert.deepEqual(visibleTabs(), ["All (1)", "Participating (1)", "Mentioned (1)"]);
+    assert.deepEqual(visibleTabs(), ["All (1)", "Mine (0+)", "Participating (1)", "Mentioned (1)"]);
     assert.equal(tab(ui, "assigned").tabIndex, -1);
     await tab(ui, "assigned").events.click();
     await tab(ui, "assigned").events.keydown({ key: "Home", preventDefault: () => assert.fail("Hidden tabs cannot navigate") });
@@ -275,10 +318,10 @@ test("empty-tab hiding follows loaded counts, ignores search and preserves All i
     search.events.input();
     await ui.fireTimer(250);
     assert.equal(ui.inbox.snapshot().matching, 0);
-    assert.deepEqual(visibleTabs(), ["All (1)", "Participating (1)", "Mentioned (1)"]);
+    assert.deepEqual(visibleTabs(), ["All (1)", "Mine (0+)", "Participating (1)", "Mentioned (1)"]);
     ui.setRows([thread("2", { reason: "review_requested" })]);
     await ui.ids.get("force-refresh").events.click();
-    assert.deepEqual(visibleTabs(), ["All (1)", "Participating (1)", "Review Requested (1)"]);
+    assert.deepEqual(visibleTabs(), ["All (1)", "Mine (0+)", "Participating (1)", "Review Requested (1)"]);
     assert.equal(ui.document.activeElement, search);
     ui.setRows([]);
     await ui.ids.get("force-refresh").events.click();
@@ -326,7 +369,7 @@ test("keyboard tab navigation skips hidden tabs, wraps and supports Home and End
   t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
   let current = "all";
   for (const [key, expected] of [
-    ["ArrowRight", "participating"], ["ArrowRight", "mentioned"], ["ArrowRight", "all"],
+    ["ArrowRight", "mine"], ["ArrowRight", "participating"], ["ArrowRight", "mentioned"], ["ArrowRight", "all"],
     ["ArrowLeft", "mentioned"], ["Home", "all"], ["End", "mentioned"],
   ]) {
     await tab(ui, current).events.keydown({ key, preventDefault() {} });
@@ -681,7 +724,7 @@ test("arrows disappear when tabs fit the full strip, respond to count widths, an
   ui.resizeAttention();
   ui.fireAnimationFrame();
   assert.equal(next.hidden, true);
-  assert.equal(ui.attentionObserved.length, 9);
+  assert.equal(ui.attentionObserved.length, 10);
   assert.equal(ui.attentionObserved[0], navigation);
   assert.equal(ui.attentionObserved.includes(tab(ui, "participating")), true);
   assert.equal(ui.attentionObserved.includes(ui.ids.get("inbox-header")), true);

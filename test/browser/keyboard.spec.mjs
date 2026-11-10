@@ -366,7 +366,9 @@ for (const packaged of [false, true]) {
         await expect(page.locator('[data-focus-key="done:2"]')).toHaveAttribute("aria-busy", "true");
         await page.keyboard.press("i");
         await page.keyboard.press("/");
+        const filtering = page.waitForRequest("**/api/filters");
         await page.getByRole("searchbox").fill("Needle tool");
+        await filtering;
         await rowLink(page, "3").focus();
         await page.keyboard.press("Shift+KeyE");
         await page.keyboard.press("/");

@@ -90,44 +90,44 @@ for (const packaged of [false, true]) {
         await page.locator("#force-refresh").click();
         await expect(page.locator("#force-refresh")).toHaveAttribute("aria-busy", "false");
         await expect(page.locator(".repo-items")).toBeHidden();
-        expect(requested()).toHaveLength(60);
-        await page.locator("#collapse").click();
         await expect.poll(() => requested().length).toBe(120);
+        await page.locator("#collapse").click();
+        expect(requested()).toHaveLength(120, "Expanding reuses the details fetched for authorship");
         await expect(page.locator(".subject-loading")).toHaveCount(0);
         expect(canvas.writes).toEqual([]);
       });
     }
 
-    test("collapsing a group drops its pending off-screen statuses until expanded", async ({ page, canvas }) => {
+    test("collapsing a group drops its pending off-screen check statuses until expanded", async ({ page, canvas }) => {
       canvas.rows.splice(0, canvas.rows.length, ...Array.from({ length: 40 }, (_, index) => {
         const repository = index < 20 ? "example/widgets" : "example/tools";
         return thread(String(index + 1), {
           repository: { full_name: repository },
-          subject: { type: "Issue", title: `Synthetic expanded issue ${index + 1}`,
-            url: `https://api.github.com/repos/${repository}/issues/${index + 1}` },
-          subjectDetails: { state: "closed" },
+          subject: { type: "CheckSuite", title: `Synthetic expanded check ${index + 1}`,
+            url: `https://api.github.com/repos/${repository}/actions/runs/${index + 1}` },
+          subjectDetails: { status: "completed", conclusion: "success" },
         });
       }));
       let release;
       const held = new Promise(resolve => { release = resolve; });
-      const requested = () => canvas.requests.filter(path => /\/issues\/\d+$/.test(path));
+      const requested = () => canvas.requests.filter(path => /\/actions\/runs\/\d+$/.test(path));
       canvas.setRequestHook(async args => {
-        if (args.at(-1).startsWith("/repos/example/widgets/issues/")) await held;
+        if (args.at(-1).startsWith("/repos/example/widgets/actions/runs/")) await held;
       });
       try {
         await page.goto(canvas.url);
         await expect(page.locator(".subject-loading")).toHaveCount(40);
-        await expect.poll(() => requested().sort()).toEqual(Array.from({ length: 20 }, (_, index) => `/repos/example/widgets/issues/${index + 1}`).sort());
+        await expect.poll(() => requested().sort()).toEqual(Array.from({ length: 20 }, (_, index) => `/repos/example/widgets/actions/runs/${index + 1}`).sort());
         const selected = page.waitForResponse(response => new URL(response.url()).pathname === "/api/subjects" &&
           response.request().postDataJSON().complete && response.request().postDataJSON().positions.length === 20);
         await page.getByRole("button", { name: /example\/tools.*total/ }).click();
         await selected;
         release();
-        await expect(page.locator(".subject-closed")).toHaveCount(20);
-        await expect(page.locator(".subject-loading")).toHaveCount(0);
+        await expect(page.locator(".subject-success")).toHaveCount(20);
+        await expect(page.locator(".subject-loading:visible")).toHaveCount(0);
         expect(requested()).toHaveLength(20);
         await page.getByRole("button", { name: /example\/tools.*total/ }).click();
-        await expect(page.locator(".subject-closed")).toHaveCount(40);
+        await expect(page.locator(".subject-success")).toHaveCount(40);
         expect(requested()).toHaveLength(40);
         expect(canvas.writes).toEqual([]);
       } finally {

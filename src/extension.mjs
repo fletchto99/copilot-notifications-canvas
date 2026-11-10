@@ -85,7 +85,7 @@ session = await joinSession({
       },
       {
         name: "set_filters",
-        description: "Choose inbox or unread notifications, then filter loaded items by attention reason or search; return aggregate status.",
+        description: "Choose inbox or unread notifications, then filter loaded items by authorship, attention reason or search; return aggregate status.",
         inputSchema: filterSchema,
         handler: ctx => action(ctx, inbox => inbox.setFilters(ctx.input), true),
       },
