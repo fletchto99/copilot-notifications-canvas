@@ -148,7 +148,7 @@ test("cancellation and revoked approval stop preparation before later operations
 });
 
 test("real Git can create the exact worktree after preparation without changing the existing checkout", async t => {
-  for (const action of ["review", "ci"]) await t.test(action, async t => {
+  for (const action of ["review", "summarize", "ci", "commit"]) await t.test(action, async t => {
     const { root } = await fixture(t);
     const remote = join(root, "remote.git");
     const seed = join(root, "seed");
@@ -194,7 +194,7 @@ test("real Git can create the exact worktree after preparation without changing 
         const actual = [...args];
         if (args.includes("fetch")) {
           fetches++;
-          assert.equal(args.at(-1), action === "ci" ? selected : "refs/pull/42/head");
+          assert.equal(args.at(-1), ["ci", "commit"].includes(action) ? selected : "refs/pull/42/head");
           const index = actual.indexOf("https://github.com/example/widgets.git");
           assert.ok(index >= 0);
           actual[index] = pathToFileURL(remote).href;

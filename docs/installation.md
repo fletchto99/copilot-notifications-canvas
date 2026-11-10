@@ -1,6 +1,6 @@
 # Installation and updating
 
-[README](../README.md) | [Usage](usage.md) | [Settings](settings.md) | [Development](development.md)
+[README](../README.md) | [Usage](usage.md) | [Copilot](copilot.md) | [Settings](settings.md) | [Development](development.md)
 
 ## Prerequisites
 
@@ -10,8 +10,8 @@
   into **github.com** with `notifications` or `repo` scope. It must support
   `gh release verify`, `gh release verify-asset`, and `gh attestation verify`
   with every identity-policy flag in the commands below.
-- For Copilot PR/CI handoffs, Git 2.29 or later and a host-exposed repository
-  checkout accessible to the extension. See [exact-commit preparation](usage.md#work-with-copilot).
+- For Copilot PR, CI, and commit handoffs, Git 2.29 or later and a host-exposed repository
+  checkout accessible to the extension. See [exact-commit preparation](copilot.md#exact-commit-preparation).
 
 GitHub.com only; fine-grained personal access tokens are not supported.
 Check sign-in with `gh auth status --hostname github.com`.

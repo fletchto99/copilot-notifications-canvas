@@ -18,15 +18,15 @@ export async function prepareCommit(repository, target, { signal, beforeFetch, r
       typeof target.repository !== "string" ||
       !/^[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/.test(target.repository) ||
       [".", ".."].includes(target.repository.split("/")[1]) ||
-      !["continue", "review", "ci"].includes(target.action) ||
-      target.action !== "ci" && !/^[1-9]\d*$/.test(target.number)) {
+      !["continue", "review", "summarize", "ci", "commit"].includes(target.action) ||
+      !["ci", "commit"].includes(target.action) && !/^[1-9]\d*$/.test(target.number)) {
     throw new InboxError("copilot_checkout", "The selected GitHub commit could not be verified.", 400);
   }
   if (!repository || repository.remote_only || typeof repository.main_repo_path !== "string" ||
       !isAbsolute(repository.main_repo_path) ||
       typeof repository.github_repo !== "string" || repository.github_repo.toLowerCase() !== target.repository.toLowerCase()) {
     throw new InboxError("copilot_checkout",
-      "The host did not expose an accessible local checkout for this repository. Configure a checkout on this execution host before starting a PR/CI handoff.", 409);
+      "The host did not expose an accessible local checkout for this repository. Configure a checkout on this execution host before starting a PR, CI, or commit handoff.", 409);
   }
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
@@ -72,7 +72,7 @@ export async function prepareCommit(repository, target, { signal, beforeFetch, r
     if (await hasCommit()) return;
     await beforeFetch?.();
     fetching = true;
-    const ref = target.action === "ci" ? target.sha : `refs/pull/${target.number}/head`;
+    const ref = ["ci", "commit"].includes(target.action) ? target.sha : `refs/pull/${target.number}/head`;
     await git([
       "-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential",
       "fetch", "--quiet", "--no-tags", "--no-prune", "--no-prune-tags", "--refmap=",

@@ -1,6 +1,6 @@
 # Settings
 
-[README](../README.md) | [Usage](usage.md) | [Installation](installation.md) | [Development](development.md)
+[README](../README.md) | [Usage](usage.md) | [Copilot](copilot.md) | [Installation](installation.md) | [Development](development.md)
 
 Open **Settings** in the canvas to change these preferences. They are saved
 across sessions and preserved during packaged upgrades.
@@ -9,7 +9,7 @@ across sessions and preserved during packaged upgrades.
 | --- | --- | --- |
 | Show notifications | All | **All** shows read and unread inbox items, excluding Done. **Unread only** shows unread items. Switching reloads the first page. No per-notification state is saved locally. |
 | Group By | Repository | **Repository**: preserve GitHub's API order, grouping repositories by first appearance. **All notifications**: one collapsible group in API order. **Date**: newest local calendar day first, using REST update times for buckets and API order for rows. |
-| Copilot integration | On | Shows contextual Copilot actions on eligible notifications. Closed, merged, and merge-queued PRs show disabled controls explaining their state. Turn off to hide the buttons and block new handoffs; sessions already started are left alone. |
+| Copilot integration | On | Shows contextual Copilot actions on eligible notifications. Closed and merged PRs offer **Summarize Changes**; closed, unmerged PRs also ask whether you want help reopening after the summary. Releases with a specific linked ID offer **Summarize Release Notes**. Merge-queued PRs show disabled controls explaining their state. Turn off to hide the buttons and block new handoffs; sessions already started are left alone. |
 | Confirm Copilot actions | On | Shows the routine handoff popup. Turn off to start from a row click when no matching session exists. Cloning, inferred CI matches, and choosing an existing or new session still require confirmation. |
 | Hide empty tabs | On | Hides attention tabs with zero loaded notifications. **All**, the selected tab, and **Mine** with incomplete authorship checks stay visible. Counts ignore search; tabs reappear when matching notifications are loaded. Saved choices are preserved. |
 | Theme | Match Copilot | **Match Copilot** uses Copilot's theme colors, falling back to the OS theme when opened outside Copilot. **Dark** and **Light** use fixed palettes. |
@@ -46,7 +46,7 @@ to `true` when absent. Its switch and **Confirm Copilot actions** appear above
 apply changes on their next poll; handoffs recheck the saved preference before
 launching work. Turning it off invalidates prepared confirmations and stops
 additional handoff steps, but cannot undo a host action already in flight or
-stop a session that has started. See [Copilot actions](usage.md#work-with-copilot).
+stop a session that has started. See [Copilot actions](copilot.md#confirmations-and-existing-sessions).
 
 `confirmCopilotActions` also defaults to `true`. **Skip routine confirmations**
 in the handoff popup saves `false` only when you confirm; cancelling leaves the
