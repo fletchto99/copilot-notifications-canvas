@@ -16,7 +16,7 @@ import { copilotHost } from "./fixtures/copilot-host.mjs";
 
 export async function createCanvasFixture({
   assetFailure = false, desktopEnabled = false, packaged = false, development, developmentApiBaseUrl, log: report = () => {},
-  now = Date.now, copilotEnabled = false,
+  now = Date.now, copilotEnabled = false, findNotifier = async () => "/synthetic/bin/terminal-notifier",
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), "notification-fixture-"));
   const directory = join(root, "home", "extensions", "github-notifications", "artifacts");
@@ -150,6 +150,7 @@ export async function createCanvasFixture({
   };
   const desktop = new DesktopNotifications({
     preferences, client, now: () => now() + offset, platform: "darwin",
+    findNotifier,
     notify: async message => { deliveries.push(message); },
     log,
   });

@@ -91,6 +91,7 @@
               <select id="desktop-sound" aria-describedby="desktop-status" disabled><option value="default">System default</option></select>
             </div>
             <p id="desktop-status" class="settings-help" role="status" aria-live="polite" hidden></p>
+            <p id="desktop-backend" class="settings-help" hidden></p>
             <p id="settings-status" class="settings-help" role="status" aria-live="polite" hidden></p>
             <div class="select-setting">
               <label for="theme">Theme</label>
@@ -146,6 +147,15 @@
           <textarea id="update-prompt" readonly rows="5" spellcheck="false"></textarea>
         </div>
         <p id="update-stale" role="status" hidden></p>
+      </section>
+      <section id="desktop-recommendation" class="desktop-recommendation" aria-label="Optional macOS notification helper" hidden>
+        <p>For smoother macOS notifications, we recommend installing <strong>terminal-notifier</strong>. It lets alerts open GitHub instead of Script Editor.</p>
+        <p>Optional: <code>brew install terminal-notifier</code>. Nothing is installed automatically, and desktop alerts stay off until you enable them.</p>
+        <div class="update-actions">
+          <a href="https://formulae.brew.sh/formula/terminal-notifier" target="_blank" rel="noopener noreferrer">Installation details</a>
+          <button id="check-terminal-notifier" type="button">Check again</button>
+          <button id="dismiss-terminal-notifier" type="button">Don't show again</button>
+        </div>
       </section>
       <label class="search">
         <span class="sr-only">Search loaded notification titles, issue or PR numbers, and repositories</span>

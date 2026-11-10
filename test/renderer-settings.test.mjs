@@ -5,6 +5,60 @@ import { runInContext } from "node:vm";
 import { http, inboxNext as next, thread } from "./fixtures.mjs";
 import { finishRows, renderer, script, html, styles, settle } from "./renderer-fixtures.mjs";
 
+test("the macOS recommendation appears on first load, dismisses durably, and never enables alerts", async t => {
+  const storedSettings = { desktopNotifications: false, future: 42 };
+  const ui = await renderer({ storedSettings, desktopStatus: { backend: "osascript" } });
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  assert.equal(ui.ids.get("desktop-recommendation").hidden, false);
+  assert.equal(Boolean(ui.ids.get("settings").open), false);
+  const dismiss = ui.ids.get("dismiss-terminal-notifier");
+  dismiss.focus();
+  dismiss.events.click();
+  assert.equal(dismiss.disabled, true);
+  await settle();
+  assert.equal(ui.ids.get("desktop-recommendation").hidden, true);
+  assert.equal(ui.document.activeElement, ui.ids.get("search"));
+  assert.deepEqual(storedSettings, { desktopNotifications: false, future: 42, terminalNotifierHintDismissed: true });
+  const reopened = await renderer({ storedSettings, desktopStatus: { backend: "osascript" } });
+  t.after(() => { reopened.window.events.pagehide(); reopened.inbox.close(); });
+  assert.equal(reopened.ids.get("desktop-recommendation").hidden, true);
+  assert.match(reopened.ids.get("desktop-backend").textContent, /brew install terminal-notifier/);
+  assert.deepEqual(ui.patches, []);
+  assert.deepEqual(ui.deletions, []);
+});
+
+test("macOS recommendation checks again without saving, and disappears when the helper becomes available", async t => {
+  const desktopStatus = { backend: "osascript" };
+  const ui = await renderer({ desktopStatus, retainDisabledFocus: true });
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  desktopStatus.backend = "terminal-notifier";
+  const check = ui.ids.get("check-terminal-notifier");
+  check.focus();
+  check.events.click();
+  await settle();
+  assert.equal(ui.ids.get("desktop-recommendation").hidden, true);
+  assert.equal(ui.document.activeElement, ui.ids.get("search"));
+  assert.equal(ui.calls.some(call => call.path === "/api/settings" && call.options.method === "POST"), false);
+});
+
+test("the helper recommendation is absent on other platforms and failed dismissal remains visible with an error", async t => {
+  for (const [desktopPlatform, backend] of [["linux", "osascript"], ["win32", "osascript"],
+    ["darwin", "terminal-notifier"], ["darwin", "unavailable"]]) {
+    const ui = await renderer({ desktopPlatform, desktopStatus: { backend } });
+    t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+    assert.equal(ui.ids.get("desktop-recommendation").hidden, true);
+  }
+  const ui = await renderer({ desktopStatus: { backend: "osascript" }, onSettings: input => {
+    if (input) throw new Error("Synthetic dismissal failure");
+  } });
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  ui.ids.get("dismiss-terminal-notifier").events.click();
+  await settle();
+  assert.equal(ui.ids.get("desktop-recommendation").hidden, false);
+  assert.equal(ui.ids.get("dismiss-terminal-notifier").disabled, false);
+  assert.match(ui.ids.get("settings-error").textContent, /Synthetic dismissal failure/);
+});
+
 test("the per-panel Web Audio option is replaced by the native notification sound picker", () => {
   assert.doesNotMatch(html, /id="sound"|Play sound|per-panel chime/);
   assert.match(html, /<label for="desktop-sound"/);

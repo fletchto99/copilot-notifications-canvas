@@ -107,7 +107,7 @@ stops them. No extra software is installed automatically.
 
 | Platform | Requirements | Sounds |
 | --- | --- | --- |
-| macOS | Built-in `osascript`; allow notifications for the script sender. | System default or named sounds such as Glass, Ping and Submarine. |
+| macOS | Optional `terminal-notifier` (preferred when installed), otherwise built-in `osascript`. Allow notifications for the selected sender. | System default or named sounds such as Glass, Ping and Submarine. |
 | Windows 10/11 | Built-in Windows PowerShell/WinRT, PowerShell's existing Start menu registration, and an interactive desktop. | Default, IM, Mail, Reminder and SMS. |
 | Linux | `notify-send` (libnotify) and a graphical D-Bus notification service. | Default or themed sound hints; desktops may ignore sound or silence hints. |
 
@@ -117,15 +117,46 @@ Windows alerts use the existing Windows PowerShell sender, including its
 path-based Start menu registration; they do not register a new sender or use
 PowerShell 7 or ISE.
 
-Clicking a Windows alert opens its GitHub destination in your default browser:
+Clicking a Windows or macOS `terminal-notifier` alert opens its GitHub destination in your default browser:
 the issue or pull request, or the resolved workflow run (the sole failed job's
 logs when available). Check notifications use the same conservative run matching
 as the canvas and fall back to filtered repository Actions when possible, or
 the repository Actions page otherwise. Missing or unsupported item links open
 the GitHub inbox. Repository burst summaries open the inbox filtered to that
-repository. Links are limited to HTTPS github.com URLs and passed to Windows as
+repository. Links are limited to HTTPS github.com URLs and passed to the notifier as
 data, not commands; no browser is opened until you click. Existing alerts are
-unchanged. macOS and Linux click behavior is unchanged.
+unchanged. AppleScript fallback and Linux click behavior is unchanged.
+
+### Optional macOS helper
+
+For smoother macOS notifications, install
+[`terminal-notifier`](https://formulae.brew.sh/formula/terminal-notifier):
+
+```sh
+brew install terminal-notifier
+```
+
+The extension automatically prefers it when found in an absolute directory on
+the extension process's `PATH`, or in `/opt/homebrew/bin` or `/usr/local/bin`.
+It checks for an executable without running it or sending an alert. When it is
+missing, the canvas shows a nonblocking recommendation on load.
+**Don't show again** saves only that dismissal across sessions; installation
+guidance remains in Settings. **Check again**, reopening Settings, or the next
+enabled watcher check picks up an installation without restarting Copilot.
+Nothing is installed automatically, and desktop alerts remain opt-in.
+
+Without the helper, alerts continue through AppleScript, whose clicks may open
+Script Editor. With the helper, macOS uses the terminal-notifier sender and clicks
+open GitHub; the extension does not impersonate Copilot or focus its canvas.
+These alerts include a bundled GitHub logo through `-contentImage`. It is an
+image inside the notification, not a replacement for the terminal-notifier
+sender icon; macOS controls its presentation. No image is downloaded at runtime.
+The extension stages only that static logo in a private temporary directory and
+removes it after the notifier finishes. AppleScript fallback alerts are unchanged.
+Allow the selected sender in macOS System Settings and respect Focus settings.
+If terminal-notifier fails, the extension reports the error and does **not**
+retry that alert through AppleScript, because the first attempt may already
+have delivered it. Removing the helper restores the fallback for future alerts.
 
 ### Polling and delivery
 
@@ -186,8 +217,9 @@ for recovery.
 
 Desktop alerts send repository names and titles to the OS, which may retain
 them in notification history or show them on the lock screen.
-Windows alerts also include the GitHub destination URL; it is not saved in the
-extension's coordination state or logs. Resolving individual Windows check
+Windows and macOS `terminal-notifier` alerts also include the GitHub destination
+URL; it is not saved in the extension's coordination state or logs. The OS/helper
+may retain it, including in system logs. Resolving individual clickable check
 links may fetch workflow-run and job metadata, respecting the shared cache and
 rate limits; it does not fetch log contents or resolve links for burst summaries.
 Server retry/rate-limit deadlines from lookups are saved in the shared
@@ -237,8 +269,10 @@ See [Privacy](../README.md#privacy).
   establish a fresh silent baseline; activity received before that baseline
   will not produce alerts.
 - **Sender icon and clicks:** the OS controls the sender icon; clicking an alert
-  cannot focus the canvas. Windows alerts open their GitHub destination in the
-  default browser instead. Visiting GitHub may mark the notification read there;
+  cannot focus the canvas. Windows and macOS `terminal-notifier` alerts open their
+  GitHub destination in the default browser instead. AppleScript fallback alerts
+  may open Script Editor; install the optional macOS helper to avoid that behavior.
+  Visiting GitHub may mark the notification read there;
   the extension does not send a read/done update when an alert is clicked.
 - **The canvas will not load:** see
   [installation troubleshooting](installation.md#upgrades-and-troubleshooting).

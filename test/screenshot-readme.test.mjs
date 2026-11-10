@@ -45,7 +45,7 @@ test("README fixture serves the frozen inbox through the protected server with t
   t.after(() => canvas.close());
   canvas.rows.splice(0, canvas.rows.length, ...readmeRows());
   await canvas.preferences.update(readmePreferences);
-  assert.deepEqual(await canvas.preferences.read(), { ...readmePreferences, desktopSound: "default" });
+  assert.deepEqual(await canvas.preferences.read(), { ...readmePreferences, terminalNotifierHintDismissed: false, desktopSound: "default" });
   const { origin, hash } = new URL(canvas.url);
   const response = await fetch(`${origin}/api/refresh`, {
     method: "POST", headers: {
