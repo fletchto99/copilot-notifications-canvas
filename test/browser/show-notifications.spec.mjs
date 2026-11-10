@@ -4,12 +4,15 @@ import { test, expect } from "./fixtures.mjs";
 for (const packaged of [false, true]) {
   test.describe(`notification view control (${packaged ? "packaged" : "source"})`, () => {
     test.use({ packaged });
-    test("hover and focus leave the next setting unobstructed without help text", async ({ page, canvas }) => {
+    test("Group By follows Show notifications in layout and keyboard order without obstruction", async ({ page, canvas }) => {
       canvas.rows.splice(1);
       await page.goto(canvas.url);
       const settings = page.getByLabel("Settings", { exact: true });
       const select = page.getByRole("combobox", { name: "Show notifications", exact: true });
+      const grouping = page.getByRole("combobox", { name: "Group By", exact: true });
       const copilotIntegration = page.getByRole("switch", { name: "Copilot integration", exact: true });
+      const copilotConfirmations = page.getByRole("switch", { name: "Confirm Copilot actions", exact: true });
+      const hideEmptyTabs = page.getByRole("switch", { name: "Hide empty tabs", exact: true });
       for (const width of [320, 960]) {
         await page.setViewportSize({ width, height: 640 });
         for (const colorScheme of ["light", "dark"]) {
@@ -23,7 +26,7 @@ for (const packaged of [false, true]) {
           await expect(select).not.toHaveAttribute("title");
           await expect(page.locator("#show-notifications-help, #show-notifications-tooltip")).toHaveCount(0);
           const controlBounds = await select.locator("..").boundingBox();
-          const nextBounds = await copilotIntegration.boundingBox();
+          const nextBounds = await grouping.locator("..").boundingBox();
           expect(nextBounds.y - controlBounds.y - controlBounds.height).toBeCloseTo(8, 1);
           await select.selectOption("unread");
           await expect(select).toBeEnabled();
@@ -37,18 +40,24 @@ for (const packaged of [false, true]) {
           await select.selectOption("all");
           await expect(select).toBeEnabled();
           await select.hover();
-          expect(await copilotIntegration.evaluate(node => {
+          expect(await grouping.evaluate(node => {
             const bounds = node.getBoundingClientRect();
             return node.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2));
           })).toBe(true);
           expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
           await select.focus();
           await select.press("Tab");
+          await expect(grouping).toBeFocused();
+          await grouping.press("Tab");
           await expect(copilotIntegration).toBeFocused();
-          await copilotIntegration.click();
-          await expect(copilotIntegration).toHaveAttribute("aria-checked", "false");
-          await copilotIntegration.click();
-          await expect(copilotIntegration).toHaveAttribute("aria-checked", "true");
+          await copilotIntegration.press("Tab");
+          await expect(copilotConfirmations).toBeFocused();
+          await copilotConfirmations.press("Tab");
+          await expect(hideEmptyTabs).toBeFocused();
+          await hideEmptyTabs.click();
+          await expect(hideEmptyTabs).toHaveAttribute("aria-checked", "false");
+          await hideEmptyTabs.click();
+          await expect(hideEmptyTabs).toHaveAttribute("aria-checked", "true");
           await page.keyboard.press("Escape");
           await expect(settings).toBeFocused();
         }

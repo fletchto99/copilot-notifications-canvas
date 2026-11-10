@@ -1,5 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
-import { test, expect } from "./fixtures.mjs";
+import { test, expect, openSettings } from "./fixtures.mjs";
 
 const rowLink = (page, id) => page.locator(`[data-focus-key="thread:${id}"]`);
 
@@ -142,10 +142,7 @@ for (const packaged of [false, true]) {
       await page.locator("#collapse").focus();
       await page.keyboard.press("j");
       await expect(rowLink(page, "2")).toBeFocused();
-      await Promise.all([
-        page.waitForResponse(response => new URL(response.url()).pathname === "/api/settings" && response.request().method() === "GET"),
-        page.getByLabel("Settings", { exact: true }).click(),
-      ]);
+      await openSettings(page);
       await expect(page.locator("#group-by")).toBeEnabled();
       await page.locator("#group-by").focus();
       await page.keyboard.press("i");
@@ -300,7 +297,7 @@ for (const packaged of [false, true]) {
       canvas.rows.splice(2);
       await page.goto(canvas.url);
       await expect(page.locator(".row")).toHaveCount(2);
-      await page.getByLabel("Settings", { exact: true }).click();
+      await openSettings(page);
       const toggle = page.getByRole("switch", { name: "Keyboard shortcuts", exact: true });
       await expect(page.locator("#auto-open + #keyboard-shortcuts + #desktop-notifications")).toHaveCount(1);
       await expect(toggle).toHaveAttribute("aria-checked", "true");
@@ -333,7 +330,7 @@ for (const packaged of [false, true]) {
       await page.getByRole("searchbox").focus();
       await page.keyboard.press("Enter");
       await expect(rowLink(page, "1")).toBeFocused();
-      await page.getByLabel("Settings", { exact: true }).click();
+      await openSettings(page);
       await toggle.click();
       await expect(toggle).toHaveAttribute("aria-checked", "true");
       await expect(page.locator("#shortcuts-toggle")).toBeVisible();
@@ -353,6 +350,12 @@ for (const packaged of [false, true]) {
       await expect(page.locator(".row")).toHaveCount(3);
       let release;
       const held = new Promise(resolve => { release = resolve; });
+      let finishFilter;
+      const filterResponse = new Promise(resolve => { finishFilter = resolve; });
+      await page.route("**/api/filters", async route => {
+        await filterResponse;
+        await route.continue();
+      }, { times: 1 });
       canvas.setRequestHook(args => args.includes("DELETE") ? held : undefined);
       try {
         await rowLink(page, "1").focus();
@@ -368,12 +371,15 @@ for (const packaged of [false, true]) {
         await page.keyboard.press("Shift+KeyE");
         await page.keyboard.press("/");
         release();
+        finishFilter();
         await expect(page.locator(".row")).toHaveCount(1);
         await expect(page.getByRole("searchbox")).toBeFocused();
-        await expect.poll(() => canvas.writes).toEqual(["1", "2"]);
-        expect(canvas.doneWrites).toEqual(["1", "2"]);
+        await expect.poll(() => canvas.writes.toSorted()).toEqual(["1", "2"]);
+        expect(canvas.doneWrites.toSorted()).toEqual(["1", "2"]);
       } finally {
         release();
+        finishFilter();
+        await page.unrouteAll({ behavior: "wait" });
       }
     });
   });

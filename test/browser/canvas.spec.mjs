@@ -248,7 +248,7 @@ test("attention tabs combine with search and constrain repository reads to match
   await page.getByRole("button", { name: "Mark 2 as read in example/widgets; 2 shown, loaded notifications", exact: true }).click();
   await expect(page.locator(".row")).toHaveCount(3);
   await expect(page.locator(".row.unread")).toHaveCount(1);
-  expect(canvas.writes).toEqual(["1", "4"]);
+  expect(canvas.writes.toSorted()).toEqual(["1", "4"]);
   expect(canvas.rows.find(row => row.id === "2").unread).toBe(true);
   expect(canvas.rows.find(row => row.id === "51").unread).toBe(true);
   await expect(page.getByRole("tab", { name: "Review Requested (3)", exact: true })).toBeVisible();
@@ -520,8 +520,9 @@ test("repository group controls remain usable for a single matching notification
   await page.getByRole("button", { name: "Mark 2 as done in example/widgets; 2 shown, loaded notifications", exact: true }).click();
   await expect(page.locator(".row")).toHaveCount(0);
   await expect(page.locator(".repo-actions")).toHaveCount(0);
-  expect(canvas.writes).toEqual(["1", "1", "2"]);
-  expect(canvas.doneWrites).toEqual(["1", "2"]);
+  expect(canvas.writes[0]).toBe("1");
+  expect(canvas.writes.slice(1).toSorted()).toEqual(["1", "2"]);
+  expect(canvas.doneWrites.toSorted()).toEqual(["1", "2"]);
 });
 
 for (const groupBy of ["repo", "date", "none"]) {
@@ -585,7 +586,7 @@ test("repository actions affect only shown loaded matches, not another repositor
   await expect(page.locator(".row")).toHaveCount(3);
   await expect(page.locator(".row.unread")).toHaveCount(1);
   await expect(page.locator("#batch-progress")).toBeHidden();
-  expect(canvas.writes).toEqual(["1", "2"]);
+  expect(canvas.writes.toSorted()).toEqual(["1", "2"]);
   expect(canvas.rows.find(row => row.id === "3").unread).toBe(true);
   expect(canvas.rows.find(row => row.id === "51").unread).toBe(true);
   await expect(page.getByRole("searchbox", { name: searchName })).toBeEnabled();
@@ -856,31 +857,76 @@ test("a stationary tooltip updates at 15-second ticks without fetching notificat
 
 test("foreground checks use a 60-second interval, pause while hidden, and refresh immediately on return", async ({ page, canvas }) => {
   canvas.rows.splice(1);
+  await page.addInitScript(() => {
+    const NativeIntersectionObserver = window.IntersectionObserver;
+    window.IntersectionObserver = class extends NativeIntersectionObserver {
+      constructor(callback, options) {
+        super((entries, observer) => {
+          callback(entries, observer);
+          const entry = entries.find(entry => entry.target === document.documentElement);
+          if (entry) window.canvasIntersecting = entry.isIntersecting;
+        }, options);
+      }
+    };
+  });
+  const localRequests = [];
+  const pending = new Set();
+  page.on("request", request => {
+    const path = new URL(request.url()).pathname;
+    if (["/api/state", "/api/refresh"].includes(path)) {
+      localRequests.push(path);
+      pending.add(request);
+    }
+  });
+  for (const event of ["requestfinished", "requestfailed"]) page.on(event, request => pending.delete(request));
+  await page.clock.install();
   const initialResponse = page.waitForResponse(response => response.url().endsWith("/api/refresh"));
+  const selected = page.waitForResponse(async response => response.url().endsWith("/api/state") &&
+    (await response.json()).subjectSelectionVersion > 0);
   await page.goto(canvas.url);
   const initial = await (await initialResponse).json();
+  await selected;
   await expect(page.locator(".row")).toHaveCount(1);
+  await expect.poll(() => page.evaluate(() => window.canvasIntersecting)).toBe(true);
+  await page.clock.pauseAt(new Date(Date.now() + 1000));
+  await expect.poll(() => pending.size).toBe(0);
   expect(initial.nextRefreshAt - initial.lastFetchedAt).toBe(60_000);
   await expect(page.locator("#refresh-tooltip-text")).toHaveText(/Last updated \d+ seconds? ago/);
   const notificationRequests = () => canvas.requests.filter(path => path.startsWith("/notifications")).length;
   expect(notificationRequests()).toBe(1);
 
+  const beforeHiding = localRequests.length;
   await page.evaluate(() => { document.documentElement.style.display = "none"; });
   await expect(page.locator("html")).toBeHidden();
-  await page.clock.setFixedTime(new Date(canvas.advance(1000)));
-  await page.waitForTimeout(5500);
+  await expect.poll(() => page.evaluate(() => window.canvasIntersecting)).toBe(false);
+  await expect.poll(() => pending.size).toBe(0);
+  canvas.advance(61_000);
+  await page.clock.runFor(61_000);
+  await expect.poll(() => pending.size).toBe(0);
+  expect(localRequests).toHaveLength(beforeHiding);
   expect(notificationRequests()).toBe(1);
 
   canvas.rows[0].subject.title = "Updated when visible again";
   const resumedRequest = page.waitForRequest(request => request.url().endsWith("/api/refresh"));
+  const resumedResponse = page.waitForResponse(response => response.url().endsWith("/api/refresh"));
   await page.evaluate(() => { document.documentElement.style.display = ""; });
+  await expect.poll(() => page.evaluate(() => window.canvasIntersecting)).toBe(true);
   expect((await resumedRequest).postDataJSON()).toEqual({ force: true });
+  const resumed = await (await resumedResponse).json();
   await expect(page.getByRole("link", { name: "Updated when visible again" })).toBeVisible();
+  await expect.poll(() => pending.size).toBe(0);
+  expect(resumed.nextRefreshAt - resumed.lastFetchedAt).toBe(60_000);
   expect(notificationRequests()).toBe(2);
 
   canvas.rows[0].subject.title = "Updated on the next foreground check";
-  await page.clock.setFixedTime(new Date(canvas.advance(61_000)));
-  await expect(page.getByRole("link", { name: "Updated on the next foreground check" })).toBeVisible({ timeout: 10_000 });
+  await page.clock.setSystemTime(new Date(resumed.lastFetchedAt));
+  canvas.advance(59_000);
+  await page.clock.runFor(59_999);
+  await expect.poll(() => pending.size).toBe(0);
+  expect(notificationRequests()).toBe(2);
+  canvas.advance(2000);
+  await page.clock.runFor(5001);
+  await expect(page.getByRole("link", { name: "Updated on the next foreground check" })).toBeVisible();
   expect(notificationRequests()).toBe(3);
   expect(canvas.writes).toEqual([]);
 });

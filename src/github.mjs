@@ -5,6 +5,7 @@ import { apiTarget, DEFAULT_API_BASE_URL, InboxError, normalizeThreads, notifica
 export const POLL_MS = 60_000;
 export const RETRY_MS = 120_000;
 export const SUBJECT_POLL_MS = 5 * 60_000;
+export const WRITE_CONCURRENCY = 10;
 const API_ORIGIN = DEFAULT_API_BASE_URL;
 const MERGE_QUEUE_QUERY = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){isInMergeQueue}}}";
 const DISCUSSION_QUERY = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){discussion(number:$number){closed isAnswered stateReason}}}";
@@ -307,7 +308,7 @@ function seconds(value) {
   return /^\d+$/.test(value ?? "") ? Number(value) * 1000 : 0;
 }
 
-async function waitForSubjectWork(pending, signal) {
+async function waitForWork(pending, signal) {
   if (!signal) return pending;
   let aborted;
   const interrupted = new Promise((resolve, reject) => {
@@ -342,6 +343,9 @@ export class GitHubClient {
     this.subjectInvalidations = new Map();
     this.sequence = 0;
     this.queue = Promise.resolve();
+    this.pageQueue = this.queue;
+    this.writeWorkers = new Set();
+    this.writeWaiters = new Set();
     this.blockedUntil = 0;
     // Only server retry/rate-limit delays may be inherited by another client.
     this.serverBlockedUntil = 0;
@@ -350,7 +354,6 @@ export class GitHubClient {
     this.failures = new Map();
     this.lastError = null;
     this.sleep = sleep;
-    this.writeAvailableAt = 0;
     this.pendingThreads = new Set();
     this.threadWrites = new Map();
     this.threadReservations = new Map();
@@ -527,8 +530,8 @@ export class GitHubClient {
     const worker = async () => {
       try {
         while (!failed) {
-          const worked = await this.#withSubjectSlot(async () => {
-            await waitForSubjectWork(this.queue, signal);
+          const worked = await this.#withRequestSlot(async () => {
+            await waitForWork(this.queue, signal);
             if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
             if (failed) return false;
             const next = nextSubject();
@@ -560,7 +563,7 @@ export class GitHubClient {
               previousItems = undefined;
             }
             return true;
-          }, signal);
+          }, signal, this.subjectWorkers, this.subjectWaiters, SUBJECT_CONCURRENCY);
           if (!worked) return;
         }
       } catch (error) {
@@ -608,28 +611,28 @@ export class GitHubClient {
     for (const wake of this.subjectRefreshes) wake();
   }
 
-  #withSubjectSlot(work, signal) {
+  #withRequestSlot(work, signal, workers, waiters, concurrency) {
     return new Promise((resolve, reject) => {
       const aborted = () => {
-        this.subjectWaiters.delete(start);
+        waiters.delete(start);
         reject(new InboxError("closed", "The canvas was closed.", 410));
       };
       const start = () => {
-        this.subjectWaiters.delete(start);
+        waiters.delete(start);
         signal?.removeEventListener("abort", aborted);
         if (signal?.aborted) return aborted();
         const pending = work();
         const settled = pending.catch(() => {}).finally(() => {
-          this.subjectWorkers.delete(settled);
-          this.subjectWaiters.values().next().value?.();
+          workers.delete(settled);
+          waiters.values().next().value?.();
         });
-        this.subjectWorkers.add(settled);
+        workers.add(settled);
         pending.then(resolve, reject);
       };
       if (signal?.aborted) return aborted();
-      if (this.subjectWorkers.size < SUBJECT_CONCURRENCY && !this.subjectWaiters.size) start();
+      if (workers.size < concurrency && !waiters.size) start();
       else {
-        this.subjectWaiters.add(start);
+        waiters.add(start);
         signal?.addEventListener("abort", aborted, { once: true });
       }
     });
@@ -650,7 +653,7 @@ export class GitHubClient {
     const previous = this.subjectRequests.get(key) ?? Promise.resolve();
     let started = false;
     const pending = previous.catch(() => {}).then(async () => {
-      await waitForSubjectWork(this.queue, signal);
+      await waitForWork(this.queue, signal);
       if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
       if (!selected()) return false;
       if ((mergeQueue || item.type === "Discussion") && this.now() < this.graphqlBlockedUntil) return;
@@ -682,7 +685,7 @@ export class GitHubClient {
     });
     this.subjectRequests.set(key, pending);
     try {
-      return await waitForSubjectWork(pending, signal);
+      return await waitForWork(pending, signal);
     } catch (error) {
       // Keep the slot occupied until an already-dispatched request has stopped.
       if (started) await pending;
@@ -694,7 +697,7 @@ export class GitHubClient {
     const url = endpointURL(endpoint);
     const path = `${url.pathname}${url.search}`;
     const pending = this.queue.then(() => this.request(path, signal, "GET", { force, minSequence, allowCachedDuringBackoff }));
-    this.queue = pending.catch(() => {});
+    this.pageQueue = this.queue = pending.catch(() => {});
     return pending.then(async page => {
       if (page.sequence >= minSequence) return page;
       // A scan needs a newer response, but waiting must not hold the request queue.
@@ -731,7 +734,7 @@ export class GitHubClient {
     return this.#markThread(id, signal, "DELETE", options);
   }
 
-  #markThread(id, signal, method, { owner, beforeWrite } = {}) {
+  #markThread(id, signal, method, { owner, beforeWrite, onWriteError, queueSignal = signal } = {}) {
     if (typeof id !== "string" || !/^[1-9]\d{0,63}$/.test(id)) {
       throw new InboxError("invalid_thread", "Use a valid notification thread ID.", 400);
     }
@@ -742,45 +745,39 @@ export class GitHubClient {
     this.pendingThreads.add(id);
     const write = { id, action: method === "DELETE" ? "done" : "read", inFlight: false };
     this.threadWrites.set(id, write);
-    const pending = this.queue.then(async () => {
-      const delay = this.writeAvailableAt - this.now();
-      if (delay > 0) {
-        try {
-          await this.sleep(delay, undefined, { signal });
-        } catch {
-          throw new InboxError("closed", "The canvas was closed.", 410);
-        }
-      }
-      if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
-      let dispatched = false;
+    // Pages are barriers: writes may overlap each other, never an inbox response.
+    const pending = waitForWork(this.pageQueue, queueSignal).then(() => this.#withRequestSlot(async () => {
       try {
+        if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
         await this.request(`/notifications/threads/${id}`, signal, method, { beforeWrite: () => {
+          if (queueSignal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
           beforeWrite?.();
-          dispatched = true;
           write.inFlight = true;
         } });
-      } finally {
-        if (dispatched) this.writeAvailableAt = this.now() + 1000;
+        this.revision++;
+        const action = method === "DELETE" ? "done" : "read";
+        for (const [endpoint, page] of this.cache) {
+          const query = endpointURL(endpoint).searchParams;
+          const retain = query.get("all") === "true" && action === "read";
+          this.cache.set(endpoint, {
+            ...page,
+            items: page.items.flatMap(item => item.id !== id ? [item] : retain ? [{ ...item, unread: false }] : []),
+            etag: undefined,
+            modified: undefined,
+            invalidated: true,
+          });
+        }
+        for (const listener of this.threadListeners) listener(id, action);
+      } catch (error) {
+        // Stop the batch's queued work before this slot can dispatch its next item.
+        onWriteError?.(error);
+        throw error;
       }
-      this.revision++;
-      const action = method === "DELETE" ? "done" : "read";
-      for (const [endpoint, page] of this.cache) {
-        const query = endpointURL(endpoint).searchParams;
-        const retain = query.get("all") === "true" && action === "read";
-        this.cache.set(endpoint, {
-          ...page,
-          items: page.items.flatMap(item => item.id !== id ? [item] : retain ? [{ ...item, unread: false }] : []),
-          etag: undefined,
-          modified: undefined,
-          invalidated: true,
-        });
-      }
-      for (const listener of this.threadListeners) listener(id, action);
-    }).finally(() => {
+    }, queueSignal, this.writeWorkers, this.writeWaiters, WRITE_CONCURRENCY)).finally(() => {
       this.pendingThreads.delete(id);
       this.threadWrites.delete(id);
     });
-    this.queue = pending.catch(() => {});
+    this.queue = Promise.all([this.queue, pending.catch(() => {})]).then(() => {});
     return pending;
   }
 
@@ -815,9 +812,10 @@ export class GitHubClient {
     }
     if (!force && cached && !cached.invalidated && now < cached.nextRefreshAt) return cached;
     const requestKey = `${checkRun || runMatch ? "RUN" : graphql ? "GRAPHQL" : method} ${endpoint}`;
+    const previousError = this.lastError;
     const clearFailure = () => {
       this.failures.delete(requestKey);
-      if (!subjectType) this.lastError = null;
+      if (!subjectType && this.lastError === previousError) this.lastError = null;
       if (graphql && this.now() >= this.graphqlBlockedUntil) this.graphqlLastError = null;
     };
     const args = ["api", "--hostname", this.target.hostname, "--method", graphql ? "POST" : method, "--include",

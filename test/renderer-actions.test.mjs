@@ -284,6 +284,33 @@ test("row reads focus the retained row's Done action across browser focus behavi
   }
 });
 
+test("a settings response cannot redirect focus from a pending row action to Search", async t => {
+  for (const retainDisabledFocus of [false, true]) {
+    let releaseSettings;
+    let releaseWrite;
+    let holdSettings = false;
+    const ui = await renderer({
+      retainDisabledFocus,
+      onSettings: () => holdSettings && new Promise(resolve => { releaseSettings = resolve; }),
+      onWrite: () => new Promise(resolve => {
+        releaseWrite = () => resolve("HTTP/2 205 Reset Content\r\n\r\n");
+      }),
+    });
+    t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+    const read = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.focusKey === "read:1");
+    read.focus();
+    holdSettings = true;
+    const settings = runInContext("settingsRequest()", ui.context);
+    await read.events.click();
+    releaseSettings();
+    await settings;
+    assert.notEqual(ui.document.activeElement, ui.ids.get("search"));
+    releaseWrite();
+    await finishRows(ui);
+    assert.equal(ui.document.activeElement.dataset.focusKey, "done:1");
+  }
+});
+
 test("row reads retain focus in their group without expanding another collapsed group", async t => {
   for (const groupBy of ["repo", "date"]) {
     for (const retainDisabledFocus of [false, true]) {
@@ -476,7 +503,7 @@ test("repository action starts from one click with no dialog and preserves indep
   });
   const buttons = ui.ids.get("groups").querySelectorAll("button");
   const disclosure = buttons.find(node => node.dataset.disclosure);
-  const groupRead = buttons.find(node => node.dataset.focusKey === "bulk:example/widgets");
+  let groupRead = buttons.find(node => node.dataset.focusKey === "bulk:example/widgets");
   assert.match(groupActionText(groupRead), /Mark 2 as read/);
   assert.equal(disclosure.contains(groupRead), false);
   assert.equal(groupRead.contains(disclosure), false);
@@ -484,13 +511,14 @@ test("repository action starts from one click with no dialog and preserves indep
   groupRead.focus();
   await groupRead.events.click();
   await settle();
-  assert.deepEqual(ui.patches, ["/notifications/threads/1"]);
+  groupRead = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.focusKey === "bulk:example/widgets");
+  assert.deepEqual(ui.patches, ["/notifications/threads/1", "/notifications/threads/2"]);
   assert.deepEqual(ui.calls.filter(call => call.path.startsWith("/api/batch/")).map(call => call.path), ["/api/batch/start"]);
   assert.equal(ui.document.activeElement, groupRead);
-  assert.equal(disclosure.attributes["aria-expanded"], "false");
+  assert.equal(ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.disclosure).attributes["aria-expanded"], "false");
   await runInContext("update()", ui.context);
-  assert.match(groupActionText(groupRead), /Marking 0\/2 as read/);
-  assert.equal(groupProgress(ui, "repo:example/widgets"), "Marking 0/2 as read...");
+  assert.match(groupActionText(groupRead), /Marking 1\/2 as read/);
+  assert.equal(groupProgress(ui, "repo:example/widgets"), "Marking 1/2 as read...");
   assert.equal(groupRead.attributes["aria-busy"], "true");
   assert.doesNotMatch(html, /batch-confirm|batch-start|batch-cancel|batch-stop/);
   assert.doesNotMatch(script, /batch\/prepare|Repository action finished/);
@@ -514,19 +542,20 @@ test("one-click repository read honors search, blocks duplicate clicks and retai
       : "HTTP/2 205 Reset Content\r\n\r\n",
   });
   await runInContext('update("filters", { query: "notification 1" })', ui.context);
-  const groupRead = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.focusKey.startsWith("bulk:"));
+  let groupRead = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.focusKey.startsWith("bulk:"));
   assert.equal(groupActionText(groupRead), "Mark 2 as read");
   groupRead.focus();
   const first = groupRead.events.click();
   await groupRead.events.click();
   await first;
+  groupRead = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.focusKey.startsWith("bulk:"));
   assert.equal(ui.ids.get("search").disabled, false);
   assert.equal(ui.inbox.batch.snapshot().total, 2);
   assert.equal(ui.inbox.batch.snapshot().searchActive, true);
   assert.equal(ui.document.activeElement, groupRead);
   await settle();
   await runInContext("update()", ui.context);
-  assert.match(groupActionText(groupRead), /Marking 0\/2/);
+  assert.match(groupActionText(groupRead), /Marking 1\/2/);
   assert.equal(ui.ids.has("refresh"), false);
   assert.equal(ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "1").disabled, true);
   release();
@@ -553,9 +582,9 @@ test("partial batch progress shows retryable remaining counts without repeating 
   await ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.focusKey.startsWith("bulk:")).events.click();
   await ui.inbox.batch.done;
   await runInContext("update()", ui.context);
-  assert.match(ui.ids.get("batch-counts").textContent, /1 succeeded \/ 1 failed \/ 0 skipped \/ 1 not attempted/);
+  assert.match(ui.ids.get("batch-counts").textContent, /2 succeeded \/ 1 failed \/ 0 skipped \/ 0 not attempted/);
   assert.equal(ui.ids.get("batch-retry").hidden, false);
-  assert.equal(ui.ids.get("batch-retry").textContent, "Retry remaining (2)");
+  assert.equal(ui.ids.get("batch-retry").textContent, "Retry remaining (1)");
   assert.equal(ui.ids.get("batch-retry").disabled, true);
   assert.match(ui.ids.get("batch-error").textContent, /HTTP 500/);
   failures = false;
@@ -566,7 +595,7 @@ test("partial batch progress shows retryable remaining counts without repeating 
   await ui.ids.get("batch-retry").events.click();
   await ui.inbox.batch.done;
   await runInContext("update()", ui.context);
-  assert.deepEqual(ui.patches, ["/notifications/threads/1", "/notifications/threads/2", "/notifications/threads/2", "/notifications/threads/3"]);
+  assert.deepEqual(ui.patches, ["/notifications/threads/1", "/notifications/threads/2", "/notifications/threads/3", "/notifications/threads/2"]);
   assert.equal(ui.document.querySelectorAll("article").length, 3);
   assert.equal(ui.inbox.summary().unread, 0);
   assert.equal(ui.ids.get("batch-progress").hidden, true);
@@ -704,9 +733,10 @@ test("changed local polls do not steal focus from pending row reads", async t =>
 
 test("a repository action clicked during local polling is not dropped and cannot receive a stale poll response afterward", async () => {
   let release;
+  let hold = true;
   const ui = await renderer({
     initialRows: [thread("1"), thread("2")],
-    onState: () => new Promise(resolve => { release = resolve; }),
+    onState: () => hold ? new Promise(resolve => { release = resolve; }) : undefined,
   });
   const button = ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.repository);
   button.focus();
@@ -715,14 +745,12 @@ test("a repository action clicked during local polling is not dropped and cannot
   assert.equal(button.disabled, false);
   const reading = button.events.click();
   assert.deepEqual(ui.patches, []);
+  hold = false;
   release();
   await polling;
   await reading;
   await ui.inbox.batch.done;
-  const finalPoll = runInContext("update()", ui.context);
-  await settle();
-  release();
-  await finalPoll;
+  await runInContext("update()", ui.context);
   assert.deepEqual(ui.patches, ["/notifications/threads/1", "/notifications/threads/2"]);
   assert.equal(ui.document.querySelectorAll("article").length, 2);
   assert.equal(ui.inbox.summary().unread, 0);

@@ -3,8 +3,6 @@ import { parseResponse, runGh } from "./github.mjs";
 import { InboxError } from "./model.mjs";
 import { compareVersions, versionParts } from "./version.mjs";
 
-export { compareVersions, versionParts } from "./version.mjs";
-
 export const CURRENT_VERSION = metadata.version;
 export const REPOSITORY = "fletchto99/copilot-notifications-canvas";
 export const REPOSITORY_URL = `https://github.com/${REPOSITORY}`;

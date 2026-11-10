@@ -1,5 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
-import { test, expect } from "./fixtures.mjs";
+import { test, expect, openSettings } from "./fixtures.mjs";
 
 const rgb = hex => `rgb(${hex.slice(1).match(/../g).map(value => parseInt(value, 16)).join(", ")})`;
 
@@ -8,16 +8,25 @@ async function expectNativeTheme(page, mode, background, foreground) {
   for (const select of await page.locator("select").all()) {
     await expect(select).toHaveCSS("color-scheme", mode);
     const enhanced = await select.evaluate(node => getComputedStyle(node).appearance === "base-select");
-    const open = enhanced && await select.isVisible() && await select.isEnabled() &&
-      !await select.evaluate(node => node.matches(":open"));
-    if (open) await select.click();
+    if (enhanced) {
+      // Closed customizable pickers can retain stale computed option styles in WebKit.
+      if (!await select.isVisible()) continue;
+      if (await select.getAttribute("id") === "desktop-sound" &&
+          await page.locator("#desktop-notifications").getAttribute("aria-checked") === "false") {
+        await expect(select).toBeDisabled();
+        continue;
+      }
+      await expect(select).toBeEnabled();
+      if (!await select.evaluate(node => node.matches(":open"))) await select.click();
+      await expect.poll(() => select.evaluate(node => node.matches(":open"))).toBe(true);
+    }
     for (const option of await select.locator("option").all()) {
       if (!enhanced || !await option.evaluate(node => node.selected)) {
         await expect(option).toHaveCSS("background-color", rgb(background));
       }
       await expect(option).toHaveCSS("color", rgb(foreground));
     }
-    if (open) {
+    if (enhanced) {
       await page.keyboard.press("Escape");
       await expect.poll(() => select.evaluate(node => node.matches(":open"))).toBe(false);
     }
@@ -34,7 +43,7 @@ for (const [target, attribute] of [
     await page.emulateMedia({ colorScheme: "light" });
     await page.goto(canvas.url);
     await expect(page.locator(".row")).toHaveCount(1);
-    await page.locator("#settings-toggle").click();
+    await openSettings(page);
     const theme = page.getByRole("combobox", { name: "Theme", exact: true });
     await expect(theme.locator("option:checked")).toHaveText("Match Copilot");
     for (const [mode, background, foreground, border, accent, muted] of [
@@ -95,7 +104,7 @@ test("native dropdowns follow OS changes when no Copilot theme is supplied", asy
   canvas.rows.splice(1);
   await page.goto(canvas.url);
   await expect(page.locator(".row")).toHaveCount(1);
-  await page.locator("#settings-toggle").click();
+  await openSettings(page);
   for (const [mode, background, foreground] of [
     ["dark", "#0d1117", "#f0f6fc"],
     ["light", "#ffffff", "#1f2328"],
@@ -113,7 +122,7 @@ test("customizable dropdowns are rounded, themed and usable beyond the Settings 
   canvas.rows.splice(1);
   await page.goto(canvas.url);
   await expect(page.locator(".row")).toHaveCount(1);
-  await page.locator("#settings-toggle").click();
+  await openSettings(page);
   const grouping = page.getByRole("combobox", { name: "Group By", exact: true });
   for (const theme of ["light", "dark"]) {
     await page.locator("#theme").selectOption(theme);
@@ -164,10 +173,7 @@ test("customizable dropdowns preserve keyboard selection, cancellation, focus an
   canvas.rows.splice(1);
   await page.goto(canvas.url);
   await expect(page.locator(".row")).toHaveCount(1);
-  await Promise.all([
-    page.waitForResponse(response => response.url().endsWith("/api/settings") && response.request().method() === "GET"),
-    page.locator("#settings-toggle").click(),
-  ]);
+  await openSettings(page);
   const grouping = page.getByRole("combobox", { name: "Group By", exact: true });
   await expect(grouping).toBeEnabled();
   await grouping.focus();
@@ -210,7 +216,7 @@ test("background settings polling restores focus from the Show notifications pic
   });
   await page.goto(canvas.url);
   await expect(page.locator(".row")).toHaveCount(1);
-  await page.locator("#settings-toggle").click();
+  await openSettings(page);
   const view = page.getByRole("combobox", { name: "Show notifications", exact: true });
   await expect(view).toBeEnabled();
   await view.focus();
@@ -241,8 +247,7 @@ test("long sound pickers scroll without overflowing a short canvas", async ({ pa
   await page.setViewportSize({ width: 320, height: 320 });
   await page.goto(canvas.url);
   await expect(page.locator(".row")).toHaveCount(1);
-  await page.locator("#settings-toggle").click();
-  await expect(page.locator("#settings-toggle")).toHaveAttribute("aria-expanded", "true");
+  await openSettings(page);
   const sound = page.getByRole("combobox", { name: "Sound", exact: true });
   await expect(sound).toBeEnabled();
   await sound.click();
@@ -277,7 +282,7 @@ test("unsupported customizable-select styling keeps the native dropdown fallback
   await canvas.preferences.update({ darkMode: true });
   await page.goto(canvas.url);
   await expect(page.locator(".row")).toHaveCount(1);
-  await page.locator("#settings-toggle").click();
+  await openSettings(page);
   await expectNativeTheme(page, "dark", "#0d1117", "#f0f6fc");
   const grouping = page.getByRole("combobox", { name: "Group By", exact: true });
   await expect(grouping).toHaveCSS("appearance", "none");

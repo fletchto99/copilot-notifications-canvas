@@ -34,6 +34,47 @@ for (const packaged of [false, true]) {
       await expect(page.locator(".row")).toHaveCount(1);
     });
 
+    test("a background settings response does not take focus from a pending row action", async ({ page, canvas }) => {
+      canvas.rows.splice(2);
+      await page.goto(canvas.url);
+      await expect(page.locator("#theme")).toBeEnabled();
+      const read = page.locator('[data-focus-key="read:1"]');
+      await expect(read).toBeEnabled();
+      const settingsStarted = Promise.withResolvers();
+      const settingsResponse = Promise.withResolvers();
+      const writeStarted = Promise.withResolvers();
+      const writeResponse = Promise.withResolvers();
+      await page.route("**/api/settings", async route => {
+        const response = await route.fetch();
+        settingsStarted.resolve();
+        await settingsResponse.promise;
+        await route.fulfill({ response });
+      });
+      canvas.setRequestHook(async args => {
+        if (args.includes("PATCH")) {
+          writeStarted.resolve();
+          await writeResponse.promise;
+        }
+      });
+      try {
+        await read.focus();
+        await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+        await settingsStarted.promise;
+        await read.press("Enter");
+        await writeStarted.promise;
+        settingsResponse.resolve();
+        await expect(page.locator("#theme")).toBeEnabled();
+        await expect(page.locator("#search")).not.toBeFocused();
+        writeResponse.resolve();
+        await expect(page.locator('[data-focus-key="done:1"]')).toBeFocused();
+        expect(canvas.writes).toEqual(["1"]);
+        expect(canvas.doneWrites).toEqual([]);
+      } finally {
+        settingsResponse.resolve();
+        writeResponse.resolve();
+      }
+    });
+
     test("holding Enter to start a batch keeps focus on its blocked action without repeating it", async ({
       page,
       canvas,
@@ -60,7 +101,7 @@ for (const packaged of [false, true]) {
         await page.keyboard.up("Enter");
         release();
       }
-      await expect.poll(() => canvas.writes).toEqual(["1", "2"]);
+      await expect.poll(() => canvas.writes.toSorted()).toEqual(["1", "2"]);
       expect(canvas.doneWrites).toEqual([]);
     });
 

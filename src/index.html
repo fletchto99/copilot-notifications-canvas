@@ -54,6 +54,14 @@
                 <option value="unread">Unread only</option>
               </select>
             </div>
+            <div class="select-setting">
+              <label for="group-by">Group By</label>
+              <select id="group-by" disabled>
+                <option value="none">All notifications</option>
+                <option value="repo" selected>Repository</option>
+                <option value="date">Date</option>
+              </select>
+            </div>
             <button id="copilot-integration" class="switch-toggle" type="button" role="switch" aria-checked="true" disabled>
               <span>Copilot integration</span>
               <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
@@ -90,14 +98,6 @@
                 <option value="system" selected>Match Copilot</option>
                 <option value="dark">Dark</option>
                 <option value="light">Light</option>
-              </select>
-            </div>
-            <div class="select-setting">
-              <label for="group-by">Group By</label>
-              <select id="group-by" disabled>
-                <option value="none">All notifications</option>
-                <option value="repo" selected>Repository</option>
-                <option value="date">Date</option>
               </select>
             </div>
             <section id="development-settings" aria-label="Development API settings" hidden>

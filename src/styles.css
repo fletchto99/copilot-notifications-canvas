@@ -803,13 +803,6 @@ kbd {
   margin: 6px 0 6px auto;
 }
 
-.group-progress {
-  flex-basis: 100%;
-  padding: 0 2px 10px;
-  font-size: 12px;
-  color: var(--muted);
-}
-
 .group-results {
   flex-basis: 100%;
 }
@@ -988,12 +981,6 @@ summary::marker {
   border: 1.5px solid currentcolor;
   border-right-color: transparent;
   border-radius: 50%;
-}
-
-.repo-actions button[data-write-state="queued"]::after,
-.row-actions button[data-write-state="queued"]::after {
-  border-style: dotted;
-  border-right-color: currentcolor;
 }
 
 .dot {
@@ -1246,8 +1233,8 @@ footer:has(#development-build[hidden]) {
     animation: refresh-spin 0.8s linear infinite;
   }
 
-  .repo-actions button[data-write-state="active"]::after,
-  .row-actions button[data-write-state="active"]::after {
+  .repo-actions button[aria-busy="true"]::after,
+  .row-actions button[aria-busy="true"]::after {
     animation: refresh-spin 0.8s linear infinite;
   }
 

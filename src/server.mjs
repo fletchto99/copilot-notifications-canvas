@@ -8,7 +8,6 @@ import { validSound } from "./notifier.mjs";
 
 const batchRoutes = new Map([
   ["/api/batch/start", "start"],
-  ["/api/batch/cancel", "cancel"],
   ["/api/batch/retry", "retry"],
   ["/api/batch/dismiss", "dismiss"],
 ]);

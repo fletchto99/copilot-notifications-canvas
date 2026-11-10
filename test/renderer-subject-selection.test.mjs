@@ -224,7 +224,8 @@ test("a snapshot changed by another panel immediately restarts stale uploads wit
     onSubjects: async input => {
       if (input.offset === 100 && !changed) {
         changed = true;
-        await ui.inbox.markDone({ id: initialRows[0].id });
+        ui.inbox.queueThread({ id: initialRows[0].id }, "done");
+        await ui.inbox.batch.done;
       }
     },
   });

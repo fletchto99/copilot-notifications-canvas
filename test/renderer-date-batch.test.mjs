@@ -70,13 +70,13 @@ test("date progress stays scoped through grouping changes and completes without 
   await controls(ui).done.events.click();
   await settle();
   await runInContext("update()", ui.context);
-  assert.equal(groupActionText(controls(ui).done), "Marking 0/2 as done...");
+  assert.equal(groupActionText(controls(ui).done), "Marking 1/2 as done...");
   assert.equal(controls(ui).done.attributes["aria-busy"], "true");
   assert.equal(controls(ui).read.attributes["aria-busy"], "false");
   assert.equal(groupActionText(controls(ui, otherDate).read), "Mark 1 as read");
   assert.equal(controls(ui, otherDate).read.attributes["aria-busy"], "false");
   assert.equal(controls(ui, otherDate).read.disabled, false);
-  assert.equal(groupProgress(ui, "date:2026-1-12"), "Marking 0/2 as done...");
+  assert.equal(groupProgress(ui, "date:2026-1-12"), "Marking 1/2 as done...");
   assert.equal(ui.ids.get("batch-progress").hidden, true);
   assert.equal(ui.document.activeElement, controls(ui).done);
   const grouping = ui.ids.get("group-by");
@@ -85,7 +85,7 @@ test("date progress stays scoped through grouping changes and completes without 
   await settle();
   const shownRead = ui.ids.get("groups").querySelectorAll("button").find(button => button.dataset.focusKey === "bulk:shown");
   assert.equal(disabled(shownRead), true);
-  assert.equal(groupActionText(shownRead), "Mark 3 as read");
+  assert.equal(groupActionText(shownRead), "Mark 2 as read");
   assert.equal(shownRead.attributes["aria-busy"], "false");
   assert.equal(ui.ids.has("batch-stop"), false);
   release();

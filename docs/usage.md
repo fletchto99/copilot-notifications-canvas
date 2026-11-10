@@ -285,23 +285,29 @@ read and unread. Read hides when none are eligible without moving or activating 
 
 **Only that group's loaded tab/search matches are included**, even when collapsed.
 Filtered-out and unloaded items are excluded; date actions cover just the selected
-day. Progress and counts appear in that group's header without moving keyboard
-focus away from the chosen action. **Queued** means a write is waiting its turn;
-**Marking** means a request is in flight. Queued indicators stay still; active
-indicators spin unless reduced motion is enabled. Row action tooltips use the
-same queued/active distinction.
+day. The group button and every targeted row show a busy spinner immediately,
+including rows waiting for a shared request slot, without adding progress text
+to the header or moving keyboard focus. Progress counts remain available in
+action tooltips and screen-reader announcements. Spinners respect reduced motion.
+**Queued** means a write is waiting its turn;
+**Marking** means a request is in flight. Row action tooltips use the same
+queued/active distinction. Accepted row and group actions immediately check
+their dispatch status instead of waiting for the next progress poll.
 
 Independent groups and rows can have actions in progress together. A group action
 locks its selected rows, not the rest of the inbox; overlapping actions are
-blocked across panels. Each batch has its own progress. GitHub writes
-remain paced through a shared queue to respect polling and rate-limit safeguards.
+blocked across panels. Each batch has its own progress. Read and Done share a
+limit of ten concurrent GitHub requests across panels in the same provider,
+without an artificial delay between writes. Inbox page requests remain ordered
+with writes, and GitHub's rate limits and retry waits still apply.
 Search and attention tabs stay usable: they change the displayed rows, never an
 active batch's captured targets. Refresh and notification-view changes wait until
 active actions finish.
 
 Group actions run through their selected notifications without a Stop control.
-If a request fails, **Retry remaining** retries the unfinished work when its wait
-expires. Failure details and retry controls appear beside the group, or above
+If a request fails, the batch stops sending new requests and waits for all
+in-flight results. **Retry remaining** retries only the unfinished work when its
+wait expires. Failure details and retry controls appear beside the group, or above
 the list if filtering or regrouping hides that group. Closing the panel still
 cancels outstanding work.
 
