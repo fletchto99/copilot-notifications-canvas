@@ -118,7 +118,7 @@ const subjectIcons = {
     open: `${issueOutline}M13 12a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z`,
     closed: `${issueOutline}m-13-1 3 3 5-5`,
     not_planned: `${issueOutline}M6 18 18 6`,
-    duplicate: `${issueOutline}m-13-1 3 3 5-5`,
+    duplicate: `${issueOutline}M6 18 18 6`,
   },
   PullRequest: {
     unknown: `${pullRequestNodes}M6 7v10M18 17V9a4 4 0 0 0-4-4h-1m3-3-3 3 3 3`,

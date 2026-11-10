@@ -1059,15 +1059,12 @@ a:hover {
 }
 
 .subject-merged .subject-icon,
-.subject-closed .subject-icon,
-.subject-duplicate .subject-icon {
+.subject-closed .subject-icon {
   color: var(--subject-completed);
 }
 
-.notification-subject[data-subject-type="Discussion"]:is(
-    .subject-open,
-    .subject-duplicate
-  )
+.subject-duplicate .subject-icon,
+.notification-subject[data-subject-type="Discussion"].subject-open
   .subject-icon {
   color: var(--muted);
 }
