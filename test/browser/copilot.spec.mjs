@@ -19,10 +19,10 @@ for (const packaged of [false, true]) {
         const action = page.locator(".copilot-action");
         await expect(action).toBeVisible();
         await expect(action).toBeDisabled();
-        await expect(action).toHaveAccessibleName(/^Checking Copilot availability/);
+        await expect(action).toHaveAccessibleName(/^Waiting on copilot SDK Availability/);
         await expect(action).toHaveAttribute("aria-busy", "true");
         await action.locator("..").hover();
-        await expect(action.locator("..").getByRole("tooltip")).toHaveText("Checking Copilot availability...");
+        await expect(action.locator("..").getByRole("tooltip")).toHaveText("Waiting on copilot SDK Availability");
         await expect(page.locator(".mark-read")).toBeEnabled();
         await expect(page.locator(".mark-done")).toBeEnabled();
         const link = page.locator(".row-link");
@@ -43,15 +43,15 @@ for (const packaged of [false, true]) {
     });
 
     for (const supported of [true, false]) {
-      test(`cold discovery ${supported ? "recovers after the initial retry budget" : "shows unavailable tooling after one minute"}`, async ({ page, canvas }) => {
-        test.setTimeout(90_000);
+      test(`cold discovery ${supported ? "recovers after the first minute" : "shows unavailable tooling after three minutes"}`, async ({ page, canvas }) => {
+        test.setTimeout(210_000);
         canvas.rows.splice(1);
         canvas.rows[0].subject.url = "https://api.github.com/repos/example/widgets/issues/1";
         const metadata = await canvas.copilotHost.rpc.getCurrentMetadata();
         let calls = 0;
         canvas.copilotHost.rpc.getCurrentMetadata = async () => {
           calls++;
-          return supported && calls > 4 ? metadata : { tools: [] };
+          return supported && calls > 15 ? metadata : { tools: [] };
         };
         await page.goto(canvas.url);
         const action = page.locator(".copilot-action");
@@ -62,10 +62,10 @@ for (const packaged of [false, true]) {
         const link = page.locator(".row-link");
         await link.focus();
         if (supported) {
-          await expect(action).toBeEnabled({ timeout: 10_000 });
-          expect(calls).toBe(5);
+          await expect(action).toBeEnabled({ timeout: 75_000 });
+          expect(calls).toBe(16);
         } else {
-          await expect(action).toHaveAccessibleName(/^Copilot tooling unavailable:/, { timeout: 65_000 });
+          await expect(action).toHaveAccessibleName(/^Copilot tooling unavailable:/, { timeout: 185_000 });
           await expect(action).toBeDisabled();
           await expect(action).toHaveAttribute("aria-busy", "false");
           await action.locator("..").hover();

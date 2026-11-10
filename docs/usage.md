@@ -20,13 +20,14 @@ already-read rows, so the remaining buttons do not move.
 Group Read/Done controls align with the same columns. Turning Copilot integration
 off restores the two-column Read/Done layout.
 
-On first load, eligible rows show a disabled **Checking Copilot availability...**
+On first load, eligible rows show a disabled **Waiting on copilot SDK Availability**
 button while the host's session tools initialize. The inbox, links, and Read/Done
 controls remain usable. The button updates automatically without a manual refresh.
 The host exposes only currently initialized tools, so an open canvas does not
 necessarily mean its session tools are ready. Discovery retries incomplete tool
 metadata or transient failures after 1 second, then 2 seconds, then every 5 seconds
-for up to one minute. The loading indicator stops after that minute even if a
+for up to three minutes, stopping as soon as the required tools are available.
+The loading indicator stops after three minutes even if a
 discovery request is still pending. Eligible rows then retain a disabled
 **Copilot tooling unavailable** button instead of disappearing. Hosts without the
 discovery APIs show that disabled state immediately.
