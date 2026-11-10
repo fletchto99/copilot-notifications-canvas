@@ -6,6 +6,71 @@ for (const packaged of [false, true]) {
   test.describe(`Copilot actions (${packaged ? "packaged" : "source"})`, () => {
     test.use({ copilotEnabled: true, packaged });
 
+    test("cold discovery keeps the inbox usable and enables Copilot without refreshing or moving focus", async ({ page, canvas }) => {
+      canvas.rows.splice(1);
+      canvas.rows[0].subject.url = "https://api.github.com/repos/example/widgets/issues/1";
+      await canvas.preferences.update({ confirmCopilotActions: false });
+      const metadata = await canvas.copilotHost.rpc.getCurrentMetadata();
+      let release;
+      const discovery = new Promise(resolve => { release = resolve; });
+      canvas.copilotHost.rpc.getCurrentMetadata = () => discovery;
+      try {
+        await page.goto(canvas.url);
+        const action = page.locator(".copilot-action");
+        await expect(action).toBeVisible();
+        await expect(action).toBeDisabled();
+        await expect(action).toHaveAccessibleName(/^Checking Copilot availability/);
+        await expect(action).toHaveAttribute("aria-busy", "true");
+        await action.locator("..").hover();
+        await expect(action.locator("..").getByRole("tooltip")).toHaveText("Checking Copilot availability...");
+        await expect(page.locator(".mark-read")).toBeEnabled();
+        await expect(page.locator(".mark-done")).toBeEnabled();
+        const link = page.locator(".row-link");
+        await expect(link).toHaveAttribute("href", "https://github.com/example/widgets/issues/1");
+        expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+        await link.focus();
+        release(metadata);
+        await expect(action).toBeEnabled();
+        await expect(action).toHaveAccessibleName(/^Investigate with Copilot:/);
+        await expect(action).toHaveAttribute("aria-busy", "false");
+        await expect(link).toBeFocused();
+        expect(canvas.copilotHost.calls).toEqual([]);
+        expect(canvas.writes).toEqual([]);
+        expect(canvas.deliveries).toEqual([]);
+      } finally {
+        release(metadata);
+      }
+    });
+
+    for (const supported of [true, false]) {
+      test(`cold discovery ${supported ? "recovers from initially empty metadata" : "hides unsupported actions after bounded retries"}`, async ({ page, canvas }) => {
+        canvas.rows.splice(1);
+        canvas.rows[0].subject.url = "https://api.github.com/repos/example/widgets/issues/1";
+        const metadata = await canvas.copilotHost.rpc.getCurrentMetadata();
+        let calls = 0;
+        canvas.copilotHost.rpc.getCurrentMetadata = async () => {
+          calls++;
+          return supported && calls > 1 ? metadata : { tools: [] };
+        };
+        await page.goto(canvas.url);
+        const action = page.locator(".copilot-action");
+        if (supported) {
+          await expect(action).toBeEnabled();
+          expect(calls).toBe(2);
+        } else {
+          await expect(action).toBeVisible();
+          await expect(action).toBeDisabled();
+          await expect(action).toBeHidden({ timeout: 15_000 });
+          expect(calls).toBe(4);
+        }
+        await expect(page.locator(".mark-read")).toBeEnabled();
+        await expect(page.locator(".mark-done")).toBeEnabled();
+        expect(canvas.copilotHost.calls).toEqual([]);
+        expect(canvas.writes).toEqual([]);
+        expect(canvas.deliveries).toEqual([]);
+      });
+    }
+
     for (const [type, closed] of [["Issue", false], ["Discussion", false], ["Discussion", true]]) test(
       `${closed ? "Closed" : "Open"} ${type} handoff is accessible, explicitly confirmed, and independent of Read/Done`, async ({ page, canvas }) => {
       canvas.rows.splice(1);
