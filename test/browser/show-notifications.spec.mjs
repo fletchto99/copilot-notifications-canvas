@@ -123,9 +123,20 @@ test.describe("packaged notification views", () => {
     const select = page.getByRole("combobox", { name: "Show notifications", exact: true });
     await expect(select).toBeEnabled();
     await expect(select).toHaveValue("all");
+    const selection = page.waitForRequest(request =>
+      new URL(request.url()).pathname === "/api/subjects" &&
+      request.postDataJSON().complete && request.postDataJSON().positions.length === 1);
+    const selectedState = page.waitForResponse(async response => {
+      if (new URL(response.url()).pathname !== "/api/state") return false;
+      const snapshot = await response.json();
+      const { selectionKey, version } = (await selection).postDataJSON();
+      return snapshot.selectionKey === selectionKey && snapshot.subjectSelectionVersion === version;
+    });
     await select.selectOption("unread");
     await expect(page.locator(".row")).toHaveCount(1);
     await expect(select).toHaveValue("unread");
+    // Let the selection's follow-up fetch finish before WebKit starts navigating away.
+    expect(await (await selectedState).finished()).toBeNull();
     await page.reload();
     await expect(page.locator(".row")).toHaveCount(1);
     expect((await canvas.preferences.read()).matchGitHubInbox).toBe(false);

@@ -298,6 +298,9 @@ advance controlled clocks past a due refresh. Layout probes stay installed
 through animation frames. DOM-identity checks wait for the renderer to acknowledge
 the specific snapshot version; receiving HTTP headers alone does not prove that
 the response was consumed or rendered.
+View-persistence tests wait for the selected view's status-selection version in
+a completed state response before reloading. Row counts can update before that
+follow-up fetch; navigating then can produce WebKit access-control errors.
 
 Windows lock tests preserve existing files and directory links before publishing
 candidate directories: a failed directory rename is not a safe guard on Windows.
