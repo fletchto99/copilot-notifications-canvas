@@ -14,6 +14,7 @@ import { buildRelease, embeddedAssetsPlugin } from "../scripts/build-release.mjs
 import { encodeBundle, inspectBundle, loadPackage, verifyArchive } from "../scripts/package.mjs";
 import { home } from "./install-fixtures.mjs";
 import { startPackagedCanvas } from "./browser/package-fixtures.mjs";
+import { createCanvasFixture } from "./canvas-fixtures.mjs";
 
 const execute = promisify(execFile);
 const tag = `v${CURRENT_VERSION}`;
@@ -53,6 +54,43 @@ test("packaged browser teardown rejects an already-crashed provider and allows r
         t.mock.restoreAll();
         syncBuiltinESMExports();
       }
+    });
+  }
+});
+
+test("test clocks preserve a pending discovery's retry deadline", async t => {
+  for (const packaged of [false, true]) {
+    await t.test(packaged ? "packaged provider" : "source provider", async t => {
+      const canvas = await createCanvasFixture({ packaged, copilotEnabled: true });
+      const discovery = Promise.withResolvers();
+      t.after(async () => {
+        discovery.resolve({ tools: [] });
+        await canvas.close();
+      });
+      let calls = 0;
+      canvas.copilotHost.rpc.getCurrentMetadata = async () => {
+        calls++;
+        return calls === 1 ? discovery.promise : { tools: [] };
+      };
+      const start = Date.now();
+      await canvas.setCopilotTime(start);
+      const url = new URL(canvas.url);
+      const state = async () => {
+        const response = await fetch(new URL("/api/state", url), {
+          headers: { Authorization: `Bearer ${url.hash.slice(1)}` },
+        });
+        assert.equal(response.status, 200);
+        return response.json();
+      };
+      await state();
+      await t.waitFor(() => assert.equal(calls, 1));
+      // Queue the clock update before the metadata response crosses the IPC boundary.
+      discovery.resolve({ tools: [] });
+      await canvas.setCopilotTime(start + 1000);
+      await state();
+      await t.waitFor(() => assert.equal(calls, 2), { timeout: 1000 });
+      assert.deepEqual(canvas.copilotHost.calls, []);
+      assert.deepEqual(canvas.writes, []);
     });
   }
 });

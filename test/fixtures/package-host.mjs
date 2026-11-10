@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
 import { register, syncBuiltinESMExports } from "node:module";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { host } from "./sdk.mjs";
 
 // Only this isolated test provider gets a controllable clock; timers still run normally.
 const realNow = Date.now;
 let fixedTime;
+let discovery;
 Date.now = () => fixedTime ?? realNow();
 
 const pending = new Map();
@@ -40,7 +42,10 @@ if (process.argv[3] === "copilot") {
     process.send({ type: "copilot", id, method, input });
   });
   host.session.rpc = { tools: {
-    getCurrentMetadata: () => call("getCurrentMetadata"),
+    getCurrentMetadata: () => {
+      discovery = call("getCurrentMetadata");
+      return discovery;
+    },
     execute: input => call("execute", input),
   } };
 }
@@ -57,6 +62,9 @@ process.on("message", async message => {
     else request.resolve(message.result);
   } else if (message.type === "set-time") {
     assert.ok(Number.isSafeInteger(message.now) && message.now >= 0);
+    await Promise.allSettled([discovery]);
+    // Let the provider's refresh promise chain finish at the old time.
+    await nextTurn();
     fixedTime = message.now;
     process.send({ type: "time-set", now: fixedTime });
   } else if (message.type === "close") {

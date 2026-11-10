@@ -203,7 +203,10 @@ export async function createCanvasFixture({
       setCopilotTime: async time => {
         assert.ok(syntheticHost && Number.isSafeInteger(time) && time >= 0);
         if (packaged) await server.setTime(time);
-        else syntheticHost.host.now = () => time;
+        else {
+          await syntheticHost.host.pending;
+          syntheticHost.host.now = () => time;
+        }
       },
       setRequestHook: hook => { requestHook = hook; },
       advance: ms => { offset += ms; return now() + offset; },

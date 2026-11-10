@@ -289,7 +289,10 @@ PR/main CI validates packaging but never publishes releases.
 Copilot discovery browser tests advance a test-only provider clock instead of
 waiting real minutes. Source fixtures inject `CopilotHost.now`; packaged fixtures
 control `Date.now` inside their isolated child process and acknowledge clock changes
-over IPC. Renderer polling and provider timers still run normally. These tests
+over IPC. Clock updates wait for pending discovery to settle and its provider-side
+completion handlers to finish; parent-side callback counts alone do not prove
+the next retry deadline has been scheduled. Renderer polling and provider timers
+still run normally. These tests
 keep the default per-test timeout and check late recovery plus the 179,999/180,000 ms
 boundary; unit tests cover every retry deadline. Production timing is unchanged.
 
@@ -312,6 +315,9 @@ the response was consumed or rendered.
 View-persistence tests wait for the selected view's status-selection version in
 a completed state response before reloading. Row counts can update before that
 follow-up fetch; navigating then can produce WebKit access-control errors.
+Compare related computed styles in one retried DOM snapshot, requiring nonempty
+values. A one-time style read during regrouping can capture an empty value that
+no amount of retrying the other element will satisfy.
 
 Windows lock tests preserve existing files and directory links before publishing
 candidate directories: a failed directory rename is not a safe guard on Windows.

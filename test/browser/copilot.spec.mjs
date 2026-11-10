@@ -50,8 +50,8 @@ for (const packaged of [false, true]) {
         const start = Date.now();
         let elapsed = 0;
         const setTime = async time => {
-          elapsed = time;
           await canvas.setCopilotTime(start + time);
+          elapsed = time;
         };
         await setTime(0);
         let calls = 0;
