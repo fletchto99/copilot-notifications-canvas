@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { startServer } from "../src/server.mjs";
-import { Inbox } from "../src/inbox.mjs";
-import { GitHubClient } from "../src/github.mjs";
-import { Updates } from "../src/updates.mjs";
+import { startServer } from "../src/provider/server.mjs";
+import { Inbox } from "../src/provider/inbox.mjs";
+import { GitHubClient } from "../src/provider/github.mjs";
+import { Updates } from "../src/provider/updates.mjs";
 import { http, thread } from "./fixtures.mjs";
 
 const stable = { tag_name: "v0.2.0", draft: false, prerelease: false };

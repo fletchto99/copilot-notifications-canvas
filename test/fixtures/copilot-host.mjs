@@ -1,5 +1,5 @@
-import { CopilotHost } from "../../src/copilot.mjs";
-import { prepareCommit } from "../../src/checkout.mjs";
+import { CopilotHost } from "../../src/provider/copilot.mjs";
+import { prepareCommit } from "../../src/provider/checkout.mjs";
 import { randomUUID } from "node:crypto";
 
 export const projectId = "11111111-1111-4111-8111-111111111111";

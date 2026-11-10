@@ -4,11 +4,11 @@ import { request } from "node:http";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { GitHubClient, firstPage, POLL_MS } from "../src/github.mjs";
-import { Inbox } from "../src/inbox.mjs";
-import { startServer } from "../src/server.mjs";
-import { DesktopNotifications } from "../src/desktop.mjs";
-import { Preferences } from "../src/settings.mjs";
+import { GitHubClient, firstPage, POLL_MS } from "../src/provider/github.mjs";
+import { Inbox } from "../src/provider/inbox.mjs";
+import { startServer } from "../src/provider/server.mjs";
+import { DesktopNotifications } from "../src/provider/desktop.mjs";
+import { Preferences } from "../src/provider/settings.mjs";
 import { http, thread } from "./fixtures.mjs";
 
 async function setup(t, run = async () => http([thread()]), options = {}) {
@@ -91,10 +91,13 @@ test("HTTP integration serves a protected inbox, rejects cross-origin access and
   assert.match(html.headers.get("content-security-policy"), /default-src 'none'/);
   const sound = await fetch(`${origin}/sound.mjs`);
   assert.equal(sound.status, 404);
-  const model = await fetch(`${origin}/model.mjs`);
+  const model = await fetch(`${origin}/shared/model.mjs`);
   assert.equal(model.status, 200);
   assert.match(model.headers.get("content-type"), /javascript/);
   assert.match(await model.text(), /export function orderedThreads/);
+  for (const path of ["/provider/settings.mjs", "/shared/version.mjs", "/extension.mjs"]) {
+    assert.equal((await fetch(`${origin}${path}`)).status, 404, "Only explicitly listed renderer assets may be served");
+  }
   const unauthenticated = await fetch(`${origin}/api/state`);
   assert.equal(unauthenticated.status, 403);
   assert.equal((await unauthenticated.text()).includes("Synthetic"), false);
@@ -111,6 +114,28 @@ test("HTTP integration serves a protected inbox, rejects cross-origin access and
   assert.equal((await refreshed.json()).loaded, 1);
   const state = await fetch(`${origin}/api/state`, { headers });
   assert.equal((await state.json()).groups[0].items[0].title, "Synthetic notification 1");
+});
+
+test("the source renderer's imports resolve through the explicit asset allowlist", async t => {
+  const { origin } = await setup(t);
+  const pending = [new URL("/app.mjs", origin)];
+  const loaded = new Set();
+  while (pending.length) {
+    const url = pending.pop();
+    if (loaded.has(url.href)) continue;
+    loaded.add(url.href);
+    assert.equal(url.origin, origin);
+    const response = await fetch(url);
+    assert.equal(response.status, 200, url.pathname);
+    assert.match(response.headers.get("content-type"), /javascript/);
+    const source = await response.text();
+    for (const [, specifier] of source.matchAll(/^import .+ from "([^"]+)";$/gm)) {
+      assert.ok(specifier.startsWith("."), "Browser modules must use local imports");
+      pending.push(new URL(specifier, url));
+    }
+  }
+  assert.ok(loaded.has(new URL("/presentation.mjs", origin).href));
+  assert.ok(loaded.has(new URL("/shared/model.mjs", origin).href));
 });
 
 test("row HTTP requests acknowledge queued writes promptly and report delayed outcomes through snapshots", async t => {

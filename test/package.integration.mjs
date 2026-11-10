@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { build } from "esbuild";
 import { list as listTar } from "tar";
-import { CURRENT_VERSION } from "../src/updates.mjs";
+import { CURRENT_VERSION } from "../src/provider/updates.mjs";
 import { buildRelease, embeddedAssetsPlugin } from "../scripts/build-release.mjs";
 import { encodeBundle, inspectBundle, loadPackage, verifyArchive } from "../scripts/package.mjs";
 import { home } from "./install-fixtures.mjs";
@@ -131,7 +131,7 @@ test("embedded assets round-trip through the JSON loader without becoming JavaSc
   ];
   const assets = samples.map((body, index) => [`/${index}`, { body, type: "text/plain" }]);
   const result = await build({
-    entryPoints: [fileURLToPath(new URL("../src/assets.mjs", import.meta.url))],
+    entryPoints: [fileURLToPath(new URL("../src/provider/assets.mjs", import.meta.url))],
     bundle: true, platform: "node", format: "esm", target: "node22", minify: true,
     write: false, metafile: true, plugins: [embeddedAssetsPlugin(assets)],
   });
@@ -229,6 +229,8 @@ async function open(canvas, id) {
   }
   assert.equal((await fetch(new URL("/sound.mjs", result.url))).status, 404);
   assert.equal((await fetch(new URL("/model.mjs", result.url))).status, 404);
+  assert.equal((await fetch(new URL("/shared/model.mjs", result.url))).status, 404);
+  assert.equal((await fetch(new URL("/presentation.mjs", result.url))).status, 404);
   const response = await fetch(new URL("/api/state", url), {
     headers: { Authorization: "Bearer " + url.hash.slice(1), Origin: url.origin },
   });
@@ -349,10 +351,11 @@ try {
   assert.equal(inspectBundle(await readFile(entry)).version, CURRENT_VERSION);
   for (const file of ["app.mjs", "styles.css"]) {
     const built = await readFile(join(root, "served-assets", file));
-    const source = await readFile(new URL(`../src/${file}`, import.meta.url));
+    const source = await readFile(new URL(`../src/renderer/${file}`, import.meta.url));
     assert.ok(built.length < source.length, `${file} must be minified`);
     if (file === "app.mjs") {
-      const notice = source.toString("utf8").match(/\/\*![\s\S]*?\*\//)?.[0];
+      const presentation = await readFile(new URL("../src/renderer/presentation.mjs", import.meta.url), "utf8");
+      const notice = presentation.match(/\/\*![\s\S]*?\*\//)?.[0];
       assert.ok(notice && built.includes(notice), "The packaged renderer must retain the Copilot icon's MIT license.");
     }
   }

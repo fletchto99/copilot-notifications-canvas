@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { setTimeout as wait } from "node:timers/promises";
 import { assetPaths, loadAssets, loadDevelopmentInfo } from "./assets.mjs";
-import { groupThreadsByDate, InboxError } from "./model.mjs";
+import { groupThreadsByDate, InboxError } from "../shared/model.mjs";
 import { RETRY_MS } from "./github.mjs";
 import { validSound } from "./notifier.mjs";
 

@@ -2,8 +2,8 @@ import { lstat, mkdir, mkdtemp, readdir, realpath, rename, rmdir, unlink, writeF
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { acquireLock } from "../src/lock.mjs";
-import { compareVersions } from "../src/version.mjs";
+import { acquireLock } from "../src/provider/lock.mjs";
+import { compareVersions } from "../src/shared/version.mjs";
 import { inspectBundle, loadPackage, name, readRegular } from "./package.mjs";
 
 async function exists(path) {

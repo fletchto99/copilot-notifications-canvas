@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { lstat, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { versionParts } from "../src/version.mjs";
+import { versionParts } from "../src/shared/version.mjs";
 
 export const name = "github-notifications";
 const prefix = "// copilot-notifications-bundle: ";

@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { extract } from "tar";
 import { verifyArchive } from "../../scripts/package.mjs";
-import { CURRENT_VERSION } from "../../src/updates.mjs";
+import { CURRENT_VERSION } from "../../src/provider/updates.mjs";
 
 export async function startPackagedCanvas(root, run, log, tools) {
   const directory = join(root, "package");

@@ -19,21 +19,35 @@ framework or separately installed runtime SDK.
 | --- | --- |
 | `.github/extensions/github-notifications/extension.mjs` | Development discovery shim importing `src/extension.mjs`. Keep it thin. |
 | `src/extension.mjs` | SDK registration, agent-facing actions, panel lifecycle, and shared services. |
-| `src/github.mjs`, `src/model.mjs` | GitHub CLI requests, caching, rate limits, validation, normalization, and grouping. |
-| `src/inbox.mjs`, `src/batch.mjs` | Loaded-page state, aggregate summaries, and row, repository, date, and shown-list read/done actions. |
-| `src/copilot.mjs` | Click-confirmed, summary-first session handoffs through capability-checked host tools. |
-| `src/checkout.mjs` | Exact-commit handoff preparation without changing existing branches or working files. |
-| `src/server.mjs`, `src/assets.mjs` | Protected per-panel loopback HTTP server, asset snapshots, and startup recovery. |
-| `src/index.html`, `src/app.mjs`, `src/styles.css` | Renderer, controls, accessibility, and themes. |
-| `src/settings.mjs`, `src/lock.mjs`, `src/startup.mjs` | User-wide preferences, cross-process locking, and session auto-open. |
-| `src/desktop.mjs`, `src/notifier.mjs` | Shared desktop activity checkpoints and platform-specific native delivery. |
-| `src/updates.mjs`, `src/version.mjs`, `version.json` | Release discovery and version handling. |
+| `src/provider/github.mjs`, `src/provider/github-subjects.mjs` | GitHub CLI requests, shared request coordination, and pure subject/response interpretation. |
+| `src/shared/model.mjs`, `src/shared/version.mjs` | Browser-safe validation, normalization, grouping, and version helpers. |
+| `src/provider/inbox.mjs`, `src/provider/batch.mjs` | Loaded-page state, aggregate summaries, and row, repository, date, and shown-list read/done actions. |
+| `src/provider/copilot.mjs`, `src/provider/copilot-prompts.mjs` | Click-confirmed session handoffs through capability-checked host tools, with separate fixed prompt generation. |
+| `src/provider/checkout.mjs` | Exact-commit handoff preparation without changing existing branches or working files. |
+| `src/provider/server.mjs`, `src/provider/assets.mjs` | Protected per-panel loopback HTTP server, asset snapshots, and startup recovery. |
+| `src/renderer/` | HTML/CSS, renderer coordination in `app.mjs`, and stateless DOM/icon/time helpers in `presentation.mjs`. |
+| `src/provider/settings.mjs`, `src/provider/lock.mjs`, `src/provider/startup.mjs` | User-wide preferences, cross-process locking, and session auto-open. |
+| `src/provider/desktop.mjs`, `src/provider/notifier.mjs` | Shared desktop activity checkpoints and platform-specific native delivery. |
+| `src/provider/updates.mjs`, `version.json` | Release discovery and the release version. |
 | `scripts/` | Release build, package verification, installation, publication, and coverage reporting. |
 | `test/`, `test/browser/` | Node unit/integration tests and Playwright browser/accessibility tests. |
 
 Edit source in `src/`, not a user's installed extension or generated `dist/`
 output. Development loads source without a build; release builds bundle
 `src/extension.mjs` and embed the renderer assets.
+
+Keep the layout shallow: `extension.mjs` wires services, `provider/` owns Node
+services, `renderer/` owns browser code, and `shared/` has no Node or DOM
+dependencies. Provider and renderer modules may import shared helpers, but not
+each other; shared modules must not import either runtime. ESLint checks these
+boundaries. Release and installation scripts may also reuse provider and shared
+modules. There are no separate packages or barrel exports.
+
+Source renderer modules are served through the explicit allowlist in
+`provider/assets.mjs`, not by exposing source directories. Register new browser
+dependencies there and update the dependency-free renderer fixture when adding
+imports. Keep source coverage discovery recursive and retain the packaged
+renderer checks when moving or extracting modules.
 
 ## Implementation conventions
 
@@ -50,7 +64,7 @@ output. Development loads source without a build; release builds bundle
   runtime packages. `@github/copilot-sdk/extension` is supplied by the host;
   do not add the SDK to this repository's dependencies.
 - Keep provider-only Node APIs out of browser modules. Shared modules such as
-  `model.mjs` must remain usable by both source and bundled renderers.
+  `shared/model.mjs` must remain usable by both source and bundled renderers.
 - Use `InboxError` for expected domain failures and translate it to HTTP errors
   or `CanvasError` at the boundary. Preserve explicit stale/error states rather
   than returning an apparently successful empty inbox.

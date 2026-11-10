@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { firstPage, GitHubClient, POLL_MS } from "../src/github.mjs";
-import { Inbox } from "../src/inbox.mjs";
-import { InboxError } from "../src/model.mjs";
+import { firstPage, GitHubClient, POLL_MS } from "../src/provider/github.mjs";
+import { Inbox } from "../src/provider/inbox.mjs";
+import { InboxError } from "../src/shared/model.mjs";
 import { http, inboxNext as next, thread } from "./fixtures.mjs";
 
 test("settings-read failures preserve the requested view and surface an independent warning", async t => {
@@ -404,7 +404,7 @@ test("concurrent actions fail explicitly and closing aborts outstanding gh work"
   const client = new GitHubClient({ run: async (_args, { signal }) => {
     launched();
     await new Promise(resolve => signal.addEventListener("abort", resolve, { once: true }));
-    const { InboxError } = await import("../src/model.mjs");
+    const { InboxError } = await import("../src/shared/model.mjs");
     throw new InboxError("closed", "Closed.", 410);
   } });
   const inbox = new Inbox(client);

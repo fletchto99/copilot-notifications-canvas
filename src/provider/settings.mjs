@@ -3,7 +3,7 @@ import { constants } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { apiTarget, InboxError } from "./model.mjs";
+import { apiTarget, InboxError } from "../shared/model.mjs";
 import { validSound } from "./notifier.mjs";
 import { acquireLock } from "./lock.mjs";
 

@@ -2,7 +2,7 @@ import { appendFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import metadata from "../version.json" with { type: "json" };
-import { versionParts } from "../src/version.mjs";
+import { versionParts } from "../src/shared/version.mjs";
 
 const CURRENT_VERSION = metadata.version;
 

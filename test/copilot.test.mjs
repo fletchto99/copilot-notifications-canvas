@@ -1,10 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { CopilotHandoff, CopilotHost } from "../src/copilot.mjs";
-import { GitHubClient, RETRY_MS } from "../src/github.mjs";
-import { Inbox } from "../src/inbox.mjs";
-import { InboxError, normalizeThreads } from "../src/model.mjs";
-import { startServer } from "../src/server.mjs";
+import { CopilotHandoff, CopilotHost } from "../src/provider/copilot.mjs";
+import { GitHubClient, RETRY_MS } from "../src/provider/github.mjs";
+import { Inbox } from "../src/provider/inbox.mjs";
+import { InboxError, normalizeThreads } from "../src/shared/model.mjs";
+import { startServer } from "../src/provider/server.mjs";
 import { thread, http } from "./fixtures.mjs";
 import { copilotHost, projectId, sessionId, toolNames } from "./fixtures/copilot-host.mjs";
 import { createCanvasFixture } from "./canvas-fixtures.mjs";

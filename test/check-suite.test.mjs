@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { GitHubClient, SUBJECT_POLL_MS } from "../src/github.mjs";
-import { apiTarget, normalizeThreads, notificationTitle } from "../src/model.mjs";
-import { Inbox } from "../src/inbox.mjs";
+import { GitHubClient, SUBJECT_POLL_MS } from "../src/provider/github.mjs";
+import { apiTarget, normalizeThreads, notificationTitle } from "../src/shared/model.mjs";
+import { Inbox } from "../src/provider/inbox.mjs";
 import { http, thread } from "./fixtures.mjs";
 
 function suite({ url = "https://api.github.com/repos/example/widgets/check-suites/9007199254740993",

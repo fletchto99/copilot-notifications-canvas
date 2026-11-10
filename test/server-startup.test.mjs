@@ -3,9 +3,10 @@ import assert from "node:assert/strict";
 import { Server } from "node:http";
 import { readFile } from "node:fs/promises";
 import { setTimeout as wait } from "node:timers/promises";
-import { GitHubClient } from "../src/github.mjs";
-import { Inbox } from "../src/inbox.mjs";
-import { startServer } from "../src/server.mjs";
+import { GitHubClient } from "../src/provider/github.mjs";
+import { Inbox } from "../src/provider/inbox.mjs";
+import { startServer } from "../src/provider/server.mjs";
+import { assetPaths } from "../src/provider/assets.mjs";
 import { http, thread } from "./fixtures.mjs";
 
 const settle = () => new Promise(resolve => setImmediate(resolve));
@@ -48,7 +49,10 @@ test("missing assets open a protected recovery page and recover on the same URL"
   }
   assert.equal((await fetch(`${origin}/api/ready`, { method: "POST", headers })).status, 405);
   assert.deepEqual(await (await fetch(`${origin}/api/ready`, { headers })).json(), { ready: false });
-  for (const path of ["/app.mjs", "/styles.css", "/api/state", "/api/settings", "/api/refresh", "/api/read", "/api/done"]) {
+  for (const path of [
+    ...[...assetPaths].filter(path => path !== "/"),
+    "/api/state", "/api/settings", "/api/refresh", "/api/read", "/api/done",
+  ]) {
     const response = await fetch(`${origin}${path}`, { headers });
     assert.equal(response.status, 503, path);
     assert.equal((await response.json()).error.code, "server_initializing");
@@ -67,7 +71,7 @@ test("missing assets open a protected recovery page and recover on the same URL"
   assert.equal(await server.ready, true);
   assert.match(await (await fetch(server.url)).text(), /id="settings"/);
   assert.equal((await fetch(`${origin}/app.mjs`)).status, 200);
-  assert.equal(reads, 8, "Recovery must publish one complete asset snapshot");
+  assert.equal(reads, 2 * assetPaths.size, "Recovery must publish one complete asset snapshot");
   assert.deepEqual(f.calls, [], "Recovery must not fetch GitHub data or mark anything read");
   await server.close();
   await assert.rejects(fetch(server.url));
@@ -125,7 +129,7 @@ test("closing during an asset retry aborts in-flight reads and never schedules a
   fail = false;
   retry();
   await settle();
-  assert.equal(signals.length, 4);
+  assert.equal(signals.length, assetPaths.size);
   await server.close();
   await settle();
   assert.equal(await server.ready, false);

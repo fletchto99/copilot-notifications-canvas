@@ -3,11 +3,11 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { GitHubClient, POLL_MS } from "../src/github.mjs";
-import { Inbox } from "../src/inbox.mjs";
-import { InboxError } from "../src/model.mjs";
-import { Preferences } from "../src/settings.mjs";
-import { startServer } from "../src/server.mjs";
+import { GitHubClient, POLL_MS } from "../src/provider/github.mjs";
+import { Inbox } from "../src/provider/inbox.mjs";
+import { InboxError } from "../src/shared/model.mjs";
+import { Preferences } from "../src/provider/settings.mjs";
+import { startServer } from "../src/provider/server.mjs";
 import { http, inboxNext as next, thread } from "./fixtures.mjs";
 
 const confirmed = "HTTP/2 204 No Content\r\n\r\n";

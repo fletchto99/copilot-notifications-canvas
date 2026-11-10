@@ -3,13 +3,13 @@ import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { ESLint } from "eslint";
 import stylelint from "stylelint";
-import { GitHubClient } from "../src/github.mjs";
-import { Inbox } from "../src/inbox.mjs";
-import { startServer } from "../src/server.mjs";
+import { GitHubClient } from "../src/provider/github.mjs";
+import { Inbox } from "../src/provider/inbox.mjs";
+import { startServer } from "../src/provider/server.mjs";
 
 const eslint = new ESLint({ cwd: fileURLToPath(new URL("../", import.meta.url)) });
-const lintScript = async code => {
-  const [result] = await eslint.lintText(code, { filePath: fileURLToPath(new URL("../src/app.mjs", import.meta.url)) });
+const lintScript = async (code, file = "renderer/app.mjs") => {
+  const [result] = await eslint.lintText(code, { filePath: fileURLToPath(new URL(`../src/${file}`, import.meta.url)) });
   return result.messages;
 };
 const lintStyles = code => stylelint.lint({
@@ -77,4 +77,25 @@ test("recovery CSS checks reject invalid properties, values and syntax while acc
   const result = await lintStyles(".fixture {\n  color: var(--text-color-default, #1f2328);\n}\n");
   assert.equal(result.errored, false);
   assert.deepEqual(result.results.flatMap(entry => entry.warnings), []);
+});
+
+test("source directories enforce runtime globals, import boundaries and logging rules", async () => {
+  for (const file of ["renderer/nested/view.mjs", "shared/nested/model.mjs"]) {
+    for (const code of ['import "node:fs";', 'import "fs";', 'import "../../provider/github.mjs";']) {
+      assert.ok((await lintScript(code, file)).some(message => message.ruleId === "no-restricted-imports"), file);
+    }
+    assert.ok((await lintScript("process.exit(1);", file)).some(message => message.ruleId === "no-undef"), file);
+    assert.deepEqual(await lintScript("export const url = new URL(\"https://example.test\");", file), []);
+  }
+  for (const file of ["provider/nested/service.mjs", "shared/nested/model.mjs"]) {
+    assert.ok((await lintScript('import "../../renderer/app.mjs";', file))
+      .some(message => message.ruleId === "no-restricted-imports"), file);
+  }
+  assert.ok((await lintScript("document.createElement(\"span\");", "shared/model.mjs"))
+    .some(message => message.ruleId === "no-undef"));
+  assert.deepEqual(await lintScript("document.createElement(\"span\");"), []);
+  assert.deepEqual(await lintScript('import "node:fs";', "provider/settings.mjs"), []);
+  for (const file of ["extension.mjs", "renderer/app.mjs", "provider/settings.mjs", "shared/model.mjs"]) {
+    assert.ok((await lintScript('console.log("fixture");', file)).some(message => message.ruleId === "no-console"), file);
+  }
 });

@@ -15,7 +15,25 @@ Use a current patched **Node.js 24+** for development; `.node-version` selects
 the preferred major. The extension runtime and installer still support Node.js
 22, which remains covered by the dependency-free tests.
 
-Edit provider modules and renderer assets in `src/`. The discovery shim at
+Source is grouped by runtime:
+
+- `src/extension.mjs` registers the canvas and wires shared services.
+- `src/provider/` contains Node-only services, persistence, and GitHub access.
+- `src/renderer/` contains browser modules, HTML, and CSS.
+- `src/shared/` contains pure helpers usable by either runtime and release tools.
+
+Keep runtime coordination together: renderer polling and focus handling stay in
+`app.mjs`, GitHub caching and request queues stay in `github.mjs`, and handoff
+confirmation and final validation stay in `copilot.mjs`. Independent presentation,
+subject interpretation, and prompt generation have their own modules.
+
+ESLint enforces runtime globals and import boundaries. Coverage discovers nested
+source modules and fails if any eligible module is missing. When adding a browser
+module, update the explicit asset map in `src/provider/assets.mjs` and the
+dependency-free renderer fixture; do not expose entire source directories.
+Release builds bundle browser dependencies into the existing `/app.mjs` asset.
+
+The discovery shim at
 `.github/extensions/github-notifications/extension.mjs` imports
 `src/extension.mjs`: opening this repository as a Copilot project loads source
 without a build. After edits or branch changes, reload extensions and use

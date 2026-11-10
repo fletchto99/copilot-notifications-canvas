@@ -4,11 +4,11 @@ import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInContext } from "node:vm";
-import { firstPage, GitHubClient, nextPage, POLL_MS } from "../src/github.mjs";
-import { apiTarget } from "../src/model.mjs";
-import { Inbox } from "../src/inbox.mjs";
-import { Preferences } from "../src/settings.mjs";
-import { startServer } from "../src/server.mjs";
+import { firstPage, GitHubClient, nextPage, POLL_MS } from "../src/provider/github.mjs";
+import { apiTarget } from "../src/shared/model.mjs";
+import { Inbox } from "../src/provider/inbox.mjs";
+import { Preferences } from "../src/provider/settings.mjs";
+import { startServer } from "../src/provider/server.mjs";
 import { http, thread } from "./fixtures.mjs";
 import { renderer, settle } from "./renderer-fixtures.mjs";
 

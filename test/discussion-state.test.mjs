@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { GitHubClient, firstPage, RETRY_MS, SUBJECT_POLL_MS } from "../src/github.mjs";
-import { apiTarget, InboxError, normalizeThreads } from "../src/model.mjs";
-import { Inbox } from "../src/inbox.mjs";
-import { startServer } from "../src/server.mjs";
+import { GitHubClient, firstPage, RETRY_MS, SUBJECT_POLL_MS } from "../src/provider/github.mjs";
+import { apiTarget, InboxError, normalizeThreads } from "../src/shared/model.mjs";
+import { Inbox } from "../src/provider/inbox.mjs";
+import { startServer } from "../src/provider/server.mjs";
 import { http, thread } from "./fixtures.mjs";
 
 const response = (discussion, headers) => http({ data: { repository: { discussion } } }, headers);

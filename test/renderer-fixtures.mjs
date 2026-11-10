@@ -2,16 +2,20 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { createContext, runInContext } from "node:vm";
 import { fileURLToPath } from "node:url";
-import { Inbox } from "../src/inbox.mjs";
-import { GitHubClient } from "../src/github.mjs";
-import { desktopCapabilities } from "../src/notifier.mjs";
-import { apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle } from "../src/model.mjs";
+import { Inbox } from "../src/provider/inbox.mjs";
+import { GitHubClient } from "../src/provider/github.mjs";
+import { desktopCapabilities } from "../src/provider/notifier.mjs";
+import { apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle } from "../src/shared/model.mjs";
 import { http, thread } from "./fixtures.mjs";
 
 export const script = await readFile(process.env.NOTIFICATIONS_TEST_SCRIPT ??
-  new URL("../src/app.mjs", import.meta.url), "utf8");
-export const html = await readFile(new URL("../src/index.html", import.meta.url), "utf8");
-export const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
+  new URL("../src/renderer/app.mjs", import.meta.url), "utf8");
+export const html = await readFile(new URL("../src/renderer/index.html", import.meta.url), "utf8");
+export const styles = await readFile(new URL("../src/renderer/styles.css", import.meta.url), "utf8");
+const presentationUrl = new URL("../src/renderer/presentation.mjs", import.meta.url);
+const presentation = await readFile(presentationUrl, "utf8");
+const modelImport = /^import \{ apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle \} from "\.\.\/shared\/model\.mjs";/m;
+const presentationImport = /^import \{ element, setControlText, actionIcon, subjectMetadata, relativeTime, updateSubjectDescription \} from "\.\/presentation\.mjs";/m;
 export const settle = () => new Promise(resolve => setImmediate(resolve));
 export const groupActionText = button => button.parentNode.querySelectorAll(".tooltip-content")[0].textContent;
 export const disabled = button => button.disabled || button.getAttribute("aria-disabled") === "true";
@@ -380,10 +384,18 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       return { ok: true, json: async () => ({ ...snapshot(), ...(rowActionToken ? { rowActionToken } : {}) }) };
     },
   });
-  if (!process.env.NOTIFICATIONS_TEST_SCRIPT) assert.match(script, /^import \{ apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle \} from "\.\/model\.mjs";/);
-  // Preserve source offsets for the coverage report when removing the injected import.
-  runInContext(script.replace(/^import \{ apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle \} from "\.\/model\.mjs";/, match => " ".repeat(match.length)), context, {
-    filename: process.env.NOTIFICATIONS_TEST_SCRIPT ?? fileURLToPath(new URL("../src/app.mjs", import.meta.url)),
+  if (!process.env.NOTIFICATIONS_TEST_SCRIPT) {
+    assert.match(script, modelImport);
+    assert.match(script, presentationImport);
+    const helpers = createContext({ document, Intl, Date: context.Date });
+    // Keep helpers in their own scope while preserving source offsets for coverage.
+    runInContext(presentation.replace(/^export /gm, "       "), helpers, { filename: fileURLToPath(presentationUrl) });
+    Object.assign(context, runInContext("({ element, setControlText, actionIcon, subjectMetadata, relativeTime, updateSubjectDescription })", helpers));
+  }
+  // Preserve source offsets for the coverage report when removing injected imports.
+  runInContext(script.replace(modelImport, match => " ".repeat(match.length))
+    .replace(presentationImport, match => " ".repeat(match.length)), context, {
+    filename: process.env.NOTIFICATIONS_TEST_SCRIPT ?? fileURLToPath(new URL("../src/renderer/app.mjs", import.meta.url)),
   });
   await settle();
   return {

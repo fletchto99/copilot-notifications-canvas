@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { GitHubClient, SUBJECT_POLL_MS } from "../src/github.mjs";
-import { apiTarget, normalizeThreads } from "../src/model.mjs";
+import { GitHubClient, SUBJECT_POLL_MS } from "../src/provider/github.mjs";
+import { apiTarget, normalizeThreads } from "../src/shared/model.mjs";
 import { http, thread } from "./fixtures.mjs";
 
 function suite(url = "https://api.github.com/repos/example/widgets/check-suites/7", baseUrl = "https://api.github.com") {

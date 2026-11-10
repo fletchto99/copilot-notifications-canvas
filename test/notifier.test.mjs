@@ -5,7 +5,7 @@ import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import { promisify } from "node:util";
-import { notifyDesktop, notificationScript, windowsSenderScript, windowsDeliveryScript, windowsScript, desktopCapabilities, validSound } from "../src/notifier.mjs";
+import { notifyDesktop, notificationScript, windowsSenderScript, windowsDeliveryScript, windowsScript, desktopCapabilities, validSound } from "../src/provider/notifier.mjs";
 
 const title = "example/widgets";
 const body = 'Fix <widget> & "quotes"; $(do-not-run)\nUnicode: caf\u00e9';

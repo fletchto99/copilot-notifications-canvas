@@ -4,7 +4,7 @@ import { execFile, spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { notifyDesktop } from "../src/notifier.mjs";
+import { notifyDesktop } from "../src/provider/notifier.mjs";
 
 async function checkPrivateBus() {
   assert.ok(process.env.DBUS_SESSION_BUS_ADDRESS, "dbus-run-session must provide a private bus");

@@ -6,12 +6,12 @@ import { join } from "node:path";
 import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 import { promisify } from "node:util";
-import { apiTarget, DEFAULT_API_BASE_URL, normalizeThreads } from "../src/model.mjs";
-import { firstPage, GitHubClient, nextPage, runGh } from "../src/github.mjs";
-import { Preferences } from "../src/settings.mjs";
-import { loadDevelopmentAPI } from "../src/development.mjs";
-import { Inbox } from "../src/inbox.mjs";
-import { startServer } from "../src/server.mjs";
+import { apiTarget, DEFAULT_API_BASE_URL, normalizeThreads } from "../src/shared/model.mjs";
+import { firstPage, GitHubClient, nextPage, runGh } from "../src/provider/github.mjs";
+import { Preferences } from "../src/provider/settings.mjs";
+import { loadDevelopmentAPI } from "../src/provider/development.mjs";
+import { Inbox } from "../src/provider/inbox.mjs";
+import { startServer } from "../src/provider/server.mjs";
 import { http, next, thread } from "./fixtures.mjs";
 
 const baseUrl = "https://git.example.com/api/v3";
@@ -59,7 +59,7 @@ assert.equal(apiTarget(validURL).baseUrl, validURL);
 assert.throws(() => apiTarget(invalidURL), { code: "invalid_api" });
 `;
   await promisify(childProcess.execFile)(process.execPath, [
-    "--input-type=module", "-e", script, new URL("../src/model.mjs", import.meta.url).href, invalidURL,
+    "--input-type=module", "-e", script, new URL("../src/shared/model.mjs", import.meta.url).href, invalidURL,
   ], { timeout: 5000 });
 });
 

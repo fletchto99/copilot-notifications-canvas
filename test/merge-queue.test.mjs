@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { GitHubClient, firstPage, RETRY_MS, SUBJECT_POLL_MS } from "../src/github.mjs";
-import { apiTarget, normalizeThreads } from "../src/model.mjs";
+import { GitHubClient, firstPage, RETRY_MS, SUBJECT_POLL_MS } from "../src/provider/github.mjs";
+import { apiTarget, normalizeThreads } from "../src/shared/model.mjs";
 import { http, thread } from "./fixtures.mjs";
 
 const queueResponse = state => http({ data: { repository: { pullRequest: { isInMergeQueue: state } } } });

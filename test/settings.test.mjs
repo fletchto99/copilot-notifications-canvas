@@ -5,10 +5,10 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { Preferences } from "../src/settings.mjs";
-import { startServer } from "../src/server.mjs";
-import { Inbox } from "../src/inbox.mjs";
-import { GitHubClient } from "../src/github.mjs";
+import { Preferences } from "../src/provider/settings.mjs";
+import { startServer } from "../src/provider/server.mjs";
+import { Inbox } from "../src/provider/inbox.mjs";
+import { GitHubClient } from "../src/provider/github.mjs";
 
 const defaults = { matchGitHubInbox: true, autoOpen: false, darkMode: null, desktopNotifications: false, desktopSound: "default", groupBy: "repo", copilotIntegration: true, confirmCopilotActions: true, hideEmptyTabs: true, keyboardShortcuts: true };
 
@@ -192,7 +192,7 @@ test("storage errors and concurrent-writer locks are actionable, not success-sha
 test("a crashed settings writer releases ownership on the next save without losing preferences", async t => {
   const preferences = await setup(t);
   await fs.writeFile(preferences.path, '{"autoOpen":false,"future":{"keep":true}}');
-  const module = new URL("../src/settings.mjs", import.meta.url).href;
+  const module = new URL("../src/provider/settings.mjs", import.meta.url).href;
   const script = `
     import * as fs from "node:fs/promises";
     import { Preferences } from ${JSON.stringify(module)};
