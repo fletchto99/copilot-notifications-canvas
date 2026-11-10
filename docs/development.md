@@ -274,6 +274,9 @@ Failures do not cancel the other shards.
 
 Each shard has a 15-minute limit for container startup, packaging, tests, and
 report uploads; Playwright's per-test timeout remains 30 seconds.
+Static-icon checks run as separate tests per theme and grouping, each retaining
+all viewport widths, accessibility checks, and source/packaged coverage. This
+keeps the full matrix from sharing one test timeout and lets shards distribute it.
 After `npm run build`, reproduce a shard locally with
 `npm run test:browser -- --project=chromium --shard=1/4 --workers=2`, substituting
 the browser and shard number. Omit `--shard` to run the full selected suite.
