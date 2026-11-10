@@ -153,3 +153,16 @@ jobs:
             test-results/
           retention-days: 14
           if-no-files-found: error
+  browser-check:
+    name: Browser tests
+    needs: browser
+    if: ${{ always() }}
+    runs-on: ubuntu-slim
+    timeout-minutes: 1
+    steps:
+      - name: Require every browser shard to pass
+        env:
+          BROWSER_RESULT: ${{ needs.browser.result }}
+        run: |
+          echo "Browser shard result: $BROWSER_RESULT"
+          test "$BROWSER_RESULT" = success

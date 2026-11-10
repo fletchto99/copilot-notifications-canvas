@@ -277,9 +277,13 @@ report uploads; Playwright's per-test timeout remains 30 seconds.
 After `npm run build`, reproduce a shard locally with
 `npm run test:browser -- --project=chromium --shard=1/4 --workers=2`, substituting
 the browser and shard number. Omit `--shard` to run the full selected suite.
-Browser check names now include the shard, for example
-`Browser (chromium, shard 1/4)`; update any required-check rules that reference
-the previous unsharded names.
+Use **Browser tests** as the required browser check in branch protection or
+rulesets, replacing any requirements for individual browser/shard jobs.
+This lightweight aggregate job depends on the entire browser matrix and passes
+only when every shard succeeds; failed, cancelled, or skipped browser jobs cannot
+produce a green aggregate check. Its name stays unchanged when the shard count
+changes. Individual shard jobs and reports remain available for diagnosis.
+Keep any required Node and lint checks separately; this check covers browsers only.
 PR/main CI validates packaging but never publishes releases.
 
 Copilot discovery browser tests advance a test-only provider clock instead of
