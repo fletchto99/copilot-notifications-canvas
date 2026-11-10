@@ -996,6 +996,48 @@ test("closed and merged PRs offer read-only summaries, with reopening help only 
   });
 });
 
+test("closed and merged summaries skip unavailable queue checks when cached PR state is missing or stale", async t => {
+  for (const merged of [false, true]) for (const cachedState of [undefined, "open"]) for (const blocked of [false, true]) {
+    await t.test(`${merged ? "merged" : "closed"}/${cachedState ?? "missing"}/${blocked ? "rate limited" : "unavailable"}`, async t => {
+      const f = await fixture(t, { type: "PullRequest", pull: { state: "closed", merged },
+        onGitHub: args => args.at(-1) === "graphql" ? http({}, {}, 403) : undefined,
+      });
+      if (cachedState) f.client.subjectCache.set("/repos/example/widgets/pulls/1", { state: cachedState });
+      if (blocked) f.client.graphqlBlockedUntil = f.client.now() + RETRY_MS;
+      const ready = await prepare(f);
+      assert.equal(ready.action, "summarize");
+      assert.equal(ready.pullState, merged ? "merged" : "closed");
+      assert.equal(f.calls.some(call => call.name === "create_session"), false);
+      assert.equal((await start(f)).status, "started");
+      assert.ok(f.requests.some(args => args.at(-1) === "/repos/example/widgets/pulls/1"));
+      assert.equal(f.requests.some(args => args.at(-1) === "graphql"), false);
+    });
+  }
+});
+
+test("fresh open and draft PR metadata precedes queue verification without weakening the queue guard", async t => {
+  for (const draft of [false, true]) for (const queue of ["clear", "queued", "unavailable", "rate limited"]) {
+    await t.test(`${draft ? "draft" : "open"}/${queue}`, async t => {
+      const f = await fixture(t, { type: "PullRequest", pull: { draft }, onGitHub: args => {
+        if (args.at(-1) !== "graphql") return;
+        if (queue === "unavailable") return http({}, {}, 403);
+        return http({ data: { repository: { pullRequest: { isInMergeQueue: queue === "queued" } } } });
+      } });
+      if (queue === "rate limited") f.client.graphqlBlockedUntil = f.client.now() + RETRY_MS;
+      f.handoff.request({ id: "1" });
+      await f.handoff.pending;
+      const pullIndex = f.requests.findIndex(args => args.at(-1) === "/repos/example/widgets/pulls/1");
+      const queueIndex = f.requests.findIndex(args => args.at(-1) === "graphql");
+      assert.ok(pullIndex >= 0, "Fresh PR metadata must be read even when GraphQL is unavailable");
+      if (queue === "rate limited") assert.equal(queueIndex, -1);
+      else assert.ok(queueIndex > pullIndex, "Queue verification must follow the fresh PR state");
+      assert.equal(f.handoff.snapshot().status, queue === "clear" ? "ready" : "error");
+      if (queue === "queued") assert.match(f.handoff.snapshot().message, /merge-queued/);
+      assert.equal(f.calls.some(call => ["create_session", "navigate_to"].includes(call.name)), false);
+    });
+  }
+});
+
 test("closed and merged summaries confirm existing-session reuse and navigate without instructions", async t => {
   for (const merged of [false, true]) for (const linked of [true, false]) await t.test(`${merged}/${linked}`, async t => {
     const session = { type: "session", id: sessionId, project_repo: "example/widgets",

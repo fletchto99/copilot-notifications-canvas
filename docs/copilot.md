@@ -64,6 +64,8 @@ Merge-queued PRs keep a disabled **PR in merge queue** button. Tab navigation
 skips it; its hover tooltip explains why the action is unavailable. Notification
 links and Read/Done remain available. Open or draft PR handoffs wait for verified
 merge-queue membership; pending or failed checks cannot authorize a session.
+Fresh REST PR metadata determines whether that check is needed, not the cached
+row state. Closed and merged PR summaries do not require merge-queue access.
 CI actions wait while run/job links load. Unresolved or ambiguous matches remain
 disabled rather than guessing a destination.
 

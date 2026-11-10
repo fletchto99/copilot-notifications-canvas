@@ -220,6 +220,34 @@ for (const packaged of [false, true]) {
       }
     });
 
+    for (const merged of [false, true]) test(
+      `${merged ? "merged" : "closed"} PR summaries use fresh REST state despite an unavailable queue check`, async ({ page, canvas }) => {
+      canvas.rows.splice(1);
+      canvas.rows[0].subject = { title: "Synthetic PR", type: "PullRequest",
+        url: "https://api.github.com/repos/example/widgets/pulls/1" };
+      canvas.rows[0].subjectDetails = { state: "open", merged: false, draft: false, user: { id: 8 } };
+      canvas.setRequestHook(args => args.at(-1) === "graphql" ? http({}, {}, 403) : undefined);
+      await page.goto(canvas.url);
+      const action = page.getByRole("button", { name: /^Review with Copilot:/ });
+      await expect(action).toBeEnabled();
+      await expect.poll(() => canvas.requests.filter(path => path === "graphql").length).toBeGreaterThan(0);
+      const queueChecks = canvas.requests.filter(path => path === "graphql").length;
+      Object.assign(canvas.rows[0].subjectDetails, { state: "closed", merged });
+      await action.click();
+      const dialog = page.getByRole("dialog", { name: "Summarize Changes", exact: true });
+      await expect(dialog).toBeVisible();
+      await expect(dialog).toContainText(merged
+        ? "summarize what this merged PR changed" : "changes proposed by this closed PR");
+      expect(canvas.copilotHost.calls.some(call => call.name === "create_session")).toBe(false);
+      await dialog.getByRole("button", { name: "Start session", exact: true }).click();
+      await expect.poll(() => canvas.copilotHost.calls.some(call => call.name === "navigate_to")).toBe(true);
+      const creation = canvas.copilotHost.calls.find(call => call.name === "create_session").args;
+      expect(creation.kickoff.prompt).toContain(`Summarize what this ${merged ? "merged" : "closed, unmerged"} pull request changed.`);
+      expect(canvas.requests.filter(path => path === "graphql")).toHaveLength(queueChecks);
+      expect(canvas.writes).toEqual([]);
+      expect(canvas.deliveries).toEqual([]);
+    });
+
     test("own and other PR labels use identity, remain stable during hydration, and fit narrow panels", async ({
       page,
       canvas,

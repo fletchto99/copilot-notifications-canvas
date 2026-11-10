@@ -286,8 +286,9 @@ export class CopilotHandoff {
     if (this.preferences) this.setSettings(await this.preferences.read());
     if (!this.enabled) throw integrationDisabled();
     const item = this.#item(id);
-    const state = pullState ?? (this.state?.status === "starting" ? this.target?.pullState : undefined) ?? item.subjectState;
-    if (item.type === "PullRequest" && !["closed", "merged"].includes(state)) {
+    // Preparation resolves fresh PR state before deciding whether queue checks apply.
+    const state = pullState ?? (this.state?.status === "starting" ? this.target?.pullState : undefined);
+    if (item.type === "PullRequest" && state === "open") {
       if (await this.inbox.client.copilotContext("queue", item, this.inbox.controller.signal)) {
         throw new InboxError("copilot_inactive_pr", "Copilot actions are unavailable for merge-queued pull requests.", 409);
       }

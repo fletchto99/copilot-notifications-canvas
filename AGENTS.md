@@ -101,6 +101,9 @@ output. Development loads source without a build; release builds bundle
   PRs show disabled Copilot controls with status explanations; reject those
   handoffs at the provider boundary too. Recheck PR state before starting;
   a changed task needs a fresh action.
+  Resolve fresh PR metadata before checking merge-queue membership. Require the
+  queue check for open/draft PRs, not for closed/merged summaries, regardless of
+  missing or stale row state.
   Closed issues use summary-only prompts, not fixing or reopening prompts.
   Recheck issue state before starting and reject stale tasks after closure or
   reopening. Discussions summarize the selected thread, replies, and any answer
