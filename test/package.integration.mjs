@@ -312,5 +312,9 @@ try {
     const built = await readFile(join(root, "served-assets", file));
     const source = await readFile(new URL(`../src/${file}`, import.meta.url));
     assert.ok(built.length < source.length, `${file} must be minified`);
+    if (file === "app.mjs") {
+      const notice = source.toString("utf8").match(/\/\*![\s\S]*?\*\//)?.[0];
+      assert.ok(notice && built.includes(notice), "The packaged renderer must retain the Copilot icon's MIT license.");
+    }
   }
 });

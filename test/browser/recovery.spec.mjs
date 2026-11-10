@@ -257,10 +257,10 @@ test("Done waits for confirmation, reports failures, and never retries automatic
     canvas.advance(120_000);
     canvas.setRequestHook(undefined);
     await done.press("Enter");
+    await expect.poll(() => canvas.doneWrites).toEqual(["1"]);
     await page.clock.fastForward(1000);
     await expect(page.locator(".row")).toHaveCount(1);
     await expect(page.locator("#notice")).toBeHidden();
-    expect(canvas.doneWrites).toEqual(["1"]);
   } finally {
     held.release();
   }
@@ -340,7 +340,13 @@ for (const packaged of [false, true]) {
             held.release();
             const retained = action === "read" && matchGitHubInbox;
             await expect(page.locator(".row")).toHaveCount(retained ? 2 : 1);
-            await expect(button).toHaveCount(0);
+            if (retained) {
+              await expect(button).toBeVisible();
+              await expect(button).toBeDisabled();
+              await expect(button).toHaveAccessibleName(/^Already read:/);
+            } else {
+              await expect(button).toHaveCount(0);
+            }
             await expect(page.locator(`[data-focus-key="${retained ? "done:1" : `${action}:2`}"]`)).toBeFocused();
             await expect(page.locator("#notice")).toBeHidden();
             const acknowledged = await page.waitForResponse(async response => response.url().endsWith("/api/state") &&
@@ -377,7 +383,9 @@ for (const moveFocus of [false, true]) {
       await queued.promise;
       if (moveFocus) await page.getByRole("searchbox").focus();
       await expect(page.locator(".row.read")).toHaveCount(1);
-      await expect(read).toHaveCount(0);
+      await expect(read).toBeVisible();
+      await expect(read).toBeDisabled();
+      await expect(read).toHaveAccessibleName(/^Already read:/);
       const done = page.locator('[data-focus-key="done:1"]');
       await expect(done).toBeEnabled();
       const expected = moveFocus ? page.getByRole("searchbox") : done;

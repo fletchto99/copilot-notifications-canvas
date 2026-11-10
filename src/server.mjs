@@ -114,7 +114,7 @@ async function readBody(req) {
   return input;
 }
 
-export async function startServer(inbox, { log = () => {}, preferences, desktop, updates, read, development, developmentAPI } = {}) {
+export async function startServer(inbox, { log = () => {}, preferences, desktop, updates, read, development, developmentAPI, copilot } = {}) {
   const secret = randomBytes(32).toString("hex");
   const inboxUrl = `${developmentAPI?.target.webOrigin ?? "https://github.com"}/notifications`;
   const recoveryPage = recoveryHtml.replace("https://github.com/notifications",
@@ -191,6 +191,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
   };
   const snapshot = () => {
     const state = inbox.snapshot();
+    copilot?.hydrate(state.groups.flatMap(group => group.items));
     orderSubjects(state.groups);
     const selected = new Set(subjectItems.map(item => item.id));
     if (!subjectRefresh && !signal.aborted && inbox.client.now() >= subjectRetryAt && inbox.client.subjectsNeedRefresh(subjectItems)) {
@@ -221,13 +222,15 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         ...group, items: group.items.map(item => {
           const subject = inbox.client.subjectSnapshot(item);
           const failed = subjectFailure && Object.hasOwn(subject, "subjectState");
+          const subjectLinkLoading = !failed && inbox.client.subjectLinkPending(item);
           return {
             ...item, ...subject,
+            ...(copilot ? { copilot: copilot.row({ ...item, ...subject, subjectLinkLoading }) } : {}),
             ...(failed ? {
               subjectStateError: subject.subjectStateError ? `${subject.subjectStateError} ${subjectFailure}` : subjectFailure,
               ...(subject.subjectCheckedAt !== undefined ? { subjectStateStale: true } : {}),
             } : {}),
-            subjectLinkLoading: !failed && inbox.client.subjectLinkPending(item),
+            subjectLinkLoading,
             subjectLoading: selected.has(item.id) && Boolean(subjectRefresh) && !failed && subject.subjectState === null &&
               !subject.subjectStateError && inbox.client.subjectsNeedRefresh([item]),
           };
@@ -238,15 +241,22 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         inboxUrl,
       } : {}),
       ...(updates ? { updates: updates.snapshot() } : {}),
+      ...(copilot ? {
+        copilotOperation: copilot.snapshot(), copilotIntegration: copilot.enabled,
+        confirmCopilotActions: copilot.confirmCopilotActions,
+      } : {}),
     };
   };
-  const settingsSnapshot = async settings => ({
-    ...settings, desktopStatus: desktop?.snapshot() ?? {
-      supported: false, state: "off", message: developmentAPI?.target.custom
-        ? "Desktop notifications are disabled for custom development APIs." : "Desktop notifications are unavailable.",
-    },
-    ...(developmentAPI ? { developmentApi: await developmentAPI.snapshot() } : {}),
-  });
+  const settingsSnapshot = async settings => {
+    copilot?.setSettings(settings);
+    return {
+      ...settings, desktopStatus: desktop?.snapshot() ?? {
+        supported: false, state: "off", message: developmentAPI?.target.custom
+          ? "Desktop notifications are disabled for custom development APIs." : "Desktop notifications are unavailable.",
+      },
+      ...(developmentAPI ? { developmentApi: await developmentAPI.snapshot() } : {}),
+    };
+  };
   const controller = new AbortController();
   const signal = AbortSignal.any([inbox.controller.signal, controller.signal]);
   assertOpen(signal);
@@ -313,7 +323,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         res.end(file.body);
         return;
       }
-      if (!["/api/ready", "/api/state", "/api/subjects", "/api/refresh", "/api/more", "/api/filters", "/api/settings", "/api/development", "/api/read", "/api/done", "/api/updates"].includes(path) &&
+      if (!["/api/ready", "/api/state", "/api/subjects", "/api/refresh", "/api/more", "/api/filters", "/api/settings", "/api/development", "/api/read", "/api/done", "/api/updates", "/api/copilot"].includes(path) &&
           !batchRoutes.has(path)) {
         throw new InboxError("not_found", "Route not found.", 404);
       }
@@ -348,6 +358,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
       if (timeZone !== null || groupBy === "date") groupThreadsByDate([], timeZone);
       const settings = preferences && ["/api/state", "/api/refresh", "/api/more"].includes(path)
         ? await inbox.syncSettings(preferences) : null;
+      if (settings) copilot?.setSettings(settings);
       setSubjectView({ groupBy: groupBy ?? settings?.groupBy ?? subjectView.groupBy, timeZone });
       if (path === "/api/state" || (path === "/api/settings" && req.method === "GET")) {
         if (req.method !== "GET") throw new InboxError("method", "Only GET is supported.", 405);
@@ -364,10 +375,14 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         if (req.method !== "POST") throw new InboxError("method", "Only POST is supported.", 405);
         if (req.headers.origin !== origin) throw new InboxError("origin", "A same-origin request is required.", 403);
         const input = await readBody(req);
-        if (!["/api/subjects", "/api/refresh", "/api/filters", "/api/settings", "/api/development", "/api/read", "/api/done"].includes(path) && !batchRoutes.has(path) && Object.keys(input).length) {
+        if (!["/api/subjects", "/api/refresh", "/api/filters", "/api/settings", "/api/development", "/api/read", "/api/done", "/api/copilot"].includes(path) && !batchRoutes.has(path) && Object.keys(input).length) {
           throw new InboxError("invalid_input", "This action takes an empty object.", 400);
         }
         if (path === "/api/subjects") return json(200, selectSubjects(input));
+        if (path === "/api/copilot") {
+          if (!copilot || developmentAPI?.target.custom) throw new InboxError("copilot_unavailable", "Copilot actions are unavailable in this panel.", 503);
+          return json(202, copilot.request(input));
+        }
         if (path === "/api/updates") {
           if (!updates) throw new InboxError("updates_unavailable", "Release checks are unavailable.", 503);
           void updates.check({ force: true });

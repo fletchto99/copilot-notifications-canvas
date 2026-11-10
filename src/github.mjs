@@ -49,13 +49,13 @@ function subjectKey(item, target) {
   return subjectEndpoint(item, target) ?? workflowRunSearch(item, target)?.key;
 }
 
-function workflowRunURL(run, repository, target) {
+function workflowRunURL(run, repository, target, attempt) {
   const url = `${target.webOrigin}/${repository}/actions/runs/${run.id}`;
   if (!(typeof run.id === "string" || Number.isSafeInteger(run.id)) || !/^[1-9]\d*$/.test(String(run.id)) ||
-      run.html_url !== url) {
+      run.html_url !== url || attempt !== undefined && (!Number.isSafeInteger(attempt) || attempt < 1)) {
     throw new InboxError("run_results_unavailable", "GitHub did not provide an unambiguous workflow run for this check suite.");
   }
-  return url;
+  return attempt === undefined ? url : `${url}/attempts/${attempt}`;
 }
 
 function checkRunLink(body, endpoint, target) {
@@ -67,7 +67,7 @@ function checkRunLink(body, endpoint, target) {
   if (body.total_count !== 1 || body.workflow_runs.length !== 1 || !run ||
       !(typeof run.check_suite_id === "string" || Number.isSafeInteger(run.check_suite_id)) ||
       String(run.check_suite_id) !== match[3]) throw invalid();
-  return workflowRunURL(run, `${match[1]}/${match[2]}`, target);
+  return workflowRunURL(run, `${match[1]}/${match[2]}`, target, run.run_attempt);
 }
 
 function inferredRunLink(body, search, target, link) {
@@ -90,7 +90,7 @@ function inferredRunLink(body, search, target, link) {
   if (candidates.length !== 1) return null;
   const run = candidates[0];
   if (run.status !== "completed" || run.conclusion !== search.state || run.run_attempt !== search.attempt) return null;
-  return `${workflowRunURL(run, search.repository, target)}/attempts/${search.attempt}`;
+  return workflowRunURL(run, search.repository, target, search.attempt);
 }
 
 function failedJobLink(body, search, target, link) {
@@ -122,6 +122,7 @@ function runSnapshot(run, inferred = false, jobs) {
   return {
     ...(run?.state ? {
       url: jobs?.state ?? run.state,
+      subjectRunUrl: jobs?.state && jobs.runUrl ? jobs.runUrl : run.state,
       label: jobs?.state ? inferred ? "Open failed job logs for inferred workflow run" : "Open failed job logs"
         : inferred ? "Open inferred workflow run results" : "Open workflow run results",
       direct: true,
@@ -205,6 +206,26 @@ function subjectAuthorship(body, type) {
   }
   const authorId = userId(body?.user);
   return authorId ? { authorId } : { error: "GitHub did not provide this item's author ID." };
+}
+
+function copilotDetails(body, kind, endpoint) {
+  const invalid = () => new InboxError("copilot_context", "GitHub did not provide verified context for this Copilot action.");
+  if (kind === "viewer") {
+    if (!Number.isSafeInteger(body?.id) || body.id < 1) throw invalid();
+    return { id: body.id };
+  }
+  if (kind === "pull") {
+    subjectState(body, "PullRequest");
+    if (!Number.isSafeInteger(body.user?.id) || body.user.id < 1 || !/^[a-f0-9]{40}$/.test(body.head?.sha)) throw invalid();
+    return { authorId: body.user.id, state: body.state, merged: body.merged, sha: body.head.sha };
+  }
+  const match = /^\/repos\/([^/]+\/[^/]+)\/actions\/runs\/([1-9]\d*)(?:\/attempts\/([1-9]\d*))?$/.exec(endpoint);
+  if (!match || String(body?.id) !== match[2] || body.repository?.full_name?.toLowerCase() !== match[1].toLowerCase() ||
+      body.html_url !== `https://github.com/${match[1]}/actions/runs/${match[2]}` ||
+      !/^[a-f0-9]{40}$/.test(body.head_sha) || !Number.isSafeInteger(body.run_attempt) || body.run_attempt < 1 ||
+      match[3] !== undefined && String(body.run_attempt) !== match[3] ||
+      !FAILED_CHECK_STATES.includes(subjectState(body, "CheckSuite"))) throw invalid();
+  return { runId: match[2], sha: body.head_sha, attempt: body.run_attempt, url: `${body.html_url}/attempts/${body.run_attempt}` };
 }
 
 export function firstPage({ mode = "unread", matchGitHubInbox = true } = {}) {
@@ -330,6 +351,7 @@ export class GitHubClient {
     this.beforeRequest = beforeRequest;
     this.cache = new Map();
     this.subjectCache = new Map();
+    this.copilotCache = new Map();
     this.mergeQueueCache = new Map();
     this.checkRunCache = new Map();
     this.jobCache = new Map();
@@ -382,9 +404,12 @@ export class GitHubClient {
       : this.now() < this.graphqlBlockedUntil ? this.graphqlLastError?.message : undefined : undefined;
     const checkedAt = cached?.checkedAt;
     const queueCheckedAt = typeof queue?.state === "boolean" ? queue.checkedAt : undefined;
-    const run = item.type === "CheckSuite" ? item.runId && endpoint ? { state: item.url } : this.checkRunCache.get(endpoint) : null;
+    const run = item.type === "CheckSuite" ? item.runId && endpoint ? { state: cached?.runUrl ?? item.url } : this.checkRunCache.get(endpoint) : null;
     return {
       subjectState: queue?.state === true ? "merge_queued" : cached?.state ?? null,
+      ...(cached?.authorId && this.copilotCache.get("/user")?.state?.id ? {
+        viewerIsAuthor: cached.authorId === this.copilotCache.get("/user").state.id,
+      } : {}),
       subjectStateError: cached?.error?.message ?? queueError ?? discussionError ?? (endpoint ? null : "GitHub did not provide a supported link for this item's status."),
       ...(checkedAt !== undefined ? {
         subjectCheckedAt: queueCheckedAt === undefined ? checkedAt : Math.min(checkedAt, queueCheckedAt),
@@ -431,12 +456,49 @@ export class GitHubClient {
     await this.refreshSubjects(authors, signal, { stateOnly: true });
   }
 
+  copilotContext(kind, item, signal) {
+    const run = /^https:\/\/github\.com\/([A-Za-z0-9-]+\/[A-Za-z0-9_.-]+)\/actions\/runs\/([1-9]\d*)(?:\/attempts\/([1-9]\d*))?$/
+      .exec(item?.subjectRunUrl ?? item?.url ?? "");
+    const link = /^https:\/\/github\.com\/([A-Za-z0-9-]+\/[A-Za-z0-9_.-]+)\/actions\/runs\/([1-9]\d*)(?:\/(job|attempts)\/([1-9]\d*))?$/
+      .exec(item?.url ?? "");
+    const matchingRun = run && link && run[1] === item.repository && link[1] === run[1] && link[2] === run[2] &&
+      (link[3] !== "attempts" || link[4] === run[3]) && (link[3] !== "job" || run[3] !== undefined);
+    const endpoint = kind === "viewer" ? "/user" : ["pull", "queue"].includes(kind) && item?.type === "PullRequest"
+      ? subjectEndpoint(item, this.target) : kind === "run" && matchingRun
+        ? `/repos/${run[1]}/actions/runs/${run[2]}${run[3] ? `/attempts/${run[3]}` : ""}` : null;
+    if (this.target.custom || !endpoint) throw new InboxError("copilot_context", "Use a confirmed github.com item for this Copilot action.", 400);
+    if (kind === "queue") {
+      return this.#refreshSubject(endpoint, item, signal, "queue", () => true).then(() => {
+        const result = this.mergeQueueCache.get(endpoint);
+        if (result?.error) throw new InboxError(result.error.code, result.error.message);
+        if (typeof result?.state !== "boolean" || !(result.nextRefreshAt > this.now())) {
+          throw this.graphqlLastError ?? new InboxError("copilot_context", "GitHub could not verify merge queue membership. Retry when queue status is available.");
+        }
+        return result.state;
+      });
+    }
+    return this.request(endpoint, signal, "GET", { subjectType: "Copilot", copilot: kind, force: kind === "pull" }).then(result => {
+      if (result.error) throw new InboxError(result.error.code, result.error.message);
+      return result.state;
+    }).catch(error => {
+      if (error instanceof InboxError && error.code !== "closed") {
+        const cached = this.copilotCache.get(endpoint);
+        const now = this.now();
+        this.copilotCache.set(endpoint, { error: { code: error.code, message: error.message },
+          nextRefreshAt: cached?.error && cached.nextRefreshAt > now
+            ? Math.max(cached.nextRefreshAt, error.retryAt ?? 0, this.blockedUntil)
+            : Math.max(error.retryAt ?? 0, this.blockedUntil, now + RETRY_MS) });
+      }
+      throw error;
+    });
+  }
+
   #jobSearch(item) {
     if (item.type !== "CheckSuite") return null;
     const endpoint = subjectEndpoint(item, this.target);
     const inferred = !endpoint;
     const state = inferred ? { state: reportedWorkflow(item.title)?.state } : this.subjectCache.get(endpoint);
-    const run = item.runId && endpoint ? { state: item.url } :
+    const run = item.runId && endpoint ? { state: state?.runUrl ?? item.url } :
       this.checkRunCache.get(endpoint ?? workflowRunSearch(item, this.target)?.key);
     const base = `${this.target.webOrigin}/${item.repository}/actions/runs/`;
     const match = run?.state?.startsWith(base) && /^([1-9]\d*)(?:\/attempts\/([1-9]\d*))?$/.exec(run.state.slice(base.length));
@@ -688,6 +750,7 @@ export class GitHubClient {
         cache.set(endpoint, {
           state: runMatch || runJobs ? null : cached?.state ?? null, checkedAt: cached?.checkedAt,
           ...(cached?.authorship ? { authorship: cached.authorship } : {}),
+          ...(cached?.runUrl ? { runUrl: cached.runUrl } : {}),
           error: { code: error.code, message: error.message },
           nextRefreshAt: Math.max(this.blockedUntil, error.retryAt ?? 0, this.now() + RETRY_MS),
         });
@@ -793,12 +856,12 @@ export class GitHubClient {
     return pending;
   }
 
-  async request(endpoint, signal, method = "GET", { force = false, minSequence = 0, allowCachedDuringBackoff = false, subjectType, mergeQueue = false, checkRun = false, runMatch = null, runJobs = null, beforeWrite } = {}) {
+  async request(endpoint, signal, method = "GET", { force = false, minSequence = 0, allowCachedDuringBackoff = false, subjectType, mergeQueue = false, checkRun = false, runMatch = null, runJobs = null, beforeWrite, copilot } = {}) {
     if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
     const discussion = subjectType === "Discussion";
     const graphql = mergeQueue || discussion;
     let now = this.now();
-    const cache = runJobs ? this.jobCache : checkRun || runMatch ? this.checkRunCache : mergeQueue ? this.mergeQueueCache : subjectType ? this.subjectCache : this.cache;
+    const cache = copilot ? this.copilotCache : runJobs ? this.jobCache : checkRun || runMatch ? this.checkRunCache : mergeQueue ? this.mergeQueueCache : subjectType ? this.subjectCache : this.cache;
     const cached = method === "GET" ? cache.get(endpoint) : undefined;
     if (cached?.error && now < cached.nextRefreshAt) return cached;
     if (allowCachedDuringBackoff && !force && cached && !cached.invalidated &&
@@ -911,6 +974,8 @@ export class GitHubClient {
       let items = cached?.items;
       let next = cached?.next;
       let authorship = cached?.authorship;
+      let authorId = status === 304 ? cached?.authorId : undefined;
+      let runUrl = status === 304 ? cached?.runUrl : undefined;
       if (status === 200) {
         let body;
         try {
@@ -919,17 +984,31 @@ export class GitHubClient {
           throw new InboxError("invalid_response", subjectType
             ? "GitHub returned invalid JSON for this item's status." : "GitHub returned invalid JSON; the previous inbox was kept.");
         }
-        items = runJobs ? failedJobLink(body, runJobs, this.target, headers.link) :
+        if (subjectType === "PullRequest" && Number.isSafeInteger(body?.user?.id) && body.user.id > 0) authorId = body.user.id;
+        items = copilot ? copilotDetails(body, copilot, endpoint) : runJobs ? failedJobLink(body, runJobs, this.target, headers.link) :
           runMatch ? inferredRunLink(body, runMatch, this.target, headers.link) : checkRun ? checkRunLink(body, endpoint, this.target) :
           mergeQueue ? mergeQueueState(body, retry > 0) : discussion ? discussionState(body, retry > 0) :
           subjectType ? subjectState(body, subjectType) : normalizeThreads(body, this.target);
         if (subjectType && !mergeQueue && !checkRun && !runMatch && !runJobs) authorship = subjectAuthorship(body, subjectType);
+        const directRun = subjectType === "CheckSuite" && !runJobs && !checkRun && !runMatch
+          ? /^\/repos\/([^/]+\/[^/]+)\/actions\/runs\/([1-9]\d*)$/.exec(endpoint) : null;
+        if (runJobs && items) {
+          const job = body.jobs.find(job => job.html_url === items);
+          runUrl = `${this.target.webOrigin}/${runJobs.repository}/actions/runs/${runJobs.runId}/attempts/${job.run_attempt}`;
+        } else if (directRun && body.run_attempt !== undefined) {
+          if (String(body.id) !== directRun[2]) {
+            throw new InboxError("run_results_unavailable", "GitHub returned a different workflow run for this notification.");
+          }
+          runUrl = workflowRunURL(body, directRun[1], this.target, body.run_attempt);
+        }
         if (!subjectType) next = nextPage(headers.link, endpoint, this.target);
       }
       if (subjectType) {
         const subject = {
           state: status === 304 ? cached.state : items,
           ...(authorship ? { authorship } : {}),
+          ...(authorId ? { authorId } : {}),
+          ...(runUrl ? { runUrl } : {}),
           checkedAt: fetchedAt,
           nextRefreshAt: Math.max(fetchedAt + poll, this.blockedUntil, graphql ? this.graphqlBlockedUntil : 0),
           etag: headers.etag ?? (status === 304 ? cached.etag : undefined),
@@ -977,6 +1056,7 @@ export class GitHubClient {
   clear() {
     this.cache.clear();
     this.subjectCache.clear();
+    this.copilotCache.clear();
     this.mergeQueueCache.clear();
     this.checkRunCache.clear();
     this.jobCache.clear();

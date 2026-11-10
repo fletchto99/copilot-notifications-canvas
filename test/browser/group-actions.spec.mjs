@@ -31,7 +31,7 @@ for (const action of ["read", "done"]) {
     const group = page.locator(".repo-group").filter({ has: page.locator('[data-focus-key="repo:example/widgets"]') });
     const header = group.locator(".repo-header");
     const headerHeight = (await header.boundingBox()).height;
-    const selected = group.locator(`.mark-${action}`);
+    const selected = group.locator(`.mark-${action}:not([data-already-read="true"])`);
     const other = page.locator('[data-focus-key="done:14"]');
     const animationNames = () => selected.evaluateAll(buttons =>
       buttons.map(button => getComputedStyle(button, "::after").animationName));
@@ -39,6 +39,10 @@ for (const action of ["read", "done"]) {
     try {
       await group.locator(`.repo-${action}`).click();
       await expect(selected).toHaveCount(count);
+      const alreadyRead = group.locator('[data-focus-key="read:2"]');
+      await expect(alreadyRead).toBeVisible();
+      await expect(alreadyRead).toBeDisabled();
+      await expect(alreadyRead).toHaveAttribute("aria-busy", "false");
       await expect.poll(animationNames).toEqual(Array(count).fill("refresh-spin"));
       const progress = group.getByRole("status");
       await expect(progress).toHaveText(`Queued to mark as ${action}...`);
@@ -338,7 +342,7 @@ test("row and group actions lock only overlapping selections and expose independ
     const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
     expect(results.violations).toEqual([]);
     release();
-    await expect(page.locator('[data-focus-key="read:1"]')).toHaveCount(0);
+    await expect(page.locator('[data-focus-key="read:1"]')).toBeDisabled();
     await expect(page.locator('[data-focus-key="done:5"]')).toHaveCount(0);
     await expect(solo).toBeHidden();
     await expect(page.locator('[data-focus-key="done:3"]')).toHaveCount(0);

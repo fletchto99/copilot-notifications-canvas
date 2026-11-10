@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { GitHubClient } from "../src/github.mjs";
+import { GitHubClient, SUBJECT_POLL_MS } from "../src/github.mjs";
 import { apiTarget, normalizeThreads } from "../src/model.mjs";
 import { http, thread } from "./fixtures.mjs";
 
@@ -48,6 +48,44 @@ test("direct run subjects retain a native results link and use the exact run for
   await client.refreshSubjects([item]);
   assert.equal(calls, 1);
   assert.equal(client.subjectSnapshot(item).subjectState, "success");
+});
+
+test("direct run links and job lookups retain the API-provided attempt through revalidation failures", async () => {
+  let now = 0;
+  let checks = 0;
+  const calls = [];
+  const client = new GitHubClient({ now: () => now, run: async args => {
+    calls.push(args.at(-1));
+    if (args.at(-1).includes("/jobs?")) return http({ total_count: 0, jobs: [] });
+    checks++;
+    return checks === 1 ? http({ ...run, run_attempt: 2, status: "completed", conclusion: "failure" }, { etag: '"attempt-2"' })
+      : checks === 2 ? http(null, {}, 304) : http({}, {}, 503);
+  } });
+  const item = suite("https://api.github.com/repos/example/widgets/actions/runs/123");
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await client.refreshSubjects([item]);
+    const snapshot = client.subjectSnapshot(item);
+    assert.equal(snapshot.url, `${run.html_url}/attempts/2`);
+    assert.equal(snapshot.subjectRunUrl, snapshot.url);
+    if (attempt === 2) assert.equal(snapshot.subjectStateStale, true);
+    now += SUBJECT_POLL_MS;
+  }
+  assert.ok(calls.includes("/repos/example/widgets/actions/runs/123/attempts/2/jobs?per_page=100"));
+  assert.ok(!calls.some(path => path.includes("filter=latest")));
+});
+
+test("invalid run identities and attempts cannot become pinned row destinations", async () => {
+  for (const body of [
+    { ...run, id: 124, run_attempt: 2 },
+    ...[0, -1, "2", 9007199254740992].map(run_attempt => ({ ...run, run_attempt })),
+  ]) {
+    const client = new GitHubClient({ run: async () => http({ status: "completed", conclusion: "failure", ...body }) });
+    const item = suite("https://api.github.com/repos/example/widgets/actions/runs/123");
+    await client.refreshSubjects([item]);
+    assert.equal(client.subjectSnapshot(item).subjectState, null);
+    assert.match(client.subjectSnapshot(item).subjectStateError, /workflow run/);
+    assert.equal(client.subjectSnapshot(item).url, run.html_url);
+  }
 });
 
 test("ambiguous, mismatched and unsafe results never replace the Actions fallback", async () => {

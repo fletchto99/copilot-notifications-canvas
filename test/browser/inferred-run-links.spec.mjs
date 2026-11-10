@@ -4,7 +4,7 @@ import { http, thread, workflowRun, workflowJob } from "../fixtures.mjs";
 
 for (const packaged of [false, true]) {
   test.describe(`inferred workflow links (${packaged ? "packaged" : "source"})`, () => {
-    test.use({ packaged });
+    test.use({ packaged, copilotEnabled: true });
 
     test("unique matches open their failed job, ambiguous matches use filtered Actions, and uncertainty is accessible", async ({ page, canvas }) => {
       canvas.rows.splice(0, canvas.rows.length, ...[
@@ -32,6 +32,7 @@ for (const packaged of [false, true]) {
       await expect(first.locator(".subject-icon")).not.toHaveAttribute("title");
       await expect(first.locator(".subject-failure")).toHaveCount(1);
       await expect(first).not.toHaveAttribute("title");
+      await expect(page.locator(".row").first().getByRole("button", { name: /^Investigate CI failures with Copilot:/ })).toBeEnabled();
       await expect.poll(() => canvas.requests.filter(path => path.includes("/actions/runs?")).length).toBe(3);
       for (const [id, name] of [["2", "Ambiguous build"], ["3", "Missing build"]]) {
         const row = page.locator(`[data-focus-key="thread:${id}"]`);
@@ -41,6 +42,7 @@ for (const packaged of [false, true]) {
         expect(url.searchParams.get("query")).toBe(`workflow:"${name}" branch:"main" is:failure`);
         await expect(row.locator(".destination")).toHaveCount(0);
         await expect(row).toHaveAccessibleName(/Open filtered repository Actions/);
+        await expect(row.locator("..").getByRole("button", { name: /^Investigate CI failures with Copilot:/ })).toBeDisabled();
       }
       for (const theme of ["light", "dark"]) {
         await page.locator("#settings-toggle").click();

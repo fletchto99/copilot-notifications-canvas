@@ -20,8 +20,9 @@ export const test = base.extend({
   packaged: [false, { option: true }],
   development: [undefined, { option: true }],
   developmentApiBaseUrl: [undefined, { option: true }],
-  canvas: async ({ page, context, assetFailure, desktopEnabled, packaged, development, developmentApiBaseUrl }, use) => {
-    const canvas = await createCanvasFixture({ assetFailure, desktopEnabled, packaged, development, developmentApiBaseUrl });
+  copilotEnabled: [false, { option: true }],
+  canvas: async ({ page, context, assetFailure, desktopEnabled, packaged, development, developmentApiBaseUrl, copilotEnabled }, use) => {
+    const canvas = await createCanvasFixture({ assetFailure, desktopEnabled, packaged, development, developmentApiBaseUrl, copilotEnabled });
     const { errors, warnings } = canvas;
     const consoleErrors = [];
     const expectedConsoleErrors = [];

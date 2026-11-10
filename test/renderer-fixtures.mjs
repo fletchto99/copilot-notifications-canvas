@@ -27,7 +27,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
   initialRows, subjectStates = {}, subjectsLoading = false, onWrite, onFetch, onState, onFilters, onActionResponse, initialOffline = false, release, development = null,
   onUpdates, clipboardFailure = false, onSettings, onSubjects, developmentApi, onDevelopment, retainDisabledFocus = false, desktopPlatform = "darwin", desktopStatus = {},
   storedSettings = { autoOpen: false, darkMode: null, desktopNotifications: false, desktopSound: "default" },
-  appColorMode = "light", systemDark = false, navigatorPlatform, userAgentData } = {}) {
+  appColorMode = "light", systemDark = false, navigatorPlatform, userAgentData, onCopilot, copilotOperation } = {}) {
   const calls = [];
   const subjectSelections = [];
   let subjectSelectionVersion = 0;
@@ -203,8 +203,11 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     ["batch-progress", "batch-buttons", "batch-retry", "batch-dismiss"].some(id => ids.get(id) === node);
   ids.get("settings").contains = node =>
     node === ids.get("settings") ||
-    ["settings-toggle", "settings-panel", "show-notifications", "auto-open", "theme", "group-by", "hide-empty-tabs", "keyboard-shortcuts", "check-updates", "desktop-notifications", "desktop-sound",
+    ["settings-toggle", "settings-panel", "show-notifications", "auto-open", "theme", "group-by", "copilot-integration", "copilot-confirmations", "hide-empty-tabs", "keyboard-shortcuts", "check-updates", "desktop-notifications", "desktop-sound",
       "development-api", "development-api-url", "development-api-save"].some(id => ids.get(id).contains(node));
+  ids.get("copilot-dialog").contains = node => node === ids.get("copilot-dialog") ||
+    ["copilot-close", "copilot-start", "copilot-skip-confirmation", "copilot-sessions"]
+      .some(id => ids.get(id).contains(node));
   const document = {
     hidden,
     hasFocus: () => documentFocused,
@@ -263,7 +266,9 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
   } }));
   const snapshot = () => {
     const state = inbox.snapshot();
-    return { ...state, subjectSelectionVersion, subjectsLoading, updates: releaseMetadata, development, ...apiState(),
+    return { ...state, subjectSelectionVersion, subjectsLoading, updates: releaseMetadata, development, copilotOperation,
+      copilotIntegration: storedSettings.copilotIntegration ?? true,
+      confirmCopilotActions: storedSettings.confirmCopilotActions ?? true, ...apiState(),
       groups: state.groups.map(group => ({ ...group, items: group.items.map(item => {
         const subject = { ...inbox.client.subjectSnapshot(item), ...subjectStates[item.id] };
         return { ...item, ...subject,
@@ -306,6 +311,10 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     fetch: async (path, options) => {
       if (offline) throw new Error("Synthetic connection failure");
       calls.push({ path, options });
+      if (path === "/api/copilot") {
+        copilotOperation = await onCopilot(JSON.parse(options.body));
+        return { ok: true, json: async () => copilotOperation };
+      }
       if (path === "/api/subjects") {
         const input = JSON.parse(options.body);
         const result = await onSubjects?.(input);
@@ -337,7 +346,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
         }
         const capabilities = desktopCapabilities(desktopPlatform);
         inbox.setMatchGitHubInbox(storedSettings.matchGitHubInbox ?? true);
-        return { ok: true, json: async () => ({ matchGitHubInbox: true, hideEmptyTabs: true, keyboardShortcuts: true, desktopNotifications: false, desktopSound: "default", ...storedSettings,
+        return { ok: true, json: async () => ({ matchGitHubInbox: true, copilotIntegration: true, confirmCopilotActions: true, hideEmptyTabs: true, keyboardShortcuts: true, desktopNotifications: false, desktopSound: "default", ...storedSettings,
           developmentApi, desktopStatus: { ...capabilities, state: "watching",
             message: capabilities.supported ? "Watching in the background." : capabilities.help, ...desktopStatus },
         }) };
@@ -410,6 +419,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     setSubjectsLoading(value) { subjectsLoading = value; },
     setOffline(value) { offline = value; },
     setRelease(value) { releaseMetadata = { ...releaseMetadata, ...value }; },
+    setCopilotOperation(value) { copilotOperation = value; },
     intersect: value => intersect([{ isIntersecting: value }]),
   };
 }

@@ -28,7 +28,7 @@ export function parseScreenshotArgs(args) {
 }
 
 export async function renderReadmeScreenshot(browser, expect, { create = createCanvasFixture } = {}) {
-  const canvas = await create({ development: false, now: () => readmeTime });
+  const canvas = await create({ development: false, now: () => readmeTime, copilotEnabled: true });
   let context;
   try {
     const rows = readmeRows();
@@ -57,9 +57,13 @@ export async function renderReadmeScreenshot(browser, expect, { create = createC
       nodes.map(node => node.getAttribute("aria-label").split(".")[0])),
     { timeout: 15_000 }).toEqual(readmeSubjectLabels);
     await expect(page.locator(".subject-loading")).toHaveCount(0);
-    await expect(page.locator("#attention-mine")).toHaveText("Mine (3)");
-    await expect(page.locator(".notification-mine:visible")).toHaveCount(3);
+    await expect(page.locator("#attention-mine")).toHaveText("Mine (4)");
+    await expect(page.locator(".notification-mine:visible")).toHaveCount(4);
     await expect(page.locator('.row-link[aria-disabled="true"]')).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "PR merged: #237" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "PR in merge queue: #248" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Continue with Copilot: #86" })).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Investigate CI failures with Copilot:/ })).toBeEnabled();
     await expect(page.locator("html")).toHaveAttribute("data-notification-theme", "dark");
     await expect(page.locator("#settings-toggle")).toHaveAttribute("aria-expanded", "false");
     for (const id of ["settings-panel", "notice", "settings-error", "update-banner", "development-build", "empty", "more"]) {

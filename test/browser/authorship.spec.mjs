@@ -46,7 +46,7 @@ for (const packaged of [false, true]) {
         })))).toEqual(Array(3).fill({ before: "mention", after: "TIME" }));
         await expect(page.locator('[data-focus-key="thread:5"]')).toHaveCount(0);
         await expect(page.locator('[data-focus-key="thread:4"]')).toHaveCount(0);
-        await expect(page.locator('[data-focus-key="read:2"]')).toHaveCount(0);
+        await expect(page.locator('[data-focus-key="read:2"]')).toBeDisabled();
         await page.getByRole("searchbox").fill("item 2");
         await expect(page.locator(".row")).toHaveCount(1);
         await expect(page.locator("#attention-mine")).toHaveText("Mine (3+)");

@@ -576,7 +576,8 @@ input::placeholder {
   font-size: 12px;
 }
 
-#shortcuts-dialog {
+#shortcuts-dialog,
+#copilot-dialog {
   width: min(480px, calc(100% - 32px));
   max-height: calc(100% - 32px);
   padding: 20px;
@@ -586,7 +587,8 @@ input::placeholder {
   background: var(--canvas-background);
 }
 
-#shortcuts-dialog::backdrop {
+#shortcuts-dialog::backdrop,
+#copilot-dialog::backdrop {
   background: rgb(0 0 0 / 40%);
 }
 
@@ -598,7 +600,8 @@ input::placeholder {
   margin-bottom: 16px;
 }
 
-#shortcuts-dialog p {
+#shortcuts-dialog p,
+#copilot-dialog p {
   margin-top: 12px;
   color: var(--muted);
 }
@@ -873,6 +876,22 @@ summary::marker {
   border-top: 1px solid var(--border);
 
   --row-actions-width: 68px;
+  --row-action-columns: 2;
+}
+
+:root[data-copilot-integration="true"] .row {
+  --row-actions-width: 104px;
+  --row-action-columns: 3;
+}
+
+#copilot-reference {
+  overflow-wrap: anywhere;
+}
+
+#copilot-remember .switch-toggle {
+  width: 100%;
+  text-align: left;
+  white-space: normal;
 }
 
 :root[data-pointer-hover-suppressed="true"]
@@ -909,13 +928,30 @@ summary::marker {
 
 .row-actions {
   grid-area: 1 / 2;
-  display: flex;
+  display: grid;
+  grid-template: 32px / repeat(var(--row-action-columns), 32px);
   align-self: stretch;
+  place-content: center end;
   align-items: center;
-  justify-content: flex-end;
   gap: 4px;
   margin-right: 12px;
   min-width: var(--row-actions-width);
+}
+
+.row-actions > .tooltip-anchor {
+  grid-row: 1;
+}
+
+.row-actions > .tooltip-anchor:has(.copilot-action) {
+  grid-column: 1 / 2;
+}
+
+.row-actions > .tooltip-anchor:has(.mark-read) {
+  grid-column: -3 / -2;
+}
+
+.row-actions > .tooltip-anchor:has(.mark-done) {
+  grid-column: -2 / -1;
 }
 
 .repo-actions .icon-button,

@@ -59,9 +59,41 @@ const batchFocusKeys = new Map();
 const batchControlItems = new WeakMap();
 let primaryBatchView;
 let shortcutReturnFocus;
+let copilotOperation;
+let copilotReturnFocus;
+let copilotRequestPending = false;
+let copilotDialogKey;
+let copilotAwaitingResult = false;
+let skipCopilotConfirmation = false;
+/*!
+ * Copilot icon: https://github.com/primer/octicons/blob/main/icons/copilot-16.svg
+ *
+ * MIT License
+ *
+ * Copyright (c) 2026 GitHub Inc.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
 const iconPaths = {
   read: "M3 9 12 3l9 6v11H3V9Zm0 0 9 6 9-6M3 20l6-7m12 7-6-7",
   done: "m5 12 4 4L19 6",
+  copilot: "M7.998 15.035c-4.562 0-7.873-2.914-7.998-3.749V9.338c.085-.628.677-1.686 1.588-2.065.013-.07.024-.143.036-.218.029-.183.06-.384.126-.612-.201-.508-.254-1.084-.254-1.656 0-.87.128-1.769.693-2.484.579-.733 1.494-1.124 2.724-1.261 1.206-.134 2.262.034 2.944.765.05.053.096.108.139.165.044-.057.094-.112.143-.165.682-.731 1.738-.899 2.944-.765 1.23.137 2.145.528 2.724 1.261.566.715.693 1.614.693 2.484 0 .572-.053 1.148-.254 1.656.066.228.098.429.126.612.012.076.024.148.037.218.924.385 1.522 1.471 1.591 2.095v1.872c0 .766-3.351 3.795-8.002 3.795Zm0-1.485c2.28 0 4.584-1.11 5.002-1.433V7.862l-.023-.116c-.49.21-1.075.291-1.727.291-1.146 0-2.059-.327-2.71-.991A3.222 3.222 0 0 1 8 6.303a3.24 3.24 0 0 1-.544.743c-.65.664-1.563.991-2.71.991-.652 0-1.236-.081-1.727-.291l-.023.116v4.255c.419.323 2.722 1.433 5.002 1.433ZM6.762 2.83c-.193-.206-.637-.413-1.682-.297-1.019.113-1.479.404-1.713.7-.247.312-.369.789-.369 1.554 0 .793.129 1.171.308 1.371.162.181.519.379 1.442.379.853 0 1.339-.235 1.638-.54.315-.322.527-.827.617-1.553.117-.935-.037-1.395-.241-1.614Zm4.155-.297c-1.044-.116-1.488.091-1.681.297-.204.219-.359.679-.242 1.614.091.726.303 1.231.618 1.553.299.305.784.54 1.638.54.922 0 1.28-.198 1.442-.379.179-.2.308-.578.308-1.371 0-.765-.123-1.242-.37-1.554-.233-.296-.693-.587-1.713-.7Z M6.25 9.037a.75.75 0 0 1 .75.75v1.501a.75.75 0 0 1-1.5 0V9.787a.75.75 0 0 1 .75-.75Zm4.25.75v1.501a.75.75 0 0 1-1.5 0V9.787a.75.75 0 0 1 1.5 0Z",
 };
 const issueOutline = "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z";
 const pullRequestNodes = "M8 5a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM8 19a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM20 19a2 2 0 1 1-4 0 2 2 0 0 1 4 0Z";
@@ -149,7 +181,13 @@ function setControlText(control, text) {
 }
 
 function actionIcon(action) {
-  return svgIcon(iconPaths[action], 18);
+  const icon = svgIcon(iconPaths[action], 18);
+  if (action === "copilot") {
+    icon.setAttribute("viewBox", "0 0 16 16");
+    icon.setAttribute("fill", "currentColor");
+    icon.setAttribute("stroke", "none");
+  }
+  return icon;
 }
 
 function svgIcon(d, size) {
@@ -355,13 +393,17 @@ function renderSettings() {
   for (const [id, key] of [
     ["auto-open", "autoOpen"],
     ["desktop-notifications", "desktopNotifications"],
+    ["copilot-integration", "copilotIntegration"],
+    ["copilot-confirmations", "confirmCopilotActions"],
     ["hide-empty-tabs", "hideEmptyTabs"],
     ["keyboard-shortcuts", "keyboardShortcuts"],
   ]) {
     if (preferences) {
-      $(id).setAttribute("aria-checked", String(Boolean(preferences[key])));
+      $(id).setAttribute("aria-checked", String(key === "copilotIntegration" ? copilotEnabled() :
+        key === "confirmCopilotActions" ? copilotConfirmations() : Boolean(preferences[key])));
     }
     $(id).disabled = settingsBusy || !preferences ||
+      (id === "copilot-confirmations" && !copilotEnabled()) ||
       (id === "desktop-notifications" && !preferences.desktopStatus?.supported);
   }
   const select = $("desktop-sound");
@@ -433,9 +475,14 @@ async function settingsRequest(input, quiet = false, path = "settings") {
     $("settings-status").hidden = !$("settings-status").textContent;
   }
   try {
+    if (input && ["copilotIntegration", "confirmCopilotActions"].some(key => Object.hasOwn(input, key))) await pollPromise;
     preferences = await api(path, input);
     settingsError = "";
-    if (state) state.settingsError = null;
+    if (state) {
+      state.settingsError = null;
+      state.copilotIntegration = preferences.copilotIntegration;
+      state.confirmCopilotActions = preferences.confirmCopilotActions;
+    }
     render();
     refreshInbox = input && Object.hasOwn(input, "matchGitHubInbox");
     $("settings-status").textContent = "";
@@ -454,6 +501,7 @@ async function settingsRequest(input, quiet = false, path = "settings") {
       void settingsRequest(next.input, false, next.path);
     }
     if (refreshInbox) void update("refresh", {});
+    else if (input && ["copilotIntegration", "confirmCopilotActions"].some(key => Object.hasOwn(input, key))) void update();
   }
 }
 
@@ -735,7 +783,7 @@ function openShortcuts() {
 function handleShortcut(event) {
   if (!visible() || !document.hasFocus() || !preferences?.keyboardShortcuts || event.defaultPrevented ||
       event.isComposing || event.keyCode === 229 || event.ctrlKey || event.metaKey || event.altKey ||
-      $("settings").open || $("shortcuts-dialog").open ||
+      $("settings").open || $("shortcuts-dialog").open || $("copilot-dialog").open ||
       event.target?.closest("input, textarea, select, [contenteditable], [role=textbox]")) return;
   if (event.key === "?") {
     event.preventDefault();
@@ -777,7 +825,7 @@ function restoreFocus(previous, preferred) {
   if (current && current !== previous && current !== document.body && current !== document.documentElement &&
       !(key && current.dataset?.focusKey === key)) return;
   let target = preferred ?? (key ? focusKey(key) : $(previous.id));
-  if (!target && key?.startsWith("read:")) target = focusKey(`done:${key.slice(5)}`);
+  if ((!target || target.dataset.alreadyRead === "true") && key?.startsWith("read:")) target = focusKey(`done:${key.slice(5)}`);
   for (let node = target; node; node = node.parentNode) {
     if (node.hidden) {
       target = null;
@@ -938,7 +986,8 @@ function renderBatchView(batch, view) {
 
 function schedule() {
   clearTimeout(timer);
-  if (visible()) timer = setTimeout(tick, batchBusy || marking.size || batchLocked() || state?.subjectsLoading && !connectionError ? 1000 : 5000);
+  if (visible()) timer = setTimeout(tick, batchBusy || marking.size || batchLocked() || copilotWorking() ||
+    state?.subjectsLoading && !connectionError ? 1000 : 5000);
 }
 
 async function performUpdate(path, input) {
@@ -1095,6 +1144,7 @@ function bindTooltip(control, anchor) {
     positionTooltip(anchor);
   };
   control.addEventListener("pointerenter", show);
+  anchor.addEventListener("pointerenter", show);
   control.addEventListener("focus", () => {
     setTooltipKeyboard(control, !pointerInteraction && control.matches(":focus-visible"));
     show();
@@ -1156,10 +1206,12 @@ function renderControls() {
     view.status.dataset.groupKey = key;
   }
   for (const button of $("groups").querySelectorAll("button")) {
+    if (button.dataset.copilot) continue;
+    const alreadyRead = button.dataset.alreadyRead === "true";
     if (!button.dataset.disclosure && !button.dataset.batchControl) {
       const blocked = actionsBlocked || locked.has(button.dataset.threadId) ||
       (batchControlItems.get(button) ?? []).some(id => locked.has(id)) ||
-      button.dataset.count === "0";
+      button.dataset.count === "0" || alreadyRead;
       if (button.dataset.batchAction) {
         button.disabled = false;
         button.setAttribute("aria-disabled", String(blocked));
@@ -1169,11 +1221,11 @@ function renderControls() {
     }
     if (button.dataset.threadId) {
       const write = state?.threadWrites.find(write => write.id === button.dataset.threadId && write.action === button.dataset.action);
-      const pending = write || marking.get(button.dataset.threadId)?.action === button.dataset.action ||
-        pendingRows.get(button.dataset.threadId) === button.dataset.action;
+      const pending = !alreadyRead && (write || marking.get(button.dataset.threadId)?.action === button.dataset.action ||
+        pendingRows.get(button.dataset.threadId) === button.dataset.action);
       button.setAttribute("aria-busy", String(Boolean(pending)));
       button.dataset.writeState = pending ? write?.inFlight ? "active" : "queued" : "idle";
-      const label = `${pending ? write?.inFlight ? "Marking" : "Queued to mark" : "Mark"} as ${button.dataset.action}`;
+      const label = alreadyRead ? "Already read" : `${pending ? write?.inFlight ? "Marking" : "Queued to mark" : "Mark"} as ${button.dataset.action}`;
       button.parentNode.querySelectorAll(".tooltip-content")[0].textContent = label;
     }
     if (button.dataset.batchAction) {
@@ -1207,7 +1259,7 @@ function renderControls() {
     ...[...$("groups").querySelectorAll("button")].filter(button => button.dataset.action)
       .map(button => [button, button.dataset.action === "read" ? "i" : "Shift+e"]),
   ]) {
-    if (preferences?.keyboardShortcuts) control.setAttribute("aria-keyshortcuts", keys);
+    if (preferences?.keyboardShortcuts && control.dataset.alreadyRead !== "true") control.setAttribute("aria-keyshortcuts", keys);
     else control.removeAttribute("aria-keyshortcuts");
   }
 }
@@ -1274,7 +1326,9 @@ function createBatchControls({ repository, date, timeZone, selectionKey, items, 
 }
 
 function renderRowSubject(view, item) {
-  const key = JSON.stringify(item);
+  const copilot = copilotEnabled() ? item.copilot : null;
+  const working = copilotWorking();
+  const key = JSON.stringify([item, Boolean(copilot), working, copilotOperation?.id, copilotOperation?.message]);
   if (key === view.key) return;
   view.key = key;
   const loading = item.subjectLinkLoading === true;
@@ -1293,6 +1347,162 @@ function renderRowSubject(view, item) {
   view.mine.hidden = item.mine !== true;
   view.authorship.textContent = item.authorshipError ? `Authorship unavailable. ${item.authorshipError}` :
     item.mine === null ? "Authorship not checked yet." : "";
+  if (view.copilot) {
+    if (copilot && !view.copilot.button) {
+      const { anchor } = view.copilot;
+      const button = element("button", "icon-button copilot-action");
+      const tooltip = element("span", "tooltip");
+      const tooltipContent = element("span", "tooltip-content");
+      tooltip.id = `row-copilot-${item.id}-tooltip`;
+      tooltip.setAttribute("role", "tooltip");
+      tooltip.append(tooltipContent);
+      button.type = "button";
+      button.dataset.focusKey = `copilot:${item.id}`;
+      button.dataset.threadId = item.id;
+      button.dataset.copilot = "true";
+      button.setAttribute("aria-describedby", tooltip.id);
+      button.append(actionIcon("copilot"));
+      bindTooltip(button, anchor);
+      button.addEventListener("click", () => {
+        if (!button.disabled) openCopilot(item.id, button);
+      });
+      anchor.append(button, tooltip);
+      view.copilot.button = button;
+      view.copilot.tooltip = tooltipContent;
+    }
+    const wasFocused = view.copilot.button === document.activeElement;
+    view.copilot.anchor.hidden = !copilot;
+    if (!view.copilot.button) return;
+    const pending = working && copilotOperation?.id === item.id;
+    view.copilot.button.disabled = !copilot?.enabled || working;
+    view.copilot.button.setAttribute("aria-busy", String(pending));
+    view.copilot.button.setAttribute("aria-label", `${item.copilot?.label ?? "Work with Copilot"}: ${notificationTitle(item, "Untitled notification")}`);
+    setControlText(view.copilot.tooltip, pending ? copilotOperation?.message ?? "Opening Copilot..." :
+      item.copilot?.reason || item.copilot?.label || "Work with Copilot");
+    if ((!copilot || !copilot.enabled && !pending) && wasFocused) restoreFocus(view.copilot.button, view.link);
+  }
+}
+
+function copilotEnabled() {
+  return state?.copilotIntegration ?? preferences?.copilotIntegration ?? true;
+}
+
+function copilotConfirmations() {
+  return state?.confirmCopilotActions ?? preferences?.confirmCopilotActions ?? true;
+}
+
+function copilotWorking() {
+  return copilotRequestPending || ["preparing", "starting"].includes(copilotOperation?.status);
+}
+
+function copilotRememberInput() {
+  return skipCopilotConfirmation ? { skipConfirmation: true } : {};
+}
+
+function renderCopilot() {
+  const operation = !copilotEnabled() && copilotOperation?.status === "ready"
+    ? { id: copilotOperation.id, status: "error", message: "Copilot integration is off. Enable it in Settings to start a handoff." }
+    : copilotOperation;
+  const dialog = $("copilot-dialog");
+  const working = copilotWorking();
+  if (copilotAwaitingResult && ["ready", "error"].includes(operation?.status) && !dialog.open && visible()) {
+    dialog.showModal();
+    $("copilot-close").focus();
+  }
+  if (["started", "opened"].includes(operation?.status)) {
+    copilotAwaitingResult = false;
+    if (!copilotConfirmations() && dialog.open) dialog.close();
+  }
+  $("copilot-feedback").hidden = !working || dialog.open;
+  $("copilot-feedback").textContent = working ? operation?.message ?? "Opening Copilot..." : "";
+  if (!dialog.open || !operation) return;
+  if (["ready", "error"].includes(operation.status)) copilotAwaitingResult = false;
+  const actionFocused = document.activeElement === $("copilot-start") ||
+    document.activeElement === $("copilot-skip-confirmation") || $("copilot-sessions").contains(document.activeElement);
+  $("copilot-title").textContent = operation.label ?? "Work with Copilot";
+  const inferred = operation.inferred
+    ? "This run was matched from notification metadata, not linked by GitHub. Confirm the run and attempt below. " : "";
+  $("copilot-status").textContent = operation.message ?? inferred + (operation.status === "preparing" ? "Checking the selected item and available sessions..." :
+    operation.status === "starting" ? "Opening Copilot. Check the app for any permission or repository trust requests." :
+      operation.sessions?.length ? "A matching session already exists. Open it without sending instructions, or start a separate summary-first session if you need a fresh start. Existing sessions and their work are left untouched." :
+        "Copilot will summarize this item first, then investigate read-only. Implementation and GitHub changes require your approval.");
+  $("copilot-status").setAttribute("role", operation.status === "error" ? "alert" : "status");
+  $("copilot-reference").textContent = operation.url ?? "";
+  $("copilot-reference").hidden = !operation.url;
+  $("copilot-clone").hidden = !operation.needsClone;
+  $("copilot-clone").textContent = operation.canClone
+    ? `This repository is not configured in Copilot. Starting a new session will clone ${operation.repository} to this computer and may use significant disk space. Opening an existing session does not clone it.`
+    : "To start a new session, add this repository in Copilot first, then reopen this action.";
+  const key = JSON.stringify([operation.status, operation.token, operation.sessions]);
+  if (key !== copilotDialogKey) {
+    copilotDialogKey = key;
+    skipCopilotConfirmation = false;
+    $("copilot-skip-confirmation").setAttribute("aria-checked", "false");
+    const buttons = document.createDocumentFragment();
+    if (operation.status === "ready") {
+      for (const session of operation.sessions) {
+        const button = element("button", "", `Open existing session: ${session.name}`);
+        button.type = "button";
+        button.addEventListener("click", () => requestCopilot({
+          id: operation.id, token: operation.token, sessionId: session.id,
+          ...copilotRememberInput(),
+        }));
+        buttons.append(button);
+      }
+    }
+    $("copilot-sessions").replaceChildren(buttons);
+  }
+  for (const button of $("copilot-sessions").querySelectorAll("button")) button.disabled = working;
+  $("copilot-remember").hidden = operation.status !== "ready" || !operation.canRemember || !operation.confirmCopilotActions;
+  $("copilot-skip-confirmation").disabled = working;
+  const start = $("copilot-start");
+  start.hidden = operation.status !== "ready" || operation.needsClone && !operation.canClone;
+  start.disabled = working;
+  setControlText(start, operation.needsClone ? operation.sessions?.length ? "Clone repository and start a new session" : "Clone repository and start" :
+    operation.sessions?.length ? "Start a new session" : "Start session");
+  setControlText($("copilot-close"), working ? "Close" : operation.status === "ready" ? "Cancel" : "Close");
+  if (actionFocused && working) $("copilot-close").focus({ preventScroll: true });
+}
+
+async function requestCopilot(input) {
+  if (copilotRequestPending || !copilotEnabled()) return;
+  const previous = copilotOperation;
+  copilotAwaitingResult = true;
+  copilotRequestPending = true;
+  copilotOperation = { id: input.id, status: input.token ? "starting" : "preparing" };
+  render();
+  try {
+    copilotOperation = await api("copilot", input);
+    if (state) state.copilotOperation = copilotOperation;
+    await pollPromise;
+    void update();
+  } catch (error) {
+    copilotOperation = { id: input.id, status: "error", message: `${error.message || "The Copilot request failed."} Check Copilot before retrying; a session may already have been created.` };
+    if (state) state.copilotOperation = copilotOperation;
+  } finally {
+    copilotRequestPending = false;
+    if (previous?.id !== input.id) copilotDialogKey = undefined;
+    render();
+    schedule();
+  }
+}
+
+function openCopilot(id, button) {
+  button.focus({ preventScroll: true });
+  copilotReturnFocus = button.dataset.focusKey;
+  closeSettings();
+  dismissTooltips();
+  const direct = !copilotConfirmations();
+  if (!direct) {
+    $("copilot-dialog").showModal();
+    $("copilot-close").focus();
+  }
+  if (["preparing", "starting"].includes(state?.copilotOperation?.status)) {
+    copilotOperation = state.copilotOperation;
+    renderCopilot();
+    return;
+  }
+  void requestCopilot({ id, ...(direct ? { direct: true } : {}) });
 }
 
 function renderGroups(groups, fallbackFocusKey, completedRows = []) {
@@ -1421,24 +1631,36 @@ function renderGroups(groups, fallbackFocusKey, completedRows = []) {
       }
       content.append(metadata);
       const actions = element("div", "row-actions");
-      for (const action of item.unread ? ["read", "done"] : ["done"]) {
+      if (Object.hasOwn(item, "copilot")) {
+        const anchor = element("div", "tooltip-anchor");
+        actions.append(anchor);
+        view.copilot = { anchor };
+        view.key = undefined;
+        renderRowSubject(view, item);
+      }
+      for (const action of ["read", "done"]) {
+        const alreadyRead = action === "read" && !item.unread;
+        const label = alreadyRead ? "Already read" : `Mark as ${action}`;
         const anchor = element("div", "tooltip-anchor");
         const button = element("button", `icon-button mark-${action}`);
         const tooltip = element("span", "tooltip");
         tooltip.id = `row-${action}-${item.id}-tooltip`;
         tooltip.setAttribute("role", "tooltip");
-        tooltip.append(element("span", "tooltip-content", `Mark as ${action}`));
+        tooltip.append(element("span", "tooltip-content", label));
         button.type = "button";
         button.dataset.focusKey = `${action}:${item.id}`;
         button.dataset.threadId = item.id;
         button.dataset.action = action;
-        button.disabled = busy || locked.has(item.id) || Boolean(pendingFilters);
-        button.setAttribute("aria-label", `Mark as ${action}: ${notificationTitle(item, "Untitled notification")}`);
+        if (alreadyRead) button.dataset.alreadyRead = "true";
+        button.disabled = alreadyRead || busy || locked.has(item.id) || Boolean(pendingFilters);
+        button.setAttribute("aria-label", `${label}: ${notificationTitle(item, "Untitled notification")}`);
         button.setAttribute("aria-describedby", tooltip.id);
-        button.setAttribute("aria-busy", String(marking.get(item.id)?.action === action));
+        button.setAttribute("aria-busy", String(!alreadyRead && marking.get(item.id)?.action === action));
         button.append(actionIcon(action));
         bindTooltip(button, anchor);
-        button.addEventListener("click", () => markThread(item.id, action));
+        button.addEventListener("click", () => {
+          if (!button.disabled) return markThread(item.id, action);
+        });
         anchor.append(button, tooltip);
         actions.append(anchor);
       }
@@ -1459,11 +1681,14 @@ function renderGroups(groups, fallbackFocusKey, completedRows = []) {
     let target = focusKey(pending ? rowFocusKey(pending) : focused) ?? focusKey(fallbackFocusKey);
     if (target?.dataset.count === "0") target = groupFocus(focused);
     // Pending actions restore focus once their replacement controls are enabled.
-    if (!target?.disabled) restoreFocus(previousFocus, target);
+    if (!target?.disabled || target.dataset.alreadyRead === "true") restoreFocus(previousFocus, target);
   }
 }
 
 function render(fallbackFocusKey) {
+  document.documentElement.dataset.copilotIntegration = String(copilotEnabled());
+  if (!copilotRequestPending && state?.copilotOperation) copilotOperation = state.copilotOperation;
+  renderCopilot();
   const completedRows = state ? reconcileRows() : [];
   renderSettingsError();
   renderUpdates(state?.updates);
@@ -1708,6 +1933,16 @@ $("theme").addEventListener("change", () => {
 $("group-by").addEventListener("change", () => {
   if (preferences && !$("group-by").disabled) void settingsRequest({ groupBy: $("group-by").value });
 });
+$("copilot-integration").addEventListener("click", () => {
+  if (preferences && !$("copilot-integration").disabled) {
+    void settingsRequest({ copilotIntegration: !copilotEnabled() });
+  }
+});
+$("copilot-confirmations").addEventListener("click", () => {
+  if (preferences && !$("copilot-confirmations").disabled) {
+    void settingsRequest({ confirmCopilotActions: !copilotConfirmations() });
+  }
+});
 $("hide-empty-tabs").addEventListener("click", () => {
   if (preferences && !$("hide-empty-tabs").disabled) {
     void settingsRequest({ hideEmptyTabs: !preferences.hideEmptyTabs });
@@ -1723,6 +1958,25 @@ $("shortcuts-toggle").addEventListener("click", () => {
   openShortcuts();
 });
 $("shortcuts-close").addEventListener("click", () => $("shortcuts-dialog").close());
+$("copilot-close").addEventListener("click", () => $("copilot-dialog").close());
+$("copilot-dialog").addEventListener("close", () => {
+  copilotAwaitingResult = false;
+  const previous = $("copilot-dialog").contains(document.activeElement) ? document.activeElement : $("copilot-close");
+  restoreFocus(previous, focusKey(copilotReturnFocus) ?? $("search"));
+});
+$("copilot-skip-confirmation").addEventListener("click", () => {
+  if ($("copilot-skip-confirmation").disabled) return;
+  skipCopilotConfirmation = !skipCopilotConfirmation;
+  $("copilot-skip-confirmation").setAttribute("aria-checked", String(skipCopilotConfirmation));
+});
+$("copilot-start").addEventListener("click", () => {
+  if (copilotOperation?.status !== "ready") return;
+  void requestCopilot({
+    id: copilotOperation.id, token: copilotOperation.token, clone: copilotOperation.needsClone,
+    ...(copilotOperation.sessions?.length ? { startNew: true } : {}),
+    ...copilotRememberInput(),
+  });
+});
 $("shortcuts-dialog").addEventListener("close", () => {
   const previous = shortcutReturnFocus;
   const target = previous?.dataset?.focusKey ? focusKey(previous.dataset.focusKey) : $(previous?.id);
@@ -1762,6 +2016,11 @@ document.addEventListener("keydown", event => {
     return;
   }
   if (event.key !== "Escape") return handleShortcut(event);
+  if ($("copilot-dialog").open) {
+    event.preventDefault();
+    $("copilot-dialog").close();
+    return;
+  }
   if ($("shortcuts-dialog").open) {
     event.preventDefault();
     $("shortcuts-dialog").close();

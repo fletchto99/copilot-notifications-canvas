@@ -54,7 +54,7 @@ for (const packaged of [false, true]) {
     }
 
     for (const width of [320, 960]) {
-      test(`a second click in the retired Read position cannot open a row at ${width}px`, async ({ page, canvas }) => {
+      test(`Already read stays visible, skips Tab, and ignores repeated clicks at ${width}px`, async ({ page, canvas }) => {
         canvas.rows.splice(2);
         canvas.rows[0].subject.title = "Short synthetic title";
         canvas.rows[1].unread = false;
@@ -77,8 +77,21 @@ for (const packaged of [false, true]) {
         const y = before.y + before.height / 2;
         await page.mouse.click(x, y);
         await expect(row).toHaveClass("row read");
-        await expect(row.locator(".mark-read")).toHaveCount(0);
-        await expect(row.locator(".row-actions")).toHaveCSS("width", "68px");
+        const alreadyRead = row.locator(".mark-read");
+        await expect(alreadyRead).toBeVisible();
+        await expect(alreadyRead).toBeDisabled();
+        await expect(alreadyRead).toHaveAccessibleName("Already read: Short synthetic title");
+        await expect(alreadyRead).toHaveCSS("opacity", "0.55");
+        await row.locator(".title").hover();
+        await alreadyRead.locator("..").hover();
+        await expect(page.locator("#row-read-1-tooltip")).toBeVisible();
+        await expect(page.locator("#row-read-1-tooltip")).toHaveText("Already read");
+        await page.keyboard.press("Escape");
+        await expect(page.locator("#row-read-1-tooltip")).toBeHidden();
+        await row.locator(".row-link").focus();
+        await page.keyboard.press("Tab");
+        await expect(row.locator(".mark-done")).toBeFocused();
+        await expect(row.locator(".row-actions")).toHaveCSS("width", "104px");
         const actions = await row.locator(".row-actions").boundingBox();
         const link = await row.locator(".row-link").boundingBox();
         expect(actions.y).toBeCloseTo(link.y);
@@ -186,7 +199,7 @@ for (const packaged of [false, true]) {
         page.context().on("page", onPage);
         await row.locator(".mark-read").click();
         await expect(row).toHaveClass("row read");
-        await expect(row.locator(".mark-read")).toHaveCount(0);
+        await expect(row.locator(".mark-read")).toBeDisabled();
         await row.locator(".mark-done").click();
         await expect(page.locator(".row")).toHaveCount(1);
         expect(canvas.writes).toEqual(["1", "1"]);

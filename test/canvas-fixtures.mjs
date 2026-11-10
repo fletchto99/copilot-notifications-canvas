@@ -11,10 +11,12 @@ import { Updates, CURRENT_VERSION } from "../src/updates.mjs";
 import { http, thread } from "./fixtures.mjs";
 import { apiTarget, reportedWorkflow } from "../src/model.mjs";
 import { loadDevelopmentAPI } from "../src/development.mjs";
+import { CopilotHandoff } from "../src/copilot.mjs";
+import { copilotHost } from "./fixtures/copilot-host.mjs";
 
 export async function createCanvasFixture({
   assetFailure = false, desktopEnabled = false, packaged = false, development, developmentApiBaseUrl, log: report = () => {},
-  now = Date.now,
+  now = Date.now, copilotEnabled = false,
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), "notification-fixture-"));
   const directory = join(root, "home", "extensions", "github-notifications", "artifacts");
@@ -51,7 +53,7 @@ export async function createCanvasFixture({
       return http({ tag_name: `v${CURRENT_VERSION}`, draft: false, prerelease: false });
     }
     if (endpoint === (target.custom ? `${target.baseUrl}/user` : "/user") && args.includes("GET")) {
-      return http({ id: 100 });
+      return http({ id: 7 });
     }
     if (endpoint === "graphql") {
       assert.ok(args.includes("POST") && !target.custom);
@@ -80,6 +82,17 @@ export async function createCanvasFixture({
       return `HTTP/2 ${args.includes("DELETE") ? 204 : 205} Synthetic\r\n\r\n`;
     }
     const url = new URL(endpoint, "https://api.github.com");
+    const attempt = /^\/repos\/([^/]+\/[^/]+)\/actions\/runs\/(\d+)\/attempts\/(\d+)$/.exec(url.pathname.slice(target.prefix.length));
+    if (args.includes("GET") && url.origin === target.origin && attempt) {
+      const candidates = rows.filter(row => row.repository.full_name === attempt[1]).flatMap(row => [
+        ...(row.workflowRunAttempts ?? []),
+        ...(row.workflowRunResults?.workflow_runs ?? []),
+        ...(row.subject.url === `${target.baseUrl}/repos/${attempt[1]}/actions/runs/${attempt[2]}` ? [row.subjectDetails] : []),
+      ]);
+      const run = candidates.find(run => run && String(run.id) === attempt[2] && String(run.run_attempt) === attempt[3]);
+      assert.ok(run, "Unexpected synthetic workflow attempt lookup");
+      return http(run);
+    }
     const jobs = /^\/repos\/([^/]+\/[^/]+)\/actions\/runs\/(\d+)(?:\/attempts\/(\d+))?\/jobs$/.exec(url.pathname.slice(target.prefix.length));
     if (args.includes("GET") && url.origin === target.origin && jobs) {
       assert.equal(url.searchParams.get("per_page"), "100");
@@ -114,7 +127,8 @@ export async function createCanvasFixture({
         /^\/repos\/[^/]+\/[^/]+\/(?:issues|pulls|check-suites|actions\/runs)\/\d+$/.test(url.pathname.slice(target.prefix.length))) {
       const row = rows.find(row => row.subject.url === url.href);
       assert.ok(row, `Unexpected synthetic subject lookup: ${endpoint}`);
-      return http({ user: { id: row.authoredByViewer ? 100 : 200 },
+      return http({ user: { id: row.authoredByViewer ? 7 : 8 },
+        ...(row.subject.type === "PullRequest" ? { head: { sha: "b".repeat(40) } } : {}),
         ...(row.subjectDetails ?? (row.subject.type === "CheckSuite"
           ? { status: "completed", conclusion: "success" } : { state: "open", merged: false, draft: false })) });
     }
@@ -144,6 +158,9 @@ export async function createCanvasFixture({
     return http({ tag_name: `v${CURRENT_VERSION}`, draft: false, prerelease: false });
   }, log, now: () => now() + offset });
   const inbox = new Inbox(client);
+  const syntheticHost = copilotEnabled ? copilotHost() : undefined;
+  await syntheticHost?.host.refresh();
+  const copilot = syntheticHost ? new CopilotHandoff(inbox, syntheticHost.host, { log, preferences }) : undefined;
   let server;
   let registration;
   let closing;
@@ -168,9 +185,9 @@ export async function createCanvasFixture({
     if (developmentApiBaseUrl !== undefined) await preferences.updateDevelopmentAPI({ baseUrl: developmentApiBaseUrl });
     const developmentAPI = developmentApiBaseUrl !== undefined && !packaged ? await loadDevelopmentAPI(preferences) : undefined;
     server = packaged
-      ? await (await import("./browser/package-fixtures.mjs")).startPackagedCanvas(root, run, log)
+      ? await (await import("./browser/package-fixtures.mjs")).startPackagedCanvas(root, run, log, syntheticHost?.rpc)
       : await startServer(inbox, {
-        preferences, desktop: target.custom ? undefined : desktop, updates, development, developmentAPI, log,
+        preferences, desktop: target.custom ? undefined : desktop, updates, development, developmentAPI, log, copilot,
         read: (path, options) => {
           if (assetsUnavailable && path.pathname.endsWith("/app.mjs")) {
             throw Object.assign(new Error("Synthetic asset failure"), { code: "ENOENT" });
@@ -183,6 +200,7 @@ export async function createCanvasFixture({
     });
     return {
       root, url: server.url, rows, writes, doneWrites, requests, preferences, deliveries, desktop, errors, warnings, close,
+      copilot, copilotHost: syntheticHost,
       setRequestHook: hook => { requestHook = hook; },
       advance: ms => { offset += ms; return now() + offset; },
       recoverAssets: () => { assetsUnavailable = false; },

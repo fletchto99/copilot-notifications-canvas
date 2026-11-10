@@ -1,4 +1,4 @@
-import { thread } from "./fixtures.mjs";
+import { thread, workflowRun } from "./fixtures.mjs";
 
 export const readmeTime = Date.parse("2026-01-10T12:00:00Z");
 export const readmeContext = {
@@ -17,6 +17,8 @@ export const readmePreferences = {
   darkMode: true,
   hideEmptyTabs: true,
   keyboardShortcuts: true,
+  copilotIntegration: true,
+  confirmCopilotActions: true,
   autoOpen: false,
   desktopNotifications: false,
 };
@@ -44,13 +46,19 @@ export function readmeRows() {
     row("4", "example/atlas", "Improve empty states across the dashboard", "PullRequest", "pulls/237", 42,
       "comment", { unread: false, subjectDetails: { state: "closed", merged: true, draft: false } }),
     row("5", "example/design-system", "Add a compact variant for notification badges", "PullRequest", "pulls/86", 60,
-      "team_mention", { subjectDetails: { state: "open", merged: false, draft: true } }),
+      "team_mention", { subjectDetails: { state: "open", merged: false, draft: true, user: { id: 7 } } }),
     row("6", "example/design-system", "Resolve the notification badge design", "Discussion", "discussions/85", 120,
       "assign", { authoredByViewer: true, subjectDetails: { closed: true, isAnswered: false, stateReason: "RESOLVED" } }),
     row("7", "example/design-system", "Document focus styles for interactive cards", "Issue", "issues/79", 180,
       "author", { unread: false, authoredByViewer: true, subjectDetails: { state: "closed", state_reason: "completed" } }),
     row("8", "example/cli", "CI / Node.js 24 tests failed on main", "CheckSuite", "check-suites/310", 240,
-      "ci_activity", { subjectDetails: { status: "completed", conclusion: "failure" } }),
+      "ci_activity", {
+        subjectDetails: { status: "completed", conclusion: "failure" },
+        workflowRunResults: { total_count: 1, workflow_runs: [workflowRun({
+          id: 3100, check_suite_id: 310, html_url: "https://github.com/example/cli/actions/runs/3100",
+          repository: { full_name: "example/cli" }, head_sha: "a".repeat(40),
+        })] },
+      }),
     row("9", "example/cli", "Update the dependency used by the command runner", "RepositoryDependabotAlertsThread",
       null, 300, "security_alert"),
     row("10", "example/cli", "Configuration question answered in the quickstart", "Discussion", "discussions/64", 1440,

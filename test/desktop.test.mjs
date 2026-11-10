@@ -1012,7 +1012,7 @@ test("Windows check alerts preserve safe fallbacks and report metadata failures 
     await watcher.check();
     assert.equal(watcher.snapshot().state, "watching");
     assert.equal(f.deliveries.length, 1);
-    const expected = ["run", "jobs-denied"].includes(kind) ? "https://github.com/example/widgets/actions/runs/123"
+    const expected = ["run", "jobs-denied"].includes(kind) ? "https://github.com/example/widgets/actions/runs/123/attempts/1"
       : `https://github.com/example/widgets/actions?${new URLSearchParams({ query: 'workflow:"Synthetic build" branch:"main" is:failure' })}`;
     assert.equal(f.deliveries[0].url, expected);
     assert.equal(f.logs.length, ["denied", "unsafe", "jobs-denied"].includes(kind) ? 1 : 0);

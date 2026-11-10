@@ -10,7 +10,7 @@ import { startServer } from "../src/server.mjs";
 import { Inbox } from "../src/inbox.mjs";
 import { GitHubClient } from "../src/github.mjs";
 
-const defaults = { matchGitHubInbox: true, autoOpen: false, darkMode: null, desktopNotifications: false, desktopSound: "default", groupBy: "repo", hideEmptyTabs: true, keyboardShortcuts: true };
+const defaults = { matchGitHubInbox: true, autoOpen: false, darkMode: null, desktopNotifications: false, desktopSound: "default", groupBy: "repo", copilotIntegration: true, confirmCopilotActions: true, hideEmptyTabs: true, keyboardShortcuts: true };
 
 async function setup(t, io) {
   const directory = await fs.mkdtemp(join(tmpdir(), "notification-settings-test-"));
@@ -91,6 +91,8 @@ test("malformed stored settings and invalid updates fail explicitly without over
     '{"matchGitHubInbox":null}', '{"matchGitHubInbox":"true"}', '{"matchGitHubInbox":0}',
     '{"hideEmptyTabs":null}', '{"hideEmptyTabs":"true"}', '{"hideEmptyTabs":0}',
     '{"keyboardShortcuts":null}', '{"keyboardShortcuts":"true"}', '{"keyboardShortcuts":0}',
+    '{"copilotIntegration":null}', '{"copilotIntegration":"true"}', '{"copilotIntegration":0}',
+    '{"confirmCopilotActions":null}', '{"confirmCopilotActions":"false"}', '{"confirmCopilotActions":0}',
     '{"desktopSound":null}', '{"desktopGeneration":false}', '{"darkMode":"dark"}', '{"darkMode":0}',
     '{"groupBy":null}', '{"groupBy":"unknown"}', '{"groupBy":false}', '{"groupBy":[]}', " ".repeat(17000)]) {
     await fs.writeFile(preferences.path, data);
@@ -102,10 +104,25 @@ test("malformed stored settings and invalid updates fail explicitly without over
     { matchGitHubInbox: null }, { matchGitHubInbox: "true" }, { matchGitHubInbox: 0 },
     { hideEmptyTabs: null }, { hideEmptyTabs: "true" }, { hideEmptyTabs: 0 },
     { keyboardShortcuts: null }, { keyboardShortcuts: "true" }, { keyboardShortcuts: 0 },
+    { copilotIntegration: null }, { copilotIntegration: "true" }, { copilotIntegration: 0 },
+    { confirmCopilotActions: null }, { confirmCopilotActions: "false" }, { confirmCopilotActions: 0 },
     { darkMode: undefined }, { autoOpen: null }, { autoOpen: true, token: "not accepted" },
     { groupBy: undefined }, { groupBy: null }, { groupBy: "unknown" }, { groupBy: "Repo" },
     { groupBy: false }, { groupBy: [] }, { groupBy: { value: "date" } }]) {
     await assert.rejects(preferences.update(input), { code: "invalid_settings" });
+  }
+});
+
+test("Copilot integration defaults on and persists across instances without losing unrelated settings", async t => {
+  const preferences = await setup(t);
+  await fs.writeFile(preferences.path, '{"groupBy":"date","future":42}');
+  assert.equal((await preferences.read()).copilotIntegration, true);
+  const other = new Preferences({ directory: preferences.directory });
+  for (const copilotIntegration of [false, true]) {
+    await preferences.update({ copilotIntegration });
+    await other.update({ darkMode: null });
+    assert.equal((await other.read()).copilotIntegration, copilotIntegration);
+    assert.deepEqual(await preferences.document(), { groupBy: "date", future: 42, copilotIntegration, darkMode: null });
   }
 });
 
@@ -120,6 +137,21 @@ test("character shortcuts default on and can be disabled across instances withou
     assert.equal((await other.read()).keyboardShortcuts, keyboardShortcuts);
     assert.deepEqual(await preferences.document(), { groupBy: "date", future: 42, keyboardShortcuts, darkMode: null });
   }
+});
+
+test("Copilot confirmations default on and their opt-out survives unrelated updates across instances", async t => {
+  const preferences = await setup(t);
+  await fs.writeFile(preferences.path, '{"copilotIntegration":true,"future":42}');
+  assert.equal((await preferences.read()).confirmCopilotActions, true);
+  await preferences.update({ confirmCopilotActions: false });
+  const other = new Preferences({ directory: preferences.directory });
+  await other.update({ groupBy: "date" });
+  assert.equal((await other.read()).confirmCopilotActions, false);
+  assert.deepEqual(await preferences.document(), {
+    copilotIntegration: true, future: 42, confirmCopilotActions: false, groupBy: "date",
+  });
+  await other.update({ confirmCopilotActions: true });
+  assert.equal((await preferences.read()).confirmCopilotActions, true);
 });
 
 test("missing settings use defaults but explicit undefined and unknown patches are rejected", async t => {
@@ -257,6 +289,10 @@ test("settings HTTP routes require capability/origin and persist only permitted 
     [{ hideEmptyTabs: "true" }, 400], [{ hideEmptyTabs: null }, 400], [{ hideEmptyTabs: 0 }, 400],
     [{ keyboardShortcuts: false }, 200], [{ keyboardShortcuts: true }, 200],
     [{ keyboardShortcuts: "true" }, 400], [{ keyboardShortcuts: null }, 400], [{ keyboardShortcuts: 0 }, 400],
+    [{ copilotIntegration: false }, 200], [{ copilotIntegration: true }, 200],
+    [{ copilotIntegration: "true" }, 400], [{ copilotIntegration: null }, 400], [{ copilotIntegration: 0 }, 400],
+    [{ confirmCopilotActions: false }, 200], [{ confirmCopilotActions: true }, 200],
+    [{ confirmCopilotActions: "false" }, 400], [{ confirmCopilotActions: null }, 400], [{ confirmCopilotActions: 0 }, 400],
     [{ groupBy: "none" }, 200], [{ groupBy: "repo" }, 200], [{ groupBy: "date" }, 200],
     [{ groupBy: "unknown" }, 400], [{ groupBy: null }, 400],
     [{ autoOpen: "yes" }, 400], [{ darkMode: "dark" }, 400], [{ sound: true }, 400]]) {
