@@ -153,6 +153,7 @@ test("known API subject links become safe GitHub web links", () => {
     assert.equal(result.direct, true);
     assert.equal(result.number, number);
     if (type === "Discussion") assert.equal(result.discussionNumber, "9");
+    if (type === "Commit") assert.equal(result.commitRef, "abcdef0123456");
   }
 });
 
@@ -163,6 +164,22 @@ test("release IDs and check-suite IDs are never mistaken for web tags or run IDs
     assert.equal(result.direct, false);
     assert.equal(result.number, null);
     assert.match(result.label, /^Open repository/);
+    if (type === "Release") assert.equal(result.releaseId, "123");
+  }
+});
+
+test("release handoff IDs come only from exact same-repository API release links", () => {
+  const [item] = normalizeThreads([thread("987", {
+    subject: { title: "Not a tag", type: "Release", url: "https://api.github.com/repos/example/widgets/releases/123" },
+  })]);
+  assert.equal(item.releaseId, "123");
+  assert.equal(item.number, null);
+  assert.equal(item.url, "https://github.com/example/widgets/releases");
+  for (const url of [null, "https://api.github.com/repos/other/widgets/releases/123",
+    "https://evil.test/repos/example/widgets/releases/123", "https://github.com/example/widgets/releases/tag/v1",
+    ...["latest", "tags/v1", "0", "01", "123/assets", "123?latest=true", "123#tag"]
+      .map(path => `https://api.github.com/repos/example/widgets/releases/${path}`)]) {
+    assert.equal(notificationLink({ type: "Release", title: "v1", url }, "example/widgets").releaseId, null);
   }
 });
 

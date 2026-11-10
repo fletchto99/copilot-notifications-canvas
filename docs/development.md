@@ -1,6 +1,6 @@
 # Development
 
-[README](../README.md) | [Usage](usage.md) | [Installation](installation.md) | [Settings](settings.md)
+[README](../README.md) | [Usage](usage.md) | [Copilot](copilot.md) | [Installation](installation.md) | [Settings](settings.md)
 
 **Jump to:** [Preview](#synthetic-preview) | [Screenshot](#readme-screenshot) |
 [Environment check](#environment-check) | [Tests](#tests-and-checks) |
