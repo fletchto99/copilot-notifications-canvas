@@ -13,7 +13,7 @@ stay hidden in both views. Search, mark rows
 or groups as read or done, start a focused Copilot investigation or review,
 and opt into desktop notifications or auto-open.
 
-![GitHub Notifications canvas with search and attention tabs above ten synthetic notifications, seven unread, across three example repositories, issue and PR status icons, a failed check run, and fixed Copilot, read, and done columns with disabled Copilot icons on merged and queued PRs and dimmed envelopes on already-read rows](docs/images/github-notifications.png)
+![GitHub Notifications canvas with search and attention tabs above ten synthetic notifications, seven unread, across three example repositories, issue and PR status icons, a failed check run, and fixed Copilot, read, and done columns with summary actions on closed issues, discussions, merged PRs, and releases, a disabled Copilot icon on queued PRs, and dimmed envelopes on already-read rows](docs/images/github-notifications.png)
 
 ## Prerequisites
 
@@ -21,7 +21,7 @@ and opt into desktop notifications or auto-open.
 - Node.js 22 or later for the extension runtime and installer.
 - [GitHub CLI](https://cli.github.com/) (`gh`) available to the app and signed
   into **github.com** with `notifications` or `repo` scope.
-- Copilot PR/CI handoffs also require Git 2.29 or later and the configured
+- Copilot PR, CI, and commit handoffs also require Git 2.29 or later and the configured
   repository checkout to be accessible on the extension's execution host.
 
 GitHub.com only; fine-grained personal access tokens are not supported.
@@ -72,13 +72,19 @@ full procedure, verification requirements, and troubleshooting.
 - Use the envelope to mark a row **read**, or the checkmark to mark it **done**.
   Already-read rows keep a dimmed, disabled envelope labeled **Already read**.
   Each group header offers the same bulk actions.
-- Use the Copilot button before Read to investigate an issue or failed CI run,
-  continue your own PR, or review another PR. Confirm the selected reference
+- Use the Copilot button before Read to investigate an open issue or failed CI run,
+  continue your own open PR, review another open PR, or summarize a closed or
+  merged PR's changes with **Summarize Changes**. For closed, unmerged PRs, the
+  session then asks whether you'd like help reopening the PR; it never reopens
+  it automatically. Closed issues and discussions offer **Summarize with Copilot**;
+  commits offer **Summarize commit** to explain the code changed in that exact
+  commit, without proposing fixes. Releases with a specific linked release ID
+  offer **Summarize Release Notes**. Confirm the selected reference
   before starting a summary-first, read-only root-level session in that repository,
   independent of the session containing the canvas. Existing sessions are
   offered without interrupting them; unconfigured repositories require explicit
-  cloning confirmation. See [Copilot actions](docs/usage.md#work-with-copilot).
-  Closed, merged, and merge-queued PRs show disabled icons explaining their state.
+  cloning confirmation. See [Copilot actions](docs/copilot.md).
+  Merge-queued PRs show disabled icons explaining their state.
   Matching sessions always offer **Open existing session** or **Start a new session**,
   even with routine confirmations off; neither choice modifies existing work.
   **Copilot integration** in Settings
@@ -105,8 +111,9 @@ to its own files. Ordinary agent-facing canvas actions expose counts, not inbox
 content. There is no telemetry or remote asset loading.
 
 **Starting a Copilot action shares the selected GitHub reference and task
-instructions with Copilot**, including the repository and issue/PR/run identifier
-(and a PR's head commit or a failed run's commit and attempt). These are retained
+instructions with Copilot**, including the repository and selected issue, PR,
+discussion, release, commit, or run reference (and a PR's head commit or a failed
+run's commit and attempt). These are retained
 in Copilot's session history, and the destination agent fetches the item's
 details. Notification titles, bodies, and the rest of the inbox are not copied
 into the handoff.
@@ -139,6 +146,7 @@ linked GitHub page may also mark a notification read on GitHub.
 ## Documentation
 
 - [Usage](docs/usage.md): browsing, filtering, Read/Done actions, and keyboard controls.
+- [Copilot actions](docs/copilot.md): prompts by notification type, confirmations, and session safeguards.
 - [Installation](docs/installation.md): setup, updates, and verification.
 - [Settings](docs/settings.md): preferences, desktop alerts, and troubleshooting.
 - [Development](docs/development.md): local development, tests, packaging, and releases.

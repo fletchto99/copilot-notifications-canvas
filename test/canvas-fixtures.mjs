@@ -120,7 +120,7 @@ export async function createCanvasFixture({
       return http({ total_count: runs.length, workflow_runs: runs });
     }
     if (args.includes("GET") && url.origin === target.origin &&
-        /^\/repos\/[^/]+\/[^/]+\/(?:issues|pulls|check-suites|actions\/runs)\/\d+$/.test(url.pathname.slice(target.prefix.length))) {
+        /^\/repos\/[^/]+\/[^/]+\/(?:(?:issues|pulls|releases|check-suites|actions\/runs)\/\d+|commits\/[a-f0-9]{7,40})$/.test(url.pathname.slice(target.prefix.length))) {
       const row = rows.find(row => row.subject.url === url.href);
       assert.ok(row, `Unexpected synthetic subject lookup: ${endpoint}`);
       return http({ ...(row.subject.type === "PullRequest" ? { user: { id: 8 }, head: { sha: "b".repeat(40) } } : {}),

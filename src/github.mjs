@@ -194,10 +194,40 @@ function copilotDetails(body, kind, endpoint) {
     if (!Number.isSafeInteger(body?.id) || body.id < 1) throw invalid();
     return { id: body.id };
   }
+  if (kind === "issue") {
+    subjectState(body, "Issue");
+    if (body.pull_request) throw invalid();
+    return { state: body.state };
+  }
+  if (kind === "commit") {
+    const match = /^\/repos\/([^/]+\/[^/]+)\/commits\/([a-f0-9]{7,40})$/.exec(endpoint);
+    if (!match || typeof body?.sha !== "string" || !/^[a-f0-9]{40}$/.test(body.sha) ||
+        !body.sha.startsWith(match[2]) || body.html_url !== `https://github.com/${match[1]}/commit/${body.sha}`) throw invalid();
+    return { sha: body.sha, url: body.html_url };
+  }
   if (kind === "pull") {
     subjectState(body, "PullRequest");
     if (!Number.isSafeInteger(body.user?.id) || body.user.id < 1 || !/^[a-f0-9]{40}$/.test(body.head?.sha)) throw invalid();
     return { authorId: body.user.id, state: body.state, merged: body.merged, sha: body.head.sha };
+  }
+  if (kind === "release") {
+    const match = /^\/repos\/([^/]+\/[^/]+)\/releases\/([1-9]\d*)$/.exec(endpoint);
+    if (!match || !Number.isSafeInteger(body?.id) || String(body.id) !== match[2] ||
+        body.draft !== false || typeof body.tag_name !== "string" || !body.tag_name ||
+        /[\s\p{Cc}\\]/u.test(body.tag_name) ||
+        typeof body.html_url !== "string" || body.html_url.length > 2048 || /[\s\\]/u.test(body.html_url)) throw invalid();
+    const prefix = `/${match[1]}/releases/tag/`;
+    let url;
+    let tag;
+    try {
+      url = new URL(body.html_url);
+      tag = decodeURIComponent(url.pathname.slice(prefix.length));
+    } catch {
+      throw invalid();
+    }
+    if (url.origin !== "https://github.com" || url.username || url.password || url.search || url.hash ||
+        !url.pathname.startsWith(prefix) || tag !== body.tag_name) throw invalid();
+    return { releaseId: match[2], url: url.href };
   }
   const match = /^\/repos\/([^/]+\/[^/]+)\/actions\/runs\/([1-9]\d*)(?:\/attempts\/([1-9]\d*))?$/.exec(endpoint);
   if (!match || String(body?.id) !== match[2] || body.repository?.full_name?.toLowerCase() !== match[1].toLowerCase() ||
@@ -406,10 +436,20 @@ export class GitHubClient {
       .exec(item?.url ?? "");
     const matchingRun = run && link && run[1] === item.repository && link[1] === run[1] && link[2] === run[2] &&
       (link[3] !== "attempts" || link[4] === run[3]) && (link[3] !== "job" || run[3] !== undefined);
-    const endpoint = kind === "viewer" ? "/user" : ["pull", "queue"].includes(kind) && item?.type === "PullRequest"
-      ? subjectEndpoint(item, this.target) : kind === "run" && matchingRun
+    const endpoint = kind === "viewer" ? "/user" : (["pull", "queue"].includes(kind) && item?.type === "PullRequest" ||
+      kind === "issue" && item?.type === "Issue") ? subjectEndpoint(item, this.target) :
+      kind === "commit" && item?.type === "Commit" ? `/repos/${item.repository}/commits/${item.commitRef}` :
+      kind === "release" && item?.type === "Release"
+        ? `/repos/${item.repository}/releases/${item.releaseId}` : kind === "run" && matchingRun
         ? `/repos/${run[1]}/actions/runs/${run[2]}${run[3] ? `/attempts/${run[3]}` : ""}` : null;
-    if (this.target.custom || !endpoint) throw new InboxError("copilot_context", "Use a confirmed github.com item for this Copilot action.", 400);
+    if (this.target.custom || !endpoint || kind === "commit" &&
+        (!/^[a-f0-9]{7,40}$/.test(item.commitRef) ||
+          notificationLink({ type: "Commit", url: `${this.target.baseUrl}${endpoint}` }, item.repository, this.target).commitRef !== item.commitRef) ||
+        kind === "release" &&
+        (!Number.isSafeInteger(Number(item.releaseId)) || Number(item.releaseId) < 1 ||
+          notificationLink({ type: "Release", url: `${this.target.baseUrl}${endpoint}` }, item.repository, this.target).releaseId !== item.releaseId)) {
+      throw new InboxError("copilot_context", "Use a confirmed github.com item for this Copilot action.", 400);
+    }
     if (kind === "queue") {
       return this.#refreshSubject(endpoint, item, signal, "queue", () => true).then(() => {
         const result = this.mergeQueueCache.get(endpoint);
@@ -420,7 +460,7 @@ export class GitHubClient {
         return result.state;
       });
     }
-    return this.request(endpoint, signal, "GET", { subjectType: "Copilot", copilot: kind, force: kind === "pull" }).then(result => {
+    return this.request(endpoint, signal, "GET", { subjectType: "Copilot", copilot: kind, force: ["pull", "issue", "commit", "release"].includes(kind) }).then(result => {
       if (result.error) throw new InboxError(result.error.code, result.error.message);
       return result.state;
     }).catch(error => {

@@ -58,7 +58,11 @@ export async function renderReadmeScreenshot(browser, expect, { create = createC
     { timeout: 15_000 }).toEqual(readmeSubjectLabels);
     await expect(page.locator(".subject-loading")).toHaveCount(0);
     await expect(page.locator('.row-link[aria-disabled="true"]')).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "PR merged: #237" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Summarize Changes: #237" })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Summarize Release Notes: v1.2.0" })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Summarize with Copilot: #79" })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Summarize with Copilot: Resolve the notification badge design" })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Summarize with Copilot: Configuration question answered in the quickstart" })).toBeEnabled();
     await expect(page.getByRole("button", { name: "PR in merge queue: #248" })).toBeDisabled();
     await expect(page.getByRole("button", { name: "Continue with Copilot: #86" })).toBeVisible();
     await expect(page.getByRole("button", { name: /^Investigate CI failures with Copilot:/ })).toBeEnabled();

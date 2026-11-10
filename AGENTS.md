@@ -78,7 +78,7 @@ output. Development loads source without a build; release builds bundle
   Submit the plan-mode prompt through creation's `kickoff` so the host queues
   it until ready; never classify a new session as existing from startup activity.
   PR worktrees start at the validated head commit, including fork PRs.
-  PR/CI handoffs verify that commit in the configured checkout before creation,
+  PR, CI, and commit handoffs verify the selected commit in the configured checkout before creation,
   fetching the selected ref through GitHub CLI credentials only after confirmation
   or a permitted direct click. Never fall back to another commit or modify an
   existing checkout's branch, files, tags, tracking refs, or `FETCH_HEAD`.
@@ -90,8 +90,24 @@ output. Development loads source without a build; release builds bundle
   the shown matching sessions and recheck before creation; changed matches require
   a new choice. Repository cloning needs separate explicit confirmation.
   Honor the user-wide `copilotIntegration` preference (default on) at the panel
-  and handoff boundary. Closed, merged, and merge-queued PRs show disabled Copilot
-  controls with status explanations; reject handoffs at the provider boundary too.
+  and handoff boundary. Closed and merged PRs offer read-only change summaries,
+  not reviews or continued implementation. For closed unmerged PRs, summarize
+  the proposed changes, then ask whether the user wants help reopening the PR;
+  never reopen it or restore its branch without explicit approval. Merge-queued
+  PRs show disabled Copilot controls with status explanations; reject those
+  handoffs at the provider boundary too. Recheck PR state before starting;
+  a changed task needs a fresh action.
+  Closed issues use summary-only prompts, not fixing or reopening prompts.
+  Recheck issue state before starting and reject stale tasks after closure or
+  reopening. Discussions summarize the selected thread, replies, and any answer
+  without posting or proposing implementation. Commit summaries resolve the
+  validated notification reference to a full SHA, verify that exact checkout,
+  and summarize its code diff; never substitute a branch or another commit.
+  Release summaries require a validated notification release ID and freshly
+  verified same-repository release URL. Never infer a tag from notification
+  text or substitute the latest release. Share only the validated ID/reference
+  and fixed instructions, not release notes or asset contents. Summaries are
+  read-only and must not download or execute release assets.
   `confirmCopilotActions` defaults on. An explicit saved opt-out may skip only
   routine confirmations on a fresh row click, never on opening or polling.
   Cloning, inferred CI matches, and existing-or-new session choices still require

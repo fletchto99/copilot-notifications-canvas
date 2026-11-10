@@ -121,11 +121,15 @@ export function notificationLink(subject, repository, target = apiTarget()) {
     url: `${base}/${route[1]}/${match[1]}`, label: "Open on GitHub", direct: true,
     number: ["Issue", "PullRequest"].includes(subject.type) ? match[1] : null,
     ...(subject.type === "Discussion" ? { discussionNumber: match[1] } : {}),
+    ...(subject.type === "Commit" ? { commitRef: match[1].toLowerCase() } : {}),
   };
 
   // Release IDs are not tags; check-suite IDs are not Actions run IDs.
   if (subject.type === "Release") {
-    return { url: `${base}/releases`, label: "Open repository releases", direct: false, number: null };
+    return {
+      url: `${base}/releases`, label: "Open repository releases", direct: false, number: null,
+      releaseId: path.match(/^releases\/([1-9]\d*)$/)?.[1] ?? null,
+    };
   }
   if (subject.type === "CheckSuite") {
     const runId = path.match(/^actions\/runs\/([1-9]\d*)$/)?.[1];

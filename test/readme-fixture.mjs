@@ -42,7 +42,10 @@ export function readmeRows() {
       "review_requested", { mergeQueued: true, subjectDetails: { state: "open", merged: false, draft: false } }),
     row("2", "example/atlas", "Keep search filters when navigating back", "Issue", "issues/241", 18,
       "mention", { subjectDetails: { state: "open" } }),
-    row("3", "example/atlas", "v1.2.0", "Release", null, 30, "subscribed"),
+    row("3", "example/atlas", "v1.2.0", "Release", "releases/120", 30, "subscribed", {
+      subjectDetails: { id: 120, tag_name: "v1.2.0", draft: false,
+        html_url: "https://github.com/example/atlas/releases/tag/v1.2.0" },
+    }),
     row("4", "example/atlas", "Improve empty states across the dashboard", "PullRequest", "pulls/237", 42,
       "comment", { unread: false, subjectDetails: { state: "closed", merged: true, draft: false } }),
     row("5", "example/design-system", "Add a compact variant for notification badges", "PullRequest", "pulls/86", 60,

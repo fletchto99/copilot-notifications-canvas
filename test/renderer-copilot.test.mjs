@@ -108,20 +108,73 @@ test("existing sessions and clone confirmation have distinct actions and safe te
   assert.equal(ui.ids.get("copilot-start").hidden, true);
 });
 
+test("closed and merged PR controls retain focus and describe the correct summary follow-up", async t => {
+  for (const pullState of ["closed", "merged"]) await t.test(pullState, async t => {
+    const subjectStates = { "1": { copilot: { label: "Review with Copilot", enabled: true } } };
+    const ui = await setup(t, { subjectStates,
+      onCopilot: () => ({ ...ready, action: "summarize", pullState, label: "Summarize Changes" }),
+    });
+    const control = button(ui);
+    control.focus();
+    subjectStates["1"].copilot = { label: "Summarize Changes", enabled: true, reason: "" };
+    await runInContext("update()", ui.context);
+    assert.equal(button(ui), control);
+    assert.equal(control.disabled, false);
+    assert.equal(ui.document.activeElement, control);
+    assert.match(control.getAttribute("aria-label"), /^Summarize Changes:/);
+    assert.equal(control.parentNode.querySelectorAll(".tooltip-content")[0].textContent, "Summarize Changes");
+    await open(ui);
+    assert.equal(ui.ids.get("copilot-title").textContent, "Summarize Changes");
+    if (pullState === "closed") {
+      assert.match(ui.ids.get("copilot-status").textContent, /changes proposed by this closed PR/);
+      assert.match(ui.ids.get("copilot-status").textContent, /ask whether you'd like help reopening it/);
+      assert.match(ui.ids.get("copilot-status").textContent, /will not reopen the PR or make changes without your approval/);
+    } else {
+      assert.match(ui.ids.get("copilot-status").textContent, /summarize what this merged PR changed/);
+      assert.doesNotMatch(ui.ids.get("copilot-status").textContent, /reopen/);
+    }
+    assert.doesNotMatch(ui.ids.get("copilot-status").textContent, /then investigate/);
+    assert.deepEqual(ui.patches, []);
+    assert.deepEqual(ui.deletions, []);
+  });
+});
+
 test("inactive controls expose their reason, preserve focus and never submit a handoff", async t => {
   const subjectStates = { "1": { copilot: { label: ready.label, enabled: true } } };
   const ui = await setup(t, { subjectStates, onCopilot: () => assert.fail("Disabled controls cannot submit") });
   const control = button(ui);
   control.focus();
-  subjectStates["1"].copilot = { label: "PR closed", enabled: false, reason: "PR closed" };
+  subjectStates["1"].copilot = { label: "PR in merge queue", enabled: false, reason: "PR in merge queue" };
   await runInContext("update()", ui.context);
   assert.equal(button(ui), control);
   assert.equal(control.disabled, true);
-  assert.match(control.getAttribute("aria-label"), /^PR closed:/);
-  assert.equal(control.parentNode.querySelectorAll(".tooltip-content")[0].textContent, "PR closed");
+  assert.match(control.getAttribute("aria-label"), /^PR in merge queue:/);
+  assert.equal(control.parentNode.querySelectorAll(".tooltip-content")[0].textContent, "PR in merge queue");
   assert.equal(ui.document.activeElement.dataset.focusKey, "thread:1");
   control.events.click();
   assert.equal(Boolean(ui.ids.get("copilot-dialog").open), false);
+});
+
+test("summary confirmations describe the selected task without offering implementation", async t => {
+  for (const [action, label, reference, description] of [
+    ["release", "Summarize Release Notes", "releases/tag/v1.2.0", /selected release notes read-only/],
+    ["issueSummary", "Summarize with Copilot", "issues/1", /closed issue and its documented outcome read-only/],
+    ["discussion", "Summarize with Copilot", "discussions/1", /summarize this discussion/],
+    ["commit", "Summarize commit", `commit/${"a".repeat(40)}`, /code and behavior changed in the selected commit/],
+  ]) await t.test(action, async t => {
+    const url = `https://github.com/example/widgets/${reference}`;
+    const ui = await setup(t, {
+      subjectStates: { "1": { copilot: { label, enabled: true } } },
+      onCopilot: () => ({ ...ready, action, label, url }),
+    });
+    await open(ui);
+    assert.equal(ui.ids.get("copilot-title").textContent, label);
+    assert.equal(ui.ids.get("copilot-reference").textContent, url);
+    assert.match(ui.ids.get("copilot-status").textContent, description);
+    assert.doesNotMatch(ui.ids.get("copilot-status").textContent, /PR|then investigate/);
+    assert.deepEqual(ui.patches, []);
+    assert.deepEqual(ui.deletions, []);
+  });
 });
 
 test("progress updates reach the dialog, nonmodal status and row tooltip without changing focus", async t => {

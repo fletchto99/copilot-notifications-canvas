@@ -648,7 +648,94 @@ for (const packaged of [false, true]) {
       expect(canvas.deliveries).toEqual([]);
     });
 
-    test("inactive PRs show disabled Copilot reasons and retain notification actions", async ({ page, canvas }) => {
+    for (const [type, status, label, task] of [
+      ["Issue", "closed", "Summarize with Copilot", "Summarize this closed issue read-only."],
+      ["Discussion", "open", "Summarize with Copilot", "Summarize this discussion read-only."],
+      ["Discussion", "closed", "Summarize with Copilot", "Summarize this discussion read-only."],
+      ["Commit", null, "Summarize commit", "Summarize the code changed in this commit read-only."],
+    ]) test(`${type} ${status ?? "diff"} has an accessible summary-only Copilot action`, async ({ page, canvas }) => {
+      const sha = "c".repeat(40);
+      canvas.rows.splice(1);
+      const path = type === "Issue" ? "issues/1" : type === "Discussion" ? "discussions/1" : `commits/${sha}`;
+      const url = `https://github.com/example/widgets/${type === "Commit" ? `commit/${sha}` : path}`;
+      canvas.rows[0].subject = { title: "Synthetic selected item", type, url: `https://api.github.com/repos/example/widgets/${path}` };
+      canvas.rows[0].subjectDetails = type === "Issue" ? { state: "closed", state_reason: "not_planned" } :
+        type === "Discussion" ? { closed: status === "closed", isAnswered: false, stateReason: status === "closed" ? "RESOLVED" : null } :
+          { sha, html_url: url, commit: { message: "Private commit message" }, files: [{ patch: "Private patch" }] };
+      await page.goto(canvas.url);
+      const action = page.locator(".copilot-action");
+      await expect(action).toBeEnabled();
+      await expect(action).toHaveAccessibleName(new RegExp(`^${label}:`));
+      await action.hover();
+      await expect(page.locator(".row").getByRole("tooltip")).toHaveText(label);
+      expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+      await action.focus();
+      await page.keyboard.press("Enter");
+      const dialog = page.getByRole("dialog", { name: label, exact: true });
+      await expect(dialog).toBeVisible();
+      await expect(page.locator("#copilot-reference")).toHaveText(url);
+      await expect(page.locator("#copilot-status")).not.toContainText("then investigate");
+      expect(canvas.copilotHost.calls.some(call => call.name === "create_session")).toBe(false);
+      expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+      await dialog.getByRole("button", { name: "Start session", exact: true }).click();
+      await expect.poll(() => canvas.copilotHost.calls.some(call => call.name === "navigate_to")).toBe(true);
+      const creation = canvas.copilotHost.calls.find(call => call.name === "create_session").args;
+      expect(creation.base_branch).toBe(type === "Commit" ? sha : undefined);
+      expect(creation.kickoff.mode).toBe("plan");
+      expect(creation.kickoff.prompt).toContain(task);
+      expect(creation.kickoff.prompt).toContain("Stop after the summary");
+      expect(creation.kickoff.prompt).not.toMatch(/Synthetic selected item|Private|After the summary, use ask_user/);
+      expect(canvas.writes).toEqual([]);
+      expect(canvas.deliveries).toEqual([]);
+    });
+
+    test("release notes are summarized only for the confirmed exact release, with accessible missing-link feedback", async ({ page, canvas }) => {
+      canvas.rows.splice(2);
+      canvas.rows[0].subject = { title: "Synthetic release", type: "Release",
+        url: "https://api.github.com/repos/example/widgets/releases/42" };
+      canvas.rows[0].subjectDetails = { id: 42, tag_name: "v1.2.0", draft: false,
+        html_url: "https://github.com/example/widgets/releases/tag/v1.2.0", body: "Private release notes" };
+      canvas.rows[1].subject = { title: "Unlinked release", type: "Release", url: null };
+      await page.goto(canvas.url);
+      const linked = page.locator(".row").first();
+      const action = linked.getByRole("button", { name: "Summarize Release Notes: Synthetic release" });
+      await expect(action).toBeEnabled();
+      await action.hover();
+      await expect(linked.getByRole("tooltip")).toHaveText("Summarize Release Notes");
+      const unlinked = page.locator(".row").nth(1);
+      const disabled = unlinked.getByRole("button", { name: "Summarize Release Notes: Unlinked release" });
+      await expect(disabled).toBeDisabled();
+      await disabled.locator("..").hover();
+      await expect(unlinked.getByRole("tooltip")).toHaveText("No specific release is linked. Open GitHub to choose a release.");
+      await expect(unlinked.locator(".mark-read")).toBeEnabled();
+      await expect(unlinked.locator(".mark-done")).toBeEnabled();
+      expect(canvas.requests).not.toContain("/repos/example/widgets/releases/42");
+      expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+      await linked.locator(".row-link").focus();
+      await page.keyboard.press("Tab");
+      await expect(action).toBeFocused();
+      await page.keyboard.press("Enter");
+      const dialog = page.getByRole("dialog", { name: "Summarize Release Notes" });
+      await expect(dialog).toBeVisible();
+      await expect(page.locator("#copilot-reference")).toHaveText(canvas.rows[0].subjectDetails.html_url);
+      await expect(dialog).toContainText("selected release notes read-only");
+      expect(canvas.copilotHost.calls.some(call => call.name === "create_session")).toBe(false);
+      expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+      await dialog.getByRole("button", { name: "Start session", exact: true }).click();
+      await expect.poll(() => canvas.copilotHost.calls.some(call => call.name === "navigate_to")).toBe(true);
+      const creation = canvas.copilotHost.calls.find(call => call.name === "create_session").args;
+      expect(creation.name).toBe("Summarize release 42");
+      expect(creation.base_branch).toBeUndefined();
+      expect(creation.kickoff.mode).toBe("plan");
+      expect(creation.kickoff.prompt).toContain("endpoint repos/example/widgets/releases/42");
+      expect(creation.kickoff.prompt).toContain("never substitute the latest release");
+      expect(creation.kickoff.prompt).not.toMatch(/Synthetic release|Private release notes/);
+      expect(canvas.copilotHost.gitCalls).toEqual([]);
+      expect(canvas.writes).toEqual([]);
+      expect(canvas.deliveries).toEqual([]);
+    });
+
+    test("closed and merged PRs offer accessible summaries while queued PRs stay disabled", async ({ page, canvas }) => {
       canvas.rows.splice(4);
       for (const [index, row] of canvas.rows.entries()) {
         row.subject.type = "PullRequest";
@@ -663,7 +750,7 @@ for (const packaged of [false, true]) {
       await page.goto(canvas.url);
       await expect(page.locator(".subject-merged")).toHaveCount(1);
       await expect(page.locator(".subject-merge-queued")).toHaveCount(1);
-      for (const [index, reason] of [[0, "PR merged"], [1, "PR in merge queue"], [3, "PR closed"]]) {
+      for (const [index, reason] of [[1, "PR in merge queue"]]) {
         const row = page.locator(".row").nth(index);
         const action = row.locator(".copilot-action");
         await expect(action).toBeVisible();
@@ -682,7 +769,40 @@ for (const packaged of [false, true]) {
       await expect(page.getByRole("button", { name: /^Continue with Copilot: #3/ })).toBeVisible();
       expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
       expect(canvas.copilotHost.calls).toEqual([]);
+      for (const [index, closed] of [[0, false], [3, true]]) {
+        const row = page.locator(".row").nth(index);
+        const action = row.getByRole("button", { name: /^Summarize Changes:/ });
+        const starts = canvas.copilotHost.calls.filter(call => call.name === "create_session").length;
+        const navigations = canvas.copilotHost.calls.filter(call => call.name === "navigate_to").length;
+        await expect(action).toBeEnabled();
+        await action.hover();
+        await expect(row.getByRole("tooltip")).toHaveText("Summarize Changes");
+        await row.locator(".row-link").focus();
+        await page.keyboard.press("Tab");
+        await expect(action).toBeFocused();
+        await page.keyboard.press("Enter");
+        const dialog = page.getByRole("dialog", { name: "Summarize Changes" });
+        await expect(dialog).toBeVisible();
+        await expect(dialog).toContainText(closed
+          ? "ask whether you'd like help reopening it" : "Copilot will summarize what this merged PR changed.");
+        expect(canvas.copilotHost.calls.filter(call => call.name === "create_session")).toHaveLength(starts);
+        expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+        await dialog.getByRole("button", { name: "Start session", exact: true }).click();
+        await expect.poll(() => canvas.copilotHost.calls.filter(call => call.name === "navigate_to").length).toBe(navigations + 1);
+        const creation = canvas.copilotHost.calls.filter(call => call.name === "create_session").at(-1).args;
+        expect(creation.kickoff.mode).toBe("plan");
+        expect(creation.kickoff.prompt).toContain(`Summarize what this ${closed ? "closed, unmerged" : "merged"} pull request changed.`);
+        if (closed) {
+          expect(creation.kickoff.prompt).toContain("After the summary, use ask_user to ask whether the user would like help reopening");
+          expect(creation.kickoff.prompt).toContain("Do not reopen the PR, restore a branch, or make other changes without explicit approval.");
+        } else {
+          expect(creation.kickoff.prompt).not.toContain("After the summary, use ask_user");
+        }
+        expect(creation.base_branch).toBe("b".repeat(40));
+        await page.locator("#copilot-close").click();
+      }
       expect(canvas.writes).toEqual([]);
+      expect(canvas.deliveries).toEqual([]);
     });
 
     test("Copilot integration defaults on above Hide empty tabs and persists when toggled", async ({ page, canvas }) => {
@@ -722,7 +842,7 @@ for (const packaged of [false, true]) {
           row.unread = index % 2 === 0;
           row.subject = {
             title: `Synthetic notification ${index + 1}`,
-            type: index < 2 ? "Issue" : "Release",
+            type: index < 2 ? "Issue" : index === 2 ? "Commit" : "Release",
             url: index < 2 ? `https://api.github.com/repos/example/widgets/issues/${index + 1}` : null,
           };
         }
@@ -741,11 +861,12 @@ for (const packaged of [false, true]) {
         for (const index of [0, 1, 2, 3]) {
           await expect(rows.nth(index).locator(".row-actions")).toHaveCSS("width", "104px");
           expect((await rows.nth(index).locator(".mark-done").boundingBox()).x).toBeCloseTo(done.x);
-          await expect(rows.nth(index).getByRole("button")).toHaveCount([3, 3, 2, 2][index]);
+          await expect(rows.nth(index).getByRole("button")).toHaveCount([3, 3, 2, 3][index]);
         }
         expect((await page.locator(".repo-read").boundingBox()).x).toBeCloseTo(read.x);
         expect((await page.locator(".repo-done").boundingBox()).x).toBeCloseTo(done.x);
         await expect(rows.nth(1).locator(".mark-read")).toBeDisabled();
+        await expect(rows.nth(3).locator(".copilot-action")).toBeDisabled();
         const emptyActions = await rows.nth(2).locator(".row-actions").boundingBox();
         expect(await page.evaluate(({ x, y }) =>
           Boolean(document.elementFromPoint(x, y)?.closest("a, button")), {
