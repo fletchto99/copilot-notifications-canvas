@@ -522,6 +522,36 @@ for (const packaged of [false, true]) {
       expect(canvas.writes).toEqual([]);
     });
 
+    test("context changes during repository setup block session creation", async ({ page, canvas }) => {
+      canvas.copilotHost.repositories.splice(0);
+      canvas.rows.splice(1);
+      canvas.rows[0].subject.url = "https://api.github.com/repos/example/widgets/issues/1";
+      canvas.rows[0].subjectDetails = { state: "open" };
+      let setupComplete = false;
+      let readsAfterSetup = 0;
+      const execute = canvas.copilotHost.rpc.execute;
+      canvas.copilotHost.rpc.execute = async input => {
+        const result = await execute(input);
+        if (input.name === "add_repository") {
+          canvas.rows[0].subjectDetails.state = "closed";
+          setupComplete = true;
+        }
+        return result;
+      };
+      canvas.setRequestHook(args => {
+        if (setupComplete && args.at(-1) === "/repos/example/widgets/issues/1") readsAfterSetup++;
+      });
+      await page.goto(canvas.url);
+      await page.getByRole("button", { name: /^Investigate with Copilot:/ }).click();
+      await page.getByRole("button", { name: "Clone repository and start", exact: true }).click();
+      await expect(page.locator("#copilot-status")).toContainText("This issue's state changed.");
+      await expect(page.locator("#copilot-status")).toHaveAttribute("role", "alert");
+      expect(readsAfterSetup).toBeGreaterThan(0);
+      expect(canvas.copilotHost.calls.some(call => ["create_session", "navigate_to"].includes(call.name))).toBe(false);
+      expect(canvas.writes).toEqual([]);
+      expect(canvas.deliveries).toEqual([]);
+    });
+
     test("the popup opt-out saves only on confirmation, survives reload, and can be restored in Settings", async ({ page, canvas }) => {
       canvas.rows.splice(1);
       canvas.rows[0].subject.url = "https://api.github.com/repos/example/widgets/issues/1";

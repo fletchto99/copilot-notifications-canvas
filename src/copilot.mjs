@@ -441,6 +441,21 @@ export class CopilotHandoff {
     }
   }
 
+  async #verifyContext(target) {
+    const kind = target.pullState ? "pull" : target.issueState ? "issue" :
+      ["release", "commit"].includes(target.action) ? target.action : null;
+    if (!kind) return;
+    const details = await this.inbox.client.copilotContext(kind, this.#item(target.id), this.inbox.controller.signal);
+    if (target.pullState && (details.merged ? "merged" : details.state) !== target.pullState) throw changedPull();
+    if (target.issueState && details.state !== target.issueState) throw changedIssue();
+    if (target.action === "commit" && details.sha !== target.sha) {
+      throw new InboxError("stale_handoff", "The selected commit changed. Open the Copilot action again to confirm the exact commit.", 409);
+    }
+    if (target.action === "release" && (details.releaseId !== target.releaseId || details.url !== target.url)) {
+      throw new InboxError("stale_handoff", "This release changed. Open the Copilot action again to confirm the selected release.", 409);
+    }
+  }
+
   async #start(input) {
     await this.#active(input.id, input.direct);
     const target = this.target;
@@ -449,23 +464,11 @@ export class CopilotHandoff {
     this.host.reservations.add(key);
     try {
       const progress = message => { this.state = { id: input.id, status: "starting", message }; };
-      const contextKind = target.pullState ? "pull" : target.issueState ? "issue" :
-        ["release", "commit"].includes(target.action) ? target.action : null;
-      const [details, { all, matching }, configured] = await parallelReads([
-        contextKind ? this.inbox.client.copilotContext(contextKind, this.#item(input.id), this.inbox.controller.signal) : null,
+      const [, { all, matching }, configured] = await parallelReads([
+        this.#verifyContext(target),
         this.#sessions(target),
         input.sessionId ? null : this.host.execute("list_repositories", {}, true),
       ]);
-      if (target.pullState && (details.merged ? "merged" : details.state) !== target.pullState) {
-        throw changedPull();
-      }
-      if (target.issueState && details.state !== target.issueState) throw changedIssue();
-      if (target.action === "commit" && details.sha !== target.sha) {
-        throw new InboxError("stale_handoff", "The selected commit changed. Open the Copilot action again to confirm the exact commit.", 409);
-      }
-      if (target.action === "release" && (details.releaseId !== target.releaseId || details.url !== target.url)) {
-        throw new InboxError("stale_handoff", "This release changed. Open the Copilot action again to confirm the selected release.", 409);
-      }
       await this.#active(input.id, input.direct);
       const sessionId = input.sessionId;
       if (sessionId) {
@@ -517,6 +520,9 @@ export class CopilotHandoff {
         this.#ready(target, latest.matching, true);
         return;
       }
+      // Setup and inventory waits can outlive the earlier context check.
+      await this.#verifyContext(target);
+      await this.#active(input.id, input.direct);
       // The host queues the kickoff until ready; startup activity is not a reuse signal.
       progress("Starting session. Check the app for any permission or repository trust requests.");
       const result = await this.host.execute("create_session", {

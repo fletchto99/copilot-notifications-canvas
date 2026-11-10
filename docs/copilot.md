@@ -78,6 +78,12 @@ sessions. **Start session** creates an independent, root-level session in the
 selected repository, not a child of the session containing the canvas.
 These generic sessions do not have the app's native issue/PR linkage.
 
+After repository setup, checkout preparation, and the final existing-session
+check, the extension fetches fresh issue/PR state or release/commit metadata
+immediately before creating a session. Changed or unavailable context stops
+creation rather than using cached row state or silently changing the task.
+Open the action again to confirm any updated task or reference.
+
 The creation request includes the plan-mode prompt, which the app queues until
 the new session is ready. Startup activity does not turn it into an
 existing-session choice or discard the prompt.

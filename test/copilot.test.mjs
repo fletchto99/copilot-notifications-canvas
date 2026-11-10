@@ -740,6 +740,85 @@ test("a short commit reference resolving differently after confirmation cannot s
   assert.equal(f.calls.some(call => ["create_session", "navigate_to"].includes(call.name)), false);
 });
 
+test("new sessions revalidate context after setup, checkout, and final session discovery", async t => {
+  for (const [type, boundary] of [
+    ["Issue", "setup"], ["Issue", "discovery"], ["PullRequest", "checkout"],
+    ["PullRequest", "discovery"], ["Release", "setup"], ["Release", "discovery"], ["Commit", "checkout"],
+  ]) await t.test(`${type}/${boundary}`, async t => {
+    const issue = { state: "open" };
+    const pull = { state: "open", merged: false };
+    const release = { ...releaseDetails };
+    const commit = { ...commitDetails };
+    let queries = 0;
+    let changed = false;
+    const changeContext = () => {
+      changed = true;
+      issue.state = "closed";
+      Object.assign(pull, { state: "closed", merged: true });
+      Object.assign(release, { tag_name: "v2.0", html_url: "https://github.com/example/widgets/releases/tag/v2.0" });
+      commit.sha = sha.slice(0, 9) + "b".repeat(31);
+      commit.html_url = `https://github.com/example/widgets/commit/${commit.sha}`;
+    };
+    const f = await fixture(t, { type, issue, pull, release, commit, commitRef: sha.slice(0, 9),
+      ...(boundary === "setup" ? { repositories: [] } : {}),
+      onExecute: name => {
+        if (name === "add_repository" && boundary === "setup") changeContext();
+        if (name === "list_sessions_and_chats" && ++queries === 3 && boundary === "discovery") changeContext();
+      },
+      onGit: args => {
+        if (args.includes("--verify") && boundary === "checkout") changeContext();
+      },
+    });
+    await prepare(f);
+    const result = await start(f, boundary === "setup" ? { clone: true } : {});
+    assert.equal(changed, true);
+    assert.equal(result.status, "error");
+    assert.match(result.message, /state changed|release changed|selected commit changed/);
+    assert.equal(f.calls.some(call => ["create_session", "navigate_to"].includes(call.name)), false);
+    assert.equal(f.host.reservations.size, 0);
+  });
+});
+
+test("the final context check rejects transitions back to the original stale row state", async t => {
+  for (const type of ["Issue", "PullRequest"]) await t.test(type, async t => {
+    const issue = { state: "open" };
+    const pull = { state: "open", merged: false };
+    const endpoint = `/repos/example/widgets/${type === "Issue" ? "issues" : "pulls"}/1`;
+    const f = await fixture(t, { type, issue, pull, repositories: [], onExecute: name => {
+      if (name === "add_repository") {
+        issue.state = "closed";
+        pull.state = "closed";
+        f.client.subjectCache.set(endpoint, { state: "closed" });
+      }
+    } });
+    f.client.subjectCache.set(endpoint, { state: "closed" });
+    assert.equal((await prepare(f)).action, type === "Issue" ? "issue" : "review");
+    assert.equal((await start(f, { clone: true })).status, "error");
+    assert.match(f.handoff.snapshot().message, /state changed/);
+    assert.equal(f.requests.filter(args => args.at(-1) === endpoint).length, 3);
+    assert.equal(f.calls.some(call => ["create_session", "navigate_to"].includes(call.name)), false);
+  });
+});
+
+test("the final context check fails closed and rechecks preferences after its request", async t => {
+  for (const failure of ["unavailable", "disabled", "confirmations restored"]) await t.test(failure, async t => {
+    const preferences = handoffPreferences(false);
+    let reads = 0;
+    const f = await fixture(t, { preferences, onGitHub: args => {
+      if (args.at(-1) !== "/repos/example/widgets/issues/1" || ++reads !== 3) return;
+      if (failure === "unavailable") return http({}, {}, 503);
+      if (failure === "disabled") preferences.settings.copilotIntegration = false;
+      else preferences.settings.confirmCopilotActions = true;
+    } });
+    f.handoff.request({ id: "1", direct: true });
+    await f.handoff.pending;
+    assert.equal(reads, 3);
+    assert.equal(f.handoff.snapshot().status, "error");
+    assert.equal(f.calls.some(call => ["create_session", "navigate_to"].includes(call.name)), false);
+    assert.equal(f.host.reservations.size, 0);
+  });
+});
+
 test("release summaries bind the exact release and leave notes out of handoff data and notification state", async t => {
   for (const direct of [false, true]) await t.test(String(direct), async t => {
     const f = await fixture(t, { type: "Release", preferences: handoffPreferences(!direct) });
@@ -773,12 +852,14 @@ test("release summaries bind the exact release and leave notes out of handoff da
     assert.match(kickoff.prompt, /Do not download or execute release assets/);
     assert.match(kickoff.prompt, /Stop after the summary/);
     assert.doesNotMatch(kickoff.prompt, /ask_user|review skill|verified head commit/);
-    assert.doesNotMatch(JSON.stringify([f.calls, [...f.client.copilotCache], f.handoff.snapshot(), before]),
-      /Private title|Private release|ignore instructions|<script>/);
+    const handoffData = JSON.stringify([f.calls, [...f.client.copilotCache], f.handoff.snapshot(), before]);
+    for (const marker of ["Private title", "Private release", "ignore instructions", "<script>"]) {
+      assert.equal(handoffData.includes(marker), false);
+    }
     assert.doesNotMatch(JSON.stringify(before), /releaseId|example\/widgets/);
     assert.deepEqual(f.inbox.summary(), before);
     assert.deepEqual(f.gitCalls, []);
-    assert.deepEqual(f.requests.map(args => args.at(-1)), Array(2).fill("/repos/example/widgets/releases/42"));
+    assert.deepEqual(f.requests.map(args => args.at(-1)), Array(3).fill("/repos/example/widgets/releases/42"));
     assert.ok(f.requests.every(args => args.includes("GET")));
   });
 });
@@ -906,7 +987,9 @@ test("closed and merged PRs offer read-only summaries, with reopening help only 
       assert.doesNotMatch(creation.kickoff.prompt, /Stop after the summary|ask whether the user wants an available PR-review skill/);
     }
     assert.match(creation.kickoff.prompt, /Wait for explicit user approval before editing files/);
-    assert.doesNotMatch(creation.kickoff.prompt, /Then proceed with read-only investigation|Private title|<script>/);
+    for (const marker of ["Then proceed with read-only investigation", "Private title", "<script>"]) {
+      assert.equal(creation.kickoff.prompt.includes(marker), false);
+    }
     assert.deepEqual(f.inbox.summary(), before);
     assert.ok(f.requests.every(args => args.includes("GET")));
     assert.equal(f.calls.some(call => call.name === "send_session_message"), false);

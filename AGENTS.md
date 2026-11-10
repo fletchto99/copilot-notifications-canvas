@@ -88,7 +88,11 @@ output. Development loads source without a build; release builds bundle
   a separate new one, even with routine confirmations off. Never infer failed
   initialization from busy, idle, or unknown activity. Bind fresh-start consent to
   the shown matching sessions and recheck before creation; changed matches require
-  a new choice. Repository cloning needs separate explicit confirmation.
+  a new choice. After setup, checkout, and final session discovery, freshly verify
+  the confirmed issue/PR state and release/commit reference immediately before
+  session creation. Cached row state cannot authorize that final step. Recheck
+  preferences after the request; changed or unavailable context must stop creation.
+  Repository cloning needs separate explicit confirmation.
   Honor the user-wide `copilotIntegration` preference (default on) at the panel
   and handoff boundary. Closed and merged PRs offer read-only change summaries,
   not reviews or continued implementation. For closed unmerged PRs, summarize
