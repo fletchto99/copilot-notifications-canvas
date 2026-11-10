@@ -132,23 +132,6 @@ kickoffs. Older hosts without that capability cannot start a handoff; the
 extension never falls back to creating a nested child. Actions are unavailable
 for custom development APIs.
 
-### Diagnose a slow handoff
-
-The read-only `get_handoff_timing` canvas action reports the latest handoff's
-stage durations in milliseconds. It never starts a session or queries GitHub.
-It retains only preparation and start timings in panel memory; closing the
-panel or reloading the provider clears them. No notification content,
-repositories, URLs, commits, session IDs, tool arguments, or raw errors are
-included or written to disk.
-
-Preparation includes the whole handoff when routine confirmations are off.
-Otherwise, start is measured separately so time spent reading the confirmation
-is excluded. Pending stages report elapsed time. Independent reads overlap, so
-stage durations must not be added to calculate total time. `host_create_session`
-measures the app/tool round trip, not just worktree initialization. These timings
-end when navigation returns; they do not measure the destination agent's first
-response or when the app paints the session.
-
 ## Find notifications
 
 Search by **title, issue/PR number, or repository**, then combine it with an

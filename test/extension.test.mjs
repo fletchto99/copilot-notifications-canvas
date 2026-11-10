@@ -116,7 +116,7 @@ test("the extension entry point wires an isolated session through its complete l
     assert.equal(canvas.id, "github-notifications");
     assert.equal(canvas.inputSchema, filterSchema);
     assert.deepEqual(canvas.actions.map(action => action.name).sort(),
-      ["check_for_updates", "get_handoff_timing", "get_settings", "get_state", "load_more", "refresh", "set_filters"]);
+      ["check_for_updates", "get_settings", "get_state", "load_more", "refresh", "set_filters"]);
     for (const action of canvas.actions) {
       assert.equal(typeof action.handler, "function");
       assert.equal(action.inputSchema, action.name === "set_filters" ? filterSchema : emptySchema);
@@ -131,8 +131,6 @@ test("the extension entry point wires an isolated session through its complete l
     assert.equal(desktopStatus.state, "off");
     assert.equal(desktopStatus.platform, process.platform);
     assert.equal(desktopStatus.supported, true);
-    assert.equal(calls.length, 0);
-    assert.deepEqual(await invoke("get_handoff_timing", "github-notifications-startup"), { preparation: null, start: null });
     assert.equal(calls.length, 0);
     await canvas.onClose({ instanceId: "github-notifications-startup" });
     for (const signal of signals) {

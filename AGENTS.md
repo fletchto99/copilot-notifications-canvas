@@ -69,9 +69,6 @@ output. Development loads source without a build; release builds bundle
   and agent-facing results. Use `Inbox.summary()` for agent actions; detailed
   snapshots belong only in the protected renderer. Do not log raw GitHub
   responses, subprocess stderr, credentials, or loopback capability URLs.
-  Read-only handoff timing diagnostics return only fixed stage names, statuses,
-  and durations. Keep only the latest preparation/start in panel memory, never
-  persist or log targets, identifiers, arguments, or raw errors with timings.
 - Copilot handoffs are a click-confirmed exception: the selected validated GitHub
   reference and fixed task instructions may enter host tool calls and Copilot
   session history. Never copy notification titles, bodies, or the surrounding

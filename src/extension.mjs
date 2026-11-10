@@ -23,11 +23,10 @@ const updates = new Updates({ log });
 
 async function action(ctx, run, syncSettings = false) {
   try {
-    const instance = instances.get(ctx.instanceId);
-    const entry = await instance?.pending;
+    const entry = await instances.get(ctx.instanceId)?.pending;
     if (!entry) throw new InboxError("not_open", "Open the notifications canvas first.", 404);
     if (syncSettings) await entry.inbox.syncSettings(preferences);
-    return await run(entry.inbox, instance.copilot);
+    return await run(entry.inbox);
   } catch (error) {
     if (error instanceof InboxError) throw new CanvasError(error.code, error.message);
     log("Unexpected notifications action failure.", { level: "error" });
@@ -79,12 +78,6 @@ session = await joinSession({
         handler: ctx => action(ctx, inbox => inbox.summary()),
       },
       {
-        name: "get_handoff_timing",
-        description: "Read in-memory durations for the latest handoff preparation and start. Returns only fixed stage names, statuses and milliseconds; never starts work or returns notification content.",
-        inputSchema: emptySchema,
-        handler: ctx => action(ctx, (_inbox, copilot) => copilot.timingSummary()),
-      },
-      {
         name: "refresh",
         description: "Refresh loaded pages, respecting GitHub polling and rate limits; return aggregate status.",
         inputSchema: emptySchema,
@@ -114,7 +107,7 @@ session = await joinSession({
             inbox.close();
             throw error;
           });
-          instances.set(ctx.instanceId, { inbox, copilot, pending });
+          instances.set(ctx.instanceId, { inbox, pending });
         }
         opening = instances.get(ctx.instanceId);
         const entry = await opening.pending;

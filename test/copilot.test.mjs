@@ -15,7 +15,7 @@ const runDetails = {
   id: 42, run_attempt: 2, head_sha: sha, status: "completed", conclusion: "failure",
   repository: { full_name: "example/widgets" }, html_url: "https://github.com/example/widgets/actions/runs/42",
 };
-async function fixture(t, { type = "Issue", reason = "author", authorId = 8, runId = 42, run = runDetails, runAttempts = {}, pull = {}, preferences, clock, onGitHub, ...hostOptions } = {}) {
+async function fixture(t, { type = "Issue", reason = "author", authorId = 8, runId = 42, run = runDetails, runAttempts = {}, pull = {}, preferences, onGitHub, ...hostOptions } = {}) {
   const requests = [];
   const client = new GitHubClient({ run: async args => {
     requests.push(args);
@@ -47,7 +47,7 @@ async function fixture(t, { type = "Issue", reason = "author", authorId = 8, run
   }
   const f = copilotHost(hostOptions);
   await f.host.refresh();
-  const handoff = new CopilotHandoff(inbox, f.host, { preferences, clock });
+  const handoff = new CopilotHandoff(inbox, f.host, { preferences });
   t.after(() => inbox.close());
   return { ...f, inbox, client, handoff, requests };
 }
@@ -84,62 +84,6 @@ function handoffPreferences(confirmCopilotActions = true) {
   };
 }
 
-test("handoff timing separates preparation from start and excludes confirmation wait and target data", async t => {
-  let now = 0;
-  const f = await fixture(t, { clock: () => now, onExecute: name => {
-    now += name === "create_session" ? 6000 : 100;
-  } });
-  assert.deepEqual(f.handoff.timingSummary(), { preparation: null, start: null });
-  await prepare(f);
-  const preparation = f.handoff.timingSummary().preparation;
-  assert.equal(preparation.elapsedMs, 200);
-  assert.equal(preparation.status, "ready");
-  now += 30_000;
-  await start(f);
-  const timing = f.handoff.timingSummary();
-  assert.deepEqual(timing.preparation, preparation);
-  assert.equal(timing.start.elapsedMs, 6500);
-  assert.equal(timing.start.status, "started");
-  assert.deepEqual(timing.start.stages.find(stage => stage.stage === "host_create_session"),
-    { stage: "host_create_session", status: "success", elapsedMs: 6000 });
-  for (const phase of Object.values(timing)) {
-    assert.deepEqual(Object.keys(phase).sort(), ["elapsedMs", "stages", "status"]);
-    for (const stage of phase.stages) assert.deepEqual(Object.keys(stage).sort(), ["elapsedMs", "stage", "status"]);
-  }
-  assert.doesNotMatch(JSON.stringify(timing), /example|Private title|session_id|https:|token|22222222/);
-  timing.start.stages[0].stage = "changed";
-  assert.notEqual(f.handoff.timingSummary().start.stages[0].stage, "changed");
-  await prepare(f);
-  assert.equal(f.handoff.timingSummary().start, null);
-});
-
-test("handoff timing exposes pending stages and sanitized failures without replaying work", async t => {
-  let now = 0;
-  const entered = deferred();
-  const held = deferred();
-  t.after(() => held.resolve());
-  const f = await fixture(t, { clock: () => now, onExecute: async name => {
-    if (name !== "create_session") return;
-    entered.resolve();
-    await held.promise;
-    throw new Error("SECRET host response");
-  } });
-  await prepare(f);
-  const pending = start(f);
-  await entered.promise;
-  now = 4500;
-  const running = f.handoff.timingSummary().start;
-  assert.equal(running.status, "running");
-  assert.deepEqual(running.stages.at(-1), { stage: "host_create_session", status: "running", elapsedMs: 4500 });
-  held.resolve();
-  await pending;
-  const timing = f.handoff.timingSummary();
-  assert.equal(timing.start.status, "error");
-  assert.equal(timing.start.stages.at(-1).status, "error");
-  assert.doesNotMatch(JSON.stringify(timing), /SECRET|host response|example|Private title/);
-  assert.equal(f.calls.filter(call => call.name === "create_session").length, 1);
-});
-
 test("preparation overlaps independent GitHub and host inventory reads", async t => {
   const viewerEntered = deferred();
   const viewer = deferred();
@@ -171,7 +115,7 @@ test("preparation overlaps independent GitHub and host inventory reads", async t
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.calls.some(call => call.name === "list_sessions_and_chats"), true,
     "Session inventory should not wait for repository inventory");
-  assert.equal(f.handoff.timingSummary().preparation.status, "running");
+  assert.ok(f.handoff.pending);
   repositories.resolve();
   await f.handoff.pending;
   assert.equal(f.handoff.snapshot().status, "ready");
@@ -214,9 +158,7 @@ test("start overlaps PR and inventory reads but drains them before reporting a f
   assert.equal((await pending).status, "error");
   assert.deepEqual(f.gitCalls, []);
   assert.equal(f.calls.some(call => ["create_session", "navigate_to"].includes(call.name)), false);
-  const timing = f.handoff.timingSummary();
-  assert.equal(timing.start.status, "error");
-  assert.equal(timing.start.stages.some(stage => stage.status === "running"), false);
+  assert.equal(f.handoff.pending, undefined);
 });
 
 test("routine confirmations are remembered only on confirmation and existing sessions always require a choice", async t => {
