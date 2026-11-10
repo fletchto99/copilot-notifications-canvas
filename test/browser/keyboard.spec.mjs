@@ -350,6 +350,12 @@ for (const packaged of [false, true]) {
       await expect(page.locator(".row")).toHaveCount(3);
       let release;
       const held = new Promise(resolve => { release = resolve; });
+      let releaseFilter;
+      const filterHeld = new Promise(resolve => { releaseFilter = resolve; });
+      await page.route("**/api/filters", async route => {
+        await filterHeld;
+        await route.continue();
+      });
       canvas.setRequestHook(args => args.includes("DELETE") ? held : undefined);
       try {
         await rowLink(page, "1").focus();
@@ -360,16 +366,20 @@ for (const packaged of [false, true]) {
         await expect(page.locator('[data-focus-key="done:2"]')).toHaveAttribute("aria-busy", "true");
         await page.keyboard.press("i");
         await page.keyboard.press("/");
+        const filtering = page.waitForRequest("**/api/filters");
         await page.getByRole("searchbox").fill("Needle tool");
+        await filtering;
         await rowLink(page, "3").focus();
         await page.keyboard.press("Shift+KeyE");
         await page.keyboard.press("/");
+        releaseFilter();
         release();
         await expect(page.locator(".row")).toHaveCount(1);
         await expect(page.getByRole("searchbox")).toBeFocused();
         await expect.poll(() => canvas.writes.toSorted()).toEqual(["1", "2"]);
         expect(canvas.doneWrites.toSorted()).toEqual(["1", "2"]);
       } finally {
+        releaseFilter();
         release();
       }
     });

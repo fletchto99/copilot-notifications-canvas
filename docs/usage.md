@@ -20,13 +20,14 @@ attention tab. The toolbar opens GitHub's inbox, refreshes, or opens Settings.
 | Tab | Includes |
 | --- | --- |
 | All | Every loaded notification in the current view; selected by default |
+| Mine | Issues, PRs, and discussions confirmed as authored by your signed-in account |
 | Assigned | Assignments |
 | Participating | GitHub's participation reasons, including assignments, mentions, and review requests |
 | Mentioned | Personal mentions |
 | Team Mentioned | Mentions of your teams |
 | Review Requested | Requests for your review |
 
-Tabs reflect GitHub's current reason, not your full participation history, and
+Except for Mine, tabs reflect GitHub's current reason, not your full participation history, and
 can overlap. Participating includes comments, authorship, mentions, assignments,
 manual subscriptions, state changes, invitations, review requests, and security
 advisory credit.
@@ -35,6 +36,19 @@ Tab counts ignore search; the status line combines the selected tab and search.
 Refresh, Load more, and clearing search preserve the tab. **Hide empty tabs**
 defaults on, but **All** and the selected tab remain visible. Search does not
 change tab visibility.
+
+Mine checks the item's actual author rather than the notification reason, which
+can change after a mention or other activity. It covers loaded notifications,
+not every item you have authored on GitHub. Authored rows show italic *mine*
+after GitHub's reason and before the timestamp. Read rows can also be Mine.
+
+Authorship loads in the background for all loaded issues, PRs, and discussions,
+including filtered rows and collapsed groups. A `+` after the Mine count means
+some authorship is pending or unavailable; the tab stays visible and explains
+the incomplete count when selected. Unknown items are not treated as unowned
+or included in Mine's bulk actions. New results update the count and selection;
+bulk actions still require the current selection and retries keep their original
+targets.
 
 Counters show **N total · M unread**. Read rows have no unread dot and use
 lighter-weight titles. Each row shows its type/number, reason, update time, and
@@ -76,7 +90,10 @@ never hides a notification or guesses that it is closed.
 ### Loading and freshness
 
 Status loads in the background for loaded search/tab matches in expanded groups,
-including rows below the viewport. Collapsed groups wait until expanded.
+including rows below the viewport. Authorship checks reuse issue, PR, and
+discussion detail requests, so those statuses also warm for filtered and
+collapsed rows. Merge queue and check-suite lookups wait until their rows are
+shown in expanded groups.
 Up to twenty lookups run across panels sharing the provider; results are shared
 and cached in memory for five minutes, or longer if GitHub requires it.
 Desktop polling does not fetch these details.
@@ -89,7 +106,9 @@ Unavailable states explain access, SSO, or other errors. Status-loading failures
 retry automatically without disabling inbox actions or hiding usable rows.
 
 Issue/PR/check status uses read-only REST; discussions and PR merge queues use
-GraphQL. Discussion checks fetch state only, not titles, bodies, or comments.
+GraphQL. Issue/PR authorship compares REST author IDs with the signed-in account
+from `/user`; discussion checks include `viewerDidAuthor`, not titles, bodies,
+or comments. IDs stay in provider memory, never in the renderer or agent results.
 Custom development REST APIs do not query github.com for GraphQL details.
 Queue failures preserve known REST state. A primary GraphQL quota limit pauses
 those checks, not REST polling or Read/Done; authentication and secondary limits

@@ -9,7 +9,7 @@ across sessions and preserved during packaged upgrades.
 | --- | --- | --- |
 | Show notifications | All | **All** shows read and unread inbox items, excluding Done. **Unread only** shows unread items. Switching reloads the first page. No per-notification state is saved locally. |
 | Group By | Repository | **Repository**: preserve GitHub's API order, grouping repositories by first appearance. **All notifications**: one collapsible group in API order. **Date**: newest local calendar day first, using REST update times for buckets and API order for rows. |
-| Hide empty tabs | On | Hides attention tabs with zero loaded notifications. **All** and the selected tab always stay visible. Counts ignore search; tabs reappear when matching notifications are loaded. Saved choices are preserved. |
+| Hide empty tabs | On | Hides attention tabs with zero loaded notifications. **All**, the selected tab, and **Mine** with incomplete authorship checks stay visible. Counts ignore search; tabs reappear when matching notifications are loaded. Saved choices are preserved. |
 | Theme | Match Copilot | **Match Copilot** uses Copilot's theme colors, falling back to the OS theme when opened outside Copilot. **Dark** and **Light** use fixed palettes. |
 | Keyboard shortcuts | On | Enables J/K navigation, I Read, Shift+E Done, / search, and ? help inside the focused canvas. Turn off to disable character shortcuts and hide the toolbar help icon; native Tab/Enter remain available. |
 | Auto-open | Off | Opens a missing Notifications panel when its provider attaches to a new or resumed session, unless you previously closed it in that session. Existing panels are left alone. |

@@ -11,6 +11,7 @@ for (const packaged of [false, true]) {
           title: "Synthetic status result", type: "Issue",
           url: "https://api.github.com/repos/example/widgets/issues/1",
         };
+        canvas.rows[0].authoredByViewer = true;
         let release;
         const held = new Promise(resolve => { release = resolve; });
         canvas.setRequestHook(async args => {
@@ -45,6 +46,7 @@ for (const packaged of [false, true]) {
             release();
             await page.clock.runFor(1000);
             await expect(page.locator(".subject-open")).toHaveCount(1);
+            await expect(page.locator(".notification-mine:visible")).toHaveCount(1);
             expect(await original.evaluate(node => node.isConnected)).toBe(true);
             if (rowLink) opened = page.context().waitForEvent("page");
           } finally {

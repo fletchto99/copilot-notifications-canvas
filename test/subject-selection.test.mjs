@@ -7,15 +7,15 @@ import { http, thread } from "./fixtures.mjs";
 
 async function setup(t, count = 250) {
   const rows = Array.from({ length: count }, (_, index) => thread(String(1000000000000 + index), {
-    subject: { type: "Issue", title: `Synthetic issue ${index + 1}`,
-      url: `https://api.github.com/repos/example/widgets/issues/${index + 1}` },
+    subject: { type: "CheckSuite", title: `Synthetic check ${index + 1}`,
+      url: `https://api.github.com/repos/example/widgets/actions/runs/${index + 1}` },
   }));
   const requests = [];
   const client = new GitHubClient({ run: async args => {
     const path = args.at(-1);
     requests.push({ path, method: args[4] });
     if (args.includes("PATCH") || args.includes("DELETE")) return http(null, {}, args.includes("PATCH") ? 205 : 204);
-    return path.startsWith("/notifications?") ? http(rows) : http({ state: "closed" });
+    return path.startsWith("/notifications?") ? http(rows) : http({ status: "completed", conclusion: "success" });
   } });
   const inbox = new Inbox(client);
   const server = await startServer(inbox, { development: null });
@@ -65,7 +65,7 @@ test("large selections use bounded chunks, publish atomically and leave ordinary
   }
   await f.call("state");
   await f.finish();
-  assert.deepEqual(f.statuses().map(({ path }) => path), positions.map(index => `/repos/example/widgets/issues/${index + 1}`));
+  assert.deepEqual(f.statuses().map(({ path }) => path), positions.map(index => `/repos/example/widgets/actions/runs/${index + 1}`));
   assert.equal((await f.call("read", { id: f.rows[0].id })).status, 202);
   assert.equal((await f.call("done", { id: f.rows[1].id })).status, 202);
   await f.inbox.batch.done;
@@ -95,7 +95,7 @@ test("stale, duplicate and out-of-order chunks cannot replace a newer selection"
   assert.equal((await f.select({ version: 2, offset: 2, positions: [2] })).status, 409);
   await f.call("state");
   await f.finish();
-  assert.deepEqual(f.statuses().map(({ path }) => path), ["/repos/example/widgets/issues/5", "/repos/example/widgets/issues/4"]);
+  assert.deepEqual(f.statuses().map(({ path }) => path), ["/repos/example/widgets/actions/runs/5", "/repos/example/widgets/actions/runs/4"]);
   const snapshot = (await f.call("state")).data;
   assert.equal(snapshot.subjectSelectionVersion, 2);
   assert.equal((await f.select({ version: snapshot.subjectSelectionVersion + 1, positions: [] })).status, 200,
@@ -109,7 +109,7 @@ test("refresh, filters and triage invalidate position mappings instead of select
       await f.select({ positions: [0], complete: false });
       if (action === "refresh") f.rows.reverse();
       const result = await f.call(action, action === "refresh" ? { force: true } :
-        action === "filters" ? { query: "issue 2" } : { id: f.rows[0].id });
+        action === "filters" ? { query: "check 2" } : { id: f.rows[0].id });
       assert.equal(result.status, ["read", "done"].includes(action) ? 202 : 200, "Ordinary actions remain available during an upload");
       await f.inbox.batch.done;
       const stale = await f.select({ offset: 1, positions: [1], complete: true });
@@ -124,7 +124,7 @@ test("refresh, filters and triage invalidate position mappings instead of select
       await f.call("state");
       await f.finish();
       const expected = action === "refresh" ? 3 : action === "filters" || action === "done" ? 2 : 1;
-      assert.deepEqual(f.statuses().map(({ path }) => path), [`/repos/example/widgets/issues/${expected}`]);
+      assert.deepEqual(f.statuses().map(({ path }) => path), [`/repos/example/widgets/actions/runs/${expected}`]);
     });
 
   }
@@ -138,7 +138,7 @@ test("a stale first chunk requests a fresh snapshot without clearing an existing
   assert.deepEqual(stale.data, { status: "stale", version: 1 });
   await f.call("state");
   await f.finish();
-  assert.deepEqual(f.statuses().map(({ path }) => path), ["/repos/example/widgets/issues/1"]);
+  assert.deepEqual(f.statuses().map(({ path }) => path), ["/repos/example/widgets/actions/runs/1"]);
   assert.equal((await f.select({ version: 2, positions: [999] })).status, 400,
     "Positions outside the current snapshot remain invalid");
 });

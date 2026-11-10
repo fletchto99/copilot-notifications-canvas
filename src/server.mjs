@@ -122,6 +122,9 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
   let subjectRefresh;
   let subjectFailure = null;
   let subjectRetryAt = 0;
+  let authorshipRefresh;
+  let authorshipFailure = null;
+  let authorshipRetryAt = 0;
   let subjectView = { groupBy: "repo", timeZone: null };
   let subjectSelection = null;
   let subjectSelectionVersion = 0;
@@ -200,8 +203,20 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         log("Unexpected notification subject status failure.", { level: "error" });
       }).finally(() => { subjectRefresh = undefined; });
     }
+    if (!authorshipRefresh && !signal.aborted && inbox.client.now() >= authorshipRetryAt &&
+        inbox.client.authorshipNeedsRefresh(inbox.loadedItems())) {
+      authorshipRefresh = inbox.client.refreshAuthorship(() => inbox.loadedItems(), signal).then(() => {
+        authorshipFailure = null;
+      }).catch(error => {
+        if (error instanceof InboxError && error.code === "closed") return;
+        authorshipFailure = "Authorship checks are unavailable. Inspect the extension log.";
+        authorshipRetryAt = inbox.client.now() + RETRY_MS;
+        log("Unexpected notification authorship failure.", { level: "error" });
+      }).finally(() => { authorshipRefresh = undefined; });
+    }
     return {
-      ...state, development, subjectSelectionVersion, subjectsLoading: Boolean(subjectRefresh),
+      ...state, development, subjectSelectionVersion, subjectsLoading: Boolean(subjectRefresh || authorshipRefresh),
+      authorshipError: state.authorship.pending ? authorshipFailure : null,
       groups: state.groups.map(group => ({
         ...group, items: group.items.map(item => {
           const subject = inbox.client.subjectSnapshot(item);
@@ -468,6 +483,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
       });
       await inbox.batch.done;
       await subjectRefresh;
+      await authorshipRefresh;
     },
   };
 }

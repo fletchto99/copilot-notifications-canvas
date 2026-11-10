@@ -1,10 +1,14 @@
 import AxeBuilder from "@axe-core/playwright";
 import { test, expect } from "./fixtures.mjs";
 
+test.beforeEach(async ({ canvas }) => {
+  for (const row of canvas.rows) row.subject.url = `https://api.github.com/repos/${row.repository.full_name}/issues/${row.id}`;
+});
+
 test("attention tabs use tighter horizontal spacing without shrinking their height", async ({ page, canvas }) => {
   canvas.rows.splice(6);
   await canvas.preferences.update({ hideEmptyTabs: false });
-  await page.setViewportSize({ width: 720, height: 900 });
+  await page.setViewportSize({ width: 820, height: 900 });
   await page.goto(canvas.url);
   await expect(page.locator(".row")).toHaveCount(6);
   const strip = page.getByRole("tablist", { name: "Attention filters" });
@@ -20,7 +24,7 @@ test("attention tabs use tighter horizontal spacing without shrinking their heig
   const last = await tabs.last().boundingBox();
   expect(last.x + last.width - first.x).toBeLessThanOrEqual((await strip.boundingBox()).width);
   await expect(page.locator("#attention-next")).toBeHidden();
-  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(720);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(820);
   expect(canvas.writes).toEqual([]);
 });
 
@@ -107,10 +111,10 @@ for (const packaged of [false, true]) {
       await expect(toggle).toBeChecked();
       await toggle.click();
       await expect(toggle).not.toBeChecked();
-      await expect(tabs).toHaveCount(6);
+      await expect(tabs).toHaveCount(7);
       expect((await canvas.preferences.read()).hideEmptyTabs).toBe(false);
       await page.reload();
-      await expect(tabs).toHaveCount(6);
+      await expect(tabs).toHaveCount(7);
       await page.getByLabel("Settings", { exact: true }).click();
       await expect(toggle).not.toBeChecked();
       await toggle.click();

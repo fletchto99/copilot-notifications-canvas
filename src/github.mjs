@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { setTimeout as wait } from "node:timers/promises";
-import { apiTarget, DEFAULT_API_BASE_URL, InboxError, normalizeThreads, notificationLink, reportedWorkflow } from "./model.mjs";
+import { apiTarget, authorshipTypes, DEFAULT_API_BASE_URL, InboxError, normalizeThreads, notificationLink, reportedWorkflow } from "./model.mjs";
 
 export const POLL_MS = 60_000;
 export const RETRY_MS = 120_000;
@@ -8,7 +8,7 @@ export const SUBJECT_POLL_MS = 5 * 60_000;
 export const WRITE_CONCURRENCY = 10;
 const API_ORIGIN = DEFAULT_API_BASE_URL;
 const MERGE_QUEUE_QUERY = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){isInMergeQueue}}}";
-const DISCUSSION_QUERY = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){discussion(number:$number){closed isAnswered stateReason}}}";
+const DISCUSSION_QUERY = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){discussion(number:$number){closed isAnswered stateReason viewerDidAuthor}}}";
 const RUN_MATCH_WINDOW_MS = 2 * 60_000;
 const RUN_SEARCH_LOOKBACK_MS = 7 * 24 * 60 * 60_000;
 const FAILED_CHECK_STATES = ["failure", "timed_out", "startup_failure"];
@@ -170,6 +170,11 @@ function discussionState(body, secondaryLimit) {
 }
 
 function subjectState(body, type) {
+  if (type === "Viewer") {
+    const id = userId(body);
+    if (!id) throw new InboxError("viewer_unavailable", "GitHub did not provide the signed-in account's ID. Authorship is unavailable.");
+    return id;
+  }
   if (type === "CheckSuite") {
     if (!["queued", "in_progress", "completed", "waiting", "requested", "pending"].includes(body?.status) ||
         body.status === "completed" && !["success", "failure", "neutral", "cancelled", "skipped",
@@ -185,6 +190,21 @@ function subjectState(body, type) {
   }
   if (type === "PullRequest") return body.merged ? "merged" : body.state === "closed" ? "closed" : body.draft ? "draft" : "open";
   return body.state === "closed" && ["not_planned", "duplicate"].includes(body.state_reason) ? body.state_reason : body.state;
+}
+
+function userId(user) {
+  const id = user?.id;
+  return (typeof id === "string" || Number.isSafeInteger(id)) && /^[1-9]\d{0,19}$/.test(String(id)) ? String(id) : null;
+}
+
+function subjectAuthorship(body, type) {
+  if (!authorshipTypes.includes(type)) return undefined;
+  if (type === "Discussion") {
+    const mine = body?.data?.repository?.discussion?.viewerDidAuthor;
+    return typeof mine === "boolean" ? { mine } : { error: "GitHub did not provide discussion authorship." };
+  }
+  const authorId = userId(body?.user);
+  return authorId ? { authorId } : { error: "GitHub did not provide this item's author ID." };
 }
 
 export function firstPage({ mode = "unread", matchGitHubInbox = true } = {}) {
@@ -374,6 +394,43 @@ export class GitHubClient {
     };
   }
 
+  authorshipSnapshot(item) {
+    if (!authorshipTypes.includes(item.type)) return {};
+    const endpoint = subjectEndpoint(item, this.target);
+    if (!endpoint) return { mine: null, authorshipError: item.type === "Discussion" && this.target.custom
+      ? "Discussion authorship is unavailable for custom development APIs."
+      : "GitHub did not provide a supported link for this item's authorship." };
+    const cached = this.subjectCache.get(endpoint);
+    const viewer = item.type === "Discussion" ? null : this.subjectCache.get("/user");
+    const graphqlBlocked = item.type === "Discussion" && this.now() < this.graphqlBlockedUntil
+      ? this.graphqlLastError?.message ?? rateLimitError(true).message : null;
+    const error = cached?.error?.message ?? cached?.authorship?.error ?? viewer?.error?.message ??
+      (!cached ? graphqlBlocked : null);
+    const mine = error ? null : item.type === "Discussion" ? cached?.authorship?.mine ?? null :
+      cached?.authorship?.authorId && viewer?.state ? cached.authorship.authorId === viewer.state : null;
+    return { mine, authorshipError: error };
+  }
+
+  authorshipNeedsRefresh(items) {
+    if (this.now() < this.blockedUntil) return false;
+    const authors = items.filter(item => authorshipTypes.includes(item.type));
+    const viewer = this.subjectCache.get("/user");
+    return (authors.some(item => item.type !== "Discussion" && subjectEndpoint(item, this.target)) &&
+      (!viewer || this.now() >= viewer.nextRefreshAt)) ||
+      this.subjectsNeedRefresh(authors, { stateOnly: true });
+  }
+
+  async refreshAuthorship(items, signal) {
+    const authors = () => (typeof items === "function" ? items() : items)
+      .filter(item => authorshipTypes.includes(item.type));
+    const needsViewer = () => authors().some(item => item.type !== "Discussion" && subjectEndpoint(item, this.target));
+    if (needsViewer()) {
+      await this.#withRequestSlot(() => this.#refreshSubject("/user", { type: "Viewer", updatedAt: "" },
+        signal, "state", needsViewer), signal, this.subjectWorkers, this.subjectWaiters, SUBJECT_CONCURRENCY);
+    }
+    await this.refreshSubjects(authors, signal, { stateOnly: true });
+  }
+
   #jobSearch(item) {
     if (item.type !== "CheckSuite") return null;
     const endpoint = subjectEndpoint(item, this.target);
@@ -408,6 +465,9 @@ export class GitHubClient {
   }
 
   invalidateSubjects(items) {
+    this.subjectInvalidations.set("/user", (this.subjectInvalidations.get("/user") ?? 0) + 1);
+    const viewer = this.subjectCache.get("/user");
+    if (viewer && !viewer.error) viewer.nextRefreshAt = 0;
     for (const item of items) {
       const key = subjectKey(item, this.target);
       if (key) this.subjectInvalidations.set(key, (this.subjectInvalidations.get(key) ?? 0) + 1);
@@ -422,7 +482,7 @@ export class GitHubClient {
     }
   }
 
-  subjectsNeedRefresh(items) {
+  subjectsNeedRefresh(items, { stateOnly = false } = {}) {
     const now = this.now();
     if (now < this.blockedUntil) return false;
     const due = (cache, endpoint, item) => {
@@ -433,6 +493,7 @@ export class GitHubClient {
     return items.some(item => {
       if (item.type === "Discussion" && now < this.graphqlBlockedUntil) return false;
       const endpoint = subjectEndpoint(item, this.target);
+      if (stateOnly) return endpoint && due(this.subjectCache, endpoint, item);
       const jobs = this.#jobSearch(item);
       if (jobs?.eligible && due(this.jobCache, jobs.endpoint, item)) return true;
       if (!endpoint) {
@@ -447,7 +508,7 @@ export class GitHubClient {
     });
   }
 
-  async refreshSubjects(items, signal) {
+  async refreshSubjects(items, signal, { stateOnly = false } = {}) {
     let previousItems;
     let subjects;
     let selectedKeys;
@@ -493,7 +554,7 @@ export class GitHubClient {
               return !failed && selectedKeys.has(endpoint);
             };
             let completed = true;
-            for (const kind of subjectEndpoint(item, this.target) ? ["state", "queue", "run", "jobs"] : ["match", "jobs"]) {
+            for (const kind of stateOnly ? ["state"] : subjectEndpoint(item, this.target) ? ["state", "queue", "run", "jobs"] : ["match", "jobs"]) {
               if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
               if (!selected()) {
                 completed = false;
@@ -609,7 +670,7 @@ export class GitHubClient {
       if (!selected()) return false;
       if ((mergeQueue || item.type === "Discussion") && this.now() < this.graphqlBlockedUntil) return;
       const cached = cache.get(endpoint);
-      const invalidationKey = runJobs ? endpoint : subjectKey(item, this.target);
+      const invalidationKey = runJobs || item.type === "Viewer" ? endpoint : subjectKey(item, this.target);
       const generation = this.subjectInvalidations.get(invalidationKey) ?? 0;
       try {
         started = true;
@@ -626,6 +687,7 @@ export class GitHubClient {
         if (error.code === "graphql_rate_limited" && error.requestDeferred) return;
         cache.set(endpoint, {
           state: runMatch || runJobs ? null : cached?.state ?? null, checkedAt: cached?.checkedAt,
+          ...(cached?.authorship ? { authorship: cached.authorship } : {}),
           error: { code: error.code, message: error.message },
           nextRefreshAt: Math.max(this.blockedUntil, error.retryAt ?? 0, this.now() + RETRY_MS),
         });
@@ -829,7 +891,8 @@ export class GitHubClient {
           ? "API sign-in expired. Run gh auth login --hostname <host> for the selected development API host. This view retries automatically while visible."
           : "GitHub sign-in expired. Run gh auth login --hostname github.com. This view retries automatically while visible.", 401);
       if (subjectType && (status === 403 || status === 404)) throw new InboxError("subject_unavailable",
-        mergeQueue ? "GitHub denied access to merge queue status. Check repository access and organization SSO."
+        subjectType === "Viewer" ? "GitHub denied access to the signed-in account. Authorship is unavailable."
+          : mergeQueue ? "GitHub denied access to merge queue status. Check repository access and organization SSO."
           : runJobs ? "GitHub denied access to job details. Check repository access and organization SSO."
           : checkRun || runMatch ? "GitHub denied access to workflow runs. Check repository access and organization SSO."
           : "GitHub denied access to this item's status. Check repository access and organization SSO.", status);
@@ -847,6 +910,7 @@ export class GitHubClient {
         subjectType ? "GitHub returned 304 without a cached subject status." : "GitHub returned 304 without a cached inbox.");
       let items = cached?.items;
       let next = cached?.next;
+      let authorship = cached?.authorship;
       if (status === 200) {
         let body;
         try {
@@ -859,11 +923,13 @@ export class GitHubClient {
           runMatch ? inferredRunLink(body, runMatch, this.target, headers.link) : checkRun ? checkRunLink(body, endpoint, this.target) :
           mergeQueue ? mergeQueueState(body, retry > 0) : discussion ? discussionState(body, retry > 0) :
           subjectType ? subjectState(body, subjectType) : normalizeThreads(body, this.target);
+        if (subjectType && !mergeQueue && !checkRun && !runMatch && !runJobs) authorship = subjectAuthorship(body, subjectType);
         if (!subjectType) next = nextPage(headers.link, endpoint, this.target);
       }
       if (subjectType) {
         const subject = {
           state: status === 304 ? cached.state : items,
+          ...(authorship ? { authorship } : {}),
           checkedAt: fetchedAt,
           nextRefreshAt: Math.max(fetchedAt + poll, this.blockedUntil, graphql ? this.graphqlBlockedUntil : 0),
           etag: headers.etag ?? (status === 304 ? cached.etag : undefined),

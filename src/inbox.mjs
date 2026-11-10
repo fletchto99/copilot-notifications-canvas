@@ -62,7 +62,7 @@ export class Inbox {
 
   groups(items = this.loadedItems()) {
     const positions = new Map(items.map((item, index) => [item.id, index]));
-    return groupThreads(items, this.filters).map(group => ({
+    return groupThreads(items.map(item => ({ ...item, ...this.client.authorshipSnapshot(item) })), this.filters).map(group => ({
       ...group,
       items: group.items.map(item => ({ ...item, apiPosition: positions.get(item.id) })),
       selectionKey: selectionKey(group, this.filters),
@@ -87,6 +87,7 @@ export class Inbox {
     const groups = this.groups(items);
     const snapshotVersion = ++this.snapshotVersion;
     const batches = this.batch.snapshots(items, groups, snapshotVersion);
+    const authoredItems = items.map(item => ({ ...item, ...this.client.authorshipSnapshot(item) }));
     return {
       snapshotVersion,
       filters: { ...this.filters },
@@ -99,7 +100,11 @@ export class Inbox {
       unread: items.filter(item => item.unread).length,
       matching: groups.reduce((count, group) => count + group.items.length, 0),
       selectionKey: this.shownSelection(groups).selectionKey,
-      attentionCounts: attentionCounts(items),
+      attentionCounts: attentionCounts(authoredItems),
+      authorship: {
+        pending: authoredItems.filter(item => item.mine === null && !item.authorshipError).length,
+        unavailable: authoredItems.filter(item => item.mine === null && item.authorshipError).length,
+      },
       hasMore: Boolean(this.pages.at(-1)?.next),
       needsRefresh: this.needsRefresh || this.viewChanged,
       lastFetchedAt: this.pages.length ? Math.min(...this.pages.map(page => page.fetchedAt)) : null,

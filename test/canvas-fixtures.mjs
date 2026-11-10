@@ -50,6 +50,9 @@ export async function createCanvasFixture({
     if (endpoint === "/repos/fletchto99/copilot-notifications-canvas/releases/latest" && args.includes("GET")) {
       return http({ tag_name: `v${CURRENT_VERSION}`, draft: false, prerelease: false });
     }
+    if (endpoint === (target.custom ? `${target.baseUrl}/user` : "/user") && args.includes("GET")) {
+      return http({ id: 100 });
+    }
     if (endpoint === "graphql") {
       assert.ok(args.includes("POST") && !target.custom);
       const value = name => args.find(arg => arg.startsWith(`${name}=`))?.slice(name.length + 1);
@@ -57,8 +60,10 @@ export async function createCanvasFixture({
       const row = rows.find(row => row.subject.url ===
         `https://api.github.com/repos/${value("owner")}/${value("name")}/${discussion ? "discussions" : "pulls"}/${value("number")}`);
       assert.ok(row, "Unexpected synthetic GraphQL lookup");
-      if (discussion) return http({ data: { repository: { discussion: row.subjectDetails ??
-        { closed: false, isAnswered: false, stateReason: null } } } });
+      if (discussion) return http({ data: { repository: { discussion: {
+        viewerDidAuthor: row.authoredByViewer ?? false,
+        ...(row.subjectDetails ?? { closed: false, isAnswered: false, stateReason: null }),
+      } } } });
       return http({ data: { repository: { pullRequest: { isInMergeQueue: row.mergeQueued ?? false } } } });
     }
     if (args.includes("PATCH") || args.includes("DELETE")) {
@@ -109,8 +114,9 @@ export async function createCanvasFixture({
         /^\/repos\/[^/]+\/[^/]+\/(?:issues|pulls|check-suites|actions\/runs)\/\d+$/.test(url.pathname.slice(target.prefix.length))) {
       const row = rows.find(row => row.subject.url === url.href);
       assert.ok(row, `Unexpected synthetic subject lookup: ${endpoint}`);
-      return http(row.subjectDetails ?? (row.subject.type === "CheckSuite"
-        ? { status: "completed", conclusion: "success" } : { state: "open", merged: false, draft: false }));
+      return http({ user: { id: row.authoredByViewer ? 100 : 200 },
+        ...(row.subjectDetails ?? (row.subject.type === "CheckSuite"
+          ? { status: "completed", conclusion: "success" } : { state: "open", merged: false, draft: false })) });
     }
     assert.ok(args.includes("GET") && url.origin === target.origin && url.pathname === `${target.prefix}/notifications`,
       `Unexpected request: ${endpoint}`);

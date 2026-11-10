@@ -71,23 +71,27 @@ for (const packaged of [false, true]) {
       });
     }
 
-    test("grouping and search changes reprioritize pending rows without fetching excluded matches", async ({ page, canvas }) => {
+    test("grouping and search changes reprioritize pending check runs without fetching excluded matches", async ({ page, canvas }) => {
       populate(canvas);
+      for (const row of canvas.rows) {
+        row.subject.type = "CheckSuite";
+        row.subject.url = row.subject.url.replace("/issues/", "/actions/runs/");
+      }
       const first = Array.from({ length: 20 }, (_, index) => thread(String(index + 101), {
         repository: { full_name: "example/first" },
-        subject: { type: "Issue", title: "Other synthetic issue",
-          url: `https://api.github.com/repos/example/first/issues/${index + 101}` },
+        subject: { type: "CheckSuite", title: "Other synthetic check",
+          url: `https://api.github.com/repos/example/first/actions/runs/${index + 101}` },
       }));
       canvas.rows.unshift(...first);
       const calls = [];
       let release;
       const held = new Promise(resolve => { release = resolve; });
       canvas.setRequestHook(async args => {
-        const id = args.at(-1).match(/\/issues\/(\d+)$/)?.[1];
+        const id = args.at(-1).match(/\/actions\/runs\/(\d+)$/)?.[1];
         if (!id) return;
         calls.push(id);
         if (calls.length <= 20) await held;
-        return http({ state: "closed", state_reason: "completed" });
+        return http({ status: "completed", conclusion: "success" });
       });
       try {
         await page.goto(canvas.url);
@@ -102,7 +106,7 @@ for (const packaged of [false, true]) {
         release();
         await expect.poll(() => calls.toSorted()).toEqual([...first.map(row => row.id), "2", "3", "4"].sort());
         await expect(page.locator(".subject-loading")).toHaveCount(0);
-        await expect(page.locator(".subject-closed")).toHaveCount(3);
+        await expect(page.locator(".subject-success")).toHaveCount(3);
         expect(canvas.writes).toEqual([]);
         expect(canvas.deliveries).toEqual([]);
       } finally {
