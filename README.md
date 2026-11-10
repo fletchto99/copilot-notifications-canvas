@@ -76,9 +76,10 @@ See [Usage](docs/usage.md) for status icons and controls,
 - **Inbox content:** Notification titles and repository names are not logged or
   saved to the extension's files. Ordinary agent actions return counts, not content.
   There is no telemetry or remote asset loading.
-- **Copilot handoffs:** Only the selected GitHub reference and task instructions
-  enter Copilot's session history; the destination session fetches the item's
-  details. Notification titles, bodies, and the surrounding inbox are not copied.
+- **Copilot handoffs:** The extension sends only the selected GitHub reference and
+  task instructions, not notification titles, bodies, or the surrounding inbox.
+  The reference, instructions, and item details fetched by the destination session
+  are retained in Copilot's session history.
 - **Confirmations:** Handoffs require a row click; confirmation is on by default. Cloning,
   inferred CI matches, and existing/new session choices always require confirmation.
 - **Desktop alerts:** Opt-in alerts share repository names and titles with your OS,
