@@ -3,7 +3,7 @@
 [README](../README.md) | [Installation](installation.md) | [Settings](settings.md) | [Development](development.md)
 
 **Jump to:** [Find](#find-notifications) | [Status icons](#status-icons) |
-[Views](#choose-a-view) | [Read / Done](#mark-read-or-done) |
+[Views](#choose-a-view) | [Read / Done](#mark-read-or-done) | [Copilot](#work-with-copilot) |
 [Refresh](#refresh-and-recover) | [Keyboard](#keyboard-and-preferences)
 
 The canvas shows GitHub's read and unread inbox items by default. Choose
@@ -11,6 +11,126 @@ The canvas shows GitHub's read and unread inbox items by default. Choose
 Done notifications are excluded in both views. Pages contain up to 50 items.
 **Search, counts, and bulk actions cover loaded items only.** Use **Load more**
 to include older notifications.
+
+## Work with Copilot
+
+Rows keep fixed **Copilot**, **Read**, and **Done** columns. Unsupported Copilot
+actions leave empty, non-interactive space. Read stays visible but disabled on
+already-read rows, so the remaining buttons do not move.
+Group Read/Done controls align with the same columns. Turning Copilot integration
+off restores the two-column Read/Done layout.
+
+The Copilot button's tooltip and accessible label describe the task:
+
+| Item | Task |
+| --- | --- |
+| Issue | Investigate with Copilot |
+| Your open or draft PR | Continue with Copilot |
+| Another person's open or draft PR | Review with Copilot |
+| Resolved or uniquely matched failed, timed-out, or startup-failed CI run | Investigate CI failures with Copilot |
+
+Closed, merged, and merge-queued PRs keep a disabled Copilot button labeled
+**PR closed**, **PR merged**, or **PR in merge queue**. These controls are skipped
+by Tab navigation; their hover tooltips explain why the action is unavailable.
+Their notification links and Read/Done controls remain available. **Settings > Copilot integration**
+defaults on; turn it off to hide all Copilot buttons and block new handoffs.
+This does not stop or change sessions already started.
+
+PR ownership uses the authenticated GitHub CLI user and actual PR author,
+not the notification reason. A PR handoff waits for verified merge-queue
+membership; pending or failed queue checks cannot authorize a session.
+While identity/status is loading, the label is
+**Work with Copilot**; clicking resolves the task before confirmation. CI actions
+wait while run/job links are loading. Unresolved or ambiguous matches remain
+disabled rather than guessing a destination.
+
+A uniquely inferred CI run can be investigated. The confirmation explicitly
+identifies that association as inferred and shows the selected run and attempt.
+The provider validates that exact attempt with GitHub before offering to start;
+it never substitutes a newer rerun. A failed-job link retains its parent run
+and attempt for the handoff even though the row opens the individual job's logs.
+Run summaries also include the attempt whenever GitHub supplies it.
+
+By default, click the icon to inspect the selected reference and available sessions.
+**Start session** creates an independent, root-level session in the selected
+repository, not a child of the session containing the canvas. It uses a worktree
+at the repository's configured base for issues, the verified PR head commit
+(including fork PRs), or the failed run's immutable commit.
+These generic sessions do not have the app's native issue/PR linkage.
+PR metadata is refreshed for each preparation rather than reusing an older
+head commit. Before creating a PR/CI worktree, the extension checks that the
+selected commit exists in the configured checkout. If missing, it fetches the
+PR's head ref or the CI commit from GitHub using `gh` as a command-scoped Git
+credential helper, then verifies the exact SHA again. Fetching does not switch
+branches, touch working files, or update tags, tracking refs, or `FETCH_HEAD`.
+An inaccessible checkout, failed fetch, or unavailable commit stops the handoff
+with an explicit error; it never falls back to the default branch. Exact-commit
+preparation currently requires a host-exposed checkout path accessible to the
+extension. Remote-only repositories without that path are unsupported for new
+PR/CI handoffs. Existing-session reuse does not fetch or change its checkout.
+The creation request includes the plan-mode prompt, which the app queues until
+the new session is ready. Startup activity does not turn it into an
+existing-session choice or discard the prompt.
+Its first substantive response summarizes the item, its current state, and
+the next investigation steps. It can then investigate read-only; implementation,
+commits, pushes, workflow reruns, and GitHub changes need explicit approval.
+Reviews remain drafts.
+
+To avoid the routine popup, turn on **Skip routine confirmations** before
+confirming. Cancel does not save that choice. Future row clicks start a new
+summary-first session directly when no matching session exists. A spinner and
+accessible status distinguish preparing the checkout, fetching the selected
+commit, starting the session, and opening it. Progress stays visible if you
+close the dialog. Errors are shown rather than silently retried.
+
+Cloning an unconfigured repository, confirming an inferred CI association, and
+choosing an existing or new session always show the popup. This option
+does not bypass Copilot permissions or review-skill questions. Restore the
+routine popup with **Settings > Confirm Copilot actions**.
+
+For a PR authored by someone else, the new session pauses after its summary to
+ask which review skill to use. It suggests `review` when that skill is available,
+or lets you choose another available skill, and waits for your answer before
+reviewing or drafting findings. If no suitable skill is available, it asks how
+to proceed instead of assuming or installing one. Your own PRs, issues, and CI
+investigations keep their existing flow.
+
+If a matching session exists, the popup offers **Open existing session** and
+**Start a new session**, even with routine confirmations off. Opening only
+navigates: it does not send another prompt, change its mode, or interrupt its
+current work or sidebar placement. New sessions are matched by repository and
+their generated issue, PR, or run/attempt name; renaming one prevents that
+name-based reuse. Existing native issue/PR links are also recognized.
+Choose **Start a new session** for a fresh start, including after an earlier
+workspace initialization failed. This creates a separate summary-first session;
+it never repairs, restarts, archives, or deletes the old one. The extension does
+not guess whether a session failed from its activity status. Every creation
+rechecks matches after repository setup and commit preparation, including direct
+starts with routine confirmations off. If a match appears or the shown matching
+sessions change, it asks you to choose again.
+If the repository is no longer configured, starting fresh also requires the
+explicit **Clone repository and start a new session** confirmation.
+Long CI session names are shortened to fit the host's 40-character limit;
+the prompt still includes the complete run URL, attempt, and commit.
+
+Repositories not configured in the app require **Clone repository and start**.
+If the host cannot set up repositories, add the repository in Copilot first.
+The app's permission and repository-trust checks still apply.
+
+Preparation and starting are queued so permission prompts or cloning can take
+longer than an HTTP request. Closing the dialog does not cancel an already
+submitted handoff. Failures are shown explicitly and are never automatically
+retried; check the app for an existing session before trying again.
+
+Read/Done never changes as a side effect. Only the selected validated reference
+and fixed task instructions are shared with Copilot, not the notification title
+or surrounding inbox. The reference and fetched context belong to Copilot's
+session history; the extension keeps no persistent handoff ledger.
+Buttons appear only on a host offering session-tool execution and the app's
+session/repository tools with support for detached creation and plan-mode
+kickoffs. Older hosts without that capability cannot start a handoff; the
+extension never falls back to creating a nested child. Actions are unavailable
+for custom development APIs.
 
 ## Find notifications
 
@@ -119,8 +239,9 @@ to Actions filtered by workflow/branch/outcome when safe, otherwise the reposito
 Actions page. Later reruns can change the results of an outcome filter.
 
 A resolved failed run opens job logs only when exactly one job failed, timed out,
-or failed at startup. Inferred runs use that attempt's jobs; direct links use
-the latest execution. Unfinished, incomplete (including over 100 jobs), inaccessible, unsafe,
+or failed at startup. Job lookups use the resolved attempt when available;
+only run responses without an attempt fall back to GitHub's latest-job lookup.
+Unfinished, incomplete (including over 100 jobs), inaccessible, unsafe,
 or non-unique results keep the run summary. Only metadata is read, never logs;
 screen-reader descriptions retain lookup errors and inferred-match caveats.
 
@@ -159,9 +280,12 @@ controls wrap while row actions stay beside their content.
 | Mark as read | Envelope | Mark read; keep in your inbox |
 | Mark as done | Checkmark | Move to Done |
 
-Read rows show only Done. After a confirmed Read in **All**, the row stays and
-focus moves from the Read button to Done; Read's space stays reserved so a second click
-cannot open the row. A status update can unlock Done and move focus before the
+Read rows keep a dimmed, disabled envelope labeled **Already read**, alongside
+Done. The disabled envelope is skipped by Tab navigation and sends no request
+when clicked. Its **Already read** tooltip remains available on hover.
+After a confirmed Read in **All**, the row stays and focus moves from Read to
+Done; a second click on the disabled envelope cannot open the row.
+A status update can unlock Done and move focus before the
 Read acknowledgement arrives, without overriding focus moved elsewhere.
 In **Unread only**, Read removes the row.
 Done removes it in either view.
@@ -272,9 +396,10 @@ release and press again to open its link.
 
 J/K skip collapsed groups and stop at the first/last row without wrapping or
 loading more. With no row focused, J starts at the first visible row and K at
-the last. Read/Done shortcuts require focus on a row link or one of its buttons;
-they never act on a group or a previously focused row. Holding these keys does
-not repeat writes. Done requires Shift; pressing E alone does nothing.
+the last. Read/Done shortcuts require focus on a row link or one of its buttons,
+including Copilot. They never act on a group or a previously focused row.
+Holding these keys does not repeat writes. Done requires Shift; pressing E alone
+does nothing.
 Pending filters, writes, and batches use the same safeguards
 as the buttons.
 

@@ -62,6 +62,14 @@
                 <option value="date">Date</option>
               </select>
             </div>
+            <button id="copilot-integration" class="switch-toggle" type="button" role="switch" aria-checked="true" disabled>
+              <span>Copilot integration</span>
+              <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+            </button>
+            <button id="copilot-confirmations" class="switch-toggle" type="button" role="switch" aria-checked="true" disabled>
+              <span>Confirm Copilot actions</span>
+              <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+            </button>
             <button id="hide-empty-tabs" class="switch-toggle" type="button" role="switch" aria-checked="true" disabled>
               <span>Hide empty tabs</span>
               <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
@@ -166,6 +174,7 @@
       <div id="development-api-notice" class="notice" role="status" hidden></div>
       <div id="settings-error" class="notice" role="alert" hidden></div>
       <div id="notice" class="notice" role="alert" hidden></div>
+      <p id="copilot-feedback" class="sr-only" role="status" hidden></p>
       <section id="batch-progress" class="batch-progress" aria-label="Notification operation" tabindex="-1" hidden>
         <h2 id="batch-title"></h2>
         <p id="batch-counts"></p>
@@ -190,6 +199,27 @@
     <footer>
       <p id="development-build" hidden></p>
     </footer>
+    <dialog id="copilot-dialog" aria-labelledby="copilot-title" aria-describedby="copilot-privacy">
+      <div class="shortcuts-heading">
+        <h2 id="copilot-title">Work with Copilot</h2>
+        <button id="copilot-close" type="button" autofocus>Cancel</button>
+      </div>
+      <p id="copilot-status" role="status"></p>
+      <p id="copilot-reference" hidden></p>
+      <p id="copilot-privacy">Only the selected GitHub reference and task instructions are shared with Copilot and retained in its session history. Notification titles and the rest of your inbox are not shared. Read/Done stays unchanged.</p>
+      <p id="copilot-clone" hidden></p>
+      <div id="copilot-remember" hidden>
+        <button id="copilot-skip-confirmation" class="switch-toggle" type="button" role="switch" aria-checked="false" aria-describedby="copilot-confirmation-help">
+          <span>Skip routine confirmations</span>
+          <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+        </button>
+        <p id="copilot-confirmation-help" class="settings-help">Saved when you confirm, not when you cancel. Cloning, inferred CI matches, and choosing an existing or new session still require confirmation. Copilot permissions and review-skill choices are unchanged. Restore confirmations in Settings.</p>
+      </div>
+      <div id="copilot-sessions" class="batch-buttons"></div>
+      <div class="batch-buttons">
+        <button id="copilot-start" type="button" hidden>Start session</button>
+      </div>
+    </dialog>
     <dialog id="shortcuts-dialog" aria-labelledby="shortcuts-title" aria-describedby="shortcuts-description">
       <div class="shortcuts-heading">
         <h2 id="shortcuts-title">Keyboard shortcuts</h2>

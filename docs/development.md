@@ -275,6 +275,9 @@ actions. Theme checks wait for temporarily disabled controls and open
 customizable pickers before inspecting their options; WebKit can retain stale
 computed styles for options in a closed picker. Intentionally disabled or hidden
 customizable pickers are not inspectable until enabled or shown.
+Long palette checks pause periodic polling while inspecting picker styles,
+then resume the clock for Axe analysis, which needs timers. Separate tests
+exercise background Settings polling and focus restoration.
 Opening Settings also waits for its native `toggle` event and settings load:
 the panel can be visible before that deferred event disables its controls.
 Hidden-polling checks observe local requests after the visibility callback and

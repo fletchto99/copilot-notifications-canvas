@@ -21,6 +21,8 @@ framework or separately installed runtime SDK.
 | `src/extension.mjs` | SDK registration, agent-facing actions, panel lifecycle, and shared services. |
 | `src/github.mjs`, `src/model.mjs` | GitHub CLI requests, caching, rate limits, validation, normalization, and grouping. |
 | `src/inbox.mjs`, `src/batch.mjs` | Loaded-page state, aggregate summaries, and row, repository, date, and shown-list read/done actions. |
+| `src/copilot.mjs` | Click-confirmed, summary-first session handoffs through capability-checked host tools. |
+| `src/checkout.mjs` | Exact-commit handoff preparation without changing existing branches or working files. |
 | `src/server.mjs`, `src/assets.mjs` | Protected per-panel loopback HTTP server, asset snapshots, and startup recovery. |
 | `src/index.html`, `src/app.mjs`, `src/styles.css` | Renderer, controls, accessibility, and themes. |
 | `src/settings.mjs`, `src/lock.mjs`, `src/startup.mjs` | User-wide preferences, cross-process locking, and session auto-open. |
@@ -67,6 +69,36 @@ output. Development loads source without a build; release builds bundle
   and agent-facing results. Use `Inbox.summary()` for agent actions; detailed
   snapshots belong only in the protected renderer. Do not log raw GitHub
   responses, subprocess stderr, credentials, or loopback capability URLs.
+- Copilot handoffs are a click-confirmed exception: the selected validated GitHub
+  reference and fixed task instructions may enter host tool calls and Copilot
+  session history. Never copy notification titles, bodies, or the surrounding
+  inbox. Keep handoff endpoints panel-only, use plan-mode summary-first prompts,
+  and never mutate read/done state. New handoffs use detached, root-level generic
+  sessions in the selected repository; require host support for `detached`.
+  Submit the plan-mode prompt through creation's `kickoff` so the host queues
+  it until ready; never classify a new session as existing from startup activity.
+  PR worktrees start at the validated head commit, including fork PRs.
+  PR/CI handoffs verify that commit in the configured checkout before creation,
+  fetching the selected ref through GitHub CLI credentials only after confirmation
+  or a permitted direct click. Never fall back to another commit or modify an
+  existing checkout's branch, files, tags, tracking refs, or `FETCH_HEAD`.
+  Generic sessions have no native issue/PR linkage; reuse by repository and generated
+  item name as well as existing native links. Existing sessions are navigation-only; do
+  not interrupt them. Always confirm the choice to open an existing session or start
+  a separate new one, even with routine confirmations off. Never infer failed
+  initialization from busy, idle, or unknown activity. Bind fresh-start consent to
+  the shown matching sessions and recheck before creation; changed matches require
+  a new choice. Repository cloning needs separate explicit confirmation.
+  Honor the user-wide `copilotIntegration` preference (default on) at the panel
+  and handoff boundary. Closed, merged, and merge-queued PRs show disabled Copilot
+  controls with status explanations; reject handoffs at the provider boundary too.
+  `confirmCopilotActions` defaults on. An explicit saved opt-out may skip only
+  routine confirmations on a fresh row click, never on opening or polling.
+  Cloning, inferred CI matches, and existing-or-new session choices still require
+  confirmation. Save the popup's opt-out only when the user confirms, not on cancel.
+  CI links and handoffs retain the selected run and attempt, including when a
+  row opens a failed job. Disclose inferred matches in confirmation and validate
+  the exact attempt; never silently replace it with a newer rerun.
 - GitHub CLI owns authentication. Keep API traffic in the provider and pinned
   to supported github.com endpoints in packaged releases. Source builds may
   explicitly select an HTTPS development REST API in Settings; freeze that

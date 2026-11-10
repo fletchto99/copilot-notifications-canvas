@@ -225,7 +225,7 @@ test("issue and PR numbers render in metadata and search selects the notificatio
   await expect(page.locator(".row")).toHaveCount(1);
   await page.getByRole("button", { name: "Mark as read: #7 <img src=x onerror=alert(1)> Needle widget 1", exact: true }).click();
   await expect(page.locator(".row")).toHaveCount(1);
-  await expect(page.locator(".mark-read")).toHaveCount(0);
+  await expect(page.locator(".mark-read")).toBeDisabled();
   expect(canvas.writes).toEqual(["1"]);
 });
 
@@ -1004,7 +1004,7 @@ test("Settings supports keyboard dismissal and persists theme and auto-open acro
   await expect(page.getByRole("switch", { name: "Desktop notifications", exact: true })).toHaveAttribute("aria-checked", "false");
   await expect(page.getByRole("combobox", { name: "Sound", exact: true })).toHaveValue("default");
   expect(await canvas.preferences.read()).toEqual({
-    matchGitHubInbox: true, autoOpen: true, darkMode: true, desktopNotifications: false, desktopSound: "default", groupBy: "repo", hideEmptyTabs: true, keyboardShortcuts: true,
+    matchGitHubInbox: true, autoOpen: true, darkMode: true, desktopNotifications: false, desktopSound: "default", groupBy: "repo", copilotIntegration: true, confirmCopilotActions: true, hideEmptyTabs: true, keyboardShortcuts: true,
   });
   await theme.selectOption("system");
   await expect.poll(async () => (await canvas.preferences.read()).darkMode).toBeNull();

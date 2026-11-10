@@ -74,7 +74,7 @@ for (const packaged of [false, true]) {
         await page.keyboard.up("i");
         expect(canvas.writes).toEqual(["1"]);
         if (matchGitHubInbox) {
-          await expect(page.locator('[data-focus-key="read:1"]')).toHaveCount(0);
+          await expect(page.locator('[data-focus-key="read:1"]')).toBeDisabled();
           await rowLink(page, "1").focus();
           await page.keyboard.press("i");
           expect(canvas.writes).toEqual(["1"]);
@@ -350,6 +350,12 @@ for (const packaged of [false, true]) {
       await expect(page.locator(".row")).toHaveCount(3);
       let release;
       const held = new Promise(resolve => { release = resolve; });
+      let finishFilter;
+      const filterResponse = new Promise(resolve => { finishFilter = resolve; });
+      await page.route("**/api/filters", async route => {
+        await filterResponse;
+        await route.continue();
+      }, { times: 1 });
       canvas.setRequestHook(args => args.includes("DELETE") ? held : undefined);
       try {
         await rowLink(page, "1").focus();
@@ -365,12 +371,15 @@ for (const packaged of [false, true]) {
         await page.keyboard.press("Shift+KeyE");
         await page.keyboard.press("/");
         release();
+        finishFilter();
         await expect(page.locator(".row")).toHaveCount(1);
         await expect(page.getByRole("searchbox")).toBeFocused();
         await expect.poll(() => canvas.writes.toSorted()).toEqual(["1", "2"]);
         expect(canvas.doneWrites.toSorted()).toEqual(["1", "2"]);
       } finally {
         release();
+        finishFilter();
+        await page.unrouteAll({ behavior: "wait" });
       }
     });
   });

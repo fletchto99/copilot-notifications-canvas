@@ -10,7 +10,7 @@ function deferred() {
 
 for (const packaged of [false, true]) {
   test.describe(`CI destination loading (${packaged ? "packaged" : "source"})`, () => {
-    test.use({ packaged });
+    test.use({ packaged, copilotEnabled: true });
 
     test("initial matching and job resolution block navigation with a spinner, but refreshes retain usable links", async ({ page, canvas }) => {
       canvas.rows.splice(0, canvas.rows.length, thread("1", {
@@ -40,6 +40,7 @@ for (const packaged of [false, true]) {
         await expect(row).toHaveCSS("cursor", "progress");
         await expect(page.locator(".mark-read")).toBeEnabled();
         await expect(page.locator(".mark-done")).toBeEnabled();
+        await expect(page.locator(".copilot-action")).toBeDisabled();
         await row.focus();
         await page.keyboard.press("Enter");
         expect(await row.evaluate(node => ["click", "auxclick"].map(type => {
@@ -57,6 +58,7 @@ for (const packaged of [false, true]) {
         await expect.poll(() => jobStarted).toBe(true);
         await expect(row).not.toHaveAttribute("href");
         await expect(row.locator(".subject-loading")).toHaveCount(1);
+        await expect(page.locator(".copilot-action")).toBeDisabled();
         jobs.resolve();
         const destination = "https://github.com/example/widgets/actions/runs/123/job/456";
         await expect(row).toHaveAttribute("href", destination);
@@ -64,6 +66,7 @@ for (const packaged of [false, true]) {
         await expect(row).not.toHaveAttribute("aria-busy");
         await expect(row).toBeFocused();
         await expect(row.locator(".subject-loading")).toHaveCount(0);
+        await expect(page.locator(".copilot-action")).toBeEnabled();
         await expect(row.locator(".subject-failure")).toHaveCount(1);
         await expect(row.locator(".destination")).toHaveCount(0);
         await expect(icon).toHaveAttribute("aria-label", /Run link inferred.*not confirmed by GitHub/);

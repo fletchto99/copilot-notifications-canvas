@@ -436,7 +436,7 @@ test("renderer preserves the saved view through the Show notifications dropdown 
   ] });
   const button = key => ui.ids.get("groups").querySelectorAll("button").find(button => button.dataset.focusKey === key);
   assert.equal(ui.ids.get("count").textContent, "2 total \u00b7 1 unread");
-  assert.equal(button("read:2"), undefined);
+  assert.equal(button("read:2").disabled, true);
   assert.equal(button("done:2").disabled, false);
   assert.equal(button("bulk:shown").dataset.count, "1");
   assert.equal(button("bulk-done:shown").dataset.count, "2");

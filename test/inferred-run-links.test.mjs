@@ -97,6 +97,7 @@ test("a unique nearby workflow run produces an explicitly inferred attempt link,
   assert.deepEqual(client.subjectSnapshot(item), {
     subjectState: "failure", subjectStateError: null, subjectStateSource: "notification",
     url: "https://github.com/example/widgets/actions/runs/123/attempts/1",
+    subjectRunUrl: "https://github.com/example/widgets/actions/runs/123/attempts/1",
     label: "Open inferred workflow run results", direct: true, subjectLinkSource: "inferred",
   });
   assert.equal(client.subjectsNeedRefresh([item]), false);

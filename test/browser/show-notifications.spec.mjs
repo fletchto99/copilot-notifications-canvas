@@ -10,6 +10,8 @@ for (const packaged of [false, true]) {
       const settings = page.getByLabel("Settings", { exact: true });
       const select = page.getByRole("combobox", { name: "Show notifications", exact: true });
       const grouping = page.getByRole("combobox", { name: "Group By", exact: true });
+      const copilotIntegration = page.getByRole("switch", { name: "Copilot integration", exact: true });
+      const copilotConfirmations = page.getByRole("switch", { name: "Confirm Copilot actions", exact: true });
       const hideEmptyTabs = page.getByRole("switch", { name: "Hide empty tabs", exact: true });
       for (const width of [320, 960]) {
         await page.setViewportSize({ width, height: 640 });
@@ -47,6 +49,10 @@ for (const packaged of [false, true]) {
           await select.press("Tab");
           await expect(grouping).toBeFocused();
           await grouping.press("Tab");
+          await expect(copilotIntegration).toBeFocused();
+          await copilotIntegration.press("Tab");
+          await expect(copilotConfirmations).toBeFocused();
+          await copilotConfirmations.press("Tab");
           await expect(hideEmptyTabs).toBeFocused();
           await hideEmptyTabs.click();
           await expect(hideEmptyTabs).toHaveAttribute("aria-checked", "false");
@@ -71,13 +77,13 @@ test("inbox matching, persistence and action eligibility remain accessible", asy
   await expect(page.locator(".row")).toHaveCount(2);
   await expect(page.locator(".row.read")).toHaveCount(1);
   await expect(page.locator("#count")).toHaveText("2 total \u00b7 1 unread");
-  await expect(page.locator('[data-focus-key="read:2"]')).toHaveCount(0);
+  await expect(page.locator('[data-focus-key="read:2"]')).toBeDisabled();
   await expect(page.locator('[data-focus-key="done:2"]')).toBeEnabled();
   await page.locator('[data-focus-key="read:1"]').click();
   await expect(page.locator(".row")).toHaveCount(2);
   await expect(page.locator(".row.unread")).toHaveCount(0);
-  await expect(page.locator(".mark-read")).toHaveCount(0);
-  await expect(page.locator("#row-read-1-tooltip")).toHaveCount(0);
+  await expect(page.locator(".mark-read:disabled")).toHaveCount(2);
+  await expect(page.locator("#row-read-1-tooltip")).toHaveText("Already read");
   await expect(page.locator('[data-focus-key="done:1"]')).toBeFocused();
   await expect(page.locator('[data-focus-key="bulk:example/widgets"]')).toBeDisabled();
   await page.locator('[data-focus-key="done:2"]').click();

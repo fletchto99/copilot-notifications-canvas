@@ -41,7 +41,7 @@ for (const packaged of [false, true]) {
       await page.getByRole("tab", { name: "Participating (10)", exact: true }).click();
       await expect(page.locator(".row")).toHaveCount(10);
       await expect(page.locator('[data-focus-key="read:1"]')).toBeVisible();
-      await expect(page.locator('[data-focus-key="read:2"]')).toHaveCount(0);
+      await expect(page.locator('[data-focus-key="read:2"]')).toBeDisabled();
       await expect(page.locator('[data-focus-key="read:11"]')).toHaveCount(0);
       await expect(page.locator('[data-focus-key="read:12"]')).toHaveCount(0);
       await page.getByRole("tab", { name: "Mentioned (1)", exact: true }).click();

@@ -14,6 +14,8 @@ import { DesktopNotifications } from "../src/desktop.mjs";
 import { GitHubClient, firstPage, POLL_MS } from "../src/github.mjs";
 import { Preferences } from "../src/settings.mjs";
 import { CURRENT_VERSION } from "../src/updates.mjs";
+import { CopilotHost, CopilotHandoff } from "../src/copilot.mjs";
+import { copilotHost as syntheticCopilotHost } from "./fixtures/copilot-host.mjs";
 
 test("the extension entry point wires an isolated session through its complete lifecycle", async t => {
   const home = await fs.mkdtemp(join(tmpdir(), "notification-extension-"));
@@ -125,7 +127,7 @@ test("the extension entry point wires an isolated session through its complete l
     }]);
     const { desktopStatus, ...settings } = await invoke("get_settings", "github-notifications-startup");
     assert.deepEqual(settings,
-      { matchGitHubInbox: true, autoOpen: true, darkMode: false, desktopNotifications: false, desktopSound: "default", groupBy: "repo", hideEmptyTabs: true, keyboardShortcuts: true, startupStatus: "opened" });
+      { matchGitHubInbox: true, autoOpen: true, darkMode: false, desktopNotifications: false, desktopSound: "default", groupBy: "repo", copilotIntegration: true, confirmCopilotActions: true, hideEmptyTabs: true, keyboardShortcuts: true, startupStatus: "opened" });
     assert.equal(desktopStatus.state, "off");
     assert.equal(desktopStatus.platform, process.platform);
     assert.equal(desktopStatus.supported, true);
@@ -346,6 +348,7 @@ async function fixture(apiBaseUrl, overrides = {}) {
     joinSession: async () => session,
     createCanvas: value => { canvas = value; return value; },
     CanvasError, InboxError, emptySchema: {}, filterSchema: {},
+    CopilotHost, CopilotHandoff,
     Preferences: class {},
     loadDevelopmentAPI: async () => ({ target: apiTarget(apiBaseUrl) }),
     Updates: class {},
@@ -370,6 +373,33 @@ async function fixture(apiBaseUrl, overrides = {}) {
   });
   return { canvas, desktop, servers, inboxes, logs, clientOptions };
 }
+
+test("rehydration before joinSession resolves discovers Copilot actions as soon as the session attaches", async () => {
+  const synthetic = syntheticCopilotHost();
+  let handoff;
+  const f = await fixture(undefined, {
+    GitHubClient, Inbox,
+    joinSession: async ({ canvases }) => {
+      await canvases[0].open({ instanceId: "early-rehydration" });
+      await handoff.host.refresh();
+      assert.equal(handoff.host.supports("issue"), false);
+      return { rpc: { tools: synthetic.rpc }, log() {} };
+    },
+    startServer: async (inbox, { copilot }) => {
+      handoff = copilot;
+      return { inbox, url: "http://127.0.0.1:1234/", ready: Promise.resolve(true), close: async () => {} };
+    },
+  });
+  try {
+    handoff.hydrate([]);
+    await handoff.hydrating;
+    assert.equal(handoff.host.supports("issue"), true, "Early discovery must not capture an absent session or start a retry delay");
+    assert.equal(handoff.row({ type: "Issue", direct: true, number: "1" }).enabled, true);
+    assert.deepEqual(synthetic.calls, [], "Capability discovery must not create sessions or read the inbox");
+  } finally {
+    await f.canvas.onClose({ instanceId: "early-rehydration" });
+  }
+});
 
 test("SDK notification reads inherit another client's server deadline before a watcher tick", async t => {
   for (const action of ["refresh", "load_more", "set_filters"]) {

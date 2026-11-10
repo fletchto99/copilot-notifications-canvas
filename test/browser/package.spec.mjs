@@ -38,7 +38,7 @@ test("installed bundle supports search, saved settings and exact row writes in a
   await expect(page.getByRole("button", { name: "Mark as read: Needle widget 2", exact: true })).toHaveAccessibleDescription("Mark as read");
   await page.getByRole("button", { name: "Mark as read: Needle widget 2", exact: true }).click();
   await expect(page.locator(".row")).toHaveCount(1);
-  await expect(page.locator(".mark-read")).toHaveCount(0);
+  await expect(page.locator(".mark-read")).toBeDisabled();
   await expect(page.locator("#empty")).toBeHidden();
   await page.getByRole("searchbox").fill("");
   await expect(page.getByRole("searchbox")).toHaveValue("");
