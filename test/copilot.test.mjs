@@ -313,6 +313,7 @@ test("discussion handoffs summarize open, answered, closed and unknown states wi
       const before = f.inbox.summary();
       const ready = await prepare(f);
       assert.equal(ready.label, "Summarize with Copilot");
+      assert.equal(ready.action, "discussion");
       assert.equal(ready.url, "https://github.com/example/widgets/discussions/1");
       assert.equal(f.calls.some(call => call.name === "create_session"), false);
       assert.equal((await start(f)).status, "started");

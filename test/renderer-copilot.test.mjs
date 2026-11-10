@@ -4,7 +4,7 @@ import { runInContext } from "node:vm";
 import { renderer, settle } from "./renderer-fixtures.mjs";
 
 const ready = {
-  id: "1", status: "ready", token: "synthetic-token", label: "Investigate with Copilot",
+  id: "1", status: "ready", token: "synthetic-token", action: "issue", label: "Investigate with Copilot",
   repository: "example/widgets", url: "https://github.com/example/widgets/issues/1",
   sessions: [], needsClone: false, canClone: true,
   canRemember: true, confirmCopilotActions: true,
@@ -80,6 +80,23 @@ test("existing sessions and clone confirmation have distinct actions and safe te
   ui.setCopilotOperation({ ...ready, needsClone: true, canClone: false });
   await runInContext("update()", ui.context);
   assert.equal(ui.ids.get("copilot-start").hidden, true);
+});
+
+test("discussion confirmation describes summary-only work and preserves session and clone guidance", async t => {
+  const discussion = { ...ready, action: "discussion", label: "Summarize with Copilot",
+    url: "https://github.com/example/widgets/discussions/1", needsClone: true };
+  const ui = await setup(t, { onCopilot: () => discussion });
+  await open(ui);
+  assert.equal(ui.ids.get("copilot-status").textContent,
+    "Copilot will summarize this discussion, then stop and wait for further instructions.");
+  assert.equal(ui.ids.get("copilot-clone").hidden, false);
+  assert.match(ui.ids.get("copilot-clone").textContent, /will clone example\/widgets/);
+  ui.setCopilotOperation({ ...discussion, sessions: [{ id: "session", name: "Summarize discussion #1" }] });
+  await runInContext("update()", ui.context);
+  assert.match(ui.ids.get("copilot-status").textContent, /A matching session already exists/);
+  assert.match(ui.ids.get("copilot-status").textContent, /Existing sessions and their work are left untouched/);
+  assert.equal(ui.ids.get("copilot-clone").hidden, false);
+  assert.equal(ui.ids.get("copilot-start").textContent, "Clone repository and start a new session");
 });
 
 test("inactive controls expose their reason, preserve focus and never submit a handoff", async t => {

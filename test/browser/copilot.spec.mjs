@@ -27,6 +27,9 @@ for (const packaged of [false, true]) {
         name: label,
       });
       await expect(dialog).toBeVisible();
+      await expect(page.locator("#copilot-status")).toHaveText(discussion
+        ? "Copilot will summarize this discussion, then stop and wait for further instructions."
+        : "Copilot will summarize this item first, then investigate read-only. Implementation and GitHub changes require your approval.");
       await expect(page.locator("#copilot-reference")).toHaveText(`https://github.com/example/widgets/${discussion ? "discussions" : "issues"}/1`);
       await expect(
         dialog.getByRole("button", { name: "Start session" }),

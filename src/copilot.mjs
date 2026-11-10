@@ -293,7 +293,7 @@ export class CopilotHandoff {
     this.target = target;
     this.existing = new Set(sessions.map(session => session.id));
     this.state = {
-      id: target.id, status: "ready", token: randomUUID(), label: labels[target.action],
+      id: target.id, status: "ready", token: randomUUID(), action: target.action, label: labels[target.action],
       url: target.url, repository: target.repository, needsClone: !configured,
       ...(target.inferred ? { inferred: true } : {}),
       canClone: this.host.tools.has("add_repository"),
