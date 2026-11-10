@@ -24,8 +24,8 @@ framework or separately installed runtime SDK.
 | `src/provider/inbox.mjs`, `src/provider/batch.mjs` | Loaded-page state, aggregate summaries, and row, repository, date, and shown-list read/done actions. |
 | `src/provider/copilot.mjs`, `src/provider/copilot-prompts.mjs` | Click-confirmed session handoffs through capability-checked host tools, with separate fixed prompt generation. |
 | `src/provider/checkout.mjs` | Exact-commit handoff preparation without changing existing branches or working files. |
-| `src/provider/server.mjs`, `src/provider/assets.mjs` | Protected per-panel loopback HTTP server, asset snapshots, and startup recovery. |
-| `src/renderer/` | HTML/CSS, renderer coordination in `app.mjs`, and stateless DOM/icon/time helpers in `presentation.mjs`. |
+| `src/provider/server.mjs`, `src/provider/assets.mjs` | Protected per-panel loopback HTTP server, route metadata, asset snapshots, and startup recovery. |
+| `src/renderer/` | HTML/CSS, coordination in `app.mjs`, stateless helpers in `presentation.mjs`, and update-notice state and lifecycle in `update-notice.mjs`. |
 | `src/provider/settings.mjs`, `src/provider/lock.mjs`, `src/provider/startup.mjs` | User-wide preferences, cross-process locking, and session auto-open. |
 | `src/provider/desktop.mjs`, `src/provider/notifier.mjs` | Shared desktop activity checkpoints and platform-specific native delivery. |
 | `src/provider/updates.mjs`, `version.json` | Release discovery and the release version. |
@@ -48,6 +48,12 @@ Source renderer modules are served through the explicit allowlist in
 dependencies there and update the dependency-free renderer fixture when adding
 imports. Keep source coverage discovery recursive and retain the packaged
 renderer checks when moving or extracting modules.
+
+Keep API methods, input policy, and batch dispatch metadata in the route table
+in `provider/server.mjs`; authentication, readiness, origin checks, and error
+translation remain shared request guards. Copilot tests are split into
+`copilot-handoffs`, `copilot-safety`, and `copilot-host` suites, with shared setup
+in `test/fixtures/copilot-handoff.mjs` and the existing synthetic host fixture.
 
 ## Implementation conventions
 

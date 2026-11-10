@@ -26,12 +26,24 @@ Keep runtime coordination together: renderer polling and focus handling stay in
 `app.mjs`, GitHub caching and request queues stay in `github.mjs`, and handoff
 confirmation and final validation stay in `copilot.mjs`. Independent presentation,
 subject interpretation, and prompt generation have their own modules.
+`renderer/update-notice.mjs` owns release-banner state, clipboard feedback,
+listeners, and timer cleanup; the app supplies requests and visibility and
+notifies it when the panel hides or closes.
+
+The HTTP route table in `provider/server.mjs` defines supported methods, body
+policy, and batch dispatch. Shared authentication, origin, readiness, and error
+handling stay outside individual route handlers.
 
 ESLint enforces runtime globals and import boundaries. Coverage discovers nested
 source modules and fails if any eligible module is missing. When adding a browser
 module, update the explicit asset map in `src/provider/assets.mjs` and the
 dependency-free renderer fixture; do not expose entire source directories.
 Release builds bundle browser dependencies into the existing `/app.mjs` asset.
+
+Copilot tests are organized as `test/copilot-handoffs.test.mjs` for subject-specific
+actions, `test/copilot-safety.test.mjs` for confirmation and lifecycle safeguards,
+and `test/copilot-host.test.mjs` for host discovery and session reuse. They share
+`test/fixtures/copilot-handoff.mjs`, which uses the existing synthetic host fixture.
 
 The discovery shim at
 `.github/extensions/github-notifications/extension.mjs` imports

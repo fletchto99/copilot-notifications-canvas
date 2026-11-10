@@ -1,5 +1,6 @@
 import { apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle } from "../shared/model.mjs";
 import { element, setControlText, actionIcon, subjectMetadata, relativeTime, updateSubjectDescription } from "./presentation.mjs";
+import { createUpdateNotice } from "./update-notice.mjs";
 
 const $ = id => document.getElementById(id);
 const token = location.hash.slice(1);
@@ -43,11 +44,6 @@ let settingsError = "";
 let pendingSettings;
 let soundOptionsKey;
 let developmentSettingsKey;
-let releaseState;
-let updatesBusy = false;
-let updateError = "";
-let copyFeedbackTimer;
-let copyAttempt = 0;
 const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
 const themeAttributes = ["data-theme-tone", "data-color-mode"];
 const marking = new Map();
@@ -71,6 +67,7 @@ const tooltipControls = [
   ["shortcuts-toggle", "shortcuts-control"],
   ["settings-toggle", "settings-toggle"],
 ];
+const updateNotice = createUpdateNotice({ api, visible, hasCapability });
 
 function expandedSubjectSelection() {
   if (!state || !visible()) return;
@@ -316,108 +313,6 @@ async function settingsRequest(input, quiet = false, path = "settings") {
     }
     if (refreshInbox) void update("refresh", {});
     else if (input && ["copilotIntegration", "confirmCopilotActions"].some(key => Object.hasOwn(input, key))) void update();
-  }
-}
-
-function renderUpdates(updates = releaseState) {
-  $("check-updates").disabled = !hasCapability;
-  $("check-updates").setAttribute("aria-busy", String(updatesBusy || Boolean(updates?.checking)));
-  if (!updates) {
-    const message = updateError || (updatesBusy ? "Checking..." : "");
-    $("update-status").textContent = message ? ` - ${message}` : "";
-    $("update-status").hidden = !message;
-    return;
-  }
-  if (releaseState?.currentVersion !== updates.currentVersion ||
-      releaseState?.latestVersion !== updates.latestVersion ||
-      releaseState?.status !== updates.status || releaseState?.prompt !== updates.prompt) {
-    copyAttempt++;
-    resetCopyFeedback();
-  }
-  releaseState = updates;
-  $("installed-version").textContent = `Notifications Canvas v${updates.currentVersion}`;
-  const messages = {
-    unchecked: "",
-    no_release: "No stable release yet.",
-    current: "Up to date",
-    ahead: "Newer than the latest release.",
-    available: `Update available: v${updates.latestVersion}.`,
-  };
-  const retry = updates.error && Date.now() < updates.canCheckAt
-    ? ` Retry after ${new Date(updates.canCheckAt).toLocaleTimeString()}.` : "";
-  const message = updateError || (updatesBusy || updates.checking ? "Checking..." :
-    updates.error ? `${updates.error}${retry}` : messages[updates.status]);
-  $("update-status").textContent = message ? ` - ${message}` : "";
-  $("update-status").hidden = !message;
-  const available = updates.status === "available";
-  $("update-banner").hidden = !available;
-  if (!available) {
-    setUpdateDetails(false);
-    return;
-  }
-  $("update-title").textContent = `Update available \u00b7 v${updates.latestVersion}`;
-  $("update-current-version").textContent = `Currently v${updates.currentVersion}`;
-  $("update-stale").hidden = !updates.error;
-  $("update-stale").textContent = updates.error ? "Last known release; the latest check failed." : "";
-  $("release-notes").href = updates.releaseUrl;
-  $("update-instructions").href = updates.instructionsUrl;
-  if ($("update-prompt").value !== updates.prompt) {
-    $("update-prompt").value = updates.prompt;
-  }
-}
-
-function setUpdateDetails(open) {
-  const details = $("update-prompt-details");
-  const toggle = $("update-details-toggle");
-  if (!open && document.hasFocus() && details.contains(document.activeElement)) toggle.focus();
-  details.hidden = !open;
-  toggle.setAttribute("aria-expanded", String(open));
-}
-
-function resetCopyFeedback() {
-  clearTimeout(copyFeedbackTimer);
-  $("copy-update").textContent = "Copy update prompt";
-  $("copy-status").textContent = "";
-}
-
-async function checkUpdates() {
-  if (!visible() || updatesBusy) return;
-  updatesBusy = true;
-  updateError = "";
-  renderUpdates();
-  try {
-    renderUpdates(await api("updates", {}));
-  } catch (error) {
-    updateError = error.message || "Could not check for updates. Try again.";
-  } finally {
-    updatesBusy = false;
-    renderUpdates();
-  }
-}
-
-async function copyUpdatePrompt() {
-  if (!visible() || releaseState?.status !== "available" || !releaseState.prompt) return;
-  const attempt = ++copyAttempt;
-  const prompt = releaseState.prompt;
-  resetCopyFeedback();
-  try {
-    await navigator.clipboard.writeText(prompt);
-    if (attempt !== copyAttempt || !visible() || releaseState?.status !== "available" || releaseState.prompt !== prompt) return;
-    resetCopyFeedback();
-    $("copy-update").textContent = "Copied";
-    $("copy-status").textContent = "Paste into Copilot to review and run.";
-    copyFeedbackTimer = setTimeout(() => {
-      $("copy-update").textContent = "Copy update prompt";
-    }, 4000);
-  } catch {
-    if (attempt !== copyAttempt || !visible() || releaseState?.status !== "available" || releaseState.prompt !== prompt) return;
-    resetCopyFeedback();
-    setUpdateDetails(true);
-    if (document.hasFocus()) {
-      $("update-prompt").focus();
-      $("update-prompt").select();
-    }
-    $("copy-status").textContent = "Clipboard unavailable. Copy the selected prompt and paste it into Copilot.";
   }
 }
 
@@ -1512,7 +1407,7 @@ function render(fallbackFocusKey) {
   renderCopilot();
   const completedRows = state ? reconcileRows() : [];
   renderSettingsError();
-  renderUpdates(state?.updates);
+  updateNotice.render(state?.updates);
   const development = state?.development;
   $("development-build").hidden = !development;
   $("development-build").textContent = development ? `dev (v${development.version}) ${development.branch}` : "";
@@ -1740,11 +1635,6 @@ $("desktop-notifications").addEventListener("click", () => {
 $("desktop-sound").addEventListener("change", () => {
   if (preferences && !$("desktop-sound").disabled) void settingsRequest({ desktopSound: $("desktop-sound").value });
 });
-$("check-updates").addEventListener("click", checkUpdates);
-$("copy-update").addEventListener("click", copyUpdatePrompt);
-$("update-details-toggle").addEventListener("click", () => {
-  setUpdateDetails($("update-prompt-details").hidden);
-});
 $("theme").addEventListener("change", () => {
   if (preferences && !$("theme").disabled) {
     const themes = { system: null, dark: true, light: false };
@@ -1937,7 +1827,7 @@ function visibilityChanged() {
   } else {
     searchFocusRequested = false;
     searchEnterHeld = false;
-    copyAttempt++;
+    updateNotice.invalidateCopy();
     dismissTooltips();
     for (const controller of requestControllers) controller.abort();
     closeSettings();
@@ -1974,12 +1864,11 @@ window.addEventListener("pagehide", () => {
   stopped = true;
   searchFocusRequested = false;
   searchEnterHeld = false;
-  copyAttempt++;
+  updateNotice.close();
   dismissTooltips();
   clearTimeout(timer);
   clearTimeout(tooltipTimer);
   clearTimeout(searchTimer);
-  clearTimeout(copyFeedbackTimer);
   if (overlayFrame !== undefined) cancelAnimationFrame(overlayFrame);
   overlayFrame = undefined;
   if (subjectSelectionFrame !== undefined) cancelAnimationFrame(subjectSelectionFrame);
@@ -2001,5 +1890,5 @@ if (hasCapability) {
   $("notice").hidden = false;
   $("notice").textContent = "Missing canvas capability. Open this canvas from Copilot instead of browsing to its local address.";
   $("empty-title").textContent = "Open from Copilot";
-  $("check-updates").disabled = true;
+  updateNotice.render();
 }

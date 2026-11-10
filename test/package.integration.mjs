@@ -231,6 +231,7 @@ async function open(canvas, id) {
   assert.equal((await fetch(new URL("/model.mjs", result.url))).status, 404);
   assert.equal((await fetch(new URL("/shared/model.mjs", result.url))).status, 404);
   assert.equal((await fetch(new URL("/presentation.mjs", result.url))).status, 404);
+  assert.equal((await fetch(new URL("/update-notice.mjs", result.url))).status, 404);
   const response = await fetch(new URL("/api/state", url), {
     headers: { Authorization: "Bearer " + url.hash.slice(1), Origin: url.origin },
   });

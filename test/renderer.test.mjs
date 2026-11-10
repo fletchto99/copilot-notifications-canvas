@@ -205,6 +205,32 @@ test("copying requires an available prompt and a visible canvas", async () => {
   assert.deepEqual(ui.copied, []);
 });
 
+test("closing the update notice removes listeners and timers and ignores a pending release check", async () => {
+  let finish;
+  const ui = await renderer({
+    release: { status: "available", prompt: "Synthetic update prompt" },
+    onUpdates: () => new Promise(resolve => { finish = resolve; }),
+  });
+  try {
+    await ui.ids.get("copy-update").events.click();
+    assert.ok([...ui.timers.values()].some(timer => timer.delay === 4000));
+    const checking = ui.ids.get("check-updates").events.click();
+    assert.equal(ui.ids.get("update-status").textContent, " - Checking...");
+    ui.window.events.pagehide();
+    for (const id of ["check-updates", "copy-update", "update-details-toggle"]) {
+      assert.equal(ui.ids.get(id).events.click, undefined, id);
+    }
+    assert.equal([...ui.timers.values()].some(timer => timer.delay === 4000), false);
+    finish({ status: "available", currentVersion: "1.0.0", latestVersion: "2.0.0", prompt: "Late prompt" });
+    await checking;
+    assert.equal(ui.ids.get("update-status").textContent, " - Checking...");
+    assert.equal(ui.ids.get("update-prompt").value, "Synthetic update prompt");
+    assert.equal(ui.timers.size, 0);
+  } finally {
+    ui.window.events.pagehide();
+  }
+});
+
 test("only the latest overlapping clipboard attempt can change feedback or focus", async t => {
   for (const olderFails of [false, true]) {
     for (const newerFails of [false, true]) {
