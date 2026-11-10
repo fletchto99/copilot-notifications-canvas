@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { Startup, STARTUP_INSTANCE, acquireStartupLock } from "../src/startup.mjs";
+import { Startup, STARTUP_INSTANCE, acquireStartupLock } from "../src/provider/startup.mjs";
 
 const notificationPanel = {
   canvasId: "github-notifications", extensionId: "user:github-notifications", instanceId: "manual-notifications",

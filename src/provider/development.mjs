@@ -1,4 +1,4 @@
-import { apiTarget } from "./model.mjs";
+import { apiTarget } from "../shared/model.mjs";
 
 export async function loadDevelopmentAPI(preferences) {
   const target = apiTarget(await preferences.readDevelopmentAPI());

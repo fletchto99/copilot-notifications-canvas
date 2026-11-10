@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { attentionCounts, attentionFilters, dateLabel, filterSchema, groupThreads, groupThreadsByDate, normalizeThreads, notificationLink, notificationTitle, orderedThreads, uniqueThreads, validateFilters } from "../src/model.mjs";
+import { attentionCounts, attentionFilters, dateLabel, filterSchema, groupThreads, groupThreadsByDate, normalizeThreads, notificationLink, notificationTitle, orderedThreads, uniqueThreads, validateFilters } from "../src/shared/model.mjs";
 import { thread } from "./fixtures.mjs";
 
 test("calendar grouping uses the requested zone rather than the provider's local date", () => {

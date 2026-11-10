@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { realpath } from "node:fs/promises";
 import { isAbsolute } from "node:path";
-import { InboxError } from "./model.mjs";
+import { InboxError } from "../shared/model.mjs";
 
 function runGit(args, options) {
   return new Promise((resolve, reject) => {

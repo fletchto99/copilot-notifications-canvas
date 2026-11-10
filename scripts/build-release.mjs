@@ -14,11 +14,11 @@ export function embeddedAssetsPlugin(assets) {
   return {
     name: "embedded-assets",
     setup(builder) {
-      builder.onLoad({ filter: /[/\\]development\.mjs$/ }, args => args.path === join(source, "development.mjs") ? {
+      builder.onLoad({ filter: /[/\\]development\.mjs$/ }, args => args.path === join(source, "provider", "development.mjs") ? {
         contents: "export async function loadDevelopmentAPI() { return null; }",
         loader: "js",
       } : undefined);
-      builder.onLoad({ filter: /[/\\]assets\.mjs$/ }, args => args.path === join(source, "assets.mjs") ? {
+      builder.onLoad({ filter: /[/\\]assets\.mjs$/ }, args => args.path === join(source, "provider", "assets.mjs") ? {
         contents: `import assets from "notifications:assets";
 export const assetPaths = new Set(assets.map(([path]) => path));
 export async function loadDevelopmentInfo() { return null; }
@@ -41,12 +41,12 @@ export async function buildRelease({ tag = `v${metadata.version}`, directory = r
   const stage = await mkdtemp(join(directory, ".package-"));
   try {
     const browser = await build({
-      entryPoints: [join(source, "app.mjs")], bundle: true, platform: "browser",
+      entryPoints: [join(source, "renderer", "app.mjs")], bundle: true, platform: "browser",
       format: "esm", target: "es2022", minify: true, write: false,
     });
-    const css = await transform(await readFile(join(source, "styles.css"), "utf8"), { loader: "css", minify: true });
+    const css = await transform(await readFile(join(source, "renderer", "styles.css"), "utf8"), { loader: "css", minify: true });
     const assets = [
-      ["/", { body: await readFile(join(source, "index.html"), "utf8"), type: "text/html; charset=utf-8" }],
+      ["/", { body: await readFile(join(source, "renderer", "index.html"), "utf8"), type: "text/html; charset=utf-8" }],
       ["/app.mjs", { body: browser.outputFiles[0].text, type: "text/javascript; charset=utf-8" }],
       ["/styles.css", { body: css.code, type: "text/css; charset=utf-8" }],
     ];

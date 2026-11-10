@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { WRITE_CONCURRENCY } from "./github.mjs";
-import { groupThreadsByDate, InboxError, uniqueThreads } from "./model.mjs";
+import { groupThreadsByDate, InboxError, uniqueThreads } from "../shared/model.mjs";
 
 export function selectionKey(group, filters) {
   return createHash("sha256").update(JSON.stringify([

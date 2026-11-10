@@ -1,5 +1,5 @@
 import { firstPage, RETRY_MS } from "./github.mjs";
-import { attentionCounts, groupThreads, groupThreadsByDate, InboxError, uniqueThreads, validateFilters } from "./model.mjs";
+import { attentionCounts, groupThreads, groupThreadsByDate, InboxError, uniqueThreads, validateFilters } from "../shared/model.mjs";
 import { NotificationBatch, selectionKey } from "./batch.mjs";
 
 export class Inbox {

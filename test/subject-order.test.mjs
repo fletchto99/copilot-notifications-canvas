@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { GitHubClient, firstPage } from "../src/github.mjs";
-import { Inbox } from "../src/inbox.mjs";
-import { normalizeThreads } from "../src/model.mjs";
-import { startServer } from "../src/server.mjs";
+import { GitHubClient, firstPage } from "../src/provider/github.mjs";
+import { Inbox } from "../src/provider/inbox.mjs";
+import { normalizeThreads } from "../src/shared/model.mjs";
+import { startServer } from "../src/provider/server.mjs";
 import { http, thread } from "./fixtures.mjs";
 
 function rows() {

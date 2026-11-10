@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { GitHubClient } from "../src/github.mjs";
-import { Inbox } from "../src/inbox.mjs";
-import { startServer } from "../src/server.mjs";
+import { GitHubClient } from "../src/provider/github.mjs";
+import { Inbox } from "../src/provider/inbox.mjs";
+import { startServer } from "../src/provider/server.mjs";
 import { http, thread } from "./fixtures.mjs";
 
 async function setup(t, count = 250) {

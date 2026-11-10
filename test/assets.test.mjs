@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { loadDevelopmentInfo } from "../src/assets.mjs";
+import { loadDevelopmentInfo } from "../src/provider/assets.mjs";
 import metadata from "../version.json" with { type: "json" };
 
 test("development metadata reads the exact branch from the extension checkout, not the process directory", async () => {

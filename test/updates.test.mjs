@@ -1,10 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { Updates, CURRENT_VERSION, CHECK_INTERVAL, REPOSITORY } from "../src/updates.mjs";
-import { compareVersions, versionParts } from "../src/version.mjs";
+import { Updates, CURRENT_VERSION, CHECK_INTERVAL, REPOSITORY } from "../src/provider/updates.mjs";
+import { compareVersions, versionParts } from "../src/shared/version.mjs";
 import { validateReleaseTag } from "../scripts/check-release.mjs";
-import { InboxError } from "../src/model.mjs";
+import { InboxError } from "../src/shared/model.mjs";
 import { http } from "./fixtures.mjs";
 
 const release = (version = "0.2.0", fields = {}) =>

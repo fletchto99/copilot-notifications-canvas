@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { test, expect } from "./fixtures.mjs";
-import { CURRENT_VERSION } from "../../src/updates.mjs";
+import { CURRENT_VERSION } from "../../src/provider/updates.mjs";
 
 async function prepareUpdate(page, canvas) {
   canvas.rows.splice(2);

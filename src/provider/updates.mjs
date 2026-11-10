@@ -1,7 +1,7 @@
-import metadata from "../version.json" with { type: "json" };
+import metadata from "../../version.json" with { type: "json" };
 import { parseResponse, runGh } from "./github.mjs";
-import { InboxError } from "./model.mjs";
-import { compareVersions, versionParts } from "./version.mjs";
+import { InboxError } from "../shared/model.mjs";
+import { compareVersions, versionParts } from "../shared/version.mjs";
 
 export const CURRENT_VERSION = metadata.version;
 export const REPOSITORY = "fletchto99/copilot-notifications-canvas";

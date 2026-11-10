@@ -8,13 +8,13 @@ import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { host, CanvasError } from "./fixtures/sdk.mjs";
 import { http, thread } from "./fixtures.mjs";
-import { apiTarget, filterSchema, emptySchema, InboxError } from "../src/model.mjs";
-import { Inbox } from "../src/inbox.mjs";
-import { DesktopNotifications } from "../src/desktop.mjs";
-import { GitHubClient, firstPage, POLL_MS } from "../src/github.mjs";
-import { Preferences } from "../src/settings.mjs";
-import { CURRENT_VERSION } from "../src/updates.mjs";
-import { CopilotHost, CopilotHandoff } from "../src/copilot.mjs";
+import { apiTarget, filterSchema, emptySchema, InboxError } from "../src/shared/model.mjs";
+import { Inbox } from "../src/provider/inbox.mjs";
+import { DesktopNotifications } from "../src/provider/desktop.mjs";
+import { GitHubClient, firstPage, POLL_MS } from "../src/provider/github.mjs";
+import { Preferences } from "../src/provider/settings.mjs";
+import { CURRENT_VERSION } from "../src/provider/updates.mjs";
+import { CopilotHost, CopilotHandoff } from "../src/provider/copilot.mjs";
 import { copilotHost as syntheticCopilotHost } from "./fixtures/copilot-host.mjs";
 
 test("the extension entry point wires an isolated session through its complete lifecycle", async t => {
@@ -203,7 +203,12 @@ test("the extension entry point wires an isolated session through its complete l
     assert.notEqual(first.url, second.url);
     for (const entry of [first, second]) {
       assert.equal(new URL(entry.url).hostname, "127.0.0.1");
-      for (const [route, file] of [["/", "index.html"], ["/app.mjs", "app.mjs"], ["/model.mjs", "model.mjs"], ["/styles.css", "styles.css"]]) {
+      for (const [route, file] of [
+        ["/", "renderer/index.html"], ["/app.mjs", "renderer/app.mjs"],
+        ["/presentation.mjs", "renderer/presentation.mjs"],
+        ["/update-notice.mjs", "renderer/update-notice.mjs"],
+        ["/shared/model.mjs", "shared/model.mjs"], ["/styles.css", "renderer/styles.css"],
+      ]) {
         const response = await fetch(new URL(route, entry.url));
         assert.equal(response.status, 200);
         assert.equal(await response.text(), await fs.readFile(new URL(`../src/${file}`, import.meta.url), "utf8"));

@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { GitHubClient, RETRY_MS, SUBJECT_POLL_MS } from "../src/github.mjs";
-import { apiTarget, normalizeThreads, reportedWorkflow } from "../src/model.mjs";
-import { Inbox } from "../src/inbox.mjs";
+import { GitHubClient, RETRY_MS, SUBJECT_POLL_MS } from "../src/provider/github.mjs";
+import { apiTarget, normalizeThreads, reportedWorkflow } from "../src/shared/model.mjs";
+import { Inbox } from "../src/provider/inbox.mjs";
 import { http, thread, workflowRun } from "./fixtures.mjs";
 
 const title = "Synthetic build workflow run failed for main branch";

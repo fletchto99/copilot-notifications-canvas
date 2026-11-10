@@ -4,8 +4,8 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { Preferences } from "../src/settings.mjs";
-import { acquireLock } from "../src/lock.mjs";
+import { Preferences } from "../src/provider/settings.mjs";
+import { acquireLock } from "../src/provider/lock.mjs";
 import { fixture, home } from "./install-fixtures.mjs";
 
 test("platform filesystem supports bundle replacement and preserves settings across upgrades", async t => {
@@ -34,7 +34,7 @@ test("platform directory locks exclude live owners and recover a crashed process
   } finally {
     await release();
   }
-  const module = new URL("../src/lock.mjs", import.meta.url).href;
+  const module = new URL("../src/provider/lock.mjs", import.meta.url).href;
   await assert.rejects(promisify(execFile)(process.execPath, ["--input-type=module", "-e",
     `import { acquireLock } from ${JSON.stringify(module)}; await acquireLock(process.argv[1]); process.exit(73);`, path]),
   { code: 73 });

@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { test, expect } from "./fixtures.mjs";
-import { CURRENT_VERSION } from "../../src/updates.mjs";
+import { CURRENT_VERSION } from "../../src/provider/updates.mjs";
 
 const searchName = "Search loaded notification titles, issue or PR numbers, and repositories";
 

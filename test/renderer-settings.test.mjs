@@ -19,7 +19,7 @@ test("Sound is a single settings row with a labeled native select and matching f
   assert.match(row[1], /<label for="desktop-sound">Sound<\/label>/);
   assert.match(row[1], /<select id="desktop-sound"[^>]*aria-describedby="desktop-status"/);
   assert.doesNotMatch(row[1], /<button|role="(?:button|combobox|listbox)"|tabindex/);
-  const css = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
+  const css = await readFile(new URL("../src/renderer/styles.css", import.meta.url), "utf8");
   assert.match(css, /\.select-setting \{[^}]*min-height: 38px;[^}]*border-radius: 7px;[^}]*padding: 7px 12px;/);
   assert.match(css, /\.select-setting select \{[^}]*border: 0;[^}]*text-align-last: right;[^}]*appearance: none;/);
   assert.match(css, /\.select-setting::after \{[^}]*pointer-events: none;/);

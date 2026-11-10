@@ -1,14 +1,14 @@
 import { joinSession, createCanvas, CanvasError } from "@github/copilot-sdk/extension";
-import { GitHubClient } from "./github.mjs";
-import { Inbox } from "./inbox.mjs";
-import { emptySchema, filterSchema, InboxError } from "./model.mjs";
-import { startServer } from "./server.mjs";
-import { Preferences } from "./settings.mjs";
-import { Startup } from "./startup.mjs";
-import { DesktopNotifications } from "./desktop.mjs";
-import { Updates } from "./updates.mjs";
-import { loadDevelopmentAPI } from "./development.mjs";
-import { CopilotHost, CopilotHandoff } from "./copilot.mjs";
+import { GitHubClient } from "./provider/github.mjs";
+import { Inbox } from "./provider/inbox.mjs";
+import { emptySchema, filterSchema, InboxError } from "./shared/model.mjs";
+import { startServer } from "./provider/server.mjs";
+import { Preferences } from "./provider/settings.mjs";
+import { Startup } from "./provider/startup.mjs";
+import { DesktopNotifications } from "./provider/desktop.mjs";
+import { Updates } from "./provider/updates.mjs";
+import { loadDevelopmentAPI } from "./provider/development.mjs";
+import { CopilotHost, CopilotHandoff } from "./provider/copilot.mjs";
 
 const instances = new Map();
 const preferences = new Preferences();

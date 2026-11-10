@@ -80,9 +80,9 @@ async function coverageEvent(percent = 98.765) {
   const paths = [fileURLToPath(new URL("../.github/extensions/github-notifications/extension.mjs", import.meta.url))];
   for (const directory of ["../src/", "../scripts/"]) {
     const root = new URL(directory, import.meta.url);
-    for (const file of await readdir(root)) {
+    for (const file of await readdir(root, { recursive: true })) {
       if (file.endsWith(".mjs") && !["coverage-reporter.mjs", "build-release.mjs"].includes(file)) {
-        paths.push(fileURLToPath(new URL(file, root)));
+        paths.push(join(fileURLToPath(root), file));
       }
     }
   }
@@ -97,6 +97,19 @@ async function report(events, badgePath = null) {
   for await (const chunk of coverageReporter(events, { badgePath })) output += chunk;
   return output;
 }
+
+test("the reporter rejects coverage that omits a nested provider, renderer or shared module", async () => {
+  for (const file of ["provider/github.mjs", "renderer/app.mjs", "shared/model.mjs"]) {
+    const event = await coverageEvent();
+    const missing = fileURLToPath(new URL(`../src/${file}`, import.meta.url));
+    assert.ok(event.data.summary.files.some(file => file.path === missing));
+    event.data.summary.files = event.data.summary.files.filter(file => file.path !== missing);
+    await assert.rejects(report([event]), error => {
+      assert.equal(error.message, `Source files missing from coverage:\n${missing}`);
+      return true;
+    });
+  }
+});
 
 test("the reporter writes a badge only when requested and preserves its source-inclusion check", async t => {
   const directory = await mkdtemp(join(tmpdir(), "coverage-badge-"));

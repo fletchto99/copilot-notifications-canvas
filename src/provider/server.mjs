@@ -2,14 +2,26 @@ import { createServer } from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { setTimeout as wait } from "node:timers/promises";
 import { assetPaths, loadAssets, loadDevelopmentInfo } from "./assets.mjs";
-import { groupThreadsByDate, InboxError } from "./model.mjs";
+import { groupThreadsByDate, InboxError } from "../shared/model.mjs";
 import { RETRY_MS } from "./github.mjs";
 import { validSound } from "./notifier.mjs";
 
-const batchRoutes = new Map([
-  ["/api/batch/start", "start"],
-  ["/api/batch/retry", "retry"],
-  ["/api/batch/dismiss", "dismiss"],
+const routes = new Map([
+  ["/api/ready", { methods: ["GET"] }],
+  ["/api/state", { methods: ["GET"] }],
+  ["/api/subjects", { methods: ["POST"], acceptsInput: true }],
+  ["/api/refresh", { methods: ["POST"], acceptsInput: true }],
+  ["/api/more", { methods: ["POST"] }],
+  ["/api/filters", { methods: ["POST"], acceptsInput: true }],
+  ["/api/settings", { methods: ["GET", "POST"], acceptsInput: true }],
+  ["/api/development", { methods: ["POST"], acceptsInput: true }],
+  ["/api/read", { methods: ["POST"], acceptsInput: true }],
+  ["/api/done", { methods: ["POST"], acceptsInput: true }],
+  ["/api/updates", { methods: ["POST"] }],
+  ["/api/copilot", { methods: ["POST"], acceptsInput: true }],
+  ["/api/batch/start", { methods: ["POST"], acceptsInput: true, batchAction: "start", status: 202 }],
+  ["/api/batch/retry", { methods: ["POST"], acceptsInput: true, batchAction: "retry", status: 202 }],
+  ["/api/batch/dismiss", { methods: ["POST"], acceptsInput: true, batchAction: "dismiss", status: 200 }],
 ]);
 
 const recoveryHtml = `<!doctype html>
@@ -89,6 +101,14 @@ function authorized(value, secret) {
   const provided = Buffer.from(value ?? "");
   const expected = Buffer.from(`Bearer ${secret}`);
   return provided.length === expected.length && timingSafeEqual(provided, expected);
+}
+
+function assertMethod(method, route) {
+  if (!route.methods.includes(method)) {
+    // Settings preserves its GET special case and existing POST error for other methods.
+    const expected = route.methods.includes("POST") ? "POST" : "GET";
+    throw new InboxError("method", `Only ${expected} is supported.`, 405);
+  }
 }
 
 async function readBody(req) {
@@ -333,8 +353,8 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         res.end(file.body);
         return;
       }
-      if (!["/api/ready", "/api/state", "/api/subjects", "/api/refresh", "/api/more", "/api/filters", "/api/settings", "/api/development", "/api/read", "/api/done", "/api/updates", "/api/copilot"].includes(path) &&
-          !batchRoutes.has(path)) {
+      const route = routes.get(path);
+      if (!route) {
         throw new InboxError("not_found", "Route not found.", 404);
       }
       if (!authorized(req.headers.authorization, secret) ||
@@ -343,7 +363,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         throw new InboxError("forbidden", "This request is not authorized for the canvas.", 403);
       }
       if (path === "/api/ready") {
-        if (req.method !== "GET") throw new InboxError("method", "Only GET is supported.", 405);
+        assertMethod(req.method, route);
         return json(200, { ready: Boolean(staticFiles) });
       }
       if (!staticFiles) throw new InboxError("server_initializing", "The canvas is still loading its local files. Retrying in the background.", 503);
@@ -370,8 +390,8 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         ? await inbox.syncSettings(preferences) : null;
       if (settings) copilot?.setSettings(settings);
       setSubjectView({ groupBy: groupBy ?? settings?.groupBy ?? subjectView.groupBy, timeZone });
-      if (path === "/api/state" || (path === "/api/settings" && req.method === "GET")) {
-        if (req.method !== "GET") throw new InboxError("method", "Only GET is supported.", 405);
+      assertMethod(req.method, route);
+      if (req.method === "GET") {
         if (path === "/api/state" && req.headers["x-notification-acknowledged-version"] !== undefined) {
           inbox.batch.acknowledge(req.headers["x-notification-acknowledged-version"]);
         }
@@ -382,10 +402,9 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
           return json(200, await settingsSnapshot(settings));
         }
       } else {
-        if (req.method !== "POST") throw new InboxError("method", "Only POST is supported.", 405);
         if (req.headers.origin !== origin) throw new InboxError("origin", "A same-origin request is required.", 403);
         const input = await readBody(req);
-        if (!["/api/subjects", "/api/refresh", "/api/filters", "/api/settings", "/api/development", "/api/read", "/api/done", "/api/copilot"].includes(path) && !batchRoutes.has(path) && Object.keys(input).length) {
+        if (!route.acceptsInput && Object.keys(input).length) {
           throw new InboxError("invalid_input", "This action takes an empty object.", 400);
         }
         if (path === "/api/subjects") return json(200, selectSubjects(input));
@@ -425,9 +444,9 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
           const rowActionToken = inbox.queueThread(input, path === "/api/done" ? "done" : "read");
           return json(202, { ...snapshot(), rowActionToken });
         }
-        if (batchRoutes.has(path)) {
-          inbox.batch[batchRoutes.get(path)](input);
-          return json(["/api/batch/start", "/api/batch/retry"].includes(path) ? 202 : 200, snapshot());
+        if (route.batchAction) {
+          inbox.batch[route.batchAction](input);
+          return json(route.status, snapshot());
         }
       }
       if (path === "/api/state" || path === "/api/refresh") void updates?.check();

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { runInContext } from "node:vm";
-import { dateLabel } from "../src/model.mjs";
+import { dateLabel } from "../src/shared/model.mjs";
 import { disabled, groupActionText, groupProgress, renderer, settle } from "./renderer-fixtures.mjs";
 import { thread } from "./fixtures.mjs";
 

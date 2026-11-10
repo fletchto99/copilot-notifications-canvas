@@ -1,5 +1,5 @@
 import { readdir, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export function assertCoverageIncludes(files, expected) {
@@ -38,9 +38,9 @@ export default async function* coverageReporter(events, { badgePath = process.en
   const scripts = new URL("./", import.meta.url);
   const expected = [fileURLToPath(new URL("../.github/extensions/github-notifications/extension.mjs", import.meta.url))];
   for (const directory of [runtime, scripts]) {
-    for (const file of await readdir(directory)) {
+    for (const file of await readdir(directory, { recursive: true })) {
       if (file.endsWith(".mjs") && !["coverage-reporter.mjs", "build-release.mjs"].includes(file)) {
-        expected.push(fileURLToPath(new URL(file, directory)));
+        expected.push(join(fileURLToPath(directory), file));
       }
     }
   }

@@ -1,10 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { GitHubClient, POLL_MS } from "../src/github.mjs";
-import { Inbox } from "../src/inbox.mjs";
-import { InboxError, normalizeThreads } from "../src/model.mjs";
-import { startServer } from "../src/server.mjs";
+import { GitHubClient, POLL_MS } from "../src/provider/github.mjs";
+import { Inbox } from "../src/provider/inbox.mjs";
+import { InboxError, normalizeThreads } from "../src/shared/model.mjs";
+import { startServer } from "../src/provider/server.mjs";
 import { http, inboxNext as next, thread } from "./fixtures.mjs";
 
 const ok = "HTTP/2 205 Reset Content\r\n\r\n";

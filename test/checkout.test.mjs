@@ -6,8 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { prepareCommit } from "../src/checkout.mjs";
-import { InboxError } from "../src/model.mjs";
+import { prepareCommit } from "../src/provider/checkout.mjs";
+import { InboxError } from "../src/shared/model.mjs";
 
 const execute = promisify(execFile);
 const sha = "a".repeat(40);

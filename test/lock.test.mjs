@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join, normalize } from "node:path";
-import { acquireLock, processAlive } from "../src/lock.mjs";
+import { acquireLock, processAlive } from "../src/provider/lock.mjs";
 import { home, intercept } from "./install-fixtures.mjs";
 
 test("process probes distinguish missing and inaccessible owners and propagate unexpected errors", t => {

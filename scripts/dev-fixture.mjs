@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createCanvasFixture } from "../test/canvas-fixtures.mjs";
 import { getPreviewScenario, previewScenarios } from "../test/preview-scenarios.mjs";
-import { CURRENT_VERSION } from "../src/updates.mjs";
+import { CURRENT_VERSION } from "../src/provider/updates.mjs";
 
 export const previewUsage = `Usage: npm run dev:fixture -- [--scenario=<name>]
        npm run dev:fixture -- --help

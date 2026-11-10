@@ -2,16 +2,16 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { GitHubClient } from "../src/github.mjs";
-import { Inbox } from "../src/inbox.mjs";
-import { DesktopNotifications } from "../src/desktop.mjs";
-import { Preferences } from "../src/settings.mjs";
-import { startServer } from "../src/server.mjs";
-import { Updates, CURRENT_VERSION } from "../src/updates.mjs";
+import { GitHubClient } from "../src/provider/github.mjs";
+import { Inbox } from "../src/provider/inbox.mjs";
+import { DesktopNotifications } from "../src/provider/desktop.mjs";
+import { Preferences } from "../src/provider/settings.mjs";
+import { startServer } from "../src/provider/server.mjs";
+import { Updates, CURRENT_VERSION } from "../src/provider/updates.mjs";
 import { http, thread } from "./fixtures.mjs";
-import { apiTarget, reportedWorkflow } from "../src/model.mjs";
-import { loadDevelopmentAPI } from "../src/development.mjs";
-import { CopilotHandoff } from "../src/copilot.mjs";
+import { apiTarget, reportedWorkflow } from "../src/shared/model.mjs";
+import { loadDevelopmentAPI } from "../src/provider/development.mjs";
+import { CopilotHandoff } from "../src/provider/copilot.mjs";
 import { copilotHost } from "./fixtures/copilot-host.mjs";
 
 export async function createCanvasFixture({

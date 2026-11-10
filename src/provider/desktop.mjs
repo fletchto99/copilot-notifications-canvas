@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { setTimeout as wait } from "node:timers/promises";
 import { GitHubClient, firstPage, POLL_MS, RETRY_MS } from "./github.mjs";
-import { groupThreads, InboxError, notificationTitle, orderedThreads } from "./model.mjs";
+import { groupThreads, InboxError, notificationTitle, orderedThreads } from "../shared/model.mjs";
 import { acquireLock, ownerPattern, processAlive, removeFile } from "./lock.mjs";
 import { notifyDesktop, desktopCapabilities, validSound } from "./notifier.mjs";
 

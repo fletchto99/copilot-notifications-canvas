@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { GitHubClient, firstPage } from "../src/github.mjs";
-import { InboxError, normalizeThreads } from "../src/model.mjs";
+import { GitHubClient, firstPage } from "../src/provider/github.mjs";
+import { InboxError, normalizeThreads } from "../src/shared/model.mjs";
 import { http, thread } from "./fixtures.mjs";
 
 const settle = () => new Promise(resolve => setImmediate(resolve));
