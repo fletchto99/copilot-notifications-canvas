@@ -248,7 +248,7 @@ test("row and group actions lock only overlapping selections and expose independ
     const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
     expect(results.violations).toEqual([]);
     release();
-    await expect(page.locator('[data-focus-key="read:1"]')).toHaveCount(0);
+    await expect(page.locator('[data-focus-key="read:1"]')).toBeDisabled();
     await expect(page.locator('[data-focus-key="done:5"]')).toHaveCount(0);
     await expect(solo).toBeHidden();
     await expect(page.locator('[data-focus-key="done:3"]')).toHaveCount(0);

@@ -8,6 +8,7 @@ import { Startup } from "./startup.mjs";
 import { DesktopNotifications } from "./desktop.mjs";
 import { Updates } from "./updates.mjs";
 import { loadDevelopmentAPI } from "./development.mjs";
+import { CopilotHost, CopilotHandoff } from "./copilot.mjs";
 
 const instances = new Map();
 const preferences = new Preferences();
@@ -15,6 +16,7 @@ const developmentAPI = await loadDevelopmentAPI(preferences);
 const client = new GitHubClient({ apiBaseUrl: developmentAPI?.target.baseUrl });
 let session;
 let startup;
+let copilotHost;
 const log = (message, options) => session?.log(message, options);
 const desktop = developmentAPI?.target.custom ? undefined : new DesktopNotifications({ preferences, client, log });
 const updates = new Updates({ log });
@@ -99,7 +101,9 @@ session = await joinSession({
       try {
         if (!instances.has(ctx.instanceId)) {
           const inbox = new Inbox(client, ctx.input ?? {});
-          const pending = startServer(inbox, { log, preferences, desktop, updates, developmentAPI }).catch(error => {
+          copilotHost ??= new CopilotHost(() => session, { log });
+          const copilot = new CopilotHandoff(inbox, copilotHost, { log, preferences });
+          const pending = startServer(inbox, { log, preferences, desktop, updates, developmentAPI, copilot }).catch(error => {
             inbox.close();
             throw error;
           });

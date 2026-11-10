@@ -222,16 +222,29 @@ test("mark-read requires a click and retains the row after confirmation", async 
   ui.window.events.pagehide();
 });
 
-test("read rows omit Read and its tooltip, including external updates in every grouping", async t => {
+test("read rows retain disabled Read controls and Already read tooltips across external updates in every grouping", async t => {
   for (const groupBy of ["repo", "none", "date"]) {
     for (const update of ["state", "refresh"]) {
       const ui = await renderer({ storedSettings: { groupBy }, initialRows: [thread("1"), thread("2", { unread: false })] });
       t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
       const buttons = () => ui.ids.get("groups").querySelectorAll("button");
       const readButtons = () => buttons().filter(button => button.dataset.action === "read");
-      assert.deepEqual(readButtons().map(button => button.dataset.threadId), ["1"]);
+      const enabledReads = () => readButtons().filter(button => !button.disabled);
+      assert.deepEqual(readButtons().map(button => button.dataset.threadId), ["1", "2"]);
+      assert.deepEqual(enabledReads().map(button => button.dataset.threadId), ["1"]);
       assert.ok(buttons().some(button => button.dataset.focusKey === "done:2"));
-      assert.equal(ui.ids.get("groups").querySelectorAll(".tooltip").some(node => node.id === "row-read-2-tooltip"), false);
+      const read = readButtons()[1];
+      assert.match(read.getAttribute("aria-label"), /^Already read:/);
+      assert.equal(read.getAttribute("aria-keyshortcuts"), null);
+      assert.equal(read.parentNode.querySelectorAll(".tooltip-content")[0].textContent, "Already read");
+      read.parentNode.events.pointerenter();
+      assert.equal(read.parentNode.dataset.tooltipDismissed, undefined);
+      ui.document.events.keydown({ key: "Escape" });
+      assert.equal(read.parentNode.dataset.tooltipDismissed, "true");
+      read.parentNode.events.pointerenter();
+      assert.equal(read.parentNode.dataset.tooltipDismissed, undefined);
+      await read.events.click();
+      assert.equal(ui.calls.some(call => call.path === "/api/read"), false);
       readButtons()[0].focus();
       if (update === "state") {
         ui.inbox.onThreadUpdated("1", "read");
@@ -240,14 +253,16 @@ test("read rows omit Read and its tooltip, including external updates in every g
         ui.setRows([thread("1", { unread: false }), thread("2", { unread: false })]);
         await runInContext('update("refresh", { force: true })', ui.context);
       }
-      assert.equal(readButtons().length, 0);
+      assert.equal(readButtons().length, 2);
+      assert.equal(enabledReads().length, 0);
+      assert.ok(readButtons().every(button => button.getAttribute("aria-busy") === "false"));
       assert.equal(ui.document.querySelectorAll("article").length, 2);
       assert.equal(ui.document.activeElement.dataset.focusKey, "done:1");
       assert.deepEqual(ui.patches, []);
       assert.deepEqual(ui.deletions, []);
       ui.setRows([thread("1"), thread("2", { unread: false })]);
       await runInContext('update("refresh", { force: true })', ui.context);
-      assert.deepEqual(readButtons().map(button => button.dataset.threadId), ["1"]);
+      assert.deepEqual(enabledReads().map(button => button.dataset.threadId), ["1"]);
     }
   }
 });

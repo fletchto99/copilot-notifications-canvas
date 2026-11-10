@@ -9,7 +9,7 @@ for (const packaged of [false, true]) {
       await page.goto(canvas.url);
       const settings = page.getByLabel("Settings", { exact: true });
       const select = page.getByRole("combobox", { name: "Show notifications", exact: true });
-      const hideEmptyTabs = page.getByRole("switch", { name: "Hide empty tabs", exact: true });
+      const copilotIntegration = page.getByRole("switch", { name: "Copilot integration", exact: true });
       for (const width of [320, 960]) {
         await page.setViewportSize({ width, height: 640 });
         for (const colorScheme of ["light", "dark"]) {
@@ -23,7 +23,7 @@ for (const packaged of [false, true]) {
           await expect(select).not.toHaveAttribute("title");
           await expect(page.locator("#show-notifications-help, #show-notifications-tooltip")).toHaveCount(0);
           const controlBounds = await select.locator("..").boundingBox();
-          const nextBounds = await hideEmptyTabs.boundingBox();
+          const nextBounds = await copilotIntegration.boundingBox();
           expect(nextBounds.y - controlBounds.y - controlBounds.height).toBeCloseTo(8, 1);
           await select.selectOption("unread");
           await expect(select).toBeEnabled();
@@ -37,18 +37,18 @@ for (const packaged of [false, true]) {
           await select.selectOption("all");
           await expect(select).toBeEnabled();
           await select.hover();
-          expect(await hideEmptyTabs.evaluate(node => {
+          expect(await copilotIntegration.evaluate(node => {
             const bounds = node.getBoundingClientRect();
             return node.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2));
           })).toBe(true);
           expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
           await select.focus();
           await select.press("Tab");
-          await expect(hideEmptyTabs).toBeFocused();
-          await hideEmptyTabs.click();
-          await expect(hideEmptyTabs).toHaveAttribute("aria-checked", "false");
-          await hideEmptyTabs.click();
-          await expect(hideEmptyTabs).toHaveAttribute("aria-checked", "true");
+          await expect(copilotIntegration).toBeFocused();
+          await copilotIntegration.click();
+          await expect(copilotIntegration).toHaveAttribute("aria-checked", "false");
+          await copilotIntegration.click();
+          await expect(copilotIntegration).toHaveAttribute("aria-checked", "true");
           await page.keyboard.press("Escape");
           await expect(settings).toBeFocused();
         }
@@ -68,13 +68,13 @@ test("inbox matching, persistence and action eligibility remain accessible", asy
   await expect(page.locator(".row")).toHaveCount(2);
   await expect(page.locator(".row.read")).toHaveCount(1);
   await expect(page.locator("#count")).toHaveText("2 total \u00b7 1 unread");
-  await expect(page.locator('[data-focus-key="read:2"]')).toHaveCount(0);
+  await expect(page.locator('[data-focus-key="read:2"]')).toBeDisabled();
   await expect(page.locator('[data-focus-key="done:2"]')).toBeEnabled();
   await page.locator('[data-focus-key="read:1"]').click();
   await expect(page.locator(".row")).toHaveCount(2);
   await expect(page.locator(".row.unread")).toHaveCount(0);
-  await expect(page.locator(".mark-read")).toHaveCount(0);
-  await expect(page.locator("#row-read-1-tooltip")).toHaveCount(0);
+  await expect(page.locator(".mark-read:disabled")).toHaveCount(2);
+  await expect(page.locator("#row-read-1-tooltip")).toHaveText("Already read");
   await expect(page.locator('[data-focus-key="done:1"]')).toBeFocused();
   await expect(page.locator('[data-focus-key="bulk:example/widgets"]')).toBeDisabled();
   await page.locator('[data-focus-key="done:2"]').click();

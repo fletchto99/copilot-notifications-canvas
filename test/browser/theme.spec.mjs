@@ -242,7 +242,9 @@ test("long sound pickers scroll without overflowing a short canvas", async ({ pa
   await page.goto(canvas.url);
   await expect(page.locator(".row")).toHaveCount(1);
   await page.locator("#settings-toggle").click();
+  await expect(page.locator("#settings-toggle")).toHaveAttribute("aria-expanded", "true");
   const sound = page.getByRole("combobox", { name: "Sound", exact: true });
+  await expect(sound).toBeEnabled();
   await sound.click();
   await expect(page.locator("#desktop-sound:open")).toBeVisible();
   expect(await sound.locator("option").count()).toBeGreaterThan(10);

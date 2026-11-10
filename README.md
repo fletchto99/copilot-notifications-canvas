@@ -10,9 +10,10 @@ Your GitHub inbox in the GitHub Copilot app, grouped by repository or date, or
 shown as a single newest-first list. **Show notifications** defaults to **All**,
 showing read and unread inbox items; choose **Unread only** to narrow the view. Completed items
 stay hidden in both views. Search, mark rows
-or groups as read or done, and opt into desktop notifications or auto-open.
+or groups as read or done, start a focused Copilot investigation or review,
+and opt into desktop notifications or auto-open.
 
-![GitHub Notifications canvas with a compact title toolbar including a keyboard shortcut icon before Settings, full-width search and attention tabs above ten synthetic notifications, seven unread, across three example repositories with pull request status icons including a yellow merge-queue icon, distinct purple closed-discussion and green answered-discussion icons, a release tag, a failed check run, a security alert, and read/done controls](docs/images/github-notifications.png)
+![GitHub Notifications canvas with search and attention tabs above ten synthetic notifications, seven unread, across three example repositories, issue and PR status icons, a failed check run, and fixed columns for Copilot, read, and done controls with dimmed envelopes on already-read rows](docs/images/github-notifications.png)
 
 ## Prerequisites
 
@@ -64,9 +65,21 @@ full procedure, verification requirements, and troubleshooting.
   unknown types fall back to a bell without additional status lookups.
 - Check-suite rows open resolved or conservatively matched runs, or the sole
   failed job's logs. Unresolved rows fall back to filtered Actions when possible,
-  or the repository Actions page otherwise.
+  or the repository Actions page otherwise. Run references include the resolved
+  attempt; Copilot validates that exact attempt rather than substituting a later rerun.
 - Use the envelope to mark a row **read**, or the checkmark to mark it **done**.
+  Already-read rows keep a dimmed, disabled envelope labeled **Already read**.
   Each group header offers the same bulk actions.
+- Use the Copilot button before Read to investigate an issue or failed CI run,
+  continue your own PR, or review another PR. Confirm the selected reference
+  before starting a summary-first, read-only root-level session in that repository,
+  independent of the session containing the canvas. Existing sessions are
+  offered without interrupting them; unconfigured repositories require explicit
+  cloning confirmation. See [Copilot actions](docs/usage.md#work-with-copilot).
+  Merged and merge-queued PRs have no action. **Copilot integration** in Settings
+  defaults on and can be turned off without changing existing sessions.
+  The popup's **Skip routine confirmations** option remembers your choice after
+  confirmation; restore it with **Settings > Confirm Copilot actions**.
 - Use **J/K** to move between visible rows, **Enter** to open a focused link,
   **I** to mark the focused row read, and **Shift+E** to mark it done.
   Read advances to the next visible row after success. **/** focuses search;
@@ -82,8 +95,19 @@ preferences and opt-in desktop alerts.
 
 ## Privacy
 
-The extension does not log notification titles or repository names, save them to
-disk, or send them to the agent. There is no telemetry or remote asset loading.
+The extension does not log notification titles or repository names or save them
+to its own files. Ordinary agent-facing canvas actions expose counts, not inbox
+content. There is no telemetry or remote asset loading.
+
+**Starting a Copilot action shares the selected GitHub reference and task
+instructions with Copilot**, including the repository and issue/PR/run identifier
+(and a PR's head commit or a failed run's commit and attempt). These are retained
+in Copilot's session history, and the destination agent fetches the item's
+details. Notification titles, bodies, and the rest of the inbox are not copied
+into the handoff.
+Confirmation is shown by default. If you opt out of routine confirmations,
+a fresh row click still authorizes each handoff; cloning and uncertain or
+ambiguous choices still require confirmation.
 
 **Desktop alerts send repository names and titles to your OS**, which may retain
 them in notification history or show them on the lock screen. System settings
@@ -96,7 +120,8 @@ errors. GitHub CLI handles credentials; they never enter the canvas renderer.
 
 GitHub CLI fetches notifications, the status of loaded issues, pull requests,
 discussions and check suites, merge queue membership, bounded workflow-run matches for missing
-links (including new individual Windows check alerts), and public release
+links (including new individual Windows check alerts), the signed-in user ID for
+Copilot PR ownership checks, selected PR/run handoff metadata, and public release
 metadata. Inferred run links are identified in screen-reader descriptions and fall back
 to filtered Actions when matching is inconclusive. Failed runs open the job log
 viewer when exactly one job failed; the extension reads job metadata, not logs.

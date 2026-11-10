@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { host } from "./sdk.mjs";
 
 const pending = new Map();
+const toolRequests = new Map();
 let nextId = 0;
 childProcess.execFile = (command, args, options, callback) => {
   assert.equal(command, "gh", "Packaged browser tests must not launch native commands");
@@ -26,12 +27,28 @@ host.session = {
   on: () => () => {},
   log: (message, options) => process.send({ type: "log", message, options }),
 };
+if (process.argv[3] === "copilot") {
+  const call = (method, input) => new Promise((resolve, reject) => {
+    const id = ++nextId;
+    toolRequests.set(id, { resolve, reject });
+    process.send({ type: "copilot", id, method, input });
+  });
+  host.session.rpc = { tools: {
+    getCurrentMetadata: () => call("getCurrentMetadata"),
+    execute: input => call("execute", input),
+  } };
+}
 register(new URL("./sdk-loader.mjs", import.meta.url));
 await import(pathToFileURL(process.argv[2]).href);
 const canvas = host.registration.canvases[0];
 process.on("message", async message => {
   if (message.type === "response") {
     pending.get(message.id)?.(message.error ? new Error(message.error) : null, message.stdout);
+  } else if (message.type === "copilot-response") {
+    const request = toolRequests.get(message.id);
+    toolRequests.delete(message.id);
+    if (message.error) request.reject(new Error(message.error));
+    else request.resolve(message.result);
   } else if (message.type === "close") {
     await canvas.onClose({ instanceId: "packaged-browser" });
     process.exit(0);

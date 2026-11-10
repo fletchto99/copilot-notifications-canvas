@@ -197,7 +197,7 @@ test("pending row responses lock only their row and cannot overwrite a newer com
   release();
   await first;
   assert.equal(button("done:2"), undefined);
-  assert.equal(button("read:1"), undefined);
+  assert.equal(button("read:1").disabled, true);
   assert.equal(button("done:1").disabled, false);
   assert.equal(ui.document.activeElement, focused);
   assert.equal(controls(ui).done.disabled, false);
@@ -315,11 +315,13 @@ test("row actions expose queued and active status while search remains usable", 
   await first;
   await settle();
   await runInContext("update()", ui.context);
-  assert.deepEqual(buttons().map(button => button.dataset.writeState), ["active"]);
+  assert.deepEqual(buttons().map(button => button.dataset.writeState), ["idle", "active"]);
+  assert.equal(groupActionText(buttons()[0]), "Already read");
   releases[1]();
   await second;
   await finishRows(ui);
-  assert.equal(buttons().length, 0);
+  assert.equal(buttons().length, 2);
+  assert.ok(buttons().every(button => button.disabled && button.dataset.writeState === "idle"));
 });
 
 test("parallel failures keep independent inline results and dismissing one preserves the other", async t => {
@@ -418,7 +420,8 @@ test("All-view Read completion unlocks Done and restores focus before acknowledg
       await ui.inbox.batch.done;
       if (moveFocus) ui.ids.get("search").focus();
       await runInContext("update()", ui.context);
-      assert.equal(button("read:1"), undefined);
+      assert.equal(button("read:1").disabled, true);
+      assert.match(button("read:1").getAttribute("aria-label"), /^Already read:/);
       assert.equal(button("done:1").disabled, false);
       const expected = moveFocus ? ui.ids.get("search") : button("done:1");
       assert.equal(ui.document.activeElement, expected);

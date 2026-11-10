@@ -74,7 +74,7 @@ for (const packaged of [false, true]) {
         await page.keyboard.up("i");
         expect(canvas.writes).toEqual(["1"]);
         if (matchGitHubInbox) {
-          await expect(page.locator('[data-focus-key="read:1"]')).toHaveCount(0);
+          await expect(page.locator('[data-focus-key="read:1"]')).toBeDisabled();
           await rowLink(page, "1").focus();
           await page.keyboard.press("i");
           expect(canvas.writes).toEqual(["1"]);

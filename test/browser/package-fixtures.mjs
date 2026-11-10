@@ -8,7 +8,7 @@ import { extract } from "tar";
 import { verifyArchive } from "../../scripts/package.mjs";
 import { CURRENT_VERSION } from "../../src/updates.mjs";
 
-export async function startPackagedCanvas(root, run, log) {
+export async function startPackagedCanvas(root, run, log, tools) {
   const directory = join(root, "package");
   const home = join(root, "home");
   await mkdir(directory);
@@ -19,12 +19,22 @@ export async function startPackagedCanvas(root, run, log) {
     env: { ...process.env, COPILOT_HOME: home },
   });
   const child = fork(fileURLToPath(new URL("../fixtures/package-host.mjs", import.meta.url)),
-    [join(home, "extensions", "github-notifications", "extension.mjs")],
+    [join(home, "extensions", "github-notifications", "extension.mjs"), ...(tools ? ["copilot"] : [])],
     { env: { ...process.env, COPILOT_HOME: home }, stdio: ["ignore", "ignore", "pipe", "ipc"] });
   let stderr = "";
   child.stderr.on("data", chunk => { stderr += chunk; });
   child.on("message", async message => {
     if (message.type === "log") return log(message.message, message.options);
+    if (message.type === "copilot") {
+      let response;
+      try {
+        response = { result: await tools[message.method](message.input) };
+      } catch {
+        response = { error: "Synthetic host tool failure" };
+      }
+      if (child.connected) child.send({ type: "copilot-response", id: message.id, ...response });
+      return;
+    }
     if (message.type !== "gh") return;
     let response;
     try {

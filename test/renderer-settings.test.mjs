@@ -764,8 +764,10 @@ test("none restores cross-repository API order in one group with repository meta
   assert.equal(list.querySelectorAll(".repo-name")[0].textContent, "All notifications");
   for (const action of ["read", "done"]) {
     assert.deepEqual(list.querySelectorAll("button").filter(node => node.dataset.action === action)
-      .map(node => node.dataset.threadId), action === "read" ? ["1", "4", "2", "3"] : ["1", "4", "2", "3", "5"]);
+      .map(node => node.dataset.threadId), ["1", "4", "2", "3", "5"]);
   }
+  assert.deepEqual(list.querySelectorAll(".mark-read").filter(node => !node.disabled).map(node => node.dataset.threadId),
+    ["1", "4", "2", "3"]);
   assert.deepEqual(list.querySelectorAll("span").filter(node => node.className === "repository").map(node => node.textContent),
     ["example/alpha", "example/zulu", "example/zulu", "example/alpha", "example/widgets"]);
   assert.equal(ui.ids.get("collapse").hidden, false);
@@ -975,7 +977,7 @@ test("row reads in none and date modes retain rows and focus their Done action",
       thread("2", { repository: { full_name: "example/zulu" }, updated_at: "2026-01-03T12:00:00Z" }),
       thread("3", { repository: { full_name: "example/alpha" }, updated_at: "2026-01-02T12:00:00Z" }),
     ] });
-    const readButtons = () => ui.ids.get("groups").querySelectorAll("button").filter(node => node.dataset.action === "read");
+    const readButtons = () => ui.ids.get("groups").querySelectorAll("button").filter(node => node.dataset.action === "read" && !node.disabled);
     const ids = groupBy === "none" ? ["1", "2", "3"] : ["2", "3", "1"];
     const first = readButtons()[0];
     first.focus();
@@ -995,6 +997,7 @@ test("row reads in none and date modes retain rows and focus their Done action",
     assert.equal(ui.document.activeElement.dataset.focusKey, `done:${ids[1]}`);
     assert.equal(ui.ids.get("empty").hidden, true);
     assert.equal(readButtons().length, 0);
+    assert.equal(ui.ids.get("groups").querySelectorAll(".mark-read").length, 3);
     ui.window.events.pagehide();
   }
 });

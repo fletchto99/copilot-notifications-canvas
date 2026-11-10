@@ -159,11 +159,19 @@ for (const action of ["read", "done"]) {
 test("Done waits for confirmation, reports failures, and never retries automatically", async ({ page, canvas }) => {
   canvas.rows.splice(2);
   await page.clock.install();
+  await page.clock.pauseAt(new Date(Date.now() + 1000));
   await page.goto(canvas.url);
   const done = page.locator('[data-focus-key="done:1"]');
   await expect(done).toBeEnabled();
   const held = gate();
   const entered = gate();
+  const requested = gate();
+  const dispatch = gate();
+  await page.route("**/api/done", async route => {
+    requested.release();
+    await dispatch.promise;
+    await route.continue();
+  }, { times: 1 });
   let attempts = 0;
   canvas.setRequestHook(async args => {
     if (!args.includes("DELETE")) return;
@@ -175,7 +183,7 @@ test("Done waits for confirmation, reports failures, and never retries automatic
   try {
     await done.focus();
     await done.press("Enter");
-    await entered.promise;
+    await requested.promise;
     await expect(done).toBeDisabled();
     await expect(done).toHaveText("");
     await expect(done).toHaveAttribute("aria-busy", "true");
@@ -183,6 +191,8 @@ test("Done waits for confirmation, reports failures, and never retries automatic
     await expect(done.locator("svg")).toBeHidden();
     await expect(done).toHaveAttribute("data-write-state", "queued");
     expect(await done.evaluate(node => getComputedStyle(node, "::after").animationName)).toBe("none");
+    dispatch.release();
+    await entered.promise;
     await page.clock.fastForward(1000);
     await expect(done).toHaveAttribute("data-write-state", "active");
     await page.emulateMedia({ reducedMotion: "reduce" });
@@ -205,12 +215,14 @@ test("Done waits for confirmation, reports failures, and never retries automatic
     canvas.advance(120_000);
     canvas.setRequestHook(undefined);
     await done.press("Enter");
+    await expect.poll(() => canvas.doneWrites).toEqual(["1"]);
     await page.clock.fastForward(1000);
     await expect(page.locator(".row")).toHaveCount(1);
     await expect(page.locator("#notice")).toBeHidden();
-    expect(canvas.doneWrites).toEqual(["1"]);
   } finally {
+    dispatch.release();
     held.release();
+    await page.unrouteAll({ behavior: "wait" });
   }
 });
 
@@ -288,7 +300,13 @@ for (const packaged of [false, true]) {
             held.release();
             const retained = action === "read" && matchGitHubInbox;
             await expect(page.locator(".row")).toHaveCount(retained ? 2 : 1);
-            await expect(button).toHaveCount(0);
+            if (retained) {
+              await expect(button).toBeVisible();
+              await expect(button).toBeDisabled();
+              await expect(button).toHaveAccessibleName(/^Already read:/);
+            } else {
+              await expect(button).toHaveCount(0);
+            }
             await expect(page.locator(`[data-focus-key="${retained ? "done:1" : `${action}:2`}"]`)).toBeFocused();
             await expect(page.locator("#notice")).toBeHidden();
             const acknowledged = await page.waitForResponse(async response => response.url().endsWith("/api/state") &&
@@ -325,7 +343,9 @@ for (const moveFocus of [false, true]) {
       await queued.promise;
       if (moveFocus) await page.getByRole("searchbox").focus();
       await expect(page.locator(".row.read")).toHaveCount(1);
-      await expect(read).toHaveCount(0);
+      await expect(read).toBeVisible();
+      await expect(read).toBeDisabled();
+      await expect(read).toHaveAccessibleName(/^Already read:/);
       const done = page.locator('[data-focus-key="done:1"]');
       await expect(done).toBeEnabled();
       const expected = moveFocus ? page.getByRole("searchbox") : done;

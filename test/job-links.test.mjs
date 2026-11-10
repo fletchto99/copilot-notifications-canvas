@@ -41,13 +41,14 @@ test("inferred, suite and direct runs open the unique failed job with the approp
     await client.refreshSubjects([item]);
     const snapshot = client.subjectSnapshot(item);
     assert.equal(snapshot.url, jobURL);
+    assert.equal(snapshot.subjectRunUrl, `${runURL}/attempts/1`);
     assert.equal(snapshot.subjectLinkTarget, "job");
     assert.equal(snapshot.subjectLinkSource, kind === "inferred" ? "inferred" : undefined);
     assert.equal(snapshot.label, kind === "inferred" ? "Open failed job logs for inferred workflow run" : "Open failed job logs");
     assert.equal(snapshot.subjectState, "failure");
     assert.equal(snapshot.direct, true);
     assert.equal(jobCalls.length, 1);
-    assert.equal(jobCalls[0].at(-1), `/repos/example/widgets/actions/runs/123${kind === "inferred" ? "/attempts/1/jobs?" : "/jobs?filter=latest&"}per_page=100`);
+    assert.equal(jobCalls[0].at(-1), `/repos/example/widgets/actions/runs/123${kind === "direct" ? "/jobs?filter=latest&" : "/attempts/1/jobs?"}per_page=100`);
     assert.equal(client.subjectsNeedRefresh([item]), false);
     assert.equal(client.sequence, 0);
     client.clear();
@@ -103,7 +104,7 @@ test("expired, invalidated, or changed check activity still uses conservative fa
       assert.equal(client.blockedUntil, 600_000);
       if (change === "expired-job") {
         assert.equal(snapshot.subjectState, "failure", "an unavailable job must not invalidate fresh run status");
-        assert.equal(snapshot.url, kind === "inferred" ? `${runURL}/attempts/1` : runURL);
+        assert.equal(snapshot.url, kind === "direct" ? runURL : `${runURL}/attempts/1`);
       }
     }
   }
