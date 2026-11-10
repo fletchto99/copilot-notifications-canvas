@@ -28,6 +28,9 @@ function extraRows(count = 20) {
 }
 
 async function setup(t, count, { holdFirst = false, preferences, initialRows = rows() } = {}) {
+  initialRows = initialRows.map(row => ({ ...row, subject: { ...row.subject,
+    type: "CheckSuite", url: row.subject.url.replace("/issues/", "/actions/runs/"),
+  } }));
   const calls = [];
   let release;
   const held = new Promise(resolve => { release = resolve; });
@@ -36,12 +39,12 @@ async function setup(t, count, { holdFirst = false, preferences, initialRows = r
   const client = new GitHubClient({ run: async args => {
     const endpoint = args.at(-1);
     if (endpoint.startsWith("/notifications")) return http(initialRows);
-    const id = endpoint.match(/\/issues\/(\d+)$/)?.[1];
+    const id = endpoint.match(/\/actions\/runs\/(\d+)$/)?.[1];
     assert.ok(id);
     calls.push(id);
     if (holdFirst && calls.length <= 20) await held;
     if (calls.length === count) finish();
-    return http({ state: "closed", state_reason: "completed" });
+    return http({ status: "completed", conclusion: "success" });
   } });
   const inbox = new Inbox(client);
   const server = await startServer(inbox, { development: null, preferences });

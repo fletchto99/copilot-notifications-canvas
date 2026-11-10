@@ -40,7 +40,7 @@ test("discussion icons use read-only GraphQL state without fetching or retaining
     for (const field of ["owner=example", "name=widgets", "number=74"]) assert.ok(calls[0].includes(field));
     const query = calls[0].find(arg => arg.startsWith("query="));
     assert.match(query, /^query=query\(\$owner:String!,\$name:String!,\$number:Int!\)/);
-    assert.match(query, /discussion\(number:\$number\)\{closed isAnswered stateReason\}/);
+    assert.match(query, /discussion\(number:\$number\)\{closed isAnswered stateReason viewerDidAuthor\}/);
     assert.doesNotMatch(query, /mutation|body|title|comments|author/);
     assert.deepEqual(client.subjectSnapshot(subject), {
       subjectState: expected, subjectStateError: null, subjectCheckedAt: 0, subjectStateStale: false,

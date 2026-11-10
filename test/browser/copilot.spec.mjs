@@ -43,26 +43,37 @@ for (const packaged of [false, true]) {
     });
 
     for (const supported of [true, false]) {
-      test(`cold discovery ${supported ? "recovers from initially empty metadata" : "hides unsupported actions after bounded retries"}`, async ({ page, canvas }) => {
+      test(`cold discovery ${supported ? "recovers after the initial retry budget" : "shows unavailable tooling after one minute"}`, async ({ page, canvas }) => {
+        test.setTimeout(90_000);
         canvas.rows.splice(1);
         canvas.rows[0].subject.url = "https://api.github.com/repos/example/widgets/issues/1";
         const metadata = await canvas.copilotHost.rpc.getCurrentMetadata();
         let calls = 0;
         canvas.copilotHost.rpc.getCurrentMetadata = async () => {
           calls++;
-          return supported && calls > 1 ? metadata : { tools: [] };
+          return supported && calls > 4 ? metadata : { tools: [] };
         };
         await page.goto(canvas.url);
         const action = page.locator(".copilot-action");
+        await expect.poll(() => calls, { timeout: 15_000 }).toBe(4);
+        await expect(action).toBeVisible();
+        await expect(action).toBeDisabled();
+        await expect(action).toHaveAttribute("aria-busy", "true");
+        const link = page.locator(".row-link");
+        await link.focus();
         if (supported) {
-          await expect(action).toBeEnabled();
-          expect(calls).toBe(2);
+          await expect(action).toBeEnabled({ timeout: 10_000 });
+          expect(calls).toBe(5);
         } else {
-          await expect(action).toBeVisible();
+          await expect(action).toHaveAccessibleName(/^Copilot tooling unavailable:/, { timeout: 65_000 });
           await expect(action).toBeDisabled();
-          await expect(action).toBeHidden({ timeout: 15_000 });
-          expect(calls).toBe(4);
+          await expect(action).toHaveAttribute("aria-busy", "false");
+          await action.locator("..").hover();
+          await expect(action.locator("..").getByRole("tooltip")).toHaveText("Copilot tooling unavailable");
+          expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+          expect(calls).toBeGreaterThan(4);
         }
+        await expect(link).toBeFocused();
         await expect(page.locator(".mark-read")).toBeEnabled();
         await expect(page.locator(".mark-done")).toBeEnabled();
         expect(canvas.copilotHost.calls).toEqual([]);
@@ -71,24 +82,31 @@ for (const packaged of [false, true]) {
       });
     }
 
-    test("Copilot handoff is accessible, summary-first, explicitly confirmed, and independent of Read/Done", async ({
-      page,
-      canvas,
-    }) => {
+    for (const [type, closed] of [["Issue", false], ["Discussion", false], ["Discussion", true]]) test(
+      `${closed ? "Closed" : "Open"} ${type} handoff is accessible, explicitly confirmed, and independent of Read/Done`, async ({ page, canvas }) => {
       canvas.rows.splice(1);
-      canvas.rows[0].subject.url =
-        "https://api.github.com/repos/example/widgets/issues/1";
+      const discussion = type === "Discussion";
+      const label = discussion ? "Summarize with Copilot" : "Investigate with Copilot";
+      const name = discussion ? "Summarize discussion #1" : "Investigate issue #1";
+      canvas.rows[0].subject.type = type;
+      canvas.rows[0].subject.url = `https://api.github.com/repos/example/widgets/${discussion ? "discussions" : "issues"}/1`;
+      if (discussion) canvas.rows[0].subjectDetails = { closed, isAnswered: false, stateReason: closed ? "RESOLVED" : null };
       await page.goto(canvas.url);
+      if (discussion) await expect(page.locator(".subject-icon")).toHaveAttribute("aria-label", new RegExp(`Discussion: ${closed ? "Closed" : "Open"}`));
       const action = page.getByRole("button", {
-        name: /^Investigate with Copilot:/,
+        name: new RegExp(`^${label}:`),
       });
       await expect(action).toBeEnabled();
       await action.focus();
       await page.keyboard.press("Enter");
       const dialog = page.getByRole("dialog", {
-        name: "Investigate with Copilot",
+        name: label,
       });
       await expect(dialog).toBeVisible();
+      await expect(page.locator("#copilot-status")).toHaveText(discussion
+        ? "Copilot will summarize this discussion, then stop and wait for further instructions."
+        : "Copilot will summarize this item first, then investigate read-only. Implementation and GitHub changes require your approval.");
+      await expect(page.locator("#copilot-reference")).toHaveText(`https://github.com/example/widgets/${discussion ? "discussions" : "issues"}/1`);
       await expect(
         dialog.getByRole("button", { name: "Start session" }),
       ).toBeVisible();
@@ -119,9 +137,14 @@ for (const packaged of [false, true]) {
       expect(kickoff.prompt).toContain(
         "first substantive response must summarize",
       );
+      if (discussion) {
+        expect(kickoff.prompt).toContain("comments and replies");
+        expect(kickoff.prompt).toContain("open or closed state");
+        expect(kickoff.prompt).toContain("Stop after the summary");
+      }
       expect(kickoff.prompt).not.toContain(canvas.rows[0].subject.title);
       expect(creation).toEqual({
-        project_id: canvas.copilotHost.repositories[0].id, name: "Investigate issue #1",
+        project_id: canvas.copilotHost.repositories[0].id, name,
         workspace_type: "worktree", detached: true,
       });
       expect(canvas.copilotHost.sessions[0].parent_session_id).toBeNull();

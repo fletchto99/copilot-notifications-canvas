@@ -33,6 +33,7 @@ export function apiTarget(value = DEFAULT_API_BASE_URL) {
 
 export const attentionFilters = [
   { value: "all", label: "All", reasons: [] },
+  { value: "mine", label: "Mine", reasons: [] },
   { value: "assigned", label: "Assigned", reasons: ["assign"] },
   { value: "participating", label: "Participating", reasons: [
     "comment", "mention", "author", "team_mention", "assign", "manual",
@@ -42,6 +43,8 @@ export const attentionFilters = [
   { value: "team_mentioned", label: "Team Mentioned", reasons: ["team_mention"] },
   { value: "review_requested", label: "Review Requested", reasons: ["review_requested"] },
 ];
+
+export const authorshipTypes = ["Issue", "PullRequest", "Discussion"];
 
 export const filterSchema = {
   type: "object",
@@ -237,9 +240,15 @@ function searchThreads(threads, query) {
 
 export function attentionCounts(threads) {
   const items = uniqueThreads(threads);
-  return Object.fromEntries(attentionFilters.map(({ value, reasons }) => [
-    value, value === "all" ? items.length : items.filter(thread => reasons.includes(thread.reason)).length,
+  return Object.fromEntries(attentionFilters.map(filter => [
+    filter.value, items.filter(thread => matchesAttention(thread, filter)).length,
   ]));
+}
+
+function matchesAttention(thread, filter) {
+  return filter.value === "all" || (filter.value === "mine"
+    ? authorshipTypes.includes(thread.type) && thread.mine === true
+    : filter.reasons.includes(thread.reason));
 }
 
 export function groupThreads(threads, { query, attention = "all" }) {
@@ -247,7 +256,7 @@ export function groupThreads(threads, { query, attention = "all" }) {
   const filter = attentionFilters.find(filter => filter.value === attention);
   if (!filter) throw new InboxError("invalid_filters", "Choose a supported attention filter.", 400);
   for (const thread of searchThreads(threads, query)) {
-    if (attention !== "all" && !filter.reasons.includes(thread.reason)) continue;
+    if (!matchesAttention(thread, filter)) continue;
     let group = groups.get(thread.repository);
     if (!group) {
       group = { repository: thread.repository, unread: 0, items: [] };

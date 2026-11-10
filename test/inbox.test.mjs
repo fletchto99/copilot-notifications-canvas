@@ -263,7 +263,7 @@ test("attention is panel-local, survives pagination and refresh, and returns onl
   assert.equal(filtered.loaded, 2);
   assert.equal(filtered.matching, 1);
   assert.equal(filtered.attention, "review_requested");
-  assert.deepEqual(filtered.attentionCounts, { all: 2, review_requested: 1, mentioned: 1, team_mentioned: 0, assigned: 0, participating: 2 });
+  assert.deepEqual(filtered.attentionCounts, { all: 2, mine: 0, review_requested: 1, mentioned: 1, team_mentioned: 0, assigned: 0, participating: 2 });
   assert.doesNotMatch(JSON.stringify(filtered), /Synthetic|example\/|selectionKey|"groups"|"filters"/);
   assert.equal(other.filters.attention, "all");
   await inbox.more();
@@ -274,7 +274,7 @@ test("attention is panel-local, survives pagination and refresh, and returns onl
   await inbox.refresh({ force: true });
   assert.equal(inbox.summary().matching, 1);
   assert.equal(inbox.summary().loaded, 3);
-  assert.deepEqual(inbox.summary().attentionCounts, { all: 3, review_requested: 2, mentioned: 1, team_mentioned: 0, assigned: 0, participating: 3 });
+  assert.deepEqual(inbox.summary().attentionCounts, { all: 3, mine: 0, review_requested: 2, mentioned: 1, team_mentioned: 0, assigned: 0, participating: 3 });
   assert.deepEqual(inbox.filters, { mode: "inbox", query: "notification 3", attention: "review_requested" });
   await assert.rejects(inbox.setFilters({ attention: "bad" }), { code: "invalid_filters" });
   assert.equal(inbox.filters.attention, "review_requested");
@@ -282,7 +282,7 @@ test("attention is panel-local, survives pagination and refresh, and returns onl
   assert.equal(inbox.filters.query, "notification 3");
   await inbox.setFilters({ query: "no matching title" });
   assert.equal(inbox.summary().matching, 0);
-  assert.deepEqual(inbox.summary().attentionCounts, { all: 3, review_requested: 2, mentioned: 1, team_mentioned: 0, assigned: 0, participating: 3 });
+  assert.deepEqual(inbox.summary().attentionCounts, { all: 3, mine: 0, review_requested: 2, mentioned: 1, team_mentioned: 0, assigned: 0, participating: 3 });
   const prefiltered = new Inbox(client, { attention: "mentioned" });
   t.after(() => prefiltered.close());
   await prefiltered.refresh();
@@ -302,12 +302,12 @@ test("tab counts follow cross-panel reads and retain loaded data after a failed 
   await other.refresh();
   other.queueThread({ id: "1" }, "read");
   await other.batch.done;
-  assert.deepEqual(inbox.snapshot().attentionCounts, { all: 2, review_requested: 0, mentioned: 1, team_mentioned: 0, assigned: 1, participating: 2 });
+  assert.deepEqual(inbox.snapshot().attentionCounts, { all: 2, mine: 0, review_requested: 0, mentioned: 1, team_mentioned: 0, assigned: 1, participating: 2 });
   assert.equal(inbox.summary().unread, 1);
   fail = true;
   await assert.rejects(inbox.refresh({ force: true }), { code: "github_http" });
   assert.equal(inbox.summary().status, "stale");
-  assert.deepEqual(inbox.snapshot().attentionCounts, { all: 2, review_requested: 0, mentioned: 1, team_mentioned: 0, assigned: 1, participating: 2 });
+  assert.deepEqual(inbox.snapshot().attentionCounts, { all: 2, mine: 0, review_requested: 0, mentioned: 1, team_mentioned: 0, assigned: 1, participating: 2 });
 });
 
 test("forced refresh rechecks every loaded page before the next poll without losing search", async () => {

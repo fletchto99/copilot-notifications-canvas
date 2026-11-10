@@ -4,7 +4,7 @@ import { runInContext } from "node:vm";
 import { renderer, settle } from "./renderer-fixtures.mjs";
 
 const ready = {
-  id: "1", status: "ready", token: "synthetic-token", label: "Investigate with Copilot",
+  id: "1", status: "ready", token: "synthetic-token", action: "issue", label: "Investigate with Copilot",
   repository: "example/widgets", url: "https://github.com/example/widgets/issues/1",
   sessions: [], needsClone: false, canClone: true,
   canRemember: true, confirmCopilotActions: true,
@@ -35,9 +35,24 @@ test("cold discovery polls promptly and updates disabled placeholders in place w
   assert.equal(Boolean(ui.ids.get("copilot-dialog").open), false);
   const link = ui.ids.get("groups").querySelectorAll(".row-link")[0];
   link.focus();
-  subjectStates["1"].copilot = { label: ready.label, enabled: true };
+  for (let second = 0; second < 60; second++) {
+    await ui.fireTimer(1000);
+    assert.equal(button(ui), control);
+    assert.equal(control.disabled, true);
+    assert.equal(control.getAttribute("aria-busy"), "true");
+  }
+  subjectStates["1"].copilot = {
+    label: "Copilot tooling unavailable", reason: "Copilot tooling unavailable", enabled: false,
+  };
   ui.setCopilotLoading(false);
   await ui.fireTimer(1000);
+  assert.equal(button(ui), control);
+  assert.equal(control.disabled, true);
+  assert.equal(control.getAttribute("aria-busy"), "false");
+  assert.match(control.getAttribute("aria-label"), /^Copilot tooling unavailable/);
+  assert.equal(ui.document.activeElement, link);
+  subjectStates["1"].copilot = { label: ready.label, enabled: true };
+  await ui.fireTimer(5000);
   assert.equal(button(ui), control);
   assert.equal(control.disabled, false);
   assert.equal(control.getAttribute("aria-busy"), "false");
@@ -137,6 +152,23 @@ test("closed and merged PR controls retain focus and describe the correct summar
     assert.deepEqual(ui.patches, []);
     assert.deepEqual(ui.deletions, []);
   });
+});
+
+test("discussion confirmation describes summary-only work and preserves session and clone guidance", async t => {
+  const discussion = { ...ready, action: "discussion", label: "Summarize with Copilot",
+    url: "https://github.com/example/widgets/discussions/1", needsClone: true };
+  const ui = await setup(t, { onCopilot: () => discussion });
+  await open(ui);
+  assert.equal(ui.ids.get("copilot-status").textContent,
+    "Copilot will summarize this discussion, then stop and wait for further instructions.");
+  assert.equal(ui.ids.get("copilot-clone").hidden, false);
+  assert.match(ui.ids.get("copilot-clone").textContent, /will clone example\/widgets/);
+  ui.setCopilotOperation({ ...discussion, sessions: [{ id: "session", name: "Summarize discussion #1" }] });
+  await runInContext("update()", ui.context);
+  assert.match(ui.ids.get("copilot-status").textContent, /A matching session already exists/);
+  assert.match(ui.ids.get("copilot-status").textContent, /Existing sessions and their work are left untouched/);
+  assert.equal(ui.ids.get("copilot-clone").hidden, false);
+  assert.equal(ui.ids.get("copilot-start").textContent, "Clone repository and start a new session");
 });
 
 test("inactive controls expose their reason, preserve focus and never submit a handoff", async t => {

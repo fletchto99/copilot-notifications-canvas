@@ -57,6 +57,8 @@ export async function renderReadmeScreenshot(browser, expect, { create = createC
       nodes.map(node => node.getAttribute("aria-label").split(".")[0])),
     { timeout: 15_000 }).toEqual(readmeSubjectLabels);
     await expect(page.locator(".subject-loading")).toHaveCount(0);
+    await expect(page.locator("#attention-mine")).toHaveText("Mine (4)");
+    await expect(page.locator(".notification-mine:visible")).toHaveCount(4);
     await expect(page.locator('.row-link[aria-disabled="true"]')).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Summarize Changes: #237" })).toBeEnabled();
     await expect(page.getByRole("button", { name: "Summarize Release Notes: v1.2.0" })).toBeEnabled();

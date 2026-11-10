@@ -49,9 +49,11 @@ export async function createCanvasFixture({
     requests.push(endpoint);
     const intercepted = await requestHook?.(args);
     if (intercepted !== undefined) return intercepted;
-    if (endpoint === "/user") return http({ id: 7 });
     if (endpoint === "/repos/fletchto99/copilot-notifications-canvas/releases/latest" && args.includes("GET")) {
       return http({ tag_name: `v${CURRENT_VERSION}`, draft: false, prerelease: false });
+    }
+    if (endpoint === (target.custom ? `${target.baseUrl}/user` : "/user") && args.includes("GET")) {
+      return http({ id: 7 });
     }
     if (endpoint === "graphql") {
       assert.ok(args.includes("POST") && !target.custom);
@@ -60,8 +62,10 @@ export async function createCanvasFixture({
       const row = rows.find(row => row.subject.url ===
         `https://api.github.com/repos/${value("owner")}/${value("name")}/${discussion ? "discussions" : "pulls"}/${value("number")}`);
       assert.ok(row, "Unexpected synthetic GraphQL lookup");
-      if (discussion) return http({ data: { repository: { discussion: row.subjectDetails ??
-        { closed: false, isAnswered: false, stateReason: null } } } });
+      if (discussion) return http({ data: { repository: { discussion: {
+        viewerDidAuthor: row.authoredByViewer ?? false,
+        ...(row.subjectDetails ?? { closed: false, isAnswered: false, stateReason: null }),
+      } } } });
       return http({ data: { repository: { pullRequest: { isInMergeQueue: row.mergeQueued ?? false } } } });
     }
     if (args.includes("PATCH") || args.includes("DELETE")) {
@@ -123,9 +127,10 @@ export async function createCanvasFixture({
         /^\/repos\/[^/]+\/[^/]+\/(?:(?:issues|pulls|releases|check-suites|actions\/runs)\/\d+|commits\/[a-f0-9]{7,40})$/.test(url.pathname.slice(target.prefix.length))) {
       const row = rows.find(row => row.subject.url === url.href);
       assert.ok(row, `Unexpected synthetic subject lookup: ${endpoint}`);
-      return http({ ...(row.subject.type === "PullRequest" ? { user: { id: 8 }, head: { sha: "b".repeat(40) } } : {}),
-        ...row.subjectDetails ?? (row.subject.type === "CheckSuite"
-          ? { status: "completed", conclusion: "success" } : { state: "open", merged: false, draft: false }) });
+      return http({ user: { id: row.authoredByViewer ? 7 : 8 },
+        ...(row.subject.type === "PullRequest" ? { head: { sha: "b".repeat(40) } } : {}),
+        ...(row.subjectDetails ?? (row.subject.type === "CheckSuite"
+          ? { status: "completed", conclusion: "success" } : { state: "open", merged: false, draft: false })) });
     }
     assert.ok(args.includes("GET") && url.origin === target.origin && url.pathname === `${target.prefix}/notifications`,
       `Unexpected request: ${endpoint}`);

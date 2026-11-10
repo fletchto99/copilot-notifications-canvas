@@ -313,11 +313,11 @@ test("metadata omits the redundant unread label and uses decorative middle-dot s
     const ui = await renderer({ storedSettings: { groupBy }, initialRows: [thread()] });
     t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
     const metadata = ui.ids.get("groups").querySelectorAll(".metadata")[0];
-    const items = metadata.querySelectorAll(".metadata-item");
+    const items = metadata.querySelectorAll(".metadata-item").filter(node => !node.hidden);
     assert.equal(items.length, groupBy === "repo" ? 3 : 4);
     assert.equal(items.some(part => part.children[0].textContent === "Unread"), false);
     assert.equal(items.at(-1).children.length, 1);
-    const separators = metadata.querySelectorAll(".metadata-separator");
+    const separators = items.flatMap(node => node.querySelectorAll(".metadata-separator"));
     assert.equal(separators.length, items.length - 1);
     for (const separator of separators) {
       assert.equal(separator.textContent, "\u00b7");

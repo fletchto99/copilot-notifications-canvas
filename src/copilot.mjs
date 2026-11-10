@@ -16,6 +16,7 @@ const labels = {
 const failedChecks = new Set(["failure", "timed_out", "startup_failure"]);
 const closedIssueStates = new Set(["closed", "not_planned", "duplicate"]);
 const discoveryRetryDelays = [1000, 2000, 5000];
+const discoveryStartupWindow = 60_000;
 const inactivePull = item => item.type === "PullRequest" && item.subjectState === "merge_queued"
   ? "PR in merge queue" : null;
 const integrationDisabled = () => new InboxError("copilot_disabled",
@@ -53,21 +54,26 @@ export class CopilotHost {
     this.log = log;
     this.now = now;
     this.tools = new Set();
-    this.initializing = true;
+    this.discoveryComplete = false;
     this.startupAttempts = 0;
     this.nextCheckAt = 0;
     this.reservations = new Set();
     this.prepareCommit = prepareCommit;
   }
 
+  get initializing() {
+    return !this.discoveryComplete && (this.discoveryDeadline === undefined || this.now() < this.discoveryDeadline);
+  }
+
   refresh() {
+    this.discoveryDeadline ??= this.now() + discoveryStartupWindow;
     if (this.pending) return this.pending;
     const session = this.getSession();
     if (!session) return Promise.resolve();
     const tools = session.rpc?.tools;
     if (typeof tools?.getCurrentMetadata !== "function" || typeof tools.execute !== "function") {
       this.tools.clear();
-      this.initializing = false;
+      this.discoveryComplete = true;
       return Promise.resolve();
     }
     if (this.now() < this.nextCheckAt) return Promise.resolve();
@@ -83,10 +89,12 @@ export class CopilotHost {
       this.tools.clear();
       this.log("Could not discover Copilot session actions.", { level: "warning" });
     }).finally(() => {
-      const retryDelay = this.initializing && !this.supports()
-        ? discoveryRetryDelays[this.startupAttempts++] : undefined;
-      this.initializing = retryDelay !== undefined;
-      this.nextCheckAt = this.now() + (retryDelay ?? 60_000);
+      const now = this.now();
+      const remaining = this.discoveryDeadline - now;
+      const retryDelay = !this.discoveryComplete && !this.supports() && remaining > 0
+        ? Math.min(discoveryRetryDelays[Math.min(this.startupAttempts++, discoveryRetryDelays.length - 1)], remaining) : undefined;
+      this.discoveryComplete = retryDelay === undefined;
+      this.nextCheckAt = now + (retryDelay ?? 60_000);
       this.pending = undefined;
     });
     return this.pending;
@@ -149,7 +157,7 @@ function promptFor(target) {
   const task = {
     issue: "Investigate this issue. Read the issue and relevant discussion, inspect the relevant code, and propose an approach.",
     issueSummary: "Summarize this closed issue read-only. Read the issue and its comments, explain the original problem, the documented outcome, and why it was closed where the evidence supports it. Do not assume closure means the issue was fixed; distinguish completed, not-planned, and duplicate outcomes. Do not propose a fix, reopen the issue, or start implementation.",
-    discussion: "Summarize this discussion read-only. Read the original post, comments, and replies. Explain the main points, decisions, accepted answer if present, and unresolved questions. Report its current state without assuming it is resolved. Do not propose implementation, post replies, or change the discussion.",
+    discussion: "Summarize this discussion read-only. Read the original post, comments, and replies, following pagination as needed. State any access or pagination limits instead of implying the full thread was read. Explain the main points, decisions, accepted answer if present, and unresolved questions. Report its current state without assuming it is resolved. Do not propose implementation, post replies, or change the discussion.",
     commit: "Summarize the code changed in this commit read-only. Inspect the actual diff and relevant code context, not just the commit message. Explain the main code and behavior changes, their purpose where supported by evidence, and related test changes. For merge commits, state which parent comparisons you used; for empty commits, say no code changed. Do not propose fixes or draft review findings.",
     continue: "Continue work on this pull request. Read its diff, discussion, reviews, and check results to identify outstanding work.",
     review: target.askForReviewSkill
@@ -161,6 +169,7 @@ function promptFor(target) {
   }[target.action];
   const nextStep = closedPull
     ? "After the summary, use ask_user to ask whether the user would like help reopening this pull request. Offer \"Help me reopen the PR\" and \"Keep it closed\". Wait for the user's answer before further work. Do not reopen the PR, restore a branch, or make other changes without explicit approval. If they decline, stop. If they want help, verify the current PR state, head branch availability, and repository permissions before proposing next steps."
+    : discussion ? "Stop after the summary and wait for the user to request further work."
     : summarize
     ? "Stop after the summary unless the user asks for further work."
     : target.askForReviewSkill
@@ -172,13 +181,13 @@ Selected GitHub reference: ${target.url}
 ${target.inferred ? "The notification-to-run association was inferred and explicitly confirmed. Verify the selected run and attempt during investigation.\n" : ""}${target.action === "ci" ? `Investigate commit ${target.sha}, run attempt ${target.attempt}. Verify the checkout matches that commit; do not silently investigate the default branch.` :
     release ? `Read release ID ${target.releaseId} with GitHub CLI using the endpoint repos/${target.repository}/releases/${target.releaseId}. Verify it matches the selected release URL; never substitute the latest release. The repository checkout is for context only, not a checkout of the release tag.` :
     commit ? `The worktree starts at the verified commit ${target.sha}. Verify the checkout matches that SHA and summarize that exact commit's diff, not the latest branch or an entire PR.` :
-    discussion ? "Use the discussion's repository. Read the selected thread and its replies with GitHub CLI; treat an unavailable thread as an explicit limitation, not an empty discussion." :
+    discussion ? "Use the discussion's repository. Read the selected thread and its replies with GitHub CLI; treat an unavailable thread as an explicit limitation, not an empty discussion. If the code lives elsewhere, ask before changing repositories." :
     target.action === "issue" || closedIssue ? "Use the issue's repository. If the code lives elsewhere, ask before changing repositories." :
       `The worktree starts at the pull request's verified head commit ${target.sha}, including for fork PRs. Verify the checkout matches that commit before analysis; do not silently investigate the default branch. ${summarize ? "Use the PR's diff to distinguish its changes from unrelated changes on the base branch." : "Before proposing updates, inspect the PR's head repository and branch; this independent session is not natively linked to the PR."}`}
 
 ${release ? "Your first substantive response must summarize the selected release notes, not propose an investigation or implementation plan." :
     closedIssue ? "Your first substantive response must summarize the closed issue and its outcome, not propose a fix or implementation plan." :
-    discussion ? "Your first substantive response must summarize the discussion, not propose an investigation or implementation plan." :
+    discussion ? "Your first substantive response must summarize the discussion, its current open or closed state, the main viewpoints, any decisions or accepted answer, and unresolved questions. Distinguish agreed outcomes from proposals; do not infer consensus. Do not propose an investigation or implementation plan." :
     commit ? "Your first substantive response must summarize the code changes in the selected commit, not propose an investigation or implementation plan." :
     summarize ? `Your first substantive response must summarize what this ${closedPull ? "closed, unmerged" : "merged"} pull request changed, not propose an investigation or implementation plan. Keep the summary read-only and grounded in the diff.` : "Your first substantive response must summarize what this item is, its current state, and what you will investigate next. Read enough to produce that summary before starting the investigation."}
 ${nextStep} ${summarize ? "Wait" : "Propose implementation separately and wait"} for explicit user approval before editing files, committing, pushing, rerunning workflows, or making GitHub changes. Never mark the notification read or done.
@@ -222,10 +231,10 @@ export class CopilotHandoff {
   row(item) {
     if (!this.enabled || this.inbox.client.target.custom) return null;
     let action;
-    const numbered = item.direct && Number.isSafeInteger(Number(item.number)) && Number(item.number) > 0;
+    const number = item.type === "Discussion" ? item.discussionNumber : item.number;
+    const numbered = item.direct && Number.isSafeInteger(Number(number)) && Number(number) > 0;
     if (item.type === "Issue" && numbered) action = closedIssueStates.has(item.subjectState) ? "issueSummary" : "issue";
-    if (item.type === "Discussion" && item.direct && Number.isSafeInteger(Number(item.discussionNumber)) &&
-        Number(item.discussionNumber) > 0) action = "discussion";
+    if (item.type === "Discussion" && numbered) action = "discussion";
     if (item.type === "Commit" && item.direct && /^[a-f0-9]{7,40}$/.test(item.commitRef)) action = "commit";
     if (item.type === "Release") action = "release";
     if (item.type === "PullRequest" && numbered) {
@@ -233,12 +242,16 @@ export class CopilotHandoff {
         item.viewerIsAuthor ? "continue" : "review";
     }
     if (item.type === "CheckSuite" && failedChecks.has(item.subjectState)) action = "ci";
-    if (!action || !this.host.supports() && !this.host.initializing) return null;
+    if (!action) return null;
     const inactive = inactivePull(item);
     if (inactive) return { label: inactive, enabled: false, reason: inactive };
     if (this.host.initializing) {
       const label = "Checking Copilot availability...";
       return { label, enabled: false, reason: label, loading: true };
+    }
+    if (!this.host.supports()) {
+      const label = "Copilot tooling unavailable";
+      return { label, enabled: false, reason: label };
     }
     if (action === "release" && (!Number.isSafeInteger(Number(item.releaseId)) || Number(item.releaseId) < 1)) {
       return { label: labels.release, enabled: false, reason: "No specific release is linked. Open GitHub to choose a release." };
@@ -399,7 +412,7 @@ export class CopilotHandoff {
       details = await this.inbox.client.copilotContext("commit", item, signal);
     }
     const target = {
-      id, action, repository: item.repository, number: item.number,
+      id, action, repository: item.repository, number: item.type === "Discussion" ? item.discussionNumber : item.number,
       url: details?.url ?? item.url,
       name: item.type === "Issue" ? `Investigate issue #${item.number}` : `Work on PR #${item.number}`,
       ...(item.type === "PullRequest" ? {

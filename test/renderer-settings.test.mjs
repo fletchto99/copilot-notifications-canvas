@@ -115,7 +115,7 @@ test("hiding empty tabs defaults on, saves only its preference, and preserves bo
     const reopened = await renderer({ initialRows: [], storedSettings });
     t.after(() => { reopened.window.events.pagehide(); reopened.inbox.close(); });
     assert.equal(reopened.ids.get("hide-empty-tabs").getAttribute("aria-checked"), String(hideEmptyTabs));
-    assert.equal(reopened.ids.get("attention-tabs").children.filter(tab => !tab.hidden).length, hideEmptyTabs ? 1 : 6);
+    assert.equal(reopened.ids.get("attention-tabs").children.filter(tab => !tab.hidden).length, hideEmptyTabs ? 1 : 7);
   }
   assert.deepEqual(ui.calls.filter(call => call.path === "/api/settings" && call.options.method === "POST")
     .map(call => JSON.parse(call.options.body)), [{ hideEmptyTabs: false }, { hideEmptyTabs: true }]);

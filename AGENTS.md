@@ -132,7 +132,7 @@ output. Development loads source without a build; release builds bundle
 - Treat notification content as untrusted text and preserve URL validation.
   Maintain accessible names, keyboard/focus behavior, and app theme-token support.
 - Keep visible row metadata limited to repository (when needed), type/number,
-  GitHub reason, and timestamp. Never inject destination hints such as
+  confirmed italic `mine`, GitHub reason, and timestamp. Never inject destination hints such as
   "Open repository releases" or "Open GitHub inbox" into it; navigation
   explanations belong in screen-reader descriptions only.
 
@@ -144,6 +144,13 @@ output. Development loads source without a build; release builds bundle
   Neither view includes done notifications.
   Search and counts cover **loaded items**, not the entire GitHub inbox.
   Refresh reconciles loaded pages; a failed refresh must not discard usable data.
+- Mine matches confirmed authorship of loaded issues, PRs, and discussions, not
+  the notification reason. Resolve authorship even for filtered or collapsed
+  rows, share the bounded detail cache, and expose incomplete counts explicitly.
+  Runtime updates must replace `Inbox.pages`, not mutate its arrays in place,
+  so authorship selections stay stable until loaded pages or inbox mode change.
+  Keep author/viewer IDs provider-only and in memory; no per-item authorship in
+  agent results or desktop polling.
 - All views preserve API row order. REST `updated_at` is not the inbox ordering
   key. Preserve cross-repository API positions when regrouping into flat/date
   views; date headings alone sort newest-first. Keep timestamp sorting for

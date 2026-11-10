@@ -161,7 +161,7 @@ test("synthetic preview uses the protected server, temporary preferences and in-
   const initial = await post("/api/refresh");
   assert.equal(initial.loaded, 50);
   assert.ok(initial.development.branch.includes("synthetic preview"));
-  assert.ok(Object.values(initial.attentionCounts).every(count => count > 0));
+  assert.ok(Object.entries(initial.attentionCounts).filter(([filter]) => filter !== "mine").every(([, count]) => count > 0));
   assert.equal((await post("/api/more")).loaded, 53);
   assert.equal((await post("/api/filters", { query: "Needle" })).matching, 4);
   const settleRows = async () => {

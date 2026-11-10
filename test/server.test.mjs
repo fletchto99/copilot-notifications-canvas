@@ -14,6 +14,7 @@ import { http, thread } from "./fixtures.mjs";
 async function setup(t, run = async () => http([thread()]), options = {}) {
   const client = new GitHubClient({ run: args => args.at(-1) === "graphql"
     ? http({ data: { repository: { pullRequest: { isInMergeQueue: false } } } })
+    : args.at(-1) === "/user" ? http({ id: 100 })
     : /^\/repos\/[^/]+\/[^/]+\/(?:issues|pulls)\/\d+$/.test(args.at(-1))
     ? http({ state: "open", merged: false, draft: false }) : run(args) });
   const inbox = new Inbox(client);
@@ -313,6 +314,7 @@ test("all HTTP notification request paths inherit another client's server deadli
     const calls = [];
     const response = args => {
       if (args.includes("PATCH") || args.includes("DELETE")) return http(null, {}, args.includes("PATCH") ? 205 : 204);
+      if (args.at(-1) === "/user") return http({ id: 100 });
       if (args.at(-1).startsWith("/repos/")) return http({ state: "open" });
       const url = new URL(args.at(-1), "https://api.github.com");
       const page = Number(url.searchParams.get("page"));
@@ -392,7 +394,7 @@ test("all HTTP notification request paths inherit another client's server deadli
     if (["read", "done"].includes(path)) assert.equal(inbox.batch.snapshot().status, "completed");
     if (path === "done") assert.equal(inbox.snapshot().loaded, 0);
     if (path === "state") assert.equal(readerClient.subjectSnapshot(inbox.loadedItems()[0]).subjectState, "open");
-    assert.equal(calls.length, before + 1);
+    assert.equal(calls.length, before + (path === "state" ? 2 : 1));
     await reader.foregroundPending;
   }
 });

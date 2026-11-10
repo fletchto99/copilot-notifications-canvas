@@ -10,10 +10,10 @@ Your GitHub inbox in the GitHub Copilot app, grouped by repository or date, or
 shown as a single newest-first list. **Show notifications** defaults to **All**,
 showing read and unread inbox items; choose **Unread only** to narrow the view. Completed items
 stay hidden in both views. Search, mark rows
-or groups as read or done, start a focused Copilot investigation or review,
+or groups as read or done, start a focused Copilot investigation, review, or discussion summary,
 and opt into desktop notifications or auto-open.
 
-![GitHub Notifications canvas with search and attention tabs above ten synthetic notifications, seven unread, across three example repositories, issue and PR status icons, a failed check run, and fixed Copilot, read, and done columns with summary actions on closed issues, discussions, merged PRs, and releases, a disabled Copilot icon on queued PRs, and dimmed envelopes on already-read rows](docs/images/github-notifications.png)
+![GitHub Notifications canvas with search and attention tabs including Mine, italic mine markers on authored items among ten synthetic notifications, seven unread, across three example repositories, issue, PR and discussion status icons, a failed check run, and fixed Copilot, read, and done columns with summary actions on closed issues, discussions, merged PRs, and releases, a disabled Copilot icon on queued PRs, and dimmed envelopes on already-read rows](docs/images/github-notifications.png)
 
 ## Prerequisites
 
@@ -54,6 +54,9 @@ full procedure, verification requirements, and troubleshooting.
 ## Usage
 
 - Filter with the attention tabs or search by title, issue/PR number, or repository.
+- **Mine** shows loaded notifications for issues, PRs, and discussions you authored;
+  those rows have an italic *mine* marker. A `+` on its count means authorship
+  checks are pending or unavailable, not that unknown items are unowned.
 - Choose **All notifications**, **Repository**, or **Date** in **Settings**.
 - Set **Show notifications** in **Settings** to **All** for read and unread inbox
   items, or **Unread only** to narrow the view.
@@ -62,6 +65,8 @@ full procedure, verification requirements, and troubleshooting.
   status, freshness, and failures; icons have no hover tooltips. Status loads for
   all loaded rows in expanded groups, with up to 20 lookups running concurrently
   across panels sharing the provider, without delaying the inbox.
+  Authorship checks also warm issue/PR/discussion details for filtered and
+  collapsed rows; merge queue and check-suite lookups remain limited to expanded matches.
   Releases, commits, security alerts,
   invitations, workflow runs, and agent sessions have static type icons;
   unknown types fall back to a bell without additional status lookups.
@@ -130,7 +135,7 @@ The local `artifacts/` directory stores settings and desktop coordination data:
 timestamps, hashed activity/thread IDs, watcher/process markers and sanitized
 errors. GitHub CLI handles credentials; they never enter the canvas renderer.
 
-GitHub CLI fetches notifications, the status of loaded issues, pull requests,
+GitHub CLI fetches notifications, the signed-in account's ID, authorship and the status of loaded issues, pull requests,
 discussions and check suites, merge queue membership, bounded workflow-run matches for missing
 links (including new individual Windows check alerts), the signed-in user ID for
 Copilot PR ownership checks, selected PR/run handoff metadata, and public release
@@ -138,7 +143,8 @@ metadata. Inferred run links are identified in screen-reader descriptions and fa
 to filtered Actions when matching is inconclusive. Failed runs open the job log
 viewer when exactly one job failed; the extension reads job metadata, not logs.
 Status is
-cached only in memory. Update checks do
+cached only in memory. Author and viewer IDs stay in the provider; the renderer
+receives only the authorship result. Update checks do
 not send notification content or download or execute release code. Only explicit
 **Mark as read** or **Mark as done** actions send notification updates; visiting a
 linked GitHub page may also mark a notification read on GitHub.

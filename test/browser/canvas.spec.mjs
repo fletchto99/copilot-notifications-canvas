@@ -274,7 +274,7 @@ test("attention tabs are keyboard accessible and fit narrow light and dark panel
   await page.setViewportSize({ width: 320, height: 800 });
   await page.goto(canvas.url);
   const tabs = page.getByRole("tablist", { name: "Attention filters" });
-  await expect(tabs.getByRole("tab")).toHaveText(["All (7)", "Assigned (1)", "Participating (6)", "Mentioned (1)", "Team Mentioned (1)", "Review Requested (1)"]);
+  await expect(tabs.getByRole("tab")).toHaveText(["All (7)", "Mine (0+)", "Assigned (1)", "Participating (6)", "Mentioned (1)", "Team Mentioned (1)", "Review Requested (1)"]);
   await page.getByRole("tab", { name: /^All \(\d+\)$/ }).focus();
   await page.keyboard.press("ArrowLeft");
   const reviews = page.getByRole("tab", { name: /^Review Requested \(\d+\)$/ });
@@ -284,6 +284,7 @@ test("attention tabs are keyboard accessible and fit narrow light and dark panel
   await expect(page.getByRole("tabpanel", { name: "Review Requested (1)", exact: true })).toBeVisible();
   await expect(page.locator(".row")).toHaveCount(1);
   await page.keyboard.press("Home");
+  await page.keyboard.press("ArrowRight");
   await page.keyboard.press("ArrowRight");
   await page.keyboard.press("ArrowRight");
   await page.keyboard.press("ArrowRight");
@@ -440,10 +441,10 @@ for (const width of [320, 480, 960]) {
       await expect(separator).toHaveAttribute("aria-hidden", "true");
     }
     for (const metadata of await page.locator(".metadata").all()) {
-      await expect(metadata.locator(".metadata-item")).toHaveCount(3);
-      await expect(metadata.locator(".metadata-separator")).toHaveCount(2);
+      await expect(metadata.locator(".metadata-item:visible")).toHaveCount(3);
+      await expect(metadata.locator(".metadata-separator:visible")).toHaveCount(2);
       await expect(metadata).not.toContainText(/Open (?:GitHub|repository)/);
-      const fields = await metadata.evaluate(node => [...node.querySelectorAll(".metadata-item")].map(part => {
+      const fields = await metadata.evaluate(node => [...node.querySelectorAll(".metadata-item:not([hidden])")].map(part => {
         const rect = [...part.children].find(child => !child.classList.contains("metadata-separator")).getBoundingClientRect();
         return { x: rect.x, y: rect.y };
       }));

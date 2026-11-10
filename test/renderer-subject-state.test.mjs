@@ -46,6 +46,12 @@ test("state icons have accessible names without hover tooltips or visible status
         assert.equal(svg.attributes.width, "16");
         assert.equal(field.dataset.subjectType, cases[index][0]);
       }
+      const issueShapes = fields.filter(field => field.dataset.subjectType === "Issue")
+        .map(field => field.querySelectorAll("path")[0].attributes.d);
+      assert.equal(issueShapes[3], "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM6 18 18 6",
+        "duplicate issues show a slashed circle");
+      assert.equal(issueShapes[3], issueShapes[2], "duplicate and not-planned issues share a slashed circle");
+      assert.notEqual(issueShapes[3], issueShapes[1], "duplicate issues do not show the completed checkmark");
       const queuedShape = fields[cases.findIndex(([, state]) => state === "merge_queued")].querySelectorAll("path")[0].attributes.d;
       assert.equal(queuedShape,
         "M6 11v6M8 19a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM21 12a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM6.75 5a.75 .75 0 1 1-1.5 0 .75 .75 0 0 1 1.5 0ZM12.25 8.5a.75 .75 0 1 1-1.5 0 .75 .75 0 0 1 1.5 0Z",
@@ -185,7 +191,7 @@ test("row metadata never includes custom destination hints for any notification 
       const groups = ui.ids.get("groups");
       assert.equal(groups.querySelectorAll(".destination").length, 0);
       for (const metadata of groups.querySelectorAll(".metadata")) {
-        assert.equal(metadata.children.length, groupBy === "repo" ? 3 : 4);
+        assert.equal(metadata.children.filter(node => !node.hidden).length, groupBy === "repo" ? 3 : 4);
         assert.equal(metadata.querySelectorAll(".sr-only").length, 0);
         assert.ok(metadata.querySelectorAll("span").every(node => !node.textContent.startsWith("Open ")));
       }
