@@ -84,12 +84,17 @@ output. Development loads source without a build; release builds bundle
   existing checkout's branch, files, tags, tracking refs, or `FETCH_HEAD`.
   Generic sessions have no native issue/PR linkage; reuse by repository and generated
   item name as well as existing native links. Existing sessions are navigation-only; do
-  not interrupt them. Repository cloning needs separate explicit confirmation.
+  not interrupt them. Always confirm the choice to open an existing session or start
+  a separate new one, even with routine confirmations off. Never infer failed
+  initialization from busy, idle, or unknown activity. Bind fresh-start consent to
+  the shown matching sessions and recheck before creation; changed matches require
+  a new choice. Repository cloning needs separate explicit confirmation.
   Honor the user-wide `copilotIntegration` preference (default on) at the panel
-  and handoff boundary. Merged and merge-queued PRs have no Copilot action.
+  and handoff boundary. Closed, merged, and merge-queued PRs show disabled Copilot
+  controls with status explanations; reject handoffs at the provider boundary too.
   `confirmCopilotActions` defaults on. An explicit saved opt-out may skip only
   routine confirmations on a fresh row click, never on opening or polling.
-  Cloning, inferred CI matches, and multiple-session choices still require
+  Cloning, inferred CI matches, and existing-or-new session choices still require
   confirmation. Save the popup's opt-out only when the user confirms, not on cancel.
   CI links and handoffs retain the selected run and attempt, including when a
   row opens a failed job. Disclose inferred matches in confirmation and validate

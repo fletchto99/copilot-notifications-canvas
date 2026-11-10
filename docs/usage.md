@@ -14,7 +14,7 @@ to include older notifications.
 
 ## Work with Copilot
 
-Rows keep fixed **Copilot**, **Read**, and **Done** columns. Unavailable Copilot
+Rows keep fixed **Copilot**, **Read**, and **Done** columns. Unsupported Copilot
 actions leave empty, non-interactive space. Read stays visible but disabled on
 already-read rows, so the remaining buttons do not move.
 Group Read/Done controls align with the same columns. Turning Copilot integration
@@ -26,11 +26,13 @@ The Copilot button's tooltip and accessible label describe the task:
 | --- | --- |
 | Issue | Investigate with Copilot |
 | Your open or draft PR | Continue with Copilot |
-| Another person's PR, or a closed unmerged PR | Review with Copilot |
+| Another person's open or draft PR | Review with Copilot |
 | Resolved or uniquely matched failed, timed-out, or startup-failed CI run | Investigate CI failures with Copilot |
 
-Merged PRs and PRs in the merge queue have no Copilot button. Their notification
-links and Read/Done controls remain available. **Settings > Copilot integration**
+Closed, merged, and merge-queued PRs keep a disabled Copilot button labeled
+**PR closed**, **PR merged**, or **PR in merge queue**. These controls are skipped
+by Tab navigation; their hover tooltips explain why the action is unavailable.
+Their notification links and Read/Done controls remain available. **Settings > Copilot integration**
 defaults on; turn it off to hide all Copilot buttons and block new handoffs.
 This does not stop or change sessions already started.
 
@@ -76,12 +78,13 @@ Reviews remain drafts.
 
 To avoid the routine popup, turn on **Skip routine confirmations** before
 confirming. Cancel does not save that choice. Future row clicks start a new
-summary-first session directly, or open a single matching session without
-messaging it. A spinner and accessible status indicate progress. Errors are
-shown rather than silently retried.
+summary-first session directly when no matching session exists. A spinner and
+accessible status distinguish preparing the checkout, fetching the selected
+commit, starting the session, and opening it. Progress stays visible if you
+close the dialog. Errors are shown rather than silently retried.
 
 Cloning an unconfigured repository, confirming an inferred CI association, and
-choosing between multiple matching sessions always show the popup. This option
+choosing an existing or new session always show the popup. This option
 does not bypass Copilot permissions or review-skill questions. Restore the
 routine popup with **Settings > Confirm Copilot actions**.
 
@@ -92,11 +95,19 @@ reviewing or drafting findings. If no suitable skill is available, it asks how
 to proceed instead of assuming or installing one. Your own PRs, issues, and CI
 investigations keep their existing flow.
 
-If a matching session exists, choose **Open existing session**. This only
+If a matching session exists, the popup offers **Open existing session** and
+**Start a new session**, even with routine confirmations off. Opening only
 navigates: it does not send another prompt, change its mode, or interrupt its
 current work or sidebar placement. New sessions are matched by repository and
 their generated issue, PR, or run/attempt name; renaming one prevents that
 name-based reuse. Existing native issue/PR links are also recognized.
+Choose **Start a new session** for a fresh start, including after an earlier
+workspace initialization failed. This creates a separate summary-first session;
+it never repairs, restarts, archives, or deletes the old one. The extension does
+not guess whether a session failed from its activity status. If matching sessions
+change while confirming or preparing the checkout, it asks you to choose again.
+If the repository is no longer configured, starting fresh also requires the
+explicit **Clone repository and start a new session** confirmation.
 Long CI session names are shortened to fit the host's 40-character limit;
 the prompt still includes the complete run URL, attempt, and commit.
 

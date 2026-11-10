@@ -58,7 +58,8 @@ export async function renderReadmeScreenshot(browser, expect, { create = createC
     { timeout: 15_000 }).toEqual(readmeSubjectLabels);
     await expect(page.locator(".subject-loading")).toHaveCount(0);
     await expect(page.locator('.row-link[aria-disabled="true"]')).toHaveCount(0);
-    await expect(page.getByRole("button", { name: /Copilot: #(248|237)\b/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "PR merged: #237" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "PR in merge queue: #248" })).toBeDisabled();
     await expect(page.getByRole("button", { name: "Continue with Copilot: #86" })).toBeVisible();
     await expect(page.getByRole("button", { name: /^Investigate CI failures with Copilot:/ })).toBeEnabled();
     await expect(page.locator("html")).toHaveAttribute("data-notification-theme", "dark");

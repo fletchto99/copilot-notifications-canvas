@@ -239,11 +239,19 @@ for (const packaged of [false, true]) {
           : workflowRun({ id: 42, run_attempt: 2, head_sha: sha, html_url: "https://github.com/example/widgets/actions/runs/42",
             repository: { full_name: "example/widgets" } });
         const run = canvas.copilotHost.rpc.runGit;
+        const execute = canvas.copilotHost.rpc.execute;
+        let releaseCheckout;
+        let releaseStart;
         let release;
         let fetching = false;
         let present = false;
         const held = new Promise(resolve => { release = resolve; });
+        const checkout = new Promise(resolve => { releaseCheckout = resolve; });
+        const starting = new Promise(resolve => { releaseStart = resolve; });
+        const direct = type === "CheckSuite";
+        if (direct) await canvas.preferences.update({ confirmCopilotActions: false });
         canvas.copilotHost.rpc.runGit = async input => {
+          if (input.args.includes("--show-toplevel")) await checkout;
           if (input.args.includes("--verify") && !present) {
             throw Object.assign(new Error("Missing synthetic commit"), { code: 1 });
           }
@@ -254,16 +262,27 @@ for (const packaged of [false, true]) {
           }
           return run(input);
         };
+        canvas.copilotHost.rpc.execute = async input => {
+          if (input.name === "create_session") await starting;
+          return execute(input);
+        };
         try {
           await page.goto(canvas.url);
-          await page.locator(".copilot-action").click();
-          const start = page.getByRole("button", { name: "Start session", exact: true });
-          await expect(start).toBeVisible();
           expect(canvas.copilotHost.gitCalls).toEqual([]);
-          await start.click();
+          await page.locator(".copilot-action").click();
+          if (!direct) await page.getByRole("button", { name: "Start session", exact: true }).click();
+          const progress = page.locator(direct ? "#copilot-feedback" : "#copilot-status");
+          await expect(progress).toHaveText("Preparing checkout...");
+          releaseCheckout();
           await expect.poll(() => fetching).toBe(true);
+          await expect(progress).toHaveText("Fetching selected commit...");
+          await expect(page.locator(".copilot-action")).toBeDisabled();
+          await expect(page.locator("#row-copilot-1-tooltip")).toHaveText("Fetching selected commit...");
           expect(canvas.copilotHost.calls.some(call => call.name === "create_session")).toBe(false);
           release();
+          await expect(progress).toContainText("Starting session.");
+          if (direct) await expect(page.locator("#copilot-dialog")).toBeHidden();
+          releaseStart();
           await expect.poll(() => canvas.copilotHost.calls.some(call => call.name === "navigate_to")).toBe(true);
           expect(canvas.copilotHost.calls.find(call => call.name === "create_session").args.base_branch).toBe(sha);
           expect(canvas.copilotHost.gitCalls.find(call => call.args.includes("fetch")).args.at(-1))
@@ -271,6 +290,8 @@ for (const packaged of [false, true]) {
           expect(canvas.writes).toEqual([]);
           expect(canvas.deliveries).toEqual([]);
         } finally {
+          releaseCheckout();
+          releaseStart();
           release();
         }
       });
@@ -398,6 +419,9 @@ for (const packaged of [false, true]) {
       await expect(action).toBeEnabled();
       const navigations = canvas.copilotHost.calls.filter(call => call.name === "navigate_to").length;
       await action.click();
+      await expect(dialog.getByRole("button", { name: "Start a new session", exact: true })).toBeVisible();
+      expect(canvas.copilotHost.calls.filter(call => call.name === "navigate_to")).toHaveLength(navigations);
+      await dialog.getByRole("button", { name: /^Open existing session:/ }).click();
       await expect.poll(() => canvas.copilotHost.calls.filter(call => call.name === "navigate_to").length).toBe(navigations + 1);
       await expect(page.locator("#copilot-dialog")).toBeHidden();
       expect(canvas.copilotHost.calls.filter(call => call.name === "create_session")).toHaveLength(1);
@@ -445,7 +469,7 @@ for (const packaged of [false, true]) {
         await expect(page.locator("#copilot-dialog")).toBeHidden();
         await expect(action).toBeDisabled();
         await expect(action).toHaveAttribute("aria-busy", "true");
-        await expect(page.locator("#copilot-feedback")).toHaveText("Opening Copilot...");
+        await expect(page.locator("#copilot-feedback")).toContainText("Starting session.");
         release();
         await expect.poll(() => canvas.copilotHost.calls.some(call => call.name === "navigate_to")).toBe(true);
         await expect(action).toBeEnabled();
@@ -477,7 +501,44 @@ for (const packaged of [false, true]) {
       expect(canvas.writes).toEqual([]);
     });
 
-    test("merged and merge-queued PRs hide Copilot but retain normal notification actions", async ({ page, canvas }) => {
+    test("a fresh start is explicitly confirmed and leaves existing sessions untouched", async ({ page, canvas }) => {
+      canvas.rows.splice(1);
+      canvas.rows[0].subject.url = "https://api.github.com/repos/example/widgets/issues/1";
+      await canvas.preferences.update({ confirmCopilotActions: false });
+      const existing = { type: "session", id: "22222222-2222-4222-8222-222222222222",
+        project_repo: "example/widgets", name: "Investigate issue #1", activity: { status: "unknown" } };
+      canvas.copilotHost.sessions.push(existing);
+      const before = structuredClone(existing);
+      await page.goto(canvas.url);
+      const action = page.locator(".copilot-action");
+      await action.click();
+      const dialog = page.locator("#copilot-dialog");
+      const fresh = dialog.getByRole("button", { name: "Start a new session", exact: true });
+      await expect(fresh).toBeVisible();
+      await expect(dialog.getByRole("button", { name: /^Open existing session:/ })).toBeVisible();
+      await expect(dialog).toContainText("Existing sessions and their work are left untouched.");
+      expect(canvas.copilotHost.calls.some(call => ["create_session", "navigate_to"].includes(call.name))).toBe(false);
+      expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+      await page.keyboard.press("Escape");
+      await expect(dialog).toBeHidden();
+      await expect(action).toBeFocused();
+      expect(canvas.copilotHost.sessions).toEqual([before]);
+      await action.click();
+      await fresh.click();
+      await expect.poll(() => canvas.copilotHost.calls.some(call => call.name === "navigate_to")).toBe(true);
+      expect(canvas.copilotHost.sessions).toHaveLength(2);
+      expect(canvas.copilotHost.sessions[0]).toEqual(before);
+      const created = canvas.copilotHost.sessions[1];
+      expect(created.id).not.toBe(existing.id);
+      expect(created.parent_session_id).toBeNull();
+      expect(canvas.copilotHost.calls.find(call => call.name === "create_session").args.kickoff.mode).toBe("plan");
+      expect(canvas.copilotHost.calls.find(call => call.name === "navigate_to").args.id).toBe(created.id);
+      expect(canvas.copilotHost.calls.some(call => ["get_session", "send_session_message"].includes(call.name))).toBe(false);
+      expect(canvas.writes).toEqual([]);
+      expect(canvas.deliveries).toEqual([]);
+    });
+
+    test("inactive PRs show disabled Copilot reasons and retain notification actions", async ({ page, canvas }) => {
       canvas.rows.splice(4);
       for (const [index, row] of canvas.rows.entries()) {
         row.subject.type = "PullRequest";
@@ -492,14 +553,26 @@ for (const packaged of [false, true]) {
       await page.goto(canvas.url);
       await expect(page.locator(".subject-merged")).toHaveCount(1);
       await expect(page.locator(".subject-merge-queued")).toHaveCount(1);
-      for (const index of [0, 1]) {
+      for (const [index, reason] of [[0, "PR merged"], [1, "PR in merge queue"], [3, "PR closed"]]) {
         const row = page.locator(".row").nth(index);
-        await expect(row.getByRole("button", { name: /Copilot:/ })).toHaveCount(0);
+        const action = row.locator(".copilot-action");
+        await expect(action).toBeVisible();
+        await expect(action).toBeDisabled();
+        await expect(action).toHaveAccessibleName(new RegExp(`^${reason}:`));
+        await action.locator("..").hover();
+        await expect(row.getByRole("tooltip")).toBeVisible();
+        await expect(row.getByRole("tooltip")).toHaveText(reason);
+        await action.click({ force: true });
+        await row.locator(".row-link").focus();
+        await page.keyboard.press("Tab");
+        await expect(row.locator(".mark-read")).toBeFocused();
         await expect(row.locator(".mark-read")).toBeEnabled();
         await expect(row.locator(".mark-done")).toBeEnabled();
       }
       await expect(page.getByRole("button", { name: /^Continue with Copilot: #3/ })).toBeVisible();
-      await expect(page.getByRole("button", { name: /^Review with Copilot: #4/ })).toBeVisible();
+      expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+      expect(canvas.copilotHost.calls).toEqual([]);
+      expect(canvas.writes).toEqual([]);
     });
 
     test("Copilot integration defaults on above Hide empty tabs and persists when toggled", async ({ page, canvas }) => {

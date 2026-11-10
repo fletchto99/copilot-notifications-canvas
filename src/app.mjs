@@ -1328,7 +1328,7 @@ function createBatchControls({ repository, date, timeZone, selectionKey, items, 
 function renderRowSubject(view, item) {
   const copilot = copilotEnabled() ? item.copilot : null;
   const working = copilotWorking();
-  const key = JSON.stringify([item, Boolean(copilot), working, copilotOperation?.id]);
+  const key = JSON.stringify([item, Boolean(copilot), working, copilotOperation?.id, copilotOperation?.message]);
   if (key === view.key) return;
   view.key = key;
   const loading = item.subjectLinkLoading === true;
@@ -1374,9 +1374,9 @@ function renderRowSubject(view, item) {
     view.copilot.button.disabled = !copilot?.enabled || working;
     view.copilot.button.setAttribute("aria-busy", String(pending));
     view.copilot.button.setAttribute("aria-label", `${item.copilot?.label ?? "Work with Copilot"}: ${notificationTitle(item, "Untitled notification")}`);
-    setControlText(view.copilot.tooltip, pending ? "Opening Copilot..." :
+    setControlText(view.copilot.tooltip, pending ? copilotOperation?.message ?? "Opening Copilot..." :
       item.copilot?.reason || item.copilot?.label || "Work with Copilot");
-    if (!copilot && wasFocused) restoreFocus(view.copilot.button, view.link);
+    if ((!copilot || !copilot.enabled && !pending) && wasFocused) restoreFocus(view.copilot.button, view.link);
   }
 }
 
@@ -1411,7 +1411,7 @@ function renderCopilot() {
     if (!copilotConfirmations() && dialog.open) dialog.close();
   }
   $("copilot-feedback").hidden = !working || dialog.open;
-  $("copilot-feedback").textContent = working ? "Opening Copilot..." : "";
+  $("copilot-feedback").textContent = working ? operation?.message ?? "Opening Copilot..." : "";
   if (!dialog.open || !operation) return;
   if (["ready", "error"].includes(operation.status)) copilotAwaitingResult = false;
   const actionFocused = document.activeElement === $("copilot-start") ||
@@ -1421,15 +1421,15 @@ function renderCopilot() {
     ? "This run was matched from notification metadata, not linked by GitHub. Confirm the run and attempt below. " : "";
   $("copilot-status").textContent = operation.message ?? inferred + (operation.status === "preparing" ? "Checking the selected item and available sessions..." :
     operation.status === "starting" ? "Opening Copilot. Check the app for any permission or repository trust requests." :
-      operation.sessions?.length ? "A matching session already exists. Opening it will not send instructions or interrupt its work." :
+      operation.sessions?.length ? "A matching session already exists. Open it without sending instructions, or start a separate summary-first session if you need a fresh start. Existing sessions and their work are left untouched." :
         "Copilot will summarize this item first, then investigate read-only. Implementation and GitHub changes require your approval.");
   $("copilot-status").setAttribute("role", operation.status === "error" ? "alert" : "status");
   $("copilot-reference").textContent = operation.url ?? "";
   $("copilot-reference").hidden = !operation.url;
-  $("copilot-clone").hidden = !operation.needsClone || Boolean(operation.sessions?.length);
+  $("copilot-clone").hidden = !operation.needsClone;
   $("copilot-clone").textContent = operation.canClone
-    ? `This repository is not configured in Copilot. Continuing will clone ${operation.repository} to this computer and may use significant disk space.`
-    : "Add this repository in Copilot first, then reopen this action.";
+    ? `This repository is not configured in Copilot. Starting a new session will clone ${operation.repository} to this computer and may use significant disk space. Opening an existing session does not clone it.`
+    : "To start a new session, add this repository in Copilot first, then reopen this action.";
   const key = JSON.stringify([operation.status, operation.token, operation.sessions]);
   if (key !== copilotDialogKey) {
     copilotDialogKey = key;
@@ -1453,9 +1453,10 @@ function renderCopilot() {
   $("copilot-remember").hidden = operation.status !== "ready" || !operation.canRemember || !operation.confirmCopilotActions;
   $("copilot-skip-confirmation").disabled = working;
   const start = $("copilot-start");
-  start.hidden = operation.status !== "ready" || Boolean(operation.sessions?.length) || operation.needsClone && !operation.canClone;
+  start.hidden = operation.status !== "ready" || operation.needsClone && !operation.canClone;
   start.disabled = working;
-  setControlText(start, operation.needsClone ? "Clone repository and start" : "Start session");
+  setControlText(start, operation.needsClone ? operation.sessions?.length ? "Clone repository and start a new session" : "Clone repository and start" :
+    operation.sessions?.length ? "Start a new session" : "Start session");
   setControlText($("copilot-close"), working ? "Close" : operation.status === "ready" ? "Cancel" : "Close");
   if (actionFocused && working) $("copilot-close").focus({ preventScroll: true });
 }
@@ -1947,6 +1948,7 @@ $("copilot-start").addEventListener("click", () => {
   if (copilotOperation?.status !== "ready") return;
   void requestCopilot({
     id: copilotOperation.id, token: copilotOperation.token, clone: copilotOperation.needsClone,
+    ...(copilotOperation.sessions?.length ? { startNew: true } : {}),
     ...copilotRememberInput(),
   });
 });

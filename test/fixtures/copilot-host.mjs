@@ -1,5 +1,6 @@
 import { CopilotHost } from "../../src/copilot.mjs";
 import { prepareCommit } from "../../src/checkout.mjs";
+import { randomUUID } from "node:crypto";
 
 export const projectId = "11111111-1111-4111-8111-111111111111";
 export const sessionId = "22222222-2222-4222-8222-222222222222";
@@ -44,13 +45,14 @@ export function copilotHost({ repositories = [{ id: projectId, github_repo: "exa
         if (typeof args.name !== "string" || args.name.length > 40) {
           return { resultType: "failure", textResultForLlm: "Synthetic session name exceeds the host limit." };
         }
+        const id = sessions.some(session => session.id === sessionId) ? randomUUID() : sessionId;
         sessions.push({
-          type: "session", id: sessionId, name: args.name,
+          type: "session", id, name: args.name,
           project_repo: repositories.find(repo => repo.id === args.project_id)?.github_repo,
           parent_session_id: args.detached ? null : "33333333-3333-4333-8333-333333333333",
           activity: { status: "unknown" },
         });
-        text = `Created session (session_id: ${sessionId}). Link: ghapp://sessions/${sessionId}.`;
+        text = `Created session (session_id: ${id}). Link: ghapp://sessions/${id}.`;
       }
       return { resultType: "success", textResultForLlm: text };
     },

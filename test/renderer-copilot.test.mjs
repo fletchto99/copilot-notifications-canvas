@@ -62,12 +62,17 @@ test("existing sessions and clone confirmation have distinct actions and safe te
     return { ...ready, sessions: [{ id: "session", name: "<script>existing</script>" }] };
   } });
   await open(ui);
-  assert.equal(ui.ids.get("copilot-start").hidden, true);
+  assert.equal(ui.ids.get("copilot-start").hidden, false);
+  assert.equal(ui.ids.get("copilot-start").textContent, "Start a new session");
   const existing = ui.ids.get("copilot-sessions").querySelectorAll("button")[0];
   assert.equal(existing.textContent, "Open existing session: <script>existing</script>");
   existing.events.click();
   await settle();
   assert.equal(requests[1].sessionId, "session");
+  ui.ids.get("copilot-start").events.click();
+  await settle();
+  assert.equal(requests.at(-1).startNew, true);
+  assert.equal(requests.at(-1).sessionId, undefined);
   ui.setCopilotOperation({ ...ready, needsClone: true });
   await runInContext("update()", ui.context);
   assert.equal(ui.ids.get("copilot-clone").hidden, false);
@@ -75,6 +80,36 @@ test("existing sessions and clone confirmation have distinct actions and safe te
   ui.setCopilotOperation({ ...ready, needsClone: true, canClone: false });
   await runInContext("update()", ui.context);
   assert.equal(ui.ids.get("copilot-start").hidden, true);
+});
+
+test("inactive controls expose their reason, preserve focus and never submit a handoff", async t => {
+  const subjectStates = { "1": { copilot: { label: ready.label, enabled: true } } };
+  const ui = await setup(t, { subjectStates, onCopilot: () => assert.fail("Disabled controls cannot submit") });
+  const control = button(ui);
+  control.focus();
+  subjectStates["1"].copilot = { label: "PR closed", enabled: false, reason: "PR closed" };
+  await runInContext("update()", ui.context);
+  assert.equal(button(ui), control);
+  assert.equal(control.disabled, true);
+  assert.match(control.getAttribute("aria-label"), /^PR closed:/);
+  assert.equal(control.parentNode.querySelectorAll(".tooltip-content")[0].textContent, "PR closed");
+  assert.equal(ui.document.activeElement.dataset.focusKey, "thread:1");
+  control.events.click();
+  assert.equal(Boolean(ui.ids.get("copilot-dialog").open), false);
+});
+
+test("progress updates reach the dialog, nonmodal status and row tooltip without changing focus", async t => {
+  const ui = await setup(t, { onCopilot: () => ({ id: "1", status: "starting", message: "Preparing checkout..." }) });
+  await open(ui);
+  assert.equal(ui.ids.get("copilot-status").textContent, "Preparing checkout...");
+  ui.ids.get("copilot-close").events.click();
+  for (const message of ["Fetching selected commit...", "Starting session..."]) {
+    ui.setCopilotOperation({ id: "1", status: "starting", message });
+    await runInContext("update()", ui.context);
+    assert.equal(ui.ids.get("copilot-feedback").textContent, message);
+    assert.equal(button(ui).parentNode.querySelectorAll(".tooltip-content")[0].textContent, message);
+    assert.equal(ui.ids.get("copilot-dialog").open, false);
+  }
 });
 
 test("inferred CI confirmation discloses the association and displays the exact run attempt", async t => {

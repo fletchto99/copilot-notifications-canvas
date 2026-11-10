@@ -9,7 +9,9 @@ const labels = {
   ci: "Investigate CI failures with Copilot",
 };
 const failedChecks = new Set(["failure", "timed_out", "startup_failure"]);
-const inactivePull = item => item.type === "PullRequest" && ["merged", "merge_queued"].includes(item.subjectState);
+const inactivePull = item => item.type === "PullRequest" && ({
+  closed: "PR closed", merged: "PR merged", merge_queued: "PR in merge queue",
+})[item.subjectState];
 const integrationDisabled = () => new InboxError("copilot_disabled",
   "Copilot integration is off. Enable it in Settings to start a handoff.", 409);
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
@@ -161,7 +163,7 @@ export class CopilotHandoff {
   }
 
   row(item) {
-    if (!this.enabled || this.inbox.client.target.custom || inactivePull(item)) return null;
+    if (!this.enabled || this.inbox.client.target.custom) return null;
     let action;
     const numbered = item.direct && Number.isSafeInteger(Number(item.number)) && Number(item.number) > 0;
     if (item.type === "Issue" && numbered) action = "issue";
@@ -170,6 +172,8 @@ export class CopilotHandoff {
     }
     if (item.type === "CheckSuite" && failedChecks.has(item.subjectState)) action = "ci";
     if (!action || !this.host.supports()) return null;
+    const inactive = inactivePull(item);
+    if (inactive) return { label: inactive, enabled: false, reason: inactive };
     const uncertain = action === "ci" && (!item.direct || !item.subjectRunUrl || item.subjectLinkLoading);
     return {
       label: item.type === "PullRequest" && item.viewerIsAuthor === undefined ? "Work with Copilot" : labels[action],
@@ -227,17 +231,18 @@ export class CopilotHandoff {
     const current = { ...item, ...this.inbox.client.subjectSnapshot(item),
       subjectLinkLoading: this.inbox.client.subjectLinkPending(item) };
     if (inactivePull(current)) {
-      throw new InboxError("copilot_inactive_pr", "Copilot actions are unavailable for merged or merge-queued pull requests.", 409);
+      throw new InboxError("copilot_inactive_pr", "Copilot actions are unavailable for closed, merged, or merge-queued pull requests.", 409);
     }
     return current;
   }
 
   request(input) {
-    if (!input || Object.keys(input).some(key => !["id", "token", "sessionId", "clone", "direct", "skipConfirmation"].includes(key)) ||
+    if (!input || Object.keys(input).some(key => !["id", "token", "sessionId", "startNew", "clone", "direct", "skipConfirmation"].includes(key)) ||
         typeof input.id !== "string" || !/^[1-9]\d{0,63}$/.test(input.id) ||
         input.clone !== undefined && typeof input.clone !== "boolean" ||
         input.direct !== undefined && (typeof input.direct !== "boolean" || input.token !== undefined) ||
         input.skipConfirmation !== undefined && typeof input.skipConfirmation !== "boolean" ||
+        input.startNew !== undefined && (input.startNew !== true || input.sessionId !== undefined) ||
         input.sessionId !== undefined && !uuid.test(input.sessionId)) {
       throw new InboxError("invalid_handoff", "Choose one loaded notification and a valid Copilot action.", 400);
     }
@@ -248,7 +253,10 @@ export class CopilotHandoff {
       if (this.state?.status !== "ready" || input.token !== this.state.token || input.id !== this.state.id) {
         throw new InboxError("stale_handoff", "This Copilot action has expired or was already submitted. Open it again.", 409);
       }
-    } else if (input.clone !== undefined || input.sessionId !== undefined || input.skipConfirmation !== undefined) {
+      if (input.startNew && !this.existing.size) {
+        throw new InboxError("invalid_handoff", "Choose a new session from the existing-session confirmation.", 400);
+      }
+    } else if (input.clone !== undefined || input.sessionId !== undefined || input.startNew !== undefined || input.skipConfirmation !== undefined) {
       throw new InboxError("invalid_handoff", "Prepare the Copilot action before confirming it.", 400);
     }
     const starting = input.token !== undefined;
@@ -290,7 +298,9 @@ export class CopilotHandoff {
     if (action === "review") {
       const viewer = await this.inbox.client.copilotContext("viewer", null, signal);
       details = await this.inbox.client.copilotContext("pull", item, signal);
-      if (details.merged) throw new InboxError("copilot_inactive_pr", "Copilot actions are unavailable for merged pull requests.", 409);
+      if (details.merged || details.state === "closed") {
+        throw new InboxError("copilot_inactive_pr", "Copilot actions are unavailable for closed or merged pull requests.", 409);
+      }
       askForReviewSkill = viewer.id !== details.authorId;
       if (viewer.id === details.authorId && details.state === "open") action = "continue";
     } else if (action === "ci") {
@@ -312,8 +322,7 @@ export class CopilotHandoff {
     const configured = repositories.some(repo => sameRepo(repo.github_repo, target.repository));
     this.#ready(target, matching, configured);
     // A saved opt-out only applies to a fresh row click, never to polling.
-    if (direct && !this.confirmCopilotActions && !target.inferred && matching.length <= 1 &&
-        (configured || matching.length === 1)) {
+    if (direct && !this.confirmCopilotActions && !target.inferred && !matching.length && configured) {
       this.state = { id, status: "starting" };
       await this.#start({ id, direct: true });
     }
@@ -326,29 +335,40 @@ export class CopilotHandoff {
     if (this.host.reservations.has(key)) throw new InboxError("copilot_busy", "This item is already being handed to Copilot in another panel.", 409);
     this.host.reservations.add(key);
     try {
+      const progress = message => { this.state = { id: input.id, status: "starting", message }; };
+      if (["continue", "review"].includes(target.action)) {
+        const details = await this.inbox.client.copilotContext("pull", this.#item(input.id), this.inbox.controller.signal);
+        if (details.merged || details.state === "closed") {
+          throw new InboxError("copilot_inactive_pr", "Copilot actions are unavailable for closed or merged pull requests.", 409);
+        }
+      }
       const { all, matching } = await this.#sessions(target);
       await this.#active(input.id, input.direct);
-      const sessionId = input.sessionId ?? (input.direct && matching.length === 1 ? matching[0].id : undefined);
+      const sessionId = input.sessionId;
       if (sessionId) {
-        if (!(input.direct ? matching.some(session => session.id === sessionId) : this.existing.has(sessionId)) ||
+        if (!this.existing.has(sessionId) ||
             !all.some(session => session.id === sessionId &&
               (sameRepo(session.project_repo, target.repository) || matches(session, target)))) {
           throw new InboxError("stale_handoff", "The selected session is no longer available. Open this action again.", 409);
         }
         await this.#remember(input);
+        progress("Opening existing session...");
         await this.host.execute("navigate_to", { id: sessionId });
         this.state = { id: input.id, status: "opened", message: "Opened the existing session without sending instructions or interrupting its work." };
         return;
       }
-      if (matching.length) {
-        this.#ready(target, matching, true);
+      let repositories = await this.host.execute("list_repositories", {}, true);
+      const sameSelection = sessions => sessions.length === this.existing.size &&
+        sessions.every(session => this.existing.has(session.id));
+      if (input.startNew ? !sameSelection(matching) : matching.length) {
+        this.#ready(target, matching, repositories.some(repo => sameRepo(repo.github_repo, target.repository)));
         return;
       }
-      let repositories = await this.host.execute("list_repositories", {}, true);
       if (!repositories.some(repo => sameRepo(repo.github_repo, target.repository))) {
         if (!input.clone) throw new InboxError("copilot_clone", "Confirm repository setup before starting this session.", 409);
         await this.#active(input.id, input.direct);
         await this.#remember(input);
+        progress("Setting up repository...");
         await this.host.execute("add_repository", { github_repo: target.repository });
         repositories = await this.host.execute("list_repositories", {}, true);
       }
@@ -359,12 +379,25 @@ export class CopilotHandoff {
       await this.#active(input.id, input.direct);
       await this.#remember(input);
       if (target.sha) {
+        progress("Preparing checkout...");
         await this.host.prepareCommit(repository, target, {
-          signal: this.inbox.controller.signal, beforeFetch: () => this.#active(input.id, input.direct),
+          signal: this.inbox.controller.signal, beforeFetch: async () => {
+            await this.#active(input.id, input.direct);
+            progress("Fetching selected commit...");
+          },
         });
         await this.#active(input.id, input.direct);
       }
+      if (input.startNew) {
+        const latest = await this.#sessions(target);
+        await this.#active(input.id);
+        if (!sameSelection(latest.matching)) {
+          this.#ready(target, latest.matching, true);
+          return;
+        }
+      }
       // The host queues the kickoff until ready; startup activity is not a reuse signal.
+      progress("Starting session. Check the app for any permission or repository trust requests.");
       const result = await this.host.execute("create_session", {
         project_id: repository.id, name: target.name, workspace_type: "worktree", detached: true,
         ...(target.sha ? { base_branch: target.sha } : {}),
@@ -378,6 +411,7 @@ export class CopilotHandoff {
       if (!opened.all.some(session => session.id === id &&
           (sameRepo(session.project_repo, target.repository) || matches(session, target)))) throw hostFailure();
       await this.#active(input.id, input.direct);
+      progress("Opening new session...");
       await this.host.execute("navigate_to", { id });
       this.state = { id: input.id, status: "started", message: "Opened a summary-first Copilot session. Read/Done is unchanged." };
     } finally {

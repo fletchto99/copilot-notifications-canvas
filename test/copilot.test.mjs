@@ -84,7 +84,7 @@ function handoffPreferences(confirmCopilotActions = true) {
   };
 }
 
-test("routine confirmations are remembered only on confirmation and direct clicks can start or reopen sessions", async t => {
+test("routine confirmations are remembered only on confirmation and existing sessions always require a choice", async t => {
   const preferences = handoffPreferences();
   const first = await fixture(t, { preferences });
   first.handoff.request({ id: "1", direct: true });
@@ -104,7 +104,9 @@ test("routine confirmations are remembered only on confirmation and direct click
   assert.equal(next.handoff.snapshot().status, "started");
   next.handoff.request({ id: "1", direct: true });
   await next.handoff.pending;
-  assert.equal(next.handoff.snapshot().status, "opened");
+  assert.equal(next.handoff.snapshot().status, "ready");
+  assert.equal(next.calls.filter(call => call.name === "navigate_to").length, 1);
+  assert.equal((await start(next, { sessionId })).status, "opened");
   assert.equal(next.calls.filter(call => call.name === "create_session").length, 1);
   assert.match(next.calls.find(call => call.name === "create_session").args.kickoff.prompt, /first substantive response must summarize/);
   assert.equal(next.calls.some(call => call.name === "send_session_message"), false);
@@ -174,13 +176,12 @@ test("turning confirmations back on stops a pending direct start before any host
 });
 
 test("issue and PR handoffs create root sessions in the target repository and summarize first without notification content", async t => {
-  for (const [type, authorId, label, pull] of [
+  for (const [type, authorId, label] of [
     ["Issue", 8, "Investigate with Copilot"],
     ["PullRequest", 7, "Continue with Copilot"],
     ["PullRequest", 8, "Review with Copilot"],
-    ["PullRequest", 7, "Review with Copilot", { state: "closed" }],
-  ]) await t.test(`${label}${pull ? " (own closed PR)" : ""}`, async t => {
-    const f = await fixture(t, { type, authorId, pull });
+  ]) await t.test(label, async t => {
+    const f = await fixture(t, { type, authorId });
     const before = f.inbox.summary();
     const ready = await prepare(f);
     assert.equal(ready.label, label);
@@ -393,19 +394,19 @@ test("CI handoff references must identify the same run and explicit attempt as t
   assert.deepEqual(f.requests, []);
 });
 
-test("merged and merge-queued PRs have no action and cannot use an earlier confirmation", async t => {
-  for (const state of ["merged", "merge_queued"]) await t.test(state, async t => {
+test("inactive PR actions are disabled and cannot use an earlier confirmation", async t => {
+  for (const [state, label] of [["merged", "PR merged"], ["merge_queued", "PR in merge queue"], ["closed", "PR closed"]]) await t.test(state, async t => {
     const f = await fixture(t, { type: "PullRequest" });
     const ready = await prepare(f);
     const path = "/repos/example/widgets/pulls/1";
-    f.client.subjectCache.set(path, { state: state === "merged" ? state : "open" });
+    f.client.subjectCache.set(path, { state: state === "merge_queued" ? "open" : state });
     if (state === "merge_queued") f.client.mergeQueueCache.set(path, { state: true });
     const item = f.inbox.loadedItems()[0];
-    assert.equal(f.handoff.row({ ...item, ...f.client.subjectSnapshot(item) }), null);
+    assert.deepEqual(f.handoff.row({ ...item, ...f.client.subjectSnapshot(item) }), { label, enabled: false, reason: label });
     assert.throws(() => f.handoff.request({ id: "1", token: ready.token }), { code: "copilot_inactive_pr" });
     assert.equal(f.calls.some(call => call.name === "create_session"), false);
     f.client.subjectCache.set(path, { state: "closed" });
-    assert.equal(f.handoff.row({ ...item, ...f.client.subjectSnapshot(item) }).label, "Work with Copilot");
+    assert.equal(f.handoff.row({ ...item, ...f.client.subjectSnapshot(item) }).label, "PR closed");
   });
   const f = await fixture(t, { type: "PullRequest", pull: { state: "closed", merged: true } });
   f.handoff.request({ id: "1" });
@@ -413,6 +414,21 @@ test("merged and merge-queued PRs have no action and cannot use an earlier confi
   assert.equal(f.handoff.snapshot().status, "error");
   assert.match(f.handoff.snapshot().message, /merged/);
   assert.deepEqual(f.calls, []);
+});
+
+test("fresh PR details reject closure before preparation or after a confirmation was shown", async t => {
+  for (const closeBeforePrepare of [true, false]) await t.test(String(closeBeforePrepare), async t => {
+    const pull = { state: "open" };
+    const f = await fixture(t, { type: "PullRequest", pull });
+    if (!closeBeforePrepare) await prepare(f);
+    pull.state = "closed";
+    if (closeBeforePrepare) f.handoff.request({ id: "1" });
+    else f.handoff.request({ id: "1", token: f.handoff.snapshot().token });
+    await f.handoff.pending;
+    assert.equal(f.handoff.snapshot().status, "error");
+    assert.match(f.handoff.snapshot().message, /closed/);
+    assert.equal(f.calls.some(call => ["create_session", "navigate_to"].includes(call.name)), false);
+  });
 });
 
 test("PR handoffs await a pending merge-queue lookup before preparing or starting", async t => {
@@ -515,6 +531,84 @@ test("existing and concurrently discovered sessions are offered without starting
     assert.equal((await start(f, { sessionId })).status, "opened");
     assert.deepEqual(f.calls.filter(call => !call.name.startsWith("list_")).map(call => call.name), ["navigate_to"]);
   });
+});
+
+test("an explicit fresh start leaves matching sessions untouched without inferring their health", async t => {
+  const existing = { type: "session", id: sessionId, project_repo: "example/widgets",
+    name: "Investigate issue #1", activity: { status: "unknown" } };
+  const f = await fixture(t, { sessions: [existing], preferences: handoffPreferences(false) });
+  const before = structuredClone(existing);
+  f.handoff.request({ id: "1", direct: true });
+  await f.handoff.pending;
+  assert.equal(f.handoff.snapshot().status, "ready");
+  assert.equal(f.calls.some(call => ["create_session", "navigate_to"].includes(call.name)), false);
+  const ready = f.handoff.snapshot();
+  assert.equal((await start(f, { startNew: true })).status, "started");
+  assert.deepEqual(existing, before);
+  assert.equal(f.sessions.length, 2);
+  const created = f.sessions[1];
+  assert.notEqual(created.id, existing.id);
+  assert.equal(created.name, existing.name);
+  assert.equal(created.parent_session_id, null);
+  assert.deepEqual(f.calls.filter(call => !call.name.startsWith("list_")).map(call => call.name), ["create_session", "navigate_to"]);
+  assert.equal(f.calls.at(-1).args.id, created.id);
+  assert.throws(() => f.handoff.request({ id: "1", token: ready.token, startNew: true }), { code: "stale_handoff" });
+  assert.equal((await prepare(f)).sessions.length, 2);
+});
+
+test("fresh starts require a matching-session token and separate cloning consent", async t => {
+  const f = await fixture(t);
+  for (const input of [{ id: "1", startNew: true }, { id: "1", direct: true, startNew: true },
+    { id: "1", startNew: false }, { id: "1", token: "bad", startNew: true, sessionId }]) {
+    assert.throws(() => f.handoff.request(input), { code: "invalid_handoff" });
+  }
+  const ready = await prepare(f);
+  assert.throws(() => f.handoff.request({ id: "1", token: ready.token, startNew: true }), { code: "invalid_handoff" });
+  const existing = { type: "session", id: sessionId, project_repo: "example/widgets", name: "Investigate issue #1" };
+  const unconfigured = await fixture(t, { sessions: [existing], repositories: [] });
+  assert.equal((await prepare(unconfigured)).needsClone, true);
+  assert.equal((await start(unconfigured, { startNew: true })).status, "error");
+  assert.equal(unconfigured.calls.some(call => call.name === "add_repository"), false);
+  await prepare(unconfigured);
+  assert.equal((await start(unconfigured, { startNew: true, clone: true })).status, "started");
+  assert.equal(unconfigured.calls.filter(call => call.name === "add_repository").length, 1);
+});
+
+test("a fresh-start confirmation is renewed when matching sessions change before creation", async t => {
+  for (const boundary of ["confirmation", "checkout"]) await t.test(boundary, async t => {
+    const existing = { type: "session", id: sessionId, project_repo: "example/widgets", name: "Work on PR #1" };
+    const concurrent = { ...existing, id: "33333333-3333-4333-8333-333333333333" };
+    const f = await fixture(t, { type: "PullRequest", sessions: [existing] });
+    const ready = await prepare(f);
+    if (boundary === "confirmation") f.sessions.push(concurrent);
+    else t.mock.method(f.host, "prepareCommit", async () => { f.sessions.push(concurrent); });
+    assert.equal((await start(f, { startNew: true })).status, "ready");
+    assert.notEqual(f.handoff.snapshot().token, ready.token);
+    assert.equal(f.handoff.snapshot().sessions.length, 2);
+    assert.equal(f.calls.some(call => ["create_session", "navigate_to"].includes(call.name)), false);
+  });
+});
+
+test("checkout, fetch, creation and navigation report progress without exposing targets", async t => {
+  let present = false;
+  const messages = [];
+  const f = await fixture(t, { type: "PullRequest",
+    onGit: args => {
+      messages.push(f.handoff.snapshot().message);
+      if (args.includes("--verify") && !present) throw Object.assign(new Error("Missing"), { code: 1 });
+      if (args.includes("fetch")) present = true;
+    },
+    onExecute: name => {
+      if (["create_session", "navigate_to"].includes(name)) messages.push(f.handoff.snapshot().message);
+    },
+  });
+  await prepare(f);
+  assert.equal((await start(f)).status, "started");
+  assert.deepEqual([...new Set(messages)], [
+    "Preparing checkout...", "Fetching selected commit...",
+    "Starting session. Check the app for any permission or repository trust requests.", "Opening new session...",
+  ]);
+  assert.doesNotMatch(messages.join(" "), /example|Private title|[a-f0-9]{40}/);
 });
 
 test("repository cloning requires a separate explicit confirmation", async t => {

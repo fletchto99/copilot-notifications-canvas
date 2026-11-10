@@ -9,8 +9,8 @@ across sessions and preserved during packaged upgrades.
 | --- | --- | --- |
 | Show notifications | All | **All** shows read and unread inbox items, excluding Done. **Unread only** shows unread items. Switching reloads the first page. No per-notification state is saved locally. |
 | Group By | Repository | **Repository**: preserve GitHub's API order, grouping repositories by first appearance. **All notifications**: one collapsible group in API order. **Date**: newest local calendar day first, using REST update times for buckets and API order for rows. |
-| Copilot integration | On | Shows contextual Copilot actions on eligible notifications. Merged and merge-queued PRs have no action. Turn off to hide the buttons and block new handoffs; sessions already started are left alone. |
-| Confirm Copilot actions | On | Shows the routine handoff popup. Turn off to start from a row click or open one matching session directly. Cloning, inferred CI matches, and multiple-session choices still require confirmation. |
+| Copilot integration | On | Shows contextual Copilot actions on eligible notifications. Closed, merged, and merge-queued PRs show disabled controls explaining their state. Turn off to hide the buttons and block new handoffs; sessions already started are left alone. |
+| Confirm Copilot actions | On | Shows the routine handoff popup. Turn off to start from a row click when no matching session exists. Cloning, inferred CI matches, and choosing an existing or new session still require confirmation. |
 | Hide empty tabs | On | Hides attention tabs with zero loaded notifications. **All** and the selected tab always stay visible. Counts ignore search; tabs reappear when matching notifications are loaded. Saved choices are preserved. |
 | Theme | Match Copilot | **Match Copilot** uses Copilot's theme colors, falling back to the OS theme when opened outside Copilot. **Dark** and **Light** use fixed palettes. |
 | Keyboard shortcuts | On | Enables J/K navigation, I Read, Shift+E Done, / search, and ? help inside the focused canvas. Turn off to disable character shortcuts and hide the toolbar help icon; native Tab/Enter remain available. |

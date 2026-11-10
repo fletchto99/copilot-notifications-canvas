@@ -13,7 +13,7 @@ stay hidden in both views. Search, mark rows
 or groups as read or done, start a focused Copilot investigation or review,
 and opt into desktop notifications or auto-open.
 
-![GitHub Notifications canvas with search and attention tabs above ten synthetic notifications, seven unread, across three example repositories, issue and PR status icons, a failed check run, and fixed columns for Copilot, read, and done controls with dimmed envelopes on already-read rows](docs/images/github-notifications.png)
+![GitHub Notifications canvas with search and attention tabs above ten synthetic notifications, seven unread, across three example repositories, issue and PR status icons, a failed check run, and fixed Copilot, read, and done columns with disabled Copilot icons on merged and queued PRs and dimmed envelopes on already-read rows](docs/images/github-notifications.png)
 
 ## Prerequisites
 
@@ -78,7 +78,10 @@ full procedure, verification requirements, and troubleshooting.
   independent of the session containing the canvas. Existing sessions are
   offered without interrupting them; unconfigured repositories require explicit
   cloning confirmation. See [Copilot actions](docs/usage.md#work-with-copilot).
-  Merged and merge-queued PRs have no action. **Copilot integration** in Settings
+  Closed, merged, and merge-queued PRs show disabled icons explaining their state.
+  Matching sessions always offer **Open existing session** or **Start a new session**,
+  even with routine confirmations off; neither choice modifies existing work.
+  **Copilot integration** in Settings
   defaults on and can be turned off without changing existing sessions.
   The popup's **Skip routine confirmations** option remembers your choice after
   confirmation; restore it with **Settings > Confirm Copilot actions**.
@@ -108,8 +111,8 @@ in Copilot's session history, and the destination agent fetches the item's
 details. Notification titles, bodies, and the rest of the inbox are not copied
 into the handoff.
 Confirmation is shown by default. If you opt out of routine confirmations,
-a fresh row click still authorizes each handoff; cloning and uncertain or
-ambiguous choices still require confirmation.
+a fresh row click still authorizes each handoff; cloning, inferred CI matches,
+and choosing an existing or new session still require confirmation.
 
 **Desktop alerts send repository names and titles to your OS**, which may retain
 them in notification history or show them on the lock screen. System settings
