@@ -53,101 +53,45 @@ full procedure, verification requirements, and troubleshooting.
 
 ## Usage
 
-- Filter with the attention tabs or search by title, issue/PR number, or repository.
-- **Mine** shows loaded notifications for issues, PRs, and discussions you authored;
-  those rows have an italic *mine* marker. A `+` on its count means authorship
-  checks are pending or unavailable, not that unknown items are unowned.
-- Choose **All notifications**, **Repository**, or **Date** in **Settings**.
-- Set **Show notifications** in **Settings** to **All** for read and unread inbox
-  items, or **Unread only** to narrow the view.
-- Icons show issue/PR states, including a yellow dotted merge icon for queued PRs,
-  discussion states, and check-suite results. Screen-reader descriptions include
-  status, freshness, and failures; icons have no hover tooltips. Status loads for
-  all loaded rows in expanded groups, with up to 20 lookups running concurrently
-  across panels sharing the provider, without delaying the inbox.
-  Authorship checks also warm issue/PR/discussion details for filtered and
-  collapsed rows; merge queue and check-suite lookups remain limited to expanded matches.
-  Releases, commits, security alerts,
-  invitations, workflow runs, and agent sessions have static type icons;
-  unknown types fall back to a bell without additional status lookups.
-- Check-suite rows open resolved or conservatively matched runs, or the sole
-  failed job's logs. Unresolved rows fall back to filtered Actions when possible,
-  or the repository Actions page otherwise. Run references include the resolved
-  attempt; Copilot validates that exact attempt rather than substituting a later rerun.
-- Use the envelope to mark a row **read**, or the checkmark to mark it **done**.
-  Already-read rows keep a dimmed, disabled envelope labeled **Already read**.
-  Each group header offers the same bulk actions.
-- Use the Copilot button before Read to investigate an open issue or failed CI run,
-  continue your own open PR, review another open PR, or summarize a closed or
-  merged PR's changes with **Summarize Changes**. For closed, unmerged PRs, the
-  session then asks whether you'd like help reopening the PR; it never reopens
-  it automatically. Closed issues and discussions offer **Summarize with Copilot**;
-  commits offer **Summarize commit** to explain the code changed in that exact
-  commit, without proposing fixes. Releases with a specific linked release ID
-  offer **Summarize Release Notes**. Confirm the selected reference
-  before starting a summary-first, read-only root-level session in that repository,
-  independent of the session containing the canvas. Existing sessions are
-  offered without interrupting them; unconfigured repositories require explicit
-  cloning confirmation. See [Copilot actions](docs/copilot.md).
-  Merge-queued PRs show disabled icons explaining their state.
-  Matching sessions always offer **Open existing session** or **Start a new session**,
-  even with routine confirmations off; neither choice modifies existing work.
-  **Copilot integration** in Settings
-  defaults on and can be turned off without changing existing sessions.
-  The popup's **Skip routine confirmations** option remembers your choice after
-  confirmation; restore it with **Settings > Confirm Copilot actions**.
-- Use **J/K** to move between visible rows, **Enter** to open a focused link,
-  **I** to mark the focused row read, and **Shift+E** to mark it done.
-  Read advances to the next visible row after success. **/** focuses search;
-  **Enter** in search focuses the first result once filtering finishes.
-  **?** opens the shortcut guide. Disable character
-  shortcuts in **Settings > Keyboard shortcuts** if preferred.
-- Use **Load more** for older notifications. Search, counts, and bulk actions
-  cover **loaded items only**, not your entire GitHub inbox.
+- **Find:** Filter with attention tabs or search by title, issue/PR number, or
+  repository. **Mine** shows issues, PRs, and discussions you authored.
+- **Choose a view:** In **Settings**, group by repository or date, or use one
+  flat list. Show all inbox items or unread only.
+- **Read or done:** Use the envelope to mark read or the checkmark to mark done.
+  Group headers offer the same actions for loaded tab/search matches.
+- **Work with Copilot:** Investigate, review, continue, or summarize a supported
+  item. New sessions summarize first and stay read-only until you approve changes;
+  existing sessions open without interruption.
+- **Use the keyboard:** **J/K** moves between rows, **Enter** opens a focused link,
+  **I** marks read, **Shift+E** marks done, **/** focuses search, and **?** shows shortcuts.
+- **Load more:** Include older notifications. Search, counts, and bulk actions
+  cover **loaded items only**, not your entire inbox.
 
-See the [usage guide](docs/usage.md) for filtering, bulk actions, keyboard
-controls, and refresh behavior. [Settings](docs/settings.md) covers saved
-preferences and opt-in desktop alerts.
+See [Usage](docs/usage.md) for status icons and controls,
+[Copilot actions](docs/copilot.md) for supported tasks and confirmations, and
+[Settings](docs/settings.md) for preferences and opt-in desktop alerts.
 
 ## Privacy
 
-The extension does not log notification titles or repository names or save them
-to its own files. Ordinary agent-facing canvas actions expose counts, not inbox
-content. There is no telemetry or remote asset loading.
-
-**Starting a Copilot action shares the selected GitHub reference and task
-instructions with Copilot**, including the repository and selected issue, PR,
-discussion, release, commit, or run reference (and a PR's head commit or a failed
-run's commit and attempt). These are retained
-in Copilot's session history, and the destination agent fetches the item's
-details. Notification titles, bodies, and the rest of the inbox are not copied
-into the handoff.
-Confirmation is shown by default. If you opt out of routine confirmations,
-a fresh row click still authorizes each handoff; cloning, inferred CI matches,
-and choosing an existing or new session still require confirmation.
-
-**Desktop alerts send repository names and titles to your OS**, which may retain
-them in notification history or show them on the lock screen. System settings
-control this, not the extension. Windows alerts also include a validated GitHub
-destination URL so clicking opens the related item in your default browser.
-
-The local `artifacts/` directory stores settings and desktop coordination data:
-timestamps, hashed activity/thread IDs, watcher/process markers and sanitized
-errors. GitHub CLI handles credentials; they never enter the canvas renderer.
-
-GitHub CLI fetches notifications, the signed-in account's ID, authorship and the status of loaded issues, pull requests,
-discussions and check suites, merge queue membership, bounded workflow-run matches for missing
-links (including new individual Windows check alerts), the signed-in user ID for
-Copilot PR ownership checks, selected PR/run handoff metadata, and public release
-metadata. Inferred run links are identified in screen-reader descriptions and fall back
-to filtered Actions when matching is inconclusive. Failed runs open the job log
-viewer when exactly one job failed; the extension reads job metadata, not logs.
-Status is
-cached only in memory. Author and viewer IDs stay in the provider; the renderer
-receives only the authorship result. Update checks do
-not send notification content or download or execute release code. Only explicit
-**Mark as read** or **Mark as done** actions send notification updates; visiting a
-linked GitHub page may also mark a notification read on GitHub.
+- **Inbox content:** Notification titles and repository names are not logged or
+  saved to the extension's files. Ordinary agent actions return counts, not content.
+  There is no telemetry or remote asset loading.
+- **Copilot handoffs:** Only the selected GitHub reference and task instructions
+  enter Copilot's session history; the destination session fetches the item's
+  details. Notification titles, bodies, and the surrounding inbox are not copied.
+- **Confirmations:** Handoffs require a row click; confirmation is on by default. Cloning,
+  inferred CI matches, and existing/new session choices always require confirmation.
+- **Desktop alerts:** Opt-in alerts share repository names and titles with your OS,
+  which may retain them or show them on the lock screen. Windows also receives a
+  validated GitHub destination URL.
+- **Local data:** `artifacts/` stores settings and desktop coordination data,
+  including timestamps, hashed IDs, process markers, and sanitized errors.
+  Status and authorship are cached only in memory.
+- **Credentials and updates:** GitHub CLI handles authentication; credentials never
+  enter the renderer. Update checks send no notification content and never download
+  or execute release code.
+- **Read/done state:** Only explicit Read/Done actions send notification updates.
+  Visiting a linked GitHub page may also mark it read on GitHub.
 
 ## Documentation
 
