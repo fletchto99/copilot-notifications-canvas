@@ -154,7 +154,6 @@ export async function createCanvasFixture({
   }, log, now: () => now() + offset });
   const inbox = new Inbox(client);
   const syntheticHost = copilotEnabled ? copilotHost() : undefined;
-  await syntheticHost?.host.refresh();
   const copilot = syntheticHost ? new CopilotHandoff(inbox, syntheticHost.host, { log, preferences }) : undefined;
   let server;
   let registration;
