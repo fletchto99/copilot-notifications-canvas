@@ -252,6 +252,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
       ...(updates ? { updates: updates.snapshot() } : {}),
       ...(copilot ? {
         copilotOperation: copilot.snapshot(), copilotIntegration: copilot.enabled,
+        copilotLoading: copilot.loading,
         confirmCopilotActions: copilot.confirmCopilotActions,
       } : {}),
     };

@@ -20,6 +20,14 @@ already-read rows, so the remaining buttons do not move.
 Group Read/Done controls align with the same columns. Turning Copilot integration
 off restores the two-column Read/Done layout.
 
+On first load, eligible rows show a disabled **Checking Copilot availability...**
+button while the host's session tools initialize. The inbox, links, and Read/Done
+controls remain usable. The button updates automatically without a manual refresh.
+Discovery makes up to three short startup retries for incomplete tool metadata or
+transient failures, then hides unavailable actions and returns to checking about
+once per minute while the panel is visible. Discovery never starts a session or
+changes notification state.
+
 The Copilot button's tooltip and accessible label describe the task:
 
 | Item | Task |

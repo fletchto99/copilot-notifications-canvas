@@ -15,7 +15,7 @@ const runDetails = {
   id: 42, run_attempt: 2, head_sha: sha, status: "completed", conclusion: "failure",
   repository: { full_name: "example/widgets" }, html_url: "https://github.com/example/widgets/actions/runs/42",
 };
-async function fixture(t, { type = "Issue", reason = "author", authorId = 8, runId = 42, run = runDetails, runAttempts = {}, pull = {}, preferences, onGitHub, ...hostOptions } = {}) {
+async function fixture(t, { type = "Issue", reason = "author", authorId = 8, runId = 42, run = runDetails, runAttempts = {}, pull = {}, preferences, onGitHub, coldHost = false, ...hostOptions } = {}) {
   const requests = [];
   const client = new GitHubClient({ run: async args => {
     requests.push(args);
@@ -46,7 +46,7 @@ async function fixture(t, { type = "Issue", reason = "author", authorId = 8, run
     client.subjectLinksReady.add(endpoint);
   }
   const f = copilotHost(hostOptions);
-  await f.host.refresh();
+  if (!coldHost) await f.host.refresh();
   const handoff = new CopilotHandoff(inbox, f.host, { preferences });
   t.after(() => inbox.close());
   return { ...f, inbox, client, handoff, requests };
@@ -916,6 +916,7 @@ test("host discovery is capability-gated and does not execute tools", async () =
   const missing = new CopilotHost(() => ({}));
   await missing.refresh();
   assert.equal(missing.supports(), false);
+  assert.equal(missing.initializing, false);
   await assert.rejects(missing.execute("create_session", {}), { code: "copilot_unavailable" });
   const f = copilotHost({ tools: toolNames.filter(name => name !== "create_session") });
   await f.host.refresh();
@@ -925,6 +926,118 @@ test("host discovery is capability-gated and does not execute tools", async () =
   await atomic.host.refresh();
   assert.equal(atomic.host.supports(), true);
   assert.deepEqual(atomic.calls, []);
+});
+
+test("startup discovery retries empty, partial and failed metadata before enabling actions", async () => {
+  const logs = [];
+  const f = copilotHost({ log: message => logs.push(message) });
+  const metadata = await f.rpc.getCurrentMetadata();
+  let now = 0;
+  let calls = 0;
+  f.host.now = () => now;
+  f.rpc.getCurrentMetadata = async () => {
+    calls++;
+    if (calls === 1) return { tools: [] };
+    if (calls === 2) return { tools: metadata.tools.filter(tool => tool.name !== "create_session") };
+    if (calls === 3) throw new Error("Private host failure detail");
+    return metadata;
+  };
+  for (const [index, delay] of [1000, 2000, 5000].entries()) {
+    const pending = f.host.refresh();
+    assert.equal(f.host.refresh(), pending, "Concurrent panels share discovery");
+    await pending;
+    assert.equal(f.host.initializing, true);
+    assert.equal(f.host.supports(), false);
+    await assert.rejects(f.host.execute("create_session", {}), { code: "copilot_unavailable" });
+    now += delay - 1;
+    await f.host.refresh();
+    assert.equal(calls, index + 1, "Polling must respect each retry deadline");
+    now++;
+  }
+  await f.host.refresh();
+  assert.equal(calls, 4);
+  assert.equal(f.host.initializing, false);
+  assert.equal(f.host.supports(), true);
+  assert.deepEqual(logs, ["Could not discover Copilot session actions."]);
+  now += 59_999;
+  await f.host.refresh();
+  assert.equal(calls, 4);
+  now++;
+  await f.host.refresh();
+  assert.equal(calls, 5);
+  assert.deepEqual(f.calls, []);
+  assert.deepEqual(f.gitCalls, []);
+});
+
+test("unsupported hosts exhaust startup retries, hide controls and retain slow recovery", async t => {
+  const f = await fixture(t, { coldHost: true });
+  const metadata = await f.rpc.getCurrentMetadata();
+  let now = 0;
+  let calls = 0;
+  let supported = false;
+  f.host.now = () => now;
+  f.rpc.getCurrentMetadata = async () => {
+    calls++;
+    return supported ? metadata : { tools: metadata.tools.filter(tool => tool.name !== "create_session") };
+  };
+  const item = f.inbox.loadedItems()[0];
+  for (const time of [0, 1000, 3000, 8000]) {
+    now = time;
+    assert.equal(f.handoff.loading, true);
+    assert.deepEqual(f.handoff.row(item), {
+      label: "Checking Copilot availability...", enabled: false, reason: "Checking Copilot availability...", loading: true,
+    });
+    await f.host.refresh();
+  }
+  assert.equal(f.handoff.loading, false);
+  assert.equal(f.handoff.row(item), null);
+  f.handoff.request({ id: item.id });
+  await f.handoff.pending;
+  assert.equal(f.handoff.snapshot().status, "error");
+  assert.equal(calls, 4);
+  supported = true;
+  now = 67_999;
+  await f.host.refresh();
+  assert.equal(f.handoff.row(item), null);
+  assert.equal(calls, 4);
+  now++;
+  await f.host.refresh();
+  assert.equal(f.handoff.row(item).enabled, true);
+  assert.equal(f.handoff.loading, false);
+  assert.equal(calls, 5);
+  assert.deepEqual(f.calls, []);
+});
+
+test("cold HTTP snapshots expose discovery progress without blocking the inbox or enabling actions", async t => {
+  const f = await fixture(t, { coldHost: true });
+  const metadata = await f.rpc.getCurrentMetadata();
+  const discovery = deferred();
+  t.after(() => discovery.resolve(metadata));
+  f.rpc.getCurrentMetadata = () => discovery.promise;
+  f.client.subjectsNeedRefresh = () => false;
+  const server = await startServer(f.inbox, { copilot: f.handoff, development: false });
+  t.after(() => server.close());
+  const url = new URL(server.url);
+  const headers = { Authorization: `Bearer ${url.hash.slice(1)}`, Origin: url.origin };
+  const state = () => fetch(new URL("/api/state", url), { headers }).then(response => response.json());
+  const initial = await state();
+  assert.equal(initial.copilotLoading, true);
+  assert.equal(initial.groups[0].items[0].copilot.enabled, false);
+  assert.equal(initial.groups[0].items[0].copilot.loading, true);
+  const closed = { ...f.inbox.loadedItems()[0], type: "PullRequest", subjectState: "closed" };
+  assert.equal(f.handoff.row(closed).label, "PR closed");
+  f.handoff.setEnabled(false);
+  assert.equal((await state()).copilotLoading, false);
+  assert.equal(f.handoff.row(closed), null);
+  f.handoff.setEnabled(true);
+  discovery.resolve(metadata);
+  await f.handoff.hydrating;
+  const ready = await state();
+  assert.equal(ready.copilotLoading, false);
+  assert.equal(ready.groups[0].items[0].copilot.enabled, true);
+  assert.equal(Object.hasOwn(f.inbox.summary(), "copilotLoading"), false);
+  assert.deepEqual(f.calls, []);
+  assert.deepEqual(f.gitCalls, []);
 });
 
 test("hosts without detached plan-kickoff support cannot create a nested or unprompted session", async t => {

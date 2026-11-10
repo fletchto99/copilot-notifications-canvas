@@ -987,7 +987,7 @@ function renderBatchView(batch, view) {
 function schedule() {
   clearTimeout(timer);
   if (visible()) timer = setTimeout(tick, batchBusy || marking.size || batchLocked() || copilotWorking() ||
-    state?.subjectsLoading && !connectionError ? 1000 : 5000);
+    (state?.subjectsLoading || state?.copilotLoading) && !connectionError ? 1000 : 5000);
 }
 
 async function performUpdate(path, input) {
@@ -1375,7 +1375,7 @@ function renderRowSubject(view, item) {
     if (!view.copilot.button) return;
     const pending = working && copilotOperation?.id === item.id;
     view.copilot.button.disabled = !copilot?.enabled || working;
-    view.copilot.button.setAttribute("aria-busy", String(pending));
+    view.copilot.button.setAttribute("aria-busy", String(pending || Boolean(copilot?.loading)));
     view.copilot.button.setAttribute("aria-label", `${item.copilot?.label ?? "Work with Copilot"}: ${notificationTitle(item, "Untitled notification")}`);
     setControlText(view.copilot.tooltip, pending ? copilotOperation?.message ?? "Opening Copilot..." :
       item.copilot?.reason || item.copilot?.label || "Work with Copilot");
