@@ -42,6 +42,24 @@ test("browser CI pins the locked Playwright version without installing browsers 
   assert.doesNotMatch(browser, /playwright install|apt-get/);
 });
 
+test("browser CI runs four shards per engine with distinct reports and packaging checks", async () => {
+  const [workflow, config] = await Promise.all([
+    readFile(new URL("../.github/workflows/tests.yml", import.meta.url), "utf8"),
+    readFile(new URL("../playwright.config.mjs", import.meta.url), "utf8"),
+  ]);
+  const browser = workflow.match(/\n {2}browser:\n([\s\S]*?)(?=\n {2}[a-z][\w-]*:|$)/)?.[1];
+  assert.ok(browser);
+  assert.match(browser, /name: Browser \(\$\{\{ matrix\.browser \}\}, shard \$\{\{ matrix\.shard \}\}\/4\)/);
+  assert.match(browser, /fail-fast: false/);
+  assert.match(browser, /matrix:\n\s+browser: \[chromium, webkit\]\n\s+shard: \[1, 2, 3, 4\]/);
+  assert.match(browser, /^\s+run: npm run test:browser -- --project="\$\{\{ matrix\.browser \}\}" --shard="\$\{\{ matrix\.shard \}\}\/4"$/m);
+  assert.match(browser, /run: \|\n\s+npm run build\n\s+npm run test:package/);
+  assert.match(browser, /if: \$\{\{ !cancelled\(\) \}\}\n\s+uses: actions\/upload-artifact@[a-f0-9]{40}/);
+  assert.match(browser, /name: browser-results-\$\{\{ matrix\.browser \}\}-\$\{\{ matrix\.shard \}\}\n\s+path: \|\n\s+playwright-report\/\n\s+test-results\//);
+  assert.match(config, /fullyParallel: true/);
+  assert.match(config, /workers: process\.env\.CI \? 2 : undefined/);
+});
+
 test("CI uses the preferred Node version for tooling while preserving Node 22 runtime coverage", async () => {
   const [manifest, lock, preferredNode, tests, setup, release, build] = await Promise.all([
     readFile(new URL("../package.json", import.meta.url), "utf8").then(JSON.parse),

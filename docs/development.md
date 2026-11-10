@@ -265,8 +265,21 @@ required-check rules separately if workflow check names change.
 **Browser CI:** both engines run in a version/digest-pinned Playwright image
 with browsers and libraries preinstalled. Update its version and verified digest
 with the locked `@playwright/test` dependency; alignment is tested.
-Each browser job has a 15-minute limit for container startup, packaging, tests,
-and report uploads; Playwright's per-test timeout remains 30 seconds.
+Each engine runs in four parallel shards, for eight browser jobs total, with two
+Playwright workers per job. With `fullyParallel` enabled, Playwright distributes
+individual tests across shards by count, not duration; new tests are included
+automatically without category lists. Every shard validates packaging and uploads
+its own HTML report and failure traces as `browser-results-<browser>-<shard>`.
+Failures do not cancel the other shards.
+
+Each shard has a 15-minute limit for container startup, packaging, tests, and
+report uploads; Playwright's per-test timeout remains 30 seconds.
+After `npm run build`, reproduce a shard locally with
+`npm run test:browser -- --project=chromium --shard=1/4 --workers=2`, substituting
+the browser and shard number. Omit `--shard` to run the full selected suite.
+Browser check names now include the shard, for example
+`Browser (chromium, shard 1/4)`; update any required-check rules that reference
+the previous unsharded names.
 PR/main CI validates packaging but never publishes releases.
 
 Browser race regressions use held synthetic responses to control request order,
