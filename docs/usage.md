@@ -35,7 +35,9 @@ defaults on; turn it off to hide all Copilot buttons and block new handoffs.
 This does not stop or change sessions already started.
 
 PR ownership uses the authenticated GitHub CLI user and actual PR author,
-not the notification reason. While identity/status is loading, the label is
+not the notification reason. A PR handoff waits for verified merge-queue
+membership; pending or failed queue checks cannot authorize a session.
+While identity/status is loading, the label is
 **Work with Copilot**; clicking resolves the task before confirmation. CI actions
 wait while run/job links are loading. Unresolved or ambiguous matches remain
 disabled rather than guessing a destination.
@@ -370,9 +372,10 @@ release and press again to open its link.
 
 J/K skip collapsed groups and stop at the first/last row without wrapping or
 loading more. With no row focused, J starts at the first visible row and K at
-the last. Read/Done shortcuts require focus on a row link or one of its buttons;
-they never act on a group or a previously focused row. Holding these keys does
-not repeat writes. Done requires Shift; pressing E alone does nothing.
+the last. Read/Done shortcuts require focus on a row link or one of its buttons,
+including Copilot. They never act on a group or a previously focused row.
+Holding these keys does not repeat writes. Done requires Shift; pressing E alone
+does nothing.
 Pending filters, writes, and batches use the same safeguards
 as the buttons.
 

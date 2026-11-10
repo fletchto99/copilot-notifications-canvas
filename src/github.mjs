@@ -406,18 +406,30 @@ export class GitHubClient {
       .exec(item?.url ?? "");
     const matchingRun = run && link && run[1] === item.repository && link[1] === run[1] && link[2] === run[2] &&
       (link[3] !== "attempts" || link[4] === run[3]) && (link[3] !== "job" || run[3] !== undefined);
-    const endpoint = kind === "viewer" ? "/user" : kind === "pull" && item?.type === "PullRequest"
+    const endpoint = kind === "viewer" ? "/user" : ["pull", "queue"].includes(kind) && item?.type === "PullRequest"
       ? subjectEndpoint(item, this.target) : kind === "run" && matchingRun
         ? `/repos/${run[1]}/actions/runs/${run[2]}${run[3] ? `/attempts/${run[3]}` : ""}` : null;
     if (this.target.custom || !endpoint) throw new InboxError("copilot_context", "Use a confirmed github.com item for this Copilot action.", 400);
+    if (kind === "queue") {
+      return this.#refreshSubject(endpoint, item, signal, "queue", () => true).then(() => {
+        const result = this.mergeQueueCache.get(endpoint);
+        if (result?.error) throw new InboxError(result.error.code, result.error.message);
+        if (typeof result?.state !== "boolean" || !(result.nextRefreshAt > this.now())) {
+          throw this.graphqlLastError ?? new InboxError("copilot_context", "GitHub could not verify merge queue membership. Retry when queue status is available.");
+        }
+        return result.state;
+      });
+    }
     return this.request(endpoint, signal, "GET", { subjectType: "Copilot", copilot: kind }).then(result => {
       if (result.error) throw new InboxError(result.error.code, result.error.message);
       return result.state;
     }).catch(error => {
       if (error instanceof InboxError && error.code !== "closed") {
         const cached = this.copilotCache.get(endpoint);
+        const now = this.now();
         this.copilotCache.set(endpoint, { error: { code: error.code, message: error.message },
-          nextRefreshAt: cached?.error ? cached.nextRefreshAt : Math.max(error.retryAt ?? 0, this.blockedUntil, this.now() + RETRY_MS) });
+          nextRefreshAt: cached?.error && cached.nextRefreshAt > now
+            ? cached.nextRefreshAt : Math.max(error.retryAt ?? 0, this.blockedUntil, now + RETRY_MS) });
       }
       throw error;
     });

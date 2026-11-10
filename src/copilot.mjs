@@ -197,6 +197,14 @@ export class CopilotHandoff {
   async #active(id, direct = false) {
     if (this.preferences) this.setSettings(await this.preferences.read());
     if (!this.enabled) throw integrationDisabled();
+    const item = this.#item(id);
+    if (item.type === "PullRequest") {
+      if (await this.inbox.client.copilotContext("queue", item, this.inbox.controller.signal)) {
+        throw new InboxError("copilot_inactive_pr", "Copilot actions are unavailable for merge-queued pull requests.", 409);
+      }
+      if (this.preferences) this.setSettings(await this.preferences.read());
+      if (!this.enabled) throw integrationDisabled();
+    }
     if (direct && (this.confirmCopilotActions || this.target?.inferred)) {
       throw new InboxError("copilot_confirmation", "This Copilot action needs confirmation. Open it again to review the details.", 409);
     }
@@ -214,7 +222,8 @@ export class CopilotHandoff {
     if (this.inbox.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
     const item = this.inbox.loadedItems().find(item => item.id === id);
     if (!item) throw new InboxError("unknown_thread", "This notification is no longer loaded. Refresh and try again.", 404);
-    const current = { ...item, ...this.inbox.client.subjectSnapshot(item) };
+    const current = { ...item, ...this.inbox.client.subjectSnapshot(item),
+      subjectLinkLoading: this.inbox.client.subjectLinkPending(item) };
     if (inactivePull(current)) {
       throw new InboxError("copilot_inactive_pr", "Copilot actions are unavailable for merged or merge-queued pull requests.", 409);
     }
@@ -360,6 +369,7 @@ export class CopilotHandoff {
       const opened = await this.#sessions(target);
       if (!opened.all.some(session => session.id === id &&
           (sameRepo(session.project_repo, target.repository) || matches(session, target)))) throw hostFailure();
+      await this.#active(input.id, input.direct);
       await this.host.execute("navigate_to", { id });
       this.state = { id: input.id, status: "started", message: "Opened a summary-first Copilot session. Read/Done is unchanged." };
     } finally {

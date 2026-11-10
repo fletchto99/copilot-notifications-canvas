@@ -1355,6 +1355,7 @@ function renderRowSubject(view, item) {
       tooltip.append(tooltipContent);
       button.type = "button";
       button.dataset.focusKey = `copilot:${item.id}`;
+      button.dataset.threadId = item.id;
       button.dataset.copilot = "true";
       button.setAttribute("aria-describedby", tooltip.id);
       button.append(actionIcon("copilot"));

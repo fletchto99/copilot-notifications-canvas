@@ -69,6 +69,69 @@ for (const packaged of [false, true]) {
       expect(canvas.deliveries).toEqual([]);
     });
 
+    test("row navigation and Read/Done shortcuts work from the Copilot button", async ({ page, canvas }) => {
+      canvas.rows.splice(3);
+      for (const row of canvas.rows) {
+        row.subject = { title: `Synthetic issue ${row.id}`, type: "Issue",
+          url: `https://api.github.com/repos/${row.repository.full_name}/issues/${row.id}` };
+      }
+      await page.goto(canvas.url);
+      const copilot = page.locator('[data-focus-key="copilot:2"]');
+      await expect(copilot).toBeEnabled();
+      await copilot.focus();
+      await page.keyboard.press("j");
+      await expect(page.locator('[data-focus-key="thread:3"]')).toBeFocused();
+      await copilot.focus();
+      await page.keyboard.press("k");
+      await expect(page.locator('[data-focus-key="thread:1"]')).toBeFocused();
+      await copilot.focus();
+      await page.keyboard.press("i");
+      await expect.poll(() => canvas.writes).toEqual(["2"]);
+      await expect(page.locator('[data-focus-key="read:2"]')).toBeDisabled();
+      await expect(page.locator('[data-focus-key="read:2"]')).toHaveAccessibleName(/^Already read:/);
+      await expect(page.locator('[data-focus-key="done:2"]')).toBeEnabled();
+      await copilot.focus();
+      await expect(copilot).toBeFocused();
+      await page.keyboard.press("Shift+KeyE");
+      await expect.poll(() => canvas.doneWrites).toEqual(["2"]);
+      await expect(copilot).toHaveCount(0);
+      expect(canvas.writes).toEqual(["2", "2"]);
+      expect(canvas.copilotHost.calls).toEqual([]);
+      expect(canvas.deliveries).toEqual([]);
+    });
+
+    test("a direct PR handoff waits for pending merge-queue membership", async ({ page, canvas }) => {
+      canvas.rows.splice(1);
+      canvas.rows[0].subject = { title: "Synthetic queued PR", type: "PullRequest",
+        url: "https://api.github.com/repos/example/widgets/pulls/1" };
+      canvas.rows[0].mergeQueued = true;
+      await canvas.preferences.update({ confirmCopilotActions: false });
+      let release;
+      let checking = false;
+      const held = new Promise(resolve => { release = resolve; });
+      canvas.setRequestHook(async args => {
+        if (args.at(-1) === "graphql") {
+          checking = true;
+          await held;
+        }
+      });
+      try {
+        await page.goto(canvas.url);
+        await expect.poll(() => checking).toBe(true);
+        const action = page.locator(".copilot-action");
+        await expect(action).toBeEnabled();
+        await action.click();
+        await expect(action).toHaveAttribute("aria-busy", "true");
+        expect(canvas.copilotHost.calls.some(call => call.name === "create_session")).toBe(false);
+        release();
+        await expect(page.locator("#copilot-status")).toContainText("merge-queued");
+        expect(canvas.copilotHost.calls.some(call => ["create_session", "navigate_to"].includes(call.name))).toBe(false);
+        expect(canvas.writes).toEqual([]);
+      } finally {
+        release();
+      }
+    });
+
     test("own and other PR labels use identity, remain stable during hydration, and fit narrow panels", async ({
       page,
       canvas,
