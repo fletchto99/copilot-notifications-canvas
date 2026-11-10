@@ -104,8 +104,10 @@ name-based reuse. Existing native issue/PR links are also recognized.
 Choose **Start a new session** for a fresh start, including after an earlier
 workspace initialization failed. This creates a separate summary-first session;
 it never repairs, restarts, archives, or deletes the old one. The extension does
-not guess whether a session failed from its activity status. If matching sessions
-change while confirming or preparing the checkout, it asks you to choose again.
+not guess whether a session failed from its activity status. Every creation
+rechecks matches after repository setup and commit preparation, including direct
+starts with routine confirmations off. If a match appears or the shown matching
+sessions change, it asks you to choose again.
 If the repository is no longer configured, starting fresh also requires the
 explicit **Clone repository and start a new session** confirmation.
 Long CI session names are shortened to fit the host's 40-character limit;

@@ -589,6 +589,65 @@ test("a fresh-start confirmation is renewed when matching sessions change before
   });
 });
 
+test("a session appearing during checkout requires a choice for normal and direct starts", async t => {
+  for (const direct of [false, true]) await t.test(direct ? "direct" : "confirmed", async t => {
+    const entered = deferred();
+    const held = deferred();
+    t.after(() => held.resolve());
+    const f = await fixture(t, { type: "PullRequest", preferences: handoffPreferences(!direct) });
+    t.mock.method(f.host, "prepareCommit", async () => {
+      entered.resolve();
+      await held.promise;
+    });
+    const original = direct ? undefined : await prepare(f);
+    f.handoff.request({ id: "1", ...(direct ? { direct: true } : { token: original.token }) });
+    await entered.promise;
+    const existing = { type: "session", id: sessionId, project_repo: "example/widgets", name: "Work on PR #1" };
+    f.sessions.push(existing);
+    held.resolve();
+    await f.handoff.pending;
+    const ready = f.handoff.snapshot();
+    assert.equal(ready.status, "ready");
+    assert.notEqual(ready.token, original?.token);
+    assert.deepEqual(ready.sessions, [{ id: sessionId, name: existing.name }]);
+    assert.equal(f.calls.some(call => ["create_session", "navigate_to"].includes(call.name)), false);
+    if (original) {
+      assert.throws(() => f.handoff.request({ id: "1", token: original.token }), { code: "stale_handoff" });
+    }
+    assert.equal((await start(f, { sessionId })).status, "opened");
+    assert.equal(f.sessions.length, 1);
+    assert.equal(f.calls.some(call => call.name === "create_session"), false);
+    assert.equal(f.host.reservations.size, 0);
+  });
+});
+
+test("issue creation rechecks matching sessions after repository setup", async t => {
+  const f = await fixture(t, { repositories: [], onExecute: name => {
+    if (name === "add_repository") {
+      f.sessions.push({ type: "session", id: sessionId, project_repo: "example/widgets", name: "Investigate issue #1" });
+    }
+  } });
+  await prepare(f);
+  const ready = await start(f, { clone: true });
+  assert.equal(ready.status, "ready");
+  assert.equal(ready.needsClone, false);
+  assert.equal(ready.sessions.length, 1);
+  assert.equal(f.calls.some(call => ["create_session", "navigate_to"].includes(call.name)), false);
+});
+
+test("restoring confirmations during the final inventory check prevents a direct creation", async t => {
+  const preferences = handoffPreferences(false);
+  let queries = 0;
+  const f = await fixture(t, { preferences, onExecute: name => {
+    if (name === "list_sessions_and_chats" && ++queries === 3) preferences.settings.confirmCopilotActions = true;
+  } });
+  f.handoff.request({ id: "1", direct: true });
+  await f.handoff.pending;
+  assert.equal(f.handoff.snapshot().status, "error");
+  assert.match(f.handoff.snapshot().message, /needs confirmation/);
+  assert.equal(f.calls.some(call => ["create_session", "navigate_to"].includes(call.name)), false);
+});
+
 test("checkout, fetch, creation and navigation report progress without exposing targets", async t => {
   let present = false;
   const messages = [];

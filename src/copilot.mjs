@@ -388,13 +388,11 @@ export class CopilotHandoff {
         });
         await this.#active(input.id, input.direct);
       }
-      if (input.startNew) {
-        const latest = await this.#sessions(target);
-        await this.#active(input.id);
-        if (!sameSelection(latest.matching)) {
-          this.#ready(target, latest.matching, true);
-          return;
-        }
+      const latest = await this.#sessions(target);
+      await this.#active(input.id, input.direct);
+      if (input.startNew ? !sameSelection(latest.matching) : latest.matching.length) {
+        this.#ready(target, latest.matching, true);
+        return;
       }
       // The host queues the kickoff until ready; startup activity is not a reuse signal.
       progress("Starting session. Check the app for any permission or repository trust requests.");
@@ -406,7 +404,7 @@ export class CopilotHandoff {
       const text = typeof result === "string" ? result : JSON.stringify(result);
       const ids = new Set([...text.matchAll(/(?:session_id[":\s]+|ghapp:\/\/sessions\/)([a-f0-9-]{36})/gi)].map(match => match[1]));
       const [id] = ids;
-      if (ids.size !== 1 || !uuid.test(id) || all.some(session => session.id === id)) throw hostFailure();
+      if (ids.size !== 1 || !uuid.test(id) || latest.all.some(session => session.id === id)) throw hostFailure();
       const opened = await this.#sessions(target);
       if (!opened.all.some(session => session.id === id &&
           (sameRepo(session.project_repo, target.repository) || matches(session, target)))) throw hostFailure();

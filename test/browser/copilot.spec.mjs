@@ -297,6 +297,51 @@ for (const packaged of [false, true]) {
       });
     }
 
+    test("a session appearing during a direct fetch restores the existing-or-new choice", async ({ page, canvas }) => {
+      canvas.rows.splice(1);
+      canvas.rows[0].subject = { title: "Synthetic PR", type: "PullRequest",
+        url: "https://api.github.com/repos/example/widgets/pulls/1" };
+      await canvas.preferences.update({ confirmCopilotActions: false });
+      const run = canvas.copilotHost.rpc.runGit;
+      let release;
+      let fetching = false;
+      let present = false;
+      const held = new Promise(resolve => { release = resolve; });
+      canvas.copilotHost.rpc.runGit = async input => {
+        if (input.args.includes("--verify") && !present) {
+          throw Object.assign(new Error("Missing synthetic commit"), { code: 1 });
+        }
+        if (input.args.includes("fetch")) {
+          fetching = true;
+          await held;
+          present = true;
+        }
+        return run(input);
+      };
+      try {
+        await page.goto(canvas.url);
+        await page.locator(".copilot-action").click();
+        await expect.poll(() => fetching).toBe(true);
+        await expect(page.locator("#copilot-dialog")).toBeHidden();
+        const existing = { type: "session", id: "22222222-2222-4222-8222-222222222222",
+          project_repo: "example/widgets", name: "Work on PR #1" };
+        canvas.copilotHost.sessions.push(existing);
+        release();
+        const dialog = page.locator("#copilot-dialog");
+        const open = dialog.getByRole("button", { name: "Open existing session: Work on PR #1", exact: true });
+        await expect(open).toBeVisible();
+        await expect(dialog.getByRole("button", { name: "Start a new session", exact: true })).toBeVisible();
+        expect(canvas.copilotHost.calls.some(call => ["create_session", "navigate_to"].includes(call.name))).toBe(false);
+        await open.click();
+        await expect.poll(() => canvas.copilotHost.calls.find(call => call.name === "navigate_to")?.args.id).toBe(existing.id);
+        expect(canvas.copilotHost.sessions).toEqual([existing]);
+        expect(canvas.copilotHost.calls.some(call => ["create_session", "send_session_message"].includes(call.name))).toBe(false);
+        expect(canvas.writes).toEqual([]);
+      } finally {
+        release();
+      }
+    });
+
     for (const failedJob of [false, true]) {
       test(`inferred CI ${failedJob ? "job" : "run"} navigation and handoff keep the original attempt after a successful rerun`, async ({ page, canvas }) => {
         await canvas.preferences.update({ confirmCopilotActions: false });
