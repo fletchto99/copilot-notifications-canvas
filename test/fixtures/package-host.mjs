@@ -4,6 +4,11 @@ import { register, syncBuiltinESMExports } from "node:module";
 import { pathToFileURL } from "node:url";
 import { host } from "./sdk.mjs";
 
+// Only this isolated test provider gets a controllable clock; timers still run normally.
+const realNow = Date.now;
+let fixedTime;
+Date.now = () => fixedTime ?? realNow();
+
 const pending = new Map();
 const toolRequests = new Map();
 let nextId = 0;
@@ -50,6 +55,10 @@ process.on("message", async message => {
     toolRequests.delete(message.id);
     if (message.error) request.reject(new Error(message.error));
     else request.resolve(message.result);
+  } else if (message.type === "set-time") {
+    assert.ok(Number.isSafeInteger(message.now) && message.now >= 0);
+    fixedTime = message.now;
+    process.send({ type: "time-set", now: fixedTime });
   } else if (message.type === "close") {
     await canvas.onClose({ instanceId: "packaged-browser" });
     process.exit(0);

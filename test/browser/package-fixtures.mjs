@@ -1,5 +1,5 @@
 import { execFile, fork } from "node:child_process";
-import { once } from "node:events";
+import { on, once } from "node:events";
 import { mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -60,6 +60,19 @@ export async function startPackagedCanvas(root, run, log, tools) {
       throw new Error(`Packaged provider failed (${child.signalCode ?? child.exitCode}): ${stderr}`);
     }
   }
+  async function setTime(now) {
+    if (!child.connected) throw new Error("Cannot set the clock of a disconnected packaged provider.");
+    const messages = on(child, "message", { signal: AbortSignal.timeout(5000), close: ["exit"] });
+    try {
+      child.send({ type: "set-time", now });
+      for await (const [message] of messages) {
+        if (message.type === "time-set" && message.now === now) return;
+      }
+      throw new Error("Packaged provider exited before acknowledging its test clock.");
+    } finally {
+      await messages.return();
+    }
+  }
   try {
     const url = await new Promise((resolve, reject) => {
       const timeout = setTimeout(() => finish(new Error(`Packaged provider did not open: ${stderr}`)), 10_000);
@@ -76,7 +89,7 @@ export async function startPackagedCanvas(root, run, log, tools) {
       child.once("exit", exited);
       child.once("error", finish);
     });
-    return { url, close };
+    return { url, close, setTime };
   } catch (error) {
     await close();
     throw error;

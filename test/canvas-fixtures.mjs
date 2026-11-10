@@ -200,6 +200,11 @@ export async function createCanvasFixture({
     return {
       root, url: server.url, rows, writes, doneWrites, requests, preferences, deliveries, desktop, errors, warnings, close,
       copilot, copilotHost: syntheticHost,
+      setCopilotTime: async time => {
+        assert.ok(syntheticHost && Number.isSafeInteger(time) && time >= 0);
+        if (packaged) await server.setTime(time);
+        else syntheticHost.host.now = () => time;
+      },
       setRequestHook: hook => { requestHook = hook; },
       advance: ms => { offset += ms; return now() + offset; },
       recoverAssets: () => { assetsUnavailable = false; },

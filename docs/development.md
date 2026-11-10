@@ -282,6 +282,13 @@ Browser check names now include the shard, for example
 the previous unsharded names.
 PR/main CI validates packaging but never publishes releases.
 
+Copilot discovery browser tests advance a test-only provider clock instead of
+waiting real minutes. Source fixtures inject `CopilotHost.now`; packaged fixtures
+control `Date.now` inside their isolated child process and acknowledge clock changes
+over IPC. Renderer polling and provider timers still run normally. These tests
+keep the default per-test timeout and check late recovery plus the 179,999/180,000 ms
+boundary; unit tests cover every retry deadline. Production timing is unchanged.
+
 Browser race regressions use held synthetic responses to control request order,
 not sleeps or retries. Settings reads must not take focus from pending row
 actions. Theme checks wait for temporarily disabled controls and open

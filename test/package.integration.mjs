@@ -37,6 +37,7 @@ test("packaged browser teardown rejects an already-crashed provider and allows r
           const exited = once(child, "exit");
           child.kill("SIGKILL");
           await exited;
+          await assert.rejects(canvas.setTime(180_000), /disconnected packaged provider/);
           await assert.rejects(canvas.close(), /Packaged provider failed \(SIGKILL\)/);
         } else {
           await canvas.close();

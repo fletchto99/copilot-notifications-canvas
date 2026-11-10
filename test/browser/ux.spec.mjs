@@ -115,7 +115,7 @@ for (const packaged of [false, true]) {
       expect(attempts).toBe(3);
       expect(fetches).toBe(1);
       if (!packaged) {
-        // Only the source fixture injects the provider clock; packaged providers use real time.
+        // advance() controls only the source fixture's provider clock.
         await page.clock.setFixedTime(new Date(canvas.advance(121_000)));
         await page.clock.runFor(5000);
         await expect(page.locator("#retry-status")).toBeHidden();
