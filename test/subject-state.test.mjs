@@ -336,11 +336,12 @@ test("closing the panel cancels background subject work and unexpected failures 
       const result = await (await fetch(`${url.origin}/api/state`, { headers })).json();
       assert.match(result.groups[0].items[0].subjectStateError, /Inspect the extension log/);
       assert.equal(result.subjectsLoading, false);
-      assert.equal(logs.length, 1, "local polling must not keep retrying an unexpected failure");
+      assert.deepEqual(logs.sort(), ["Unexpected notification authorship failure.", "Unexpected notification subject status failure."],
+        "Each background task reports its unexpected failure once, not on every local poll");
       assert.doesNotMatch(JSON.stringify(logs), /Private/);
       now += RETRY_MS;
       await fetch(`${url.origin}/api/state`, { headers });
-      assert.equal(logs.length, 2);
+      assert.equal(logs.length, 4);
     }
     await server.close();
     assert.equal(client.subjectCache.size, 0);
@@ -384,7 +385,7 @@ test("unexpected hydration failures preserve cached API states and reported work
   assert.equal(reported.subjectCheckedAt, undefined);
   assert.equal(reported.subjectStateStale, undefined);
   for (const row of [cached, unknown, reported]) assert.match(row.subjectStateError, /Inspect the extension log/);
-  assert.equal(logs.length, 1);
+  assert.deepEqual(logs.sort(), ["Unexpected notification authorship failure.", "Unexpected notification subject status failure."]);
   assert.doesNotMatch(JSON.stringify(logs), /Private/);
   failing = false;
   now += RETRY_MS;

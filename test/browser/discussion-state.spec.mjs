@@ -73,7 +73,7 @@ for (const packaged of [false, true]) {
       expect(canvas.deliveries).toEqual([]);
     });
 
-    test("collapsed discussions defer refresh and failed lookups preserve their last known icon", async ({ page, canvas }) => {
+    test("collapsed discussions refresh authorship and state, while failed lookups preserve their last known icon", async ({ page, canvas }) => {
       canvas.rows.splice(0, canvas.rows.length, discussion("1", resolved));
       await page.goto(canvas.url);
       const icon = page.locator(".subject-icon");
@@ -83,9 +83,9 @@ for (const packaged of [false, true]) {
       canvas.rows[0].subjectDetails = { closed: false, isAnswered: false, stateReason: "REOPENED" };
       await page.locator("#force-refresh").click();
       await expect(page.locator("#force-refresh")).toHaveAttribute("aria-busy", "false");
-      expect(canvas.requests.filter(path => path === "graphql")).toHaveLength(1);
-      await page.locator(".repo-toggle").click();
       await expect(icon).toHaveAttribute("aria-label", /^Discussion: Open\. Checked /);
+      expect(canvas.requests.filter(path => path === "graphql")).toHaveLength(2);
+      await page.locator(".repo-toggle").click();
       expect(canvas.requests.filter(path => path === "graphql")).toHaveLength(2);
       canvas.setRequestHook(args => args.at(-1) === "graphql" ? http({}, {}, 403) : undefined);
       await page.locator("#force-refresh").click();

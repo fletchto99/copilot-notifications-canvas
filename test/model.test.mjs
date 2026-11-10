@@ -123,19 +123,19 @@ test("attention counts include every deduplicated read and unread notification",
   for (const threads of [items, [...items].reverse()]) {
     const counts = attentionCounts(threads);
     assert.deepEqual(counts,
-      { all: 8, review_requested: 1, mentioned: 2, team_mentioned: 1, assigned: 1, participating: 7 });
+      { all: 8, mine: 0, review_requested: 1, mentioned: 2, team_mentioned: 1, assigned: 1, participating: 7 });
     for (const filter of attentionFilters) {
       const groups = groupThreads(threads, { query: "", attention: filter.value });
       assert.equal(counts[filter.value], groups.reduce((total, group) => total + group.items.length, 0));
     }
   }
   assert.deepEqual(attentionCounts([]),
-    { all: 0, review_requested: 0, mentioned: 0, team_mentioned: 0, assigned: 0, participating: 0 });
+    { all: 0, mine: 0, review_requested: 0, mentioned: 0, team_mentioned: 0, assigned: 0, participating: 0 });
 });
 
 test("attention tabs use GitHub's requested order and expose team mentions in the public schema", () => {
   assert.deepEqual(attentionFilters.map(({ value, label }) => [value, label]), [
-    ["all", "All"], ["assigned", "Assigned"], ["participating", "Participating"],
+    ["all", "All"], ["mine", "Mine"], ["assigned", "Assigned"], ["participating", "Participating"],
     ["mentioned", "Mentioned"], ["team_mentioned", "Team Mentioned"], ["review_requested", "Review Requested"],
   ]);
   assert.deepEqual(validateFilters({ attention: "team_mentioned" }), { attention: "team_mentioned" });

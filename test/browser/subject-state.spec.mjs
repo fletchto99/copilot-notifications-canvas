@@ -30,7 +30,7 @@ for (const packaged of [false, true]) {
           await expect(page.locator(".destination")).toHaveCount(0);
           for (const metadata of await page.locator(".metadata").all()) {
             await expect(metadata).not.toContainText(/Open (?:GitHub|repository)/);
-            await expect(metadata.locator(".metadata-item")).toHaveCount(groupBy === "repo" ? 3 : 4);
+            await expect(metadata.locator(".metadata-item:visible")).toHaveCount(groupBy === "repo" ? 3 : 4);
           }
           for (const width of [320, 375, 960]) {
             await page.setViewportSize({ width, height: 900 });
@@ -149,6 +149,14 @@ for (const packaged of [false, true]) {
           await page.locator("#group-by").selectOption(groupBy);
           await page.keyboard.press("Escape");
           await expect.poll(labels).toEqual(expectedLabels);
+          const issueIcons = page.locator('.notification-subject[data-subject-type="Issue"] .subject-icon');
+          const completedIcon = issueIcons.nth(1);
+          const notPlannedIcon = issueIcons.nth(2);
+          const duplicateIcon = issueIcons.nth(3);
+          await expect(duplicateIcon.locator("path")).toHaveAttribute("d", await notPlannedIcon.locator("path").getAttribute("d"));
+          await expect(duplicateIcon.locator("path")).not.toHaveAttribute("d", await completedIcon.locator("path").getAttribute("d"));
+          await expect(duplicateIcon).toHaveCSS("color", await notPlannedIcon.evaluate(node => getComputedStyle(node).color));
+          await expect(duplicateIcon).not.toHaveCSS("color", await completedIcon.evaluate(node => getComputedStyle(node).color));
           const queuedIcon = page.locator(".subject-merge-queued .subject-icon");
           await expect(queuedIcon).toHaveCSS("color", theme === "light" ? "rgb(154, 103, 0)" : "rgb(210, 153, 34)");
           for (const width of [320, 960]) {

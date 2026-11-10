@@ -118,7 +118,7 @@ const subjectIcons = {
     open: `${issueOutline}M13 12a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z`,
     closed: `${issueOutline}m-13-1 3 3 5-5`,
     not_planned: `${issueOutline}M6 18 18 6`,
-    duplicate: `${issueOutline}m-13-1 3 3 5-5`,
+    duplicate: `${issueOutline}M6 18 18 6`,
   },
   PullRequest: {
     unknown: `${pullRequestNodes}M6 7v10M18 17V9a4 4 0 0 0-4-4h-1m3-3-3 3 3 3`,
@@ -1344,6 +1344,9 @@ function renderRowSubject(view, item) {
   view.destination.hidden = loading || item.direct && item.subjectLinkSource !== "inferred" && item.subjectLinkTarget !== "job";
   view.destination.textContent = view.destination.hidden ? "" : item.label;
   view.subject = subjectMetadata(item, view.subject);
+  view.mine.hidden = item.mine !== true;
+  view.authorship.textContent = item.authorshipError ? `Authorship unavailable. ${item.authorshipError}` :
+    item.mine === null ? "Authorship not checked yet." : "";
   if (view.copilot) {
     if (copilot && !view.copilot.button) {
       const { anchor } = view.copilot;
@@ -1575,7 +1578,13 @@ function renderGroups(groups, fallbackFocusKey, completedRows = []) {
       const content = element("div", "row-content");
       const title = element("span", "title", item.title || "(Untitled notification)");
       const link = element("a", "row-link");
-      const view = { link, destination: element("span", "sr-only") };
+      const mine = element("span", "metadata-item");
+      const marker = element("em", "notification-mine", "mine");
+      marker.setAttribute("aria-label", "Authored by you");
+      const separator = element("span", "metadata-separator", "\u00b7");
+      separator.setAttribute("aria-hidden", "true");
+      mine.append(marker, separator);
+      const view = { link, mine, authorship: element("span", "sr-only"), destination: element("span", "sr-only") };
       renderRowSubject(view, item);
       rowViews.set(item.id, view);
       link.target = "_blank";
@@ -1597,7 +1606,9 @@ function renderGroups(groups, fallbackFocusKey, completedRows = []) {
       content.append(title);
       content.append(element("span", "sr-only", item.unread ? "Unread" : "Read"));
       content.append(view.destination);
+      content.append(view.authorship);
       const metadata = element("div", "metadata");
+      const reason = element("span", "", item.reason.replaceAll("_", " "));
       const time = element("time", "", relativeTime(item.updatedAt));
       time.dateTime = item.updatedAt;
       time.title = new Date(item.updatedAt).toLocaleString();
@@ -1605,7 +1616,7 @@ function renderGroups(groups, fallbackFocusKey, completedRows = []) {
       const fields = [
         ...(group.repository ? [] : [element("span", "repository", item.repository)]),
         view.subject,
-        element("span", "", item.reason.replaceAll("_", " ")),
+        reason,
         time,
       ];
       for (const [index, field] of fields.entries()) {
@@ -1617,6 +1628,7 @@ function renderGroups(groups, fallbackFocusKey, completedRows = []) {
           part.append(separator);
         }
         metadata.append(part);
+        if (field === reason) metadata.append(view.mine);
       }
       content.append(metadata);
       const actions = element("div", "row-actions");
@@ -1705,18 +1717,31 @@ function render(fallbackFocusKey) {
   const cleared = Boolean(state && !state.loaded && state.hasMore);
   const caughtUp = Boolean(state && !error && !loading && !filtered && !state.groups.length && !cleared);
   const attention = state?.filters.attention ?? "all";
+  const pendingAuthorship = state?.authorship?.pending ?? 0;
+  const unavailableAuthorship = state?.authorship?.unavailable ?? 0;
+  const incompleteAuthorship = Boolean(pendingAuthorship || unavailableAuthorship || state?.authorshipError);
+  const authorshipStatus = [
+    pendingAuthorship ? `Checking authorship for ${pendingAuthorship} loaded ${pendingAuthorship === 1 ? "item" : "items"}.` : "",
+    unavailableAuthorship ? `Authorship unavailable for ${unavailableAuthorship} loaded ${unavailableAuthorship === 1 ? "item" : "items"}.` : "",
+    state?.authorshipError ?? "",
+    incompleteAuthorship ? "Mine shows confirmed matches only; its count may be incomplete." : "",
+  ].filter(Boolean).join(" ");
+  $("authorship-status").hidden = attention !== "mine" || !incompleteAuthorship;
+  setControlText($("authorship-status"), authorshipStatus);
   const requestedAttention = pendingFilters?.attention ?? inFlightAttention;
   let focusedTab = [...attentionTabs.values()].find(tab => tab === document.activeElement);
   let tabsChanged = false;
   for (const { value, label } of attentionFilters) {
     const tab = attentionTabs.get(value);
-    const text = state ? `${label} (${state.attentionCounts[value]})` : label;
+    const incomplete = value === "mine" && incompleteAuthorship;
+    const text = state ? `${label} (${state.attentionCounts[value]}${incomplete ? "+" : ""})` : label;
     const selected = String(value === attention);
     const hidden = Boolean(preferences?.hideEmptyTabs && state?.attentionCounts[value] === 0 &&
-      value !== "all" && value !== attention && value !== requestedAttention);
+      !incomplete && value !== "all" && value !== attention && value !== requestedAttention);
     if (tab.textContent !== text || tab.getAttribute("aria-selected") !== selected || tab.hidden !== hidden) tabsChanged = true;
     setControlText(tab, text);
     tab.setAttribute("aria-selected", selected);
+    if (value === "mine") tab.setAttribute("aria-description", authorshipStatus || "Notifications for items authored by you.");
     tab.hidden = hidden;
   }
   if (focusedTab?.hidden) {
