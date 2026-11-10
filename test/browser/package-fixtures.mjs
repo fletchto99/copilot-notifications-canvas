@@ -35,12 +35,13 @@ export async function startPackagedCanvas(root, run, log, tools) {
       if (child.connected) child.send({ type: "copilot-response", id: message.id, ...response });
       return;
     }
-    if (message.type !== "gh") return;
+    if (!["gh", "git"].includes(message.type)) return;
     let response;
     try {
-      response = { stdout: await run(message.args) };
+      response = { stdout: message.type === "git"
+        ? await tools.runGit({ args: message.args, cwd: message.cwd }) : await run(message.args) };
     } catch (error) {
-      response = { error: error.message };
+      response = { error: error.message, code: error.code };
     }
     if (child.connected) child.send({ type: "response", id: message.id, ...response });
   });

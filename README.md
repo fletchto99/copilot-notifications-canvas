@@ -21,6 +21,8 @@ and opt into desktop notifications or auto-open.
 - Node.js 22 or later for the extension runtime and installer.
 - [GitHub CLI](https://cli.github.com/) (`gh`) available to the app and signed
   into **github.com** with `notifications` or `repo` scope.
+- Copilot PR/CI handoffs also require Git 2.29 or later and the configured
+  repository checkout to be accessible on the extension's execution host.
 
 GitHub.com only; fine-grained personal access tokens are not supported.
 See the [installation guide](docs/installation.md#prerequisites) for CLI

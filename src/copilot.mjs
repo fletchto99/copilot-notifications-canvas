@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { InboxError } from "./model.mjs";
+import { prepareCommit as prepareGitCommit } from "./checkout.mjs";
 
 const labels = {
   issue: "Investigate with Copilot",
@@ -35,13 +36,14 @@ function toolData(result, list = false) {
 }
 
 export class CopilotHost {
-  constructor(getSession, { log = () => {}, now = Date.now } = {}) {
+  constructor(getSession, { log = () => {}, now = Date.now, prepareCommit = prepareGitCommit } = {}) {
     this.getSession = getSession;
     this.log = log;
     this.now = now;
     this.tools = new Set();
     this.nextCheckAt = 0;
     this.reservations = new Set();
+    this.prepareCommit = prepareCommit;
   }
 
   refresh() {
@@ -356,6 +358,12 @@ export class CopilotHandoff {
       }
       await this.#active(input.id, input.direct);
       await this.#remember(input);
+      if (target.sha) {
+        await this.host.prepareCommit(repository, target, {
+          signal: this.inbox.controller.signal, beforeFetch: () => this.#active(input.id, input.direct),
+        });
+        await this.#active(input.id, input.direct);
+      }
       // The host queues the kickoff until ready; startup activity is not a reuse signal.
       const result = await this.host.execute("create_session", {
         project_id: repository.id, name: target.name, workspace_type: "worktree", detached: true,

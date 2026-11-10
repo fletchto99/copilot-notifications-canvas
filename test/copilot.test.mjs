@@ -238,6 +238,78 @@ test("CI handoffs bind the verified failed run, attempt and immutable commit", a
   assert.doesNotMatch(kickoff.prompt, /ask_user|review skill/);
 });
 
+test("a new PR preparation uses its current head even after cached metadata and a subject refresh", async t => {
+  const pull = { head: { sha: prSha } };
+  const f = await fixture(t, { type: "PullRequest", pull });
+  await prepare(f);
+  const updated = "c".repeat(40);
+  pull.head = { sha: updated };
+  const item = f.inbox.pages[0].items[0];
+  item.updatedAt = new Date(Date.parse(item.updatedAt) + 1000).toISOString();
+  f.client.invalidateSubjects([item]);
+  await f.client.refreshSubjects([item]);
+  await prepare(f);
+  assert.equal((await start(f)).status, "started");
+  assert.equal(f.calls.find(call => call.name === "create_session").args.base_branch, updated);
+});
+
+test("missing PR commits are fetched and verified only after confirmation and before session creation", async t => {
+  let present = false;
+  const f = await fixture(t, { type: "PullRequest", onGit: args => {
+    if (args.includes("--verify") && !present) throw Object.assign(new Error("Missing synthetic commit"), { code: 1 });
+    if (args.includes("fetch")) {
+      assert.equal(args.at(-1), "refs/pull/1/head");
+      present = true;
+    }
+  }, onExecute: name => {
+    if (name === "create_session") assert.equal(present, true);
+  } });
+  await prepare(f);
+  assert.deepEqual(f.gitCalls, []);
+  assert.equal((await start(f)).status, "started");
+  assert.equal(f.gitCalls.filter(call => call.args.includes("fetch")).length, 1);
+  assert.equal(f.calls.find(call => call.name === "create_session").args.base_branch, prSha);
+});
+
+test("failed commit preparation cannot create a session or expose raw Git errors", async t => {
+  const f = await fixture(t, { type: "CheckSuite", onGit: args => {
+    if (args.includes("--verify")) throw Object.assign(new Error("Missing synthetic commit"), { code: 1 });
+    if (args.includes("fetch")) throw new Error("SECRET transport details");
+  } });
+  await prepare(f);
+  const result = await start(f);
+  assert.equal(result.status, "error");
+  assert.match(result.message, /Could not fetch/);
+  assert.doesNotMatch(result.message, /SECRET/);
+  assert.equal(f.calls.some(call => call.name === "create_session"), false);
+});
+
+test("closing the panel or disabling integration during a fetch stops subsequent creation", async t => {
+  for (const change of ["close", "disable"]) await t.test(change, async t => {
+    const entered = deferred();
+    const held = deferred();
+    t.after(() => held.resolve());
+    const preferences = handoffPreferences();
+    let present = false;
+    const f = await fixture(t, { type: "PullRequest", preferences, onGit: async args => {
+      if (args.includes("--verify") && !present) throw Object.assign(new Error("Missing synthetic commit"), { code: 1 });
+      if (args.includes("fetch")) {
+        entered.resolve();
+        await held.promise;
+        present = true;
+      }
+    } });
+    await prepare(f);
+    const pending = start(f);
+    await entered.promise;
+    if (change === "close") f.inbox.close();
+    else preferences.settings.copilotIntegration = false;
+    held.resolve();
+    assert.equal((await pending).status, "error");
+    assert.equal(f.calls.some(call => call.name === "create_session"), false);
+  });
+});
+
 test("CI handoffs fit the host name limit without losing exact references or session reuse", async t => {
   const names = new Set();
   for (const [runId, attempt] of [
@@ -554,6 +626,33 @@ test("repeated context failures renew expired backoff without extending an activ
   assert.equal(client.copilotCache.get("/user").nextRefreshAt, nextDeadline);
 });
 
+test("concurrent context failures retain the longer deadline from the later failure", async () => {
+  let now = 0;
+  const responses = [];
+  const client = new GitHubClient({ now: () => now, run: () => {
+    const response = deferred();
+    responses.push(response);
+    return response.promise;
+  } });
+  const first = client.copilotContext("viewer").catch(error => error);
+  const second = client.copilotContext("viewer").catch(error => error);
+  responses[0].resolve(http({ id: -1 }));
+  const firstError = await first;
+  responses[1].resolve(http({ id: -1 }));
+  const secondError = await second;
+  assert.equal(firstError.code, "copilot_context");
+  assert.equal(secondError.code, "copilot_context");
+  assert.ok(secondError.retryAt > firstError.retryAt);
+  assert.equal(client.copilotCache.get("/user").nextRefreshAt, secondError.retryAt);
+  now = firstError.retryAt;
+  await assert.rejects(client.copilotContext("viewer"), { code: "copilot_context" });
+  assert.equal(responses.length, 2, "The earlier deadline must not permit another request");
+  now = secondError.retryAt;
+  const recovered = client.copilotContext("viewer");
+  responses[2].resolve(http({ id: 7 }));
+  assert.deepEqual(await recovered, { id: 7 });
+});
+
 test("handoffs reject arbitrary targets, stale selections, replay and concurrent requests", async t => {
   let release;
   const f = await fixture(t, { onExecute: name => name === "list_repositories"
@@ -641,6 +740,7 @@ test("generic sessions are reused by repository and item name without messaging 
     assert.equal((await start(f, { sessionId })).status, "opened");
     assert.equal(f.sessions[0].parent_session_id, projectId);
     assert.deepEqual(f.calls.filter(call => !call.name.startsWith("list_")).map(call => call.name), ["navigate_to"]);
+    assert.deepEqual(f.gitCalls, []);
   }
 });
 

@@ -55,6 +55,17 @@ repository, not a child of the session containing the canvas. It uses a worktree
 at the repository's configured base for issues, the verified PR head commit
 (including fork PRs), or the failed run's immutable commit.
 These generic sessions do not have the app's native issue/PR linkage.
+PR metadata is refreshed for each preparation rather than reusing an older
+head commit. Before creating a PR/CI worktree, the extension checks that the
+selected commit exists in the configured checkout. If missing, it fetches the
+PR's head ref or the CI commit from GitHub using `gh` as a command-scoped Git
+credential helper, then verifies the exact SHA again. Fetching does not switch
+branches, touch working files, or update tags, tracking refs, or `FETCH_HEAD`.
+An inaccessible checkout, failed fetch, or unavailable commit stops the handoff
+with an explicit error; it never falls back to the default branch. Exact-commit
+preparation currently requires a host-exposed checkout path accessible to the
+extension. Remote-only repositories without that path are unsupported for new
+PR/CI handoffs. Existing-session reuse does not fetch or change its checkout.
 The creation request includes the plan-mode prompt, which the app queues until
 the new session is ready. Startup activity does not turn it into an
 existing-session choice or discard the prompt.

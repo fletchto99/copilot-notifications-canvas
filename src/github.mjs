@@ -420,7 +420,7 @@ export class GitHubClient {
         return result.state;
       });
     }
-    return this.request(endpoint, signal, "GET", { subjectType: "Copilot", copilot: kind }).then(result => {
+    return this.request(endpoint, signal, "GET", { subjectType: "Copilot", copilot: kind, force: kind === "pull" }).then(result => {
       if (result.error) throw new InboxError(result.error.code, result.error.message);
       return result.state;
     }).catch(error => {
@@ -429,7 +429,8 @@ export class GitHubClient {
         const now = this.now();
         this.copilotCache.set(endpoint, { error: { code: error.code, message: error.message },
           nextRefreshAt: cached?.error && cached.nextRefreshAt > now
-            ? cached.nextRefreshAt : Math.max(error.retryAt ?? 0, this.blockedUntil, now + RETRY_MS) });
+            ? Math.max(cached.nextRefreshAt, error.retryAt ?? 0, this.blockedUntil)
+            : Math.max(error.retryAt ?? 0, this.blockedUntil, now + RETRY_MS) });
       }
       throw error;
     });

@@ -1,4 +1,5 @@
 import { CopilotHost } from "../../src/copilot.mjs";
+import { prepareCommit } from "../../src/checkout.mjs";
 
 export const projectId = "11111111-1111-4111-8111-111111111111";
 export const sessionId = "22222222-2222-4222-8222-222222222222";
@@ -7,9 +8,20 @@ export const toolNames = [
   "create_session", "add_repository",
 ];
 
-export function copilotHost({ repositories = [{ id: projectId, github_repo: "example/widgets" }], sessions = [], tools = toolNames, onExecute, log } = {}) {
+export function copilotHost({ repositories = [{ id: projectId, github_repo: "example/widgets", main_repo_path: process.cwd() }],
+  sessions = [], tools = toolNames, onExecute, onGit, log } = {}) {
   const calls = [];
+  const gitCalls = [];
   const rpc = {
+    runGit: async ({ args, cwd }) => {
+      gitCalls.push({ args, cwd });
+      const intercepted = await onGit?.(args, { cwd });
+      if (intercepted !== undefined) return intercepted;
+      if (args.join(" ") === "rev-parse --show-toplevel") return `${cwd}\n`;
+      if (args[0] === "rev-parse" && args[1] === "--verify") return `${args.at(-1).slice(0, 40)}\n`;
+      if (args.includes("fetch")) return "";
+      throw new Error("Unexpected synthetic Git command");
+    },
     getCurrentMetadata: async () => ({ tools: tools.map(name => ({
       name, ...(name === "create_session" ? { input_schema: { properties: {
         name: { type: "string", maxLength: 40 },
@@ -27,7 +39,7 @@ export function copilotHost({ repositories = [{ id: projectId, github_repo: "exa
       if (name === "list_repositories") text = `Found ${repositories.length} configured container(s):\n${JSON.stringify(repositories)}`;
       if (name === "list_sessions_and_chats") text = `Found ${sessions.length} item(s):\n${JSON.stringify(sessions)}`;
       if (name === "get_session") text = JSON.stringify({ id: args.project_session_id, activity: { status: "unknown" } });
-      if (name === "add_repository") repositories.push({ id: projectId, github_repo: args.github_repo });
+      if (name === "add_repository") repositories.push({ id: projectId, github_repo: args.github_repo, main_repo_path: process.cwd() });
       if (name === "create_session") {
         if (typeof args.name !== "string" || args.name.length > 40) {
           return { resultType: "failure", textResultForLlm: "Synthetic session name exceeds the host limit." };
@@ -43,6 +55,10 @@ export function copilotHost({ repositories = [{ id: projectId, github_repo: "exa
       return { resultType: "success", textResultForLlm: text };
     },
   };
-  const host = new CopilotHost(() => ({ rpc: { tools: rpc } }), { log });
-  return { host, calls, rpc, repositories, sessions };
+  const host = new CopilotHost(() => ({ rpc: { tools: rpc } }), { log,
+    prepareCommit: (repository, target, options) => prepareCommit(repository, target, {
+      ...options, run: (args, { cwd }) => rpc.runGit({ args, cwd }),
+    }),
+  });
+  return { host, calls, gitCalls, rpc, repositories, sessions };
 }

@@ -227,6 +227,55 @@ for (const packaged of [false, true]) {
       expect(canvas.writes).toEqual([]);
     });
 
+    for (const type of ["PullRequest", "CheckSuite"]) {
+      test(`a missing ${type} commit is fetched before the session kickoff`, async ({ page, canvas }) => {
+        canvas.rows.splice(1);
+        const sha = "d".repeat(40);
+        const row = canvas.rows[0];
+        row.subject = { title: "Synthetic selected commit", type,
+          url: `https://api.github.com/repos/example/widgets/${type === "PullRequest" ? "pulls/1" : "actions/runs/42"}` };
+        row.subjectDetails = type === "PullRequest"
+          ? { state: "open", merged: false, draft: false, user: { id: 7 }, head: { sha } }
+          : workflowRun({ id: 42, run_attempt: 2, head_sha: sha, html_url: "https://github.com/example/widgets/actions/runs/42",
+            repository: { full_name: "example/widgets" } });
+        const run = canvas.copilotHost.rpc.runGit;
+        let release;
+        let fetching = false;
+        let present = false;
+        const held = new Promise(resolve => { release = resolve; });
+        canvas.copilotHost.rpc.runGit = async input => {
+          if (input.args.includes("--verify") && !present) {
+            throw Object.assign(new Error("Missing synthetic commit"), { code: 1 });
+          }
+          if (input.args.includes("fetch")) {
+            fetching = true;
+            await held;
+            present = true;
+          }
+          return run(input);
+        };
+        try {
+          await page.goto(canvas.url);
+          await page.locator(".copilot-action").click();
+          const start = page.getByRole("button", { name: "Start session", exact: true });
+          await expect(start).toBeVisible();
+          expect(canvas.copilotHost.gitCalls).toEqual([]);
+          await start.click();
+          await expect.poll(() => fetching).toBe(true);
+          expect(canvas.copilotHost.calls.some(call => call.name === "create_session")).toBe(false);
+          release();
+          await expect.poll(() => canvas.copilotHost.calls.some(call => call.name === "navigate_to")).toBe(true);
+          expect(canvas.copilotHost.calls.find(call => call.name === "create_session").args.base_branch).toBe(sha);
+          expect(canvas.copilotHost.gitCalls.find(call => call.args.includes("fetch")).args.at(-1))
+            .toBe(type === "PullRequest" ? "refs/pull/1/head" : sha);
+          expect(canvas.writes).toEqual([]);
+          expect(canvas.deliveries).toEqual([]);
+        } finally {
+          release();
+        }
+      });
+    }
+
     for (const failedJob of [false, true]) {
       test(`inferred CI ${failedJob ? "job" : "run"} navigation and handoff keep the original attempt after a successful rerun`, async ({ page, canvas }) => {
         await canvas.preferences.update({ confirmCopilotActions: false });

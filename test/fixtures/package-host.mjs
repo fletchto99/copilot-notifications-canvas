@@ -8,7 +8,8 @@ const pending = new Map();
 const toolRequests = new Map();
 let nextId = 0;
 childProcess.execFile = (command, args, options, callback) => {
-  assert.equal(command, "gh", "Packaged browser tests must not launch native commands");
+  assert.ok(command === "gh" || command === "git" && process.argv[3] === "copilot",
+    "Packaged browser tests must not launch native commands");
   const id = ++nextId;
   const complete = (error, stdout = "") => {
     if (!pending.delete(id)) return;
@@ -19,7 +20,7 @@ childProcess.execFile = (command, args, options, callback) => {
   pending.set(id, complete);
   if (options.signal?.aborted) return abort();
   options.signal?.addEventListener("abort", abort, { once: true });
-  process.send({ type: "gh", id, args });
+  process.send({ type: command, id, args, ...(command === "git" ? { cwd: options.cwd } : {}) });
 };
 syncBuiltinESMExports();
 host.session = {
@@ -43,7 +44,7 @@ await import(pathToFileURL(process.argv[2]).href);
 const canvas = host.registration.canvases[0];
 process.on("message", async message => {
   if (message.type === "response") {
-    pending.get(message.id)?.(message.error ? new Error(message.error) : null, message.stdout);
+    pending.get(message.id)?.(message.error ? Object.assign(new Error(message.error), { code: message.code }) : null, message.stdout);
   } else if (message.type === "copilot-response") {
     const request = toolRequests.get(message.id);
     toolRequests.delete(message.id);
