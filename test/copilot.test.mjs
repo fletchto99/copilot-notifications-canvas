@@ -1538,7 +1538,43 @@ test("startup discovery keeps retrying empty, partial and failed metadata beyond
   assert.deepEqual(f.gitCalls, []);
 });
 
-test("unsupported hosts keep loading for one minute, then show disabled controls and retain slow recovery", async t => {
+test("startup discovery still retries every five seconds after two minutes", async t => {
+  const f = await fixture(t, { coldHost: true });
+  const metadata = await f.rpc.getCurrentMetadata();
+  let now = 0;
+  let calls = 0;
+  let supported = false;
+  f.host.now = () => now;
+  f.rpc.getCurrentMetadata = async () => {
+    calls++;
+    return supported ? metadata : { tools: null };
+  };
+  const item = f.inbox.loadedItems()[0];
+  for (const time of [0, 1000, 3000]) {
+    now = time;
+    await f.host.refresh();
+  }
+  for (now = 8000; now <= 123_000; now += 5000) {
+    await f.host.refresh();
+    assert.equal(f.handoff.loading, true);
+    assert.equal(f.handoff.row(item).enabled, false);
+    assert.equal(f.host.nextCheckAt, now + 5000);
+  }
+  supported = true;
+  const attempts = calls;
+  now = 127_999;
+  await f.host.refresh();
+  assert.equal(calls, attempts);
+  now++;
+  await f.host.refresh();
+  assert.equal(calls, attempts + 1);
+  assert.equal(f.handoff.row(item).enabled, true);
+  assert.equal(f.handoff.loading, false);
+  assert.deepEqual(f.calls, []);
+  assert.deepEqual(f.gitCalls, []);
+});
+
+test("unsupported hosts keep loading for three minutes, then show disabled controls and retain slow recovery", async t => {
   const f = await fixture(t, { coldHost: true });
   const metadata = await f.rpc.getCurrentMetadata();
   let now = 0;
@@ -1550,17 +1586,19 @@ test("unsupported hosts keep loading for one minute, then show disabled controls
     return supported ? metadata : { tools: metadata.tools.filter(tool => tool.name !== "create_session") };
   };
   const item = f.inbox.loadedItems()[0];
-  for (const time of [0, 1000, 3000, 8000, 13000, 18000, 23000, 28000, 33000, 38000, 43000, 48000, 53000, 58000]) {
+  const checks = [0, 1000, 3000];
+  for (let time = 8000; time < 180_000; time += 5000) checks.push(time);
+  for (const time of checks) {
     now = time;
     assert.equal(f.handoff.loading, true);
     assert.deepEqual(f.handoff.row(item), {
-      label: "Checking Copilot availability...", enabled: false, reason: "Checking Copilot availability...", loading: true,
+      label: "Waiting on copilot SDK Availability", enabled: false, reason: "Waiting on copilot SDK Availability", loading: true,
     });
     await f.host.refresh();
   }
-  now = 59_999;
+  now = 179_999;
   await f.host.refresh();
-  assert.equal(calls, 14);
+  assert.equal(calls, checks.length);
   assert.equal(f.handoff.loading, true);
   now++;
   await f.host.refresh();
@@ -1572,21 +1610,21 @@ test("unsupported hosts keep loading for one minute, then show disabled controls
   f.handoff.request({ id: item.id });
   await f.handoff.pending;
   assert.equal(f.handoff.snapshot().status, "error");
-  assert.equal(calls, 15);
+  assert.equal(calls, checks.length + 1);
   supported = true;
-  now = 119_999;
+  now = 239_999;
   await f.host.refresh();
   assert.deepEqual(f.handoff.row(item), unavailable);
-  assert.equal(calls, 15);
+  assert.equal(calls, checks.length + 1);
   now++;
   await f.host.refresh();
   assert.equal(f.handoff.row(item).enabled, true);
   assert.equal(f.handoff.loading, false);
-  assert.equal(calls, 16);
+  assert.equal(calls, checks.length + 2);
   assert.deepEqual(f.calls, []);
 });
 
-test("cold HTTP snapshots bound stalled discovery to one minute and recover when it completes", async t => {
+test("cold HTTP snapshots bound stalled discovery to three minutes and recover when it completes", async t => {
   const f = await fixture(t, { coldHost: true });
   let now = 0;
   f.host.now = () => now;
@@ -1610,7 +1648,7 @@ test("cold HTTP snapshots bound stalled discovery to one minute and recover when
   assert.equal((await state()).copilotLoading, false);
   assert.equal(f.handoff.row(queued), null);
   f.handoff.setEnabled(true);
-  now = 59_999;
+  now = 179_999;
   assert.equal((await state()).copilotLoading, true);
   now++;
   const unavailable = await state();

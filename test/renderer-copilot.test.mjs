@@ -24,18 +24,18 @@ async function open(ui) {
 
 test("cold discovery polls promptly and updates disabled placeholders in place without moving focus", async t => {
   const subjectStates = { "1": { copilot: {
-    label: "Checking Copilot availability...", reason: "Checking Copilot availability...", enabled: false, loading: true,
+    label: "Waiting on copilot SDK Availability", reason: "Waiting on copilot SDK Availability", enabled: false, loading: true,
   } } };
   const ui = await setup(t, { subjectStates, copilotLoading: true, onCopilot: () => assert.fail("Discovery cannot submit a handoff") });
   const control = button(ui);
   assert.equal(control.disabled, true);
   assert.equal(control.getAttribute("aria-busy"), "true");
-  assert.match(control.getAttribute("aria-label"), /^Checking Copilot availability/);
+  assert.match(control.getAttribute("aria-label"), /^Waiting on copilot SDK Availability/);
   control.events.click();
   assert.equal(Boolean(ui.ids.get("copilot-dialog").open), false);
   const link = ui.ids.get("groups").querySelectorAll(".row-link")[0];
   link.focus();
-  for (let second = 0; second < 60; second++) {
+  for (let second = 0; second < 180; second++) {
     await ui.fireTimer(1000);
     assert.equal(button(ui), control);
     assert.equal(control.disabled, true);

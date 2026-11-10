@@ -16,7 +16,7 @@ const labels = {
 const failedChecks = new Set(["failure", "timed_out", "startup_failure"]);
 const closedIssueStates = new Set(["closed", "not_planned", "duplicate"]);
 const discoveryRetryDelays = [1000, 2000, 5000];
-const discoveryStartupWindow = 60_000;
+const discoveryStartupWindow = 180_000;
 const inactivePull = item => item.type === "PullRequest" && item.subjectState === "merge_queued"
   ? "PR in merge queue" : null;
 const integrationDisabled = () => new InboxError("copilot_disabled",
@@ -246,7 +246,7 @@ export class CopilotHandoff {
     const inactive = inactivePull(item);
     if (inactive) return { label: inactive, enabled: false, reason: inactive };
     if (this.host.initializing) {
-      const label = "Checking Copilot availability...";
+      const label = "Waiting on copilot SDK Availability";
       return { label, enabled: false, reason: label, loading: true };
     }
     if (!this.host.supports()) {
