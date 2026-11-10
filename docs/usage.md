@@ -197,7 +197,7 @@ provide status, freshness, and failures without extra visible text or hover tool
 
 | Subject | States |
 | --- | --- |
-| Issue / PR | Green open; purple completed issue or merged PR; red closed unmerged PR; gray draft or not-planned issue; yellow dotted merge icon for queued PRs |
+| Issue / PR | Green open; purple completed issue or merged PR; red closed unmerged PR; gray draft PR; gray slashed circle for not-planned or duplicate issues; yellow dotted merge icon for queued PRs |
 | Discussion | Purple overlapping checkmarked bubbles for resolved; green checkmarked bubble for answered; gray open/reopened, slashed duplicate, or clock-marked outdated |
 | Check suite | Green passing checkmark, red failure/timeout/startup-failure cross, amber pending clock; distinct descriptions for other outcomes |
 | Release / Commit | Static tag / commit icon |
