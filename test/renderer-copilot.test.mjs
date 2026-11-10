@@ -35,9 +35,24 @@ test("cold discovery polls promptly and updates disabled placeholders in place w
   assert.equal(Boolean(ui.ids.get("copilot-dialog").open), false);
   const link = ui.ids.get("groups").querySelectorAll(".row-link")[0];
   link.focus();
-  subjectStates["1"].copilot = { label: ready.label, enabled: true };
+  for (let second = 0; second < 60; second++) {
+    await ui.fireTimer(1000);
+    assert.equal(button(ui), control);
+    assert.equal(control.disabled, true);
+    assert.equal(control.getAttribute("aria-busy"), "true");
+  }
+  subjectStates["1"].copilot = {
+    label: "Copilot tooling unavailable", reason: "Copilot tooling unavailable", enabled: false,
+  };
   ui.setCopilotLoading(false);
   await ui.fireTimer(1000);
+  assert.equal(button(ui), control);
+  assert.equal(control.disabled, true);
+  assert.equal(control.getAttribute("aria-busy"), "false");
+  assert.match(control.getAttribute("aria-label"), /^Copilot tooling unavailable/);
+  assert.equal(ui.document.activeElement, link);
+  subjectStates["1"].copilot = { label: ready.label, enabled: true };
+  await ui.fireTimer(5000);
   assert.equal(button(ui), control);
   assert.equal(control.disabled, false);
   assert.equal(control.getAttribute("aria-busy"), "false");

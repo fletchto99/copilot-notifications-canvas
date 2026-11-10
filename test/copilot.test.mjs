@@ -928,7 +928,7 @@ test("host discovery is capability-gated and does not execute tools", async () =
   assert.deepEqual(atomic.calls, []);
 });
 
-test("startup discovery retries empty, partial and failed metadata before enabling actions", async () => {
+test("startup discovery keeps retrying empty, partial and failed metadata beyond the initial attempts", async () => {
   const logs = [];
   const f = copilotHost({ log: message => logs.push(message) });
   const metadata = await f.rpc.getCurrentMetadata();
@@ -940,9 +940,10 @@ test("startup discovery retries empty, partial and failed metadata before enabli
     if (calls === 1) return { tools: [] };
     if (calls === 2) return { tools: metadata.tools.filter(tool => tool.name !== "create_session") };
     if (calls === 3) throw new Error("Private host failure detail");
+    if (calls <= 5) return { tools: [] };
     return metadata;
   };
-  for (const [index, delay] of [1000, 2000, 5000].entries()) {
+  for (const [index, delay] of [1000, 2000, 5000, 5000, 5000].entries()) {
     const pending = f.host.refresh();
     assert.equal(f.host.refresh(), pending, "Concurrent panels share discovery");
     await pending;
@@ -955,21 +956,21 @@ test("startup discovery retries empty, partial and failed metadata before enabli
     now++;
   }
   await f.host.refresh();
-  assert.equal(calls, 4);
+  assert.equal(calls, 6);
   assert.equal(f.host.initializing, false);
   assert.equal(f.host.supports(), true);
   assert.deepEqual(logs, ["Could not discover Copilot session actions."]);
   now += 59_999;
   await f.host.refresh();
-  assert.equal(calls, 4);
+  assert.equal(calls, 6);
   now++;
   await f.host.refresh();
-  assert.equal(calls, 5);
+  assert.equal(calls, 7);
   assert.deepEqual(f.calls, []);
   assert.deepEqual(f.gitCalls, []);
 });
 
-test("unsupported hosts exhaust startup retries, hide controls and retain slow recovery", async t => {
+test("unsupported hosts keep loading for one minute, then show disabled controls and retain slow recovery", async t => {
   const f = await fixture(t, { coldHost: true });
   const metadata = await f.rpc.getCurrentMetadata();
   let now = 0;
@@ -981,7 +982,7 @@ test("unsupported hosts exhaust startup retries, hide controls and retain slow r
     return supported ? metadata : { tools: metadata.tools.filter(tool => tool.name !== "create_session") };
   };
   const item = f.inbox.loadedItems()[0];
-  for (const time of [0, 1000, 3000, 8000]) {
+  for (const time of [0, 1000, 3000, 8000, 13000, 18000, 23000, 28000, 33000, 38000, 43000, 48000, 53000, 58000]) {
     now = time;
     assert.equal(f.handoff.loading, true);
     assert.deepEqual(f.handoff.row(item), {
@@ -989,27 +990,38 @@ test("unsupported hosts exhaust startup retries, hide controls and retain slow r
     });
     await f.host.refresh();
   }
+  now = 59_999;
+  await f.host.refresh();
+  assert.equal(calls, 14);
+  assert.equal(f.handoff.loading, true);
+  now++;
+  await f.host.refresh();
   assert.equal(f.handoff.loading, false);
-  assert.equal(f.handoff.row(item), null);
+  const unavailable = {
+    label: "Copilot tooling unavailable", enabled: false, reason: "Copilot tooling unavailable",
+  };
+  assert.deepEqual(f.handoff.row(item), unavailable);
   f.handoff.request({ id: item.id });
   await f.handoff.pending;
   assert.equal(f.handoff.snapshot().status, "error");
-  assert.equal(calls, 4);
+  assert.equal(calls, 15);
   supported = true;
-  now = 67_999;
+  now = 119_999;
   await f.host.refresh();
-  assert.equal(f.handoff.row(item), null);
-  assert.equal(calls, 4);
+  assert.deepEqual(f.handoff.row(item), unavailable);
+  assert.equal(calls, 15);
   now++;
   await f.host.refresh();
   assert.equal(f.handoff.row(item).enabled, true);
   assert.equal(f.handoff.loading, false);
-  assert.equal(calls, 5);
+  assert.equal(calls, 16);
   assert.deepEqual(f.calls, []);
 });
 
-test("cold HTTP snapshots expose discovery progress without blocking the inbox or enabling actions", async t => {
+test("cold HTTP snapshots bound stalled discovery to one minute and recover when it completes", async t => {
   const f = await fixture(t, { coldHost: true });
+  let now = 0;
+  f.host.now = () => now;
   const metadata = await f.rpc.getCurrentMetadata();
   const discovery = deferred();
   t.after(() => discovery.resolve(metadata));
@@ -1030,6 +1042,15 @@ test("cold HTTP snapshots expose discovery progress without blocking the inbox o
   assert.equal((await state()).copilotLoading, false);
   assert.equal(f.handoff.row(closed), null);
   f.handoff.setEnabled(true);
+  now = 59_999;
+  assert.equal((await state()).copilotLoading, true);
+  now++;
+  const unavailable = await state();
+  assert.equal(unavailable.copilotLoading, false);
+  assert.deepEqual(unavailable.groups[0].items[0].copilot, {
+    label: "Copilot tooling unavailable", enabled: false, reason: "Copilot tooling unavailable",
+  });
+  assert.equal(f.host.refresh(), f.host.pending, "A stalled discovery must not start overlapping requests");
   discovery.resolve(metadata);
   await f.handoff.hydrating;
   const ready = await state();
@@ -1052,7 +1073,9 @@ test("hosts without detached plan-kickoff support cannot create a nested or unpr
     f.rpc.getCurrentMetadata = async () => metadata;
     f.host.nextCheckAt = 0;
     await f.host.refresh();
-    assert.equal(f.handoff.row(f.inbox.loadedItems()[0]), null);
+    assert.deepEqual(f.handoff.row(f.inbox.loadedItems()[0]), {
+      label: "Copilot tooling unavailable", enabled: false, reason: "Copilot tooling unavailable",
+    });
     f.handoff.request({ id: "1" });
     await f.handoff.pending;
     assert.equal(f.handoff.snapshot().status, "error");

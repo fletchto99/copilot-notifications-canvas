@@ -10,6 +10,7 @@ const labels = {
 };
 const failedChecks = new Set(["failure", "timed_out", "startup_failure"]);
 const discoveryRetryDelays = [1000, 2000, 5000];
+const discoveryStartupWindow = 60_000;
 const inactivePull = item => item.type === "PullRequest" && ({
   closed: "PR closed", merged: "PR merged", merge_queued: "PR in merge queue",
 })[item.subjectState];
@@ -44,21 +45,26 @@ export class CopilotHost {
     this.log = log;
     this.now = now;
     this.tools = new Set();
-    this.initializing = true;
+    this.discoveryComplete = false;
     this.startupAttempts = 0;
     this.nextCheckAt = 0;
     this.reservations = new Set();
     this.prepareCommit = prepareCommit;
   }
 
+  get initializing() {
+    return !this.discoveryComplete && (this.discoveryDeadline === undefined || this.now() < this.discoveryDeadline);
+  }
+
   refresh() {
+    this.discoveryDeadline ??= this.now() + discoveryStartupWindow;
     if (this.pending) return this.pending;
     const session = this.getSession();
     if (!session) return Promise.resolve();
     const tools = session.rpc?.tools;
     if (typeof tools?.getCurrentMetadata !== "function" || typeof tools.execute !== "function") {
       this.tools.clear();
-      this.initializing = false;
+      this.discoveryComplete = true;
       return Promise.resolve();
     }
     if (this.now() < this.nextCheckAt) return Promise.resolve();
@@ -74,10 +80,12 @@ export class CopilotHost {
       this.tools.clear();
       this.log("Could not discover Copilot session actions.", { level: "warning" });
     }).finally(() => {
-      const retryDelay = this.initializing && !this.supports()
-        ? discoveryRetryDelays[this.startupAttempts++] : undefined;
-      this.initializing = retryDelay !== undefined;
-      this.nextCheckAt = this.now() + (retryDelay ?? 60_000);
+      const now = this.now();
+      const remaining = this.discoveryDeadline - now;
+      const retryDelay = !this.discoveryComplete && !this.supports() && remaining > 0
+        ? Math.min(discoveryRetryDelays[Math.min(this.startupAttempts++, discoveryRetryDelays.length - 1)], remaining) : undefined;
+      this.discoveryComplete = retryDelay === undefined;
+      this.nextCheckAt = now + (retryDelay ?? 60_000);
       this.pending = undefined;
     });
     return this.pending;
@@ -197,12 +205,16 @@ export class CopilotHandoff {
       action = item.viewerIsAuthor && !["closed", "merged"].includes(item.subjectState) ? "continue" : "review";
     }
     if (item.type === "CheckSuite" && failedChecks.has(item.subjectState)) action = "ci";
-    if (!action || !this.host.supports() && !this.host.initializing) return null;
+    if (!action) return null;
     const inactive = inactivePull(item);
     if (inactive) return { label: inactive, enabled: false, reason: inactive };
     if (this.host.initializing) {
       const label = "Checking Copilot availability...";
       return { label, enabled: false, reason: label, loading: true };
+    }
+    if (!this.host.supports()) {
+      const label = "Copilot tooling unavailable";
+      return { label, enabled: false, reason: label };
     }
     const uncertain = action === "ci" && (!item.direct || !item.subjectRunUrl || item.subjectLinkLoading);
     return {

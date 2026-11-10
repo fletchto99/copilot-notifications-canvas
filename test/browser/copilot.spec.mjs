@@ -43,26 +43,37 @@ for (const packaged of [false, true]) {
     });
 
     for (const supported of [true, false]) {
-      test(`cold discovery ${supported ? "recovers from initially empty metadata" : "hides unsupported actions after bounded retries"}`, async ({ page, canvas }) => {
+      test(`cold discovery ${supported ? "recovers after the initial retry budget" : "shows unavailable tooling after one minute"}`, async ({ page, canvas }) => {
+        test.setTimeout(90_000);
         canvas.rows.splice(1);
         canvas.rows[0].subject.url = "https://api.github.com/repos/example/widgets/issues/1";
         const metadata = await canvas.copilotHost.rpc.getCurrentMetadata();
         let calls = 0;
         canvas.copilotHost.rpc.getCurrentMetadata = async () => {
           calls++;
-          return supported && calls > 1 ? metadata : { tools: [] };
+          return supported && calls > 4 ? metadata : { tools: [] };
         };
         await page.goto(canvas.url);
         const action = page.locator(".copilot-action");
+        await expect.poll(() => calls, { timeout: 15_000 }).toBe(4);
+        await expect(action).toBeVisible();
+        await expect(action).toBeDisabled();
+        await expect(action).toHaveAttribute("aria-busy", "true");
+        const link = page.locator(".row-link");
+        await link.focus();
         if (supported) {
-          await expect(action).toBeEnabled();
-          expect(calls).toBe(2);
+          await expect(action).toBeEnabled({ timeout: 10_000 });
+          expect(calls).toBe(5);
         } else {
-          await expect(action).toBeVisible();
+          await expect(action).toHaveAccessibleName(/^Copilot tooling unavailable:/, { timeout: 65_000 });
           await expect(action).toBeDisabled();
-          await expect(action).toBeHidden({ timeout: 15_000 });
-          expect(calls).toBe(4);
+          await expect(action).toHaveAttribute("aria-busy", "false");
+          await action.locator("..").hover();
+          await expect(action.locator("..").getByRole("tooltip")).toHaveText("Copilot tooling unavailable");
+          expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+          expect(calls).toBeGreaterThan(4);
         }
+        await expect(link).toBeFocused();
         await expect(page.locator(".mark-read")).toBeEnabled();
         await expect(page.locator(".mark-done")).toBeEnabled();
         expect(canvas.copilotHost.calls).toEqual([]);

@@ -23,10 +23,17 @@ off restores the two-column Read/Done layout.
 On first load, eligible rows show a disabled **Checking Copilot availability...**
 button while the host's session tools initialize. The inbox, links, and Read/Done
 controls remain usable. The button updates automatically without a manual refresh.
-Discovery makes up to three short startup retries for incomplete tool metadata or
-transient failures, then hides unavailable actions and returns to checking about
-once per minute while the panel is visible. Discovery never starts a session or
-changes notification state.
+The host exposes only currently initialized tools, so an open canvas does not
+necessarily mean its session tools are ready. Discovery retries incomplete tool
+metadata or transient failures after 1 second, then 2 seconds, then every 5 seconds
+for up to one minute. The loading indicator stops after that minute even if a
+discovery request is still pending. Eligible rows then retain a disabled
+**Copilot tooling unavailable** button instead of disappearing. Hosts without the
+discovery APIs show that disabled state immediately.
+Discovery returns to checking about once per minute while the panel is visible,
+without overlapping pending requests, and enables the button automatically if the
+tools become available. Discovery never starts a session or changes notification
+state.
 
 The Copilot button's tooltip and accessible label describe the task:
 
