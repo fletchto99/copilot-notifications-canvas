@@ -6,23 +6,23 @@ for (const packaged of [false, true]) {
   test.describe(`subject state icons (${packaged ? "packaged" : "source"})`, () => {
     test.use({ packaged });
 
-    test("static type icons and fallback bells stay accessible without status lookups", async ({ page, canvas }, testInfo) => {
-      const types = ["Release", ...staticSubjectTypes, "FutureSubject", "__proto__", "", "X".repeat(80)];
-      const labels = types.map(type => type.replace(/([a-z])([A-Z])/g, "$1 $2") || "Notification");
-      const paths = { Commit: "commits/abcdef0123456" };
-      canvas.rows.splice(0, canvas.rows.length, ...types.map((type, index) => thread(String(index + 1), {
-        unread: index % 2 === 0,
-        subject: {
-          type, title: `Synthetic type ${index}`,
-          url: index === 0 ? "https://api.github.com/repos/example/widgets/releases/123" :
-            Object.hasOwn(paths, type) ? `https://api.github.com/repos/example/widgets/${paths[type]}` : null,
-        },
-      })));
-      await page.goto(canvas.url);
-      const fields = page.locator(".notification-subject");
-      await expect(fields).toHaveCount(types.length);
-      for (const theme of ["light", "dark"]) {
-        for (const groupBy of ["repo", "none", "date"]) {
+    for (const theme of ["light", "dark"]) {
+      for (const groupBy of ["repo", "none", "date"]) {
+        test(`static type icons and fallback bells stay accessible without status lookups (${theme}, ${groupBy})`, async ({ page, canvas }, testInfo) => {
+          const types = ["Release", ...staticSubjectTypes, "FutureSubject", "__proto__", "", "X".repeat(80)];
+          const labels = types.map(type => type.replace(/([a-z])([A-Z])/g, "$1 $2") || "Notification");
+          const paths = { Commit: "commits/abcdef0123456" };
+          canvas.rows.splice(0, canvas.rows.length, ...types.map((type, index) => thread(String(index + 1), {
+            unread: index % 2 === 0,
+            subject: {
+              type, title: `Synthetic type ${index}`,
+              url: index === 0 ? "https://api.github.com/repos/example/widgets/releases/123" :
+                Object.hasOwn(paths, type) ? `https://api.github.com/repos/example/widgets/${paths[type]}` : null,
+            },
+          })));
+          await page.goto(canvas.url);
+          const fields = page.locator(".notification-subject");
+          await expect(fields).toHaveCount(types.length);
           await page.locator("#settings-toggle").click();
           await page.locator("#theme").selectOption(theme);
           await page.locator("#group-by").selectOption(groupBy);
@@ -68,32 +68,32 @@ for (const packaged of [false, true]) {
             }
             expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
           }
-        }
-        const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
-        expect(results.violations).toEqual([]);
-        await page.screenshot({ path: testInfo.outputPath(`type-icons-${theme}.png`), fullPage: true });
+          const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+          expect(results.violations).toEqual([]);
+          await page.screenshot({ path: testInfo.outputPath(`type-icons-${theme}.png`), fullPage: true });
+          const shapes = await fields.locator("path").evaluateAll(nodes => nodes.map(node => node.getAttribute("d")));
+          const bell = "M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9ZM10 21a2 2 0 0 0 4 0";
+          expect(shapes[0]).toBe("M3 3h7l11 11-7 7L3 10V3ZM7 7h.01");
+          expect(shapes[1]).toBe(shapes[0]);
+          expect(shapes.slice(0, staticSubjectTypes.length + 1).every(shape => shape !== bell)).toBe(true);
+          expect(shapes.slice(staticSubjectTypes.length + 1).every(shape => shape === bell)).toBe(true);
+          for (const [index, link] of (await page.locator(".row-link").all()).entries()) {
+            const type = types[index];
+            const suffix = type === "Release" ? "example/widgets/releases" : type === "Commit" ? "example/widgets/commit/abcdef0123456" : "notifications";
+            await expect(link).toHaveAttribute("href", `https://github.com/${suffix}`);
+            if (type === "Release") await expect(link).toHaveAccessibleName(/Open repository releases/);
+            else if (type !== "Commit") await expect(link).toHaveAccessibleName(/Open GitHub inbox/);
+          }
+          await page.locator("#force-refresh").click();
+          await expect(page.locator(".subject-icon")).toHaveCount(types.length);
+          await expect(page.locator(".subject-loading")).toHaveCount(0);
+          expect(canvas.requests.filter(path => !path.startsWith("/notifications?") &&
+            path !== "/repos/fletchto99/copilot-notifications-canvas/releases/latest")).toEqual([]);
+          expect(canvas.writes).toEqual([]);
+          expect(canvas.deliveries).toEqual([]);
+        });
       }
-      const shapes = await fields.locator("path").evaluateAll(nodes => nodes.map(node => node.getAttribute("d")));
-      const bell = "M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9ZM10 21a2 2 0 0 0 4 0";
-      expect(shapes[0]).toBe("M3 3h7l11 11-7 7L3 10V3ZM7 7h.01");
-      expect(shapes[1]).toBe(shapes[0]);
-      expect(shapes.slice(0, staticSubjectTypes.length + 1).every(shape => shape !== bell)).toBe(true);
-      expect(shapes.slice(staticSubjectTypes.length + 1).every(shape => shape === bell)).toBe(true);
-      for (const [index, link] of (await page.locator(".row-link").all()).entries()) {
-        const type = types[index];
-        const suffix = type === "Release" ? "example/widgets/releases" : type === "Commit" ? "example/widgets/commit/abcdef0123456" : "notifications";
-        await expect(link).toHaveAttribute("href", `https://github.com/${suffix}`);
-        if (type === "Release") await expect(link).toHaveAccessibleName(/Open repository releases/);
-        else if (type !== "Commit") await expect(link).toHaveAccessibleName(/Open GitHub inbox/);
-      }
-      await page.locator("#force-refresh").click();
-      await expect(page.locator(".subject-icon")).toHaveCount(types.length);
-      await expect(page.locator(".subject-loading")).toHaveCount(0);
-      expect(canvas.requests.filter(path => !path.startsWith("/notifications?") &&
-        path !== "/repos/fletchto99/copilot-notifications-canvas/releases/latest")).toEqual([]);
-      expect(canvas.writes).toEqual([]);
-      expect(canvas.deliveries).toEqual([]);
-    });
+    }
 
     test("state icons remain accessible in all views, themes, and narrow panels", async ({ page, canvas }, testInfo) => {
       const cases = [
