@@ -22,6 +22,32 @@ async function open(ui) {
   await settle();
 }
 
+test("cold discovery polls promptly and updates disabled placeholders in place without moving focus", async t => {
+  const subjectStates = { "1": { copilot: {
+    label: "Checking Copilot availability...", reason: "Checking Copilot availability...", enabled: false, loading: true,
+  } } };
+  const ui = await setup(t, { subjectStates, copilotLoading: true, onCopilot: () => assert.fail("Discovery cannot submit a handoff") });
+  const control = button(ui);
+  assert.equal(control.disabled, true);
+  assert.equal(control.getAttribute("aria-busy"), "true");
+  assert.match(control.getAttribute("aria-label"), /^Checking Copilot availability/);
+  control.events.click();
+  assert.equal(Boolean(ui.ids.get("copilot-dialog").open), false);
+  const link = ui.ids.get("groups").querySelectorAll(".row-link")[0];
+  link.focus();
+  subjectStates["1"].copilot = { label: ready.label, enabled: true };
+  ui.setCopilotLoading(false);
+  await ui.fireTimer(1000);
+  assert.equal(button(ui), control);
+  assert.equal(control.disabled, false);
+  assert.equal(control.getAttribute("aria-busy"), "false");
+  assert.equal(ui.document.activeElement, link);
+  await ui.fireTimer(5000);
+  assert.equal(button(ui), control);
+  assert.deepEqual(ui.patches, []);
+  assert.deepEqual(ui.deletions, []);
+});
+
 test("Copilot controls precede Read, confirm explicitly, preserve focus, and never write notification state", async t => {
   const requests = [];
   const ui = await setup(t, { onCopilot: input => {

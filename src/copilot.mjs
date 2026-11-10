@@ -9,6 +9,7 @@ const labels = {
   ci: "Investigate CI failures with Copilot",
 };
 const failedChecks = new Set(["failure", "timed_out", "startup_failure"]);
+const discoveryRetryDelays = [1000, 2000, 5000];
 const inactivePull = item => item.type === "PullRequest" && ({
   closed: "PR closed", merged: "PR merged", merge_queued: "PR in merge queue",
 })[item.subjectState];
@@ -43,6 +44,8 @@ export class CopilotHost {
     this.log = log;
     this.now = now;
     this.tools = new Set();
+    this.initializing = true;
+    this.startupAttempts = 0;
     this.nextCheckAt = 0;
     this.reservations = new Set();
     this.prepareCommit = prepareCommit;
@@ -50,10 +53,15 @@ export class CopilotHost {
 
   refresh() {
     if (this.pending) return this.pending;
-    const tools = this.getSession()?.rpc?.tools;
-    if (!tools?.getCurrentMetadata || !tools.execute) return Promise.resolve();
+    const session = this.getSession();
+    if (!session) return Promise.resolve();
+    const tools = session.rpc?.tools;
+    if (typeof tools?.getCurrentMetadata !== "function" || typeof tools.execute !== "function") {
+      this.tools.clear();
+      this.initializing = false;
+      return Promise.resolve();
+    }
     if (this.now() < this.nextCheckAt) return Promise.resolve();
-    this.nextCheckAt = this.now() + 60_000;
     this.pending = tools.getCurrentMetadata().then(result => {
       this.tools = new Set((result.tools ?? []).filter(tool => {
         const properties = tool.input_schema?.properties;
@@ -65,7 +73,13 @@ export class CopilotHost {
     }).catch(() => {
       this.tools.clear();
       this.log("Could not discover Copilot session actions.", { level: "warning" });
-    }).finally(() => { this.pending = undefined; });
+    }).finally(() => {
+      const retryDelay = this.initializing && !this.supports()
+        ? discoveryRetryDelays[this.startupAttempts++] : undefined;
+      this.initializing = retryDelay !== undefined;
+      this.nextCheckAt = this.now() + (retryDelay ?? 60_000);
+      this.pending = undefined;
+    });
     return this.pending;
   }
 
@@ -153,6 +167,10 @@ export class CopilotHandoff {
     this.viewerRetryAt = 0;
   }
 
+  get loading() {
+    return this.enabled && !this.inbox.client.target.custom && this.host.initializing;
+  }
+
   hydrate(items) {
     if (!this.enabled || this.inbox.client.target.custom || this.hydrating || this.inbox.controller.signal.aborted) return;
     this.hydrating = this.host.refresh().then(async () => {
@@ -179,9 +197,13 @@ export class CopilotHandoff {
       action = item.viewerIsAuthor && !["closed", "merged"].includes(item.subjectState) ? "continue" : "review";
     }
     if (item.type === "CheckSuite" && failedChecks.has(item.subjectState)) action = "ci";
-    if (!action || !this.host.supports()) return null;
+    if (!action || !this.host.supports() && !this.host.initializing) return null;
     const inactive = inactivePull(item);
     if (inactive) return { label: inactive, enabled: false, reason: inactive };
+    if (this.host.initializing) {
+      const label = "Checking Copilot availability...";
+      return { label, enabled: false, reason: label, loading: true };
+    }
     const uncertain = action === "ci" && (!item.direct || !item.subjectRunUrl || item.subjectLinkLoading);
     return {
       label: item.type === "PullRequest" && item.viewerIsAuthor === undefined ? "Work with Copilot" : labels[action],

@@ -27,7 +27,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
   initialRows, subjectStates = {}, subjectsLoading = false, onWrite, onFetch, onState, onFilters, onActionResponse, initialOffline = false, release, development = null,
   onUpdates, clipboardFailure = false, onSettings, onSubjects, developmentApi, onDevelopment, retainDisabledFocus = false, desktopPlatform = "darwin", desktopStatus = {},
   storedSettings = { autoOpen: false, darkMode: null, desktopNotifications: false, desktopSound: "default" },
-  appColorMode = "light", systemDark = false, navigatorPlatform, userAgentData, onCopilot, copilotOperation } = {}) {
+  appColorMode = "light", systemDark = false, navigatorPlatform, userAgentData, onCopilot, copilotOperation, copilotLoading = false } = {}) {
   const calls = [];
   const subjectSelections = [];
   let subjectSelectionVersion = 0;
@@ -266,7 +266,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
   } }));
   const snapshot = () => {
     const state = inbox.snapshot();
-    return { ...state, subjectSelectionVersion, subjectsLoading, updates: releaseMetadata, development, copilotOperation,
+    return { ...state, subjectSelectionVersion, subjectsLoading, updates: releaseMetadata, development, copilotOperation, copilotLoading,
       copilotIntegration: storedSettings.copilotIntegration ?? true,
       confirmCopilotActions: storedSettings.confirmCopilotActions ?? true, ...apiState(),
       groups: state.groups.map(group => ({ ...group, items: group.items.map(item => {
@@ -420,6 +420,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     setOffline(value) { offline = value; },
     setRelease(value) { releaseMetadata = { ...releaseMetadata, ...value }; },
     setCopilotOperation(value) { copilotOperation = value; },
+    setCopilotLoading(value) { copilotLoading = value; },
     intersect: value => intersect([{ isIntersecting: value }]),
   };
 }
