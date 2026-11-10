@@ -138,7 +138,7 @@ for (const packaged of [false, true]) {
         "first substantive response must summarize",
       );
       if (discussion) {
-        expect(kickoff.prompt).toContain("comments and replies");
+        expect(kickoff.prompt).toMatch(/comments,? and replies/);
         expect(kickoff.prompt).toContain("open or closed state");
         expect(kickoff.prompt).toContain("Stop after the summary");
       }
