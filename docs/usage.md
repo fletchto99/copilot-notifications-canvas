@@ -138,7 +138,9 @@ compatibility, `mode: "unread"` selects the unread filter and `mode: "inbox"`
 selects read and unread. An explicit `readState` takes precedence over `mode`.
 Neither alias changes the fetched inbox or locks the controls. Explicit
 `set_filters` actions sync dropdown changes across canvases just like the controls;
-search and attention inputs remain local.
+search and attention inputs remain local. `get_state` reads the latest shared
+filters before reporting loaded-item counts, even when the panel is hidden and
+renderer polling is paused. It does not refetch notifications or save preferences.
 
 ### Status icons
 

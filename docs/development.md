@@ -376,8 +376,21 @@ customizable pickers are not inspectable until enabled or shown.
 Long palette checks pause periodic polling while inspecting picker styles,
 then resume the clock for Axe analysis, which needs timers. Separate tests
 exercise background Settings polling and focus restoration.
-Opening Settings also waits for its native `toggle` event and settings load:
-the panel can be visible before that deferred event disables its controls.
+Use the browser fixture's `openSettings` helper before interacting with Settings.
+It waits for the toggle handler's `aria-expanded` update and enabled controls:
+the panel can be visible before that deferred handler starts loading settings.
+For keyboard coverage, pass the activation callback as its second argument.
+Do not install a DOM event listener concurrently with the activation: Playwright
+can dispatch the input before `page.evaluate` installs the listener, leaving
+the test waiting for an event that already fired. Prefer retrying assertions
+on the resulting state over unbounded event promises or larger test timeouts.
+Advancing Playwright's clock does not finish in-flight HTTP requests. For eventual
+polling assertions, advance the clock inside `expect.poll` and assert rendered
+state; a held old response may reschedule the next poll after the first advance.
+Keep exact polling-cadence checks in tests with explicitly settled requests.
+Check optional CSS support with `CSS.supports` before asserting computed values;
+Windows WebKit lacks `overscroll-behavior`. Keep its viewport, scrolling, focus,
+and accessibility checks running rather than skipping the layout test.
 Hidden-polling checks observe local requests after the visibility callback and
 advance controlled clocks past a due refresh. Layout probes stay installed
 through animation frames. DOM-identity checks wait for the renderer to acknowledge
@@ -392,6 +405,9 @@ no amount of retrying the other element will satisfy.
 
 Windows lock tests preserve existing files and directory links before publishing
 candidate directories: a failed directory rename is not a safe guard on Windows.
+Settings publication retries Windows `EPERM` replacement failures at most four
+times with 25/50/75/100 ms waits. It keeps the same temporary file and write lock,
+never deletes the existing settings file, and reports persistent failures normally.
 
 ## Copilot cloud agent and code review
 

@@ -260,7 +260,7 @@ test("the extension entry point wires an isolated session through its complete l
       const invalid = '{"autoOpen":"yes"}';
       await fs.writeFile(path, invalid);
       await assert.rejects(invoke("get_settings", "settings-failure"), { code: "settings_read" });
-      for (const action of ["refresh", "load_more", "set_filters"]) {
+      for (const action of ["get_state", "refresh", "load_more", "set_filters"]) {
         const state = await invoke(action, "settings-failure");
         assert.equal(state.settingsError.code, "settings_read");
         assert.equal(state.readState, "unread");
@@ -270,7 +270,7 @@ test("the extension entry point wires an isolated session through its complete l
       }
       assert.equal(await fs.readFile(path, "utf8"), invalid);
       await fs.writeFile(path, valid);
-      assert.equal((await invoke("refresh", "settings-failure")).settingsError, null);
+      assert.equal((await invoke("get_state", "settings-failure")).settingsError, null);
     } finally {
       await fs.writeFile(path, original);
       await canvas.onClose({ instanceId: "settings-failure" });
@@ -379,6 +379,50 @@ async function fixture(apiBaseUrl, overrides = {}) {
   });
   return { canvas, desktop, servers, inboxes, logs, clientOptions };
 }
+
+test("SDK state reads sync shared filters without renderer polling or refetching notifications", async t => {
+  const directory = await fs.mkdtemp(join(tmpdir(), "notification-sdk-filters-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const preferences = new Preferences({ directory });
+  const calls = [];
+  const client = new GitHubClient({ run: async args => {
+    calls.push(args);
+    return http([thread("1"), thread("2", { unread: false })]);
+  } });
+  const f = await fixture(undefined, {
+    Preferences: class { constructor() { return preferences; } },
+    GitHubClient: class { constructor() { return client; } },
+    Inbox,
+  });
+  const invoke = (name, instanceId, input = {}) => f.canvas.actions.find(action => action.name === name)
+    .handler({ instanceId, input });
+  try {
+    for (const instanceId of ["writer", "reader"]) {
+      const opening = f.canvas.open({ instanceId });
+      f.servers.at(-1).ready();
+      await opening;
+      assert.equal((await invoke("refresh", instanceId)).loaded, 2);
+    }
+    const initial = await invoke("set_filters", "reader", { query: "notification", attention: "review_requested" });
+    assert.equal(initial.matching, 2);
+    const changed = await invoke("set_filters", "writer", { readState: "unread", query: "no matches", attention: "mine" });
+    const saved = await fs.readFile(preferences.path, "utf8");
+    const before = calls.length;
+    const state = await invoke("get_state", "reader");
+    assert.equal(state.readState, "unread");
+    assert.equal(state.matching, 1);
+    assert.equal(state.loaded, 2);
+    assert.equal(state.settingsRevision, changed.settingsRevision);
+    assert.equal(state.searchActive, true);
+    assert.equal(state.attention, "review_requested");
+    assert.equal(calls.length, before, "State reads must only filter the already loaded inbox");
+    assert.equal(await fs.readFile(preferences.path, "utf8"), saved, "State reads must not save preferences");
+    assert.doesNotMatch(JSON.stringify(state), /Synthetic|example\/widgets|notification 1|notification 2/);
+  } finally {
+    await f.canvas.onClose({ instanceId: "writer" });
+    await f.canvas.onClose({ instanceId: "reader" });
+  }
+});
 
 test("rehydration before joinSession resolves discovers Copilot actions as soon as the session attaches", async () => {
   const synthetic = syntheticCopilotHost();

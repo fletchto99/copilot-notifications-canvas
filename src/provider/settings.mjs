@@ -3,6 +3,7 @@ import { constants } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as wait } from "node:timers/promises";
 import { apiTarget, InboxError, sharedFilters, validFilterChanges, validFilterDefaults } from "../shared/model.mjs";
 import { validSound } from "./notifier.mjs";
 import { acquireLock } from "./lock.mjs";
@@ -45,11 +46,12 @@ const settingsValue = data => ({
 
 export class Preferences {
   constructor({ directory = join(process.env.COPILOT_HOME || join(homedir(), ".copilot"),
-    "extensions", "github-notifications", "artifacts"), io = fs, now = Date.now } = {}) {
+    "extensions", "github-notifications", "artifacts"), io = fs, now = Date.now, platform = process.platform } = {}) {
     this.directory = directory;
     this.path = join(directory, "settings.json");
     this.io = io;
     this.now = now;
+    this.platform = platform;
   }
 
   async document() {
@@ -151,7 +153,16 @@ export class Preferences {
       } finally {
         await output.close();
       }
-      await this.io.rename(temporary, this.path);
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await this.io.rename(temporary, this.path);
+          break;
+        } catch (error) {
+          // Windows readers can briefly prevent replacement. Keep the same file and write lock.
+          if (this.platform !== "win32" || error.code !== "EPERM" || attempt >= 4) throw error;
+          await wait(25 * (attempt + 1));
+        }
+      }
       temporaryCreated = false;
       return updated;
     } catch (error) {
