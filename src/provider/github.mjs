@@ -252,7 +252,7 @@ export class GitHubClient {
     await this.refreshSubjects(authors, signal, { stateOnly: true });
   }
 
-  copilotContext(kind, item, signal) {
+  copilotContext(kind, item, signal, { force = false } = {}) {
     const run = /^https:\/\/github\.com\/([A-Za-z0-9-]+\/[A-Za-z0-9_.-]+)\/actions\/runs\/([1-9]\d*)(?:\/attempts\/([1-9]\d*))?$/
       .exec(item?.subjectRunUrl ?? item?.url ?? "");
     const link = /^https:\/\/github\.com\/([A-Za-z0-9-]+\/[A-Za-z0-9_.-]+)\/actions\/runs\/([1-9]\d*)(?:\/(job|attempts)\/([1-9]\d*))?$/
@@ -274,7 +274,7 @@ export class GitHubClient {
       throw new InboxError("copilot_context", "Use a confirmed github.com item for this Copilot action.", 400);
     }
     if (kind === "queue") {
-      return this.#refreshSubject(endpoint, item, signal, "queue", () => true).then(() => {
+      return this.#refreshSubject(endpoint, item, signal, "queue", () => true, { force }).then(() => {
         const result = this.mergeQueueCache.get(endpoint);
         if (result?.error) throw new InboxError(result.error.code, result.error.message);
         if (typeof result?.state !== "boolean" || !(result.nextRefreshAt > this.now())) {
@@ -518,7 +518,7 @@ export class GitHubClient {
     });
   }
 
-  async #refreshSubject(endpoint, item, signal, kind, selected) {
+  async #refreshSubject(endpoint, item, signal, kind, selected, { force = false } = {}) {
     const mergeQueue = kind === "queue";
     const checkRun = kind === "run";
     const runMatch = kind === "match" ? workflowRunSearch(item, this.target) : null;
@@ -536,14 +536,14 @@ export class GitHubClient {
       await waitForWork(this.queue, signal);
       if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
       if (!selected()) return false;
-      if ((mergeQueue || item.type === "Discussion") && this.now() < this.graphqlBlockedUntil) return;
+      if (!force && (mergeQueue || item.type === "Discussion") && this.now() < this.graphqlBlockedUntil) return;
       const cached = cache.get(endpoint);
       const invalidationKey = runJobs || item.type === "Viewer" ? endpoint : subjectKey(item, this.target);
       const generation = this.subjectInvalidations.get(invalidationKey) ?? 0;
       try {
         started = true;
         const result = await this.request(endpoint, signal, "GET", {
-          subjectType: item.type, mergeQueue, checkRun, runMatch, runJobs, force: item.updatedAt > (cached?.updatedAt ?? ""),
+          subjectType: item.type, mergeQueue, checkRun, runMatch, runJobs, force: force || item.updatedAt > (cached?.updatedAt ?? ""),
           allowCachedDuringBackoff: item.type === "CheckSuite",
         });
         cache.set(endpoint, {
@@ -552,7 +552,7 @@ export class GitHubClient {
         });
       } catch (error) {
         if (!(error instanceof InboxError) || error.code === "closed") throw error;
-        if (error.code === "graphql_rate_limited" && error.requestDeferred) return;
+        if (!force && error.code === "graphql_rate_limited" && error.requestDeferred) return;
         cache.set(endpoint, {
           state: runMatch || runJobs ? null : cached?.state ?? null, checkedAt: cached?.checkedAt,
           ...(cached?.authorship ? { authorship: cached.authorship } : {}),

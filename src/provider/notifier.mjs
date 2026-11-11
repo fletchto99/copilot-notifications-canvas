@@ -44,7 +44,7 @@ export function desktopCapabilities(platform = process.platform, terminalNotifie
       backend: terminalNotifier ? "terminal-notifier" : "osascript",
     } : {}),
     help: platform === "darwin" ? (terminalNotifier
-      ? "Uses terminal-notifier. Clicking an alert opens GitHub. Allow terminal-notifier in System Settings; notification and Focus settings control delivery."
+      ? "Uses terminal-notifier for a smoother notifications experience. Make sure to allow terminal-notifier in system notification settings"
       : "Uses built-in AppleScript notifications; clicking an alert may open Script Editor. For GitHub click targets, optionally install terminal-notifier with: brew install terminal-notifier") :
       platform === "win32" ? "Uses Windows PowerShell and Windows 10/11 toasts. Windows notification settings control delivery." :
       platform === "linux" ? "Requires notify-send and a graphical desktop session. Sound choices and silence are hints; your desktop may ignore them." :

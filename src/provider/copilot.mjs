@@ -236,14 +236,14 @@ export class CopilotHandoff {
     this.confirmCopilotActions = settings.confirmCopilotActions ?? true;
   }
 
-  async #active(id, direct = false, pullState) {
+  async #active(id, direct = false, { pullState, forceQueue = false } = {}) {
     if (this.preferences) this.setSettings(await this.preferences.read());
     if (!this.enabled) throw integrationDisabled();
     const item = this.#item(id);
     // Preparation resolves fresh PR state before deciding whether queue checks apply.
     const state = pullState ?? (this.state?.status === "starting" ? this.target?.pullState : undefined);
     if (item.type === "PullRequest" && state === "open") {
-      if (await this.inbox.client.copilotContext("queue", item, this.inbox.controller.signal)) {
+      if (await this.inbox.client.copilotContext("queue", item, this.inbox.controller.signal, { force: forceQueue })) {
         throw new InboxError("copilot_inactive_pr", "Copilot actions are unavailable for merge-queued pull requests.", 409);
       }
       if (this.preferences) this.setSettings(await this.preferences.read());
@@ -386,7 +386,7 @@ export class CopilotHandoff {
     const [repositories, { matching }] = await parallelReads([
       this.host.execute("list_repositories", {}, true), this.#sessions(target),
     ]);
-    await this.#active(id, false, target.pullState);
+    await this.#active(id, false, { pullState: target.pullState });
     const configured = repositories.some(repo => sameRepo(repo.github_repo, target.repository));
     this.#ready(target, matching, configured);
     // A saved opt-out only applies to a fresh row click, never to polling.
@@ -402,6 +402,9 @@ export class CopilotHandoff {
     if (!kind) return;
     const details = await this.inbox.client.copilotContext(kind, this.#item(target.id), this.inbox.controller.signal);
     if (target.pullState && (details.merged ? "merged" : details.state) !== target.pullState) throw changedPull();
+    if (target.pullState && details.sha !== target.sha) {
+      throw new InboxError("stale_handoff", "This pull request's head commit changed. Open the Copilot action again to confirm the updated commit.", 409);
+    }
     if (target.issueState && details.state !== target.issueState) throw changedIssue();
     if (target.action === "commit" && details.sha !== target.sha) {
       throw new InboxError("stale_handoff", "The selected commit changed. Open the Copilot action again to confirm the exact commit.", 409);
@@ -424,7 +427,7 @@ export class CopilotHandoff {
         this.#sessions(target),
         input.sessionId ? null : this.host.execute("list_repositories", {}, true),
       ]);
-      await this.#active(input.id, input.direct);
+      await this.#active(input.id, input.direct, { forceQueue: true });
       const sessionId = input.sessionId;
       if (sessionId) {
         if (!this.existing.has(sessionId) ||
@@ -477,7 +480,7 @@ export class CopilotHandoff {
       }
       // Setup and inventory waits can outlive the earlier context check.
       await this.#verifyContext(target);
-      await this.#active(input.id, input.direct);
+      await this.#active(input.id, input.direct, { forceQueue: true });
       // The host queues the kickoff until ready; startup activity is not a reuse signal.
       progress("Starting session. Check the app for any permission or repository trust requests.");
       const result = await this.host.execute("create_session", {

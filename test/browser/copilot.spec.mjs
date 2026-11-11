@@ -237,6 +237,32 @@ for (const packaged of [false, true]) {
       }
     });
 
+    for (const change of ["head", "queue"]) test(
+      `a PR ${change} change after confirmation shows an error without creating a session`, async ({ page, canvas }) => {
+      canvas.rows.splice(1);
+      canvas.rows[0].subject = { title: "Synthetic PR", type: "PullRequest",
+        url: "https://api.github.com/repos/example/widgets/pulls/1" };
+      canvas.rows[0].subjectDetails = {
+        state: "open", merged: false, draft: false, user: { id: 8 }, head: { sha: "b".repeat(40) },
+      };
+      await page.goto(canvas.url);
+      await page.getByRole("button", { name: /^Review with Copilot:/ }).click();
+      const start = page.getByRole("button", { name: "Start session", exact: true });
+      await expect(start).toBeVisible();
+      if (change === "head") canvas.rows[0].subjectDetails.head.sha = "c".repeat(40);
+      else canvas.rows[0].mergeQueued = true;
+      await start.click();
+      await expect(page.locator("#copilot-status")).toContainText(
+        change === "head" ? "head commit changed" : "merge-queued",
+      );
+      await expect(page.locator("#copilot-status")).toHaveAttribute("role", "alert");
+      await expect(start).toBeHidden();
+      expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+      expect(canvas.copilotHost.calls.some(call => ["create_session", "navigate_to"].includes(call.name))).toBe(false);
+      expect(canvas.writes).toEqual([]);
+      expect(canvas.deliveries).toEqual([]);
+    });
+
     for (const merged of [false, true]) test(
       `${merged ? "merged" : "closed"} PR summaries use fresh REST state despite an unavailable queue check`, async ({ page, canvas }) => {
       canvas.rows.splice(1);

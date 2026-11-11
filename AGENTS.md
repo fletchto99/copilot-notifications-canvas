@@ -109,8 +109,8 @@ in `test/fixtures/copilot-handoff.mjs` and the existing synthetic host fixture.
   initialization from busy, idle, or unknown activity. Bind fresh-start consent to
   the shown matching sessions and recheck before creation; changed matches require
   a new choice. After setup, checkout, and final session discovery, freshly verify
-  the confirmed issue/PR state and release/commit reference immediately before
-  session creation. Cached row state cannot authorize that final step. Recheck
+  the confirmed issue/PR state, PR head commit, and release/commit reference
+  immediately before session creation. Cached row state cannot authorize that final step. Recheck
   preferences after the request; changed or unavailable context must stop creation.
   Repository cloning needs separate explicit confirmation.
   Honor the user-wide `copilotIntegration` preference (default on) at the panel
@@ -123,7 +123,9 @@ in `test/fixtures/copilot-handoff.mjs` and the existing synthetic host fixture.
   a changed task needs a fresh action.
   Resolve fresh PR metadata before checking merge-queue membership. Require the
   queue check for open/draft PRs, not for closed/merged summaries, regardless of
-  missing or stale row state.
+  missing or stale row state. Revalidate queue membership before checkout and
+  immediately before creation; cached non-queued results cannot authorize these
+  steps. Preserve failure and rate-limit backoff.
   Closed issues use summary-only prompts, not fixing or reopening prompts.
   Recheck issue state before starting and reject stale tasks after closure or
   reopening. Discussions summarize the selected thread, replies, and any answer
