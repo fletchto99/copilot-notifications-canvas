@@ -68,6 +68,8 @@ Fresh REST PR metadata determines whether that check is needed, not the cached
 row state. Starting a handoff rechecks queue membership before checkout and
 again immediately before session creation rather than trusting a cached
 non-queued result. These checks still respect failure and rate-limit backoff.
+The fresh queue response also verifies the confirmed PR state and head commit,
+so a push, closure, or merge during that request stops the handoff.
 Closed and merged PR summaries do not require merge-queue access.
 CI actions wait while run/job links load. Unresolved or ambiguous matches remain
 disabled rather than guessing a destination.

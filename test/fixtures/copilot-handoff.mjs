@@ -30,7 +30,10 @@ export async function fixture(t, { type = "Issue", reason = "author", authorId =
     const intercepted = await onGitHub?.(args);
     if (intercepted !== undefined) return intercepted;
     const path = args.at(-1);
-    if (path === "graphql") return http({ data: { repository: { pullRequest: { isInMergeQueue: false } } } });
+    if (path === "graphql") return http({ data: { repository: { pullRequest: {
+      isInMergeQueue: false, state: pull.merged ? "MERGED" : (pull.state ?? "open").toUpperCase(),
+      headRefOid: Object.hasOwn(pull, "head") ? pull.head?.sha : prSha,
+    } } } });
     if (path === "/user") return http({ id: 7 });
     if (path === "/repos/example/widgets/issues/1") return http(issue);
     if (path === `/repos/example/widgets/commits/${commitRef.toLowerCase()}`) return http(commit);

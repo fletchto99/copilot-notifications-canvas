@@ -173,6 +173,37 @@ test("PR head changes after confirmation or during checkout require a fresh acti
   });
 });
 
+test("PR changes during the final queue request cannot authorize a stale session", async t => {
+  for (const change of ["head", "closed", "merged"]) await t.test(change, async t => {
+    const entered = deferred();
+    const held = deferred();
+    t.after(() => held.resolve());
+    const pull = { state: "open", merged: false, head: { sha: prSha } };
+    let queries = 0;
+    const f = await fixture(t, { type: "PullRequest", pull, onGitHub: async args => {
+      if (args.at(-1) !== "graphql") return;
+      if (++queries === 3) {
+        entered.resolve();
+        await held.promise;
+      }
+      return http({ data: { repository: { pullRequest: {
+        isInMergeQueue: false, state: pull.merged ? "MERGED" : pull.state.toUpperCase(), headRefOid: pull.head.sha,
+      } } } });
+    } });
+    await prepare(f);
+    const starting = start(f);
+    await entered.promise;
+    if (change === "head") pull.head.sha = "c".repeat(40);
+    else Object.assign(pull, { state: "closed", merged: change === "merged" });
+    held.resolve();
+    const result = await starting;
+    assert.equal(result.status, "error");
+    assert.match(result.message, change === "head" ? /head commit changed/ : /state changed/);
+    assert.equal(f.calls.some(call => ["create_session", "navigate_to"].includes(call.name)), false);
+    assert.equal(f.host.reservations.size, 0);
+  });
+});
+
 test("missing PR commits are fetched and verified only after confirmation and before session creation", async t => {
   let present = false;
   const f = await fixture(t, { type: "PullRequest", onGit: args => {
@@ -664,7 +695,9 @@ test("PRs entering the merge queue after confirmation, checkout, or discovery ca
       preferences: handoffPreferences(boundary === "confirmation"),
       onGitHub: args => {
         if (args.at(-1) === "graphql") {
-          return http({ data: { repository: { pullRequest: { isInMergeQueue: queued } } } });
+          return http({ data: { repository: { pullRequest: {
+            isInMergeQueue: queued, state: "OPEN", headRefOid: prSha,
+          } } } });
         }
       },
       onGit: args => {

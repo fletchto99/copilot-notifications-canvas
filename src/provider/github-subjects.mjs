@@ -220,6 +220,11 @@ export function copilotDetails(body, kind, endpoint) {
     if (!Number.isSafeInteger(body.user?.id) || body.user.id < 1 || !/^[a-f0-9]{40}$/.test(body.head?.sha)) throw invalid();
     return { authorId: body.user.id, state: body.state, merged: body.merged, sha: body.head.sha };
   }
+  if (kind === "pull-queue") {
+    const pull = body?.data?.repository?.pullRequest;
+    if (!["OPEN", "CLOSED", "MERGED"].includes(pull?.state) || !/^[a-f0-9]{40}$/.test(pull.headRefOid)) throw invalid();
+    return { state: pull.state === "OPEN" ? "open" : "closed", merged: pull.state === "MERGED", sha: pull.headRefOid };
+  }
   if (kind === "release") {
     const match = /^\/repos\/([^/]+\/[^/]+)\/releases\/([1-9]\d*)$/.exec(endpoint);
     if (!match || !Number.isSafeInteger(body?.id) || String(body.id) !== match[2] ||

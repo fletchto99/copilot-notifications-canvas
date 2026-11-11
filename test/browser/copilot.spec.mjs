@@ -237,7 +237,7 @@ for (const packaged of [false, true]) {
       }
     });
 
-    for (const change of ["head", "queue"]) test(
+    for (const change of ["head", "queue", "head during final queue lookup", "closure during final queue lookup"]) test(
       `a PR ${change} change after confirmation shows an error without creating a session`, async ({ page, canvas }) => {
       canvas.rows.splice(1);
       canvas.rows[0].subject = { title: "Synthetic PR", type: "PullRequest",
@@ -249,11 +249,18 @@ for (const packaged of [false, true]) {
       await page.getByRole("button", { name: /^Review with Copilot:/ }).click();
       const start = page.getByRole("button", { name: "Start session", exact: true });
       await expect(start).toBeVisible();
-      if (change === "head") canvas.rows[0].subjectDetails.head.sha = "c".repeat(40);
+      if (change.includes("during")) {
+        let queries = 0;
+        canvas.setRequestHook(args => {
+          if (args.at(-1) !== "graphql" || !args.some(arg => arg.includes("headRefOid")) || ++queries !== 2) return;
+          if (change.startsWith("head")) canvas.rows[0].subjectDetails.head.sha = "c".repeat(40);
+          else canvas.rows[0].subjectDetails.state = "closed";
+        });
+      } else if (change === "head") canvas.rows[0].subjectDetails.head.sha = "c".repeat(40);
       else canvas.rows[0].mergeQueued = true;
       await start.click();
       await expect(page.locator("#copilot-status")).toContainText(
-        change === "head" ? "head commit changed" : "merge-queued",
+        change.startsWith("head") ? "head commit changed" : change === "queue" ? "merge-queued" : "state changed",
       );
       await expect(page.locator("#copilot-status")).toHaveAttribute("role", "alert");
       await expect(start).toBeHidden();

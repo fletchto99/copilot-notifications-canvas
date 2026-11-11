@@ -125,7 +125,8 @@ in `test/fixtures/copilot-handoff.mjs` and the existing synthetic host fixture.
   queue check for open/draft PRs, not for closed/merged summaries, regardless of
   missing or stale row state. Revalidate queue membership before checkout and
   immediately before creation; cached non-queued results cannot authorize these
-  steps. Preserve failure and rate-limit backoff.
+  steps. Validate PR state and head commit from that same fresh queue response,
+  not solely from the preceding REST lookup. Preserve failure and rate-limit backoff.
   Closed issues use summary-only prompts, not fixing or reopening prompts.
   Recheck issue state before starting and reject stale tasks after closure or
   reopening. Discussions summarize the selected thread, replies, and any answer

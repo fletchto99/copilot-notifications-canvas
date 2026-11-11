@@ -32,6 +32,13 @@ const unavailable = () => new InboxError("copilot_unavailable",
 const hostFailure = () => new InboxError("copilot_host",
   "Copilot could not complete the handoff. Check the app for permission requests or a session already created before trying again.", 502);
 
+function verifyPullContext(target, details) {
+  if ((details.merged ? "merged" : details.state) !== target.pullState) throw changedPull();
+  if (details.sha !== target.sha) {
+    throw new InboxError("stale_handoff", "This pull request's head commit changed. Open the Copilot action again to confirm the updated commit.", 409);
+  }
+}
+
 function toolData(result, list = false) {
   if (typeof result !== "string" && result?.resultType !== "success") throw hostFailure();
   const text = typeof result === "string" ? result : result.textResultForLlm;
@@ -243,9 +250,11 @@ export class CopilotHandoff {
     // Preparation resolves fresh PR state before deciding whether queue checks apply.
     const state = pullState ?? (this.state?.status === "starting" ? this.target?.pullState : undefined);
     if (item.type === "PullRequest" && state === "open") {
-      if (await this.inbox.client.copilotContext("queue", item, this.inbox.controller.signal, { force: forceQueue })) {
+      const context = await this.inbox.client.copilotContext(forceQueue ? "pull-queue" : "queue", item, this.inbox.controller.signal);
+      if (forceQueue ? context.queued : context) {
         throw new InboxError("copilot_inactive_pr", "Copilot actions are unavailable for merge-queued pull requests.", 409);
       }
+      if (forceQueue) verifyPullContext(this.target, context);
       if (this.preferences) this.setSettings(await this.preferences.read());
       if (!this.enabled) throw integrationDisabled();
     }
@@ -401,10 +410,7 @@ export class CopilotHandoff {
       ["release", "commit"].includes(target.action) ? target.action : null;
     if (!kind) return;
     const details = await this.inbox.client.copilotContext(kind, this.#item(target.id), this.inbox.controller.signal);
-    if (target.pullState && (details.merged ? "merged" : details.state) !== target.pullState) throw changedPull();
-    if (target.pullState && details.sha !== target.sha) {
-      throw new InboxError("stale_handoff", "This pull request's head commit changed. Open the Copilot action again to confirm the updated commit.", 409);
-    }
+    if (target.pullState) verifyPullContext(target, details);
     if (target.issueState && details.state !== target.issueState) throw changedIssue();
     if (target.action === "commit" && details.sha !== target.sha) {
       throw new InboxError("stale_handoff", "The selected commit changed. Open the Copilot action again to confirm the exact commit.", 409);
