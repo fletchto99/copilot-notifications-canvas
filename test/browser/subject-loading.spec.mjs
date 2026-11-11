@@ -136,12 +136,12 @@ for (const packaged of [false, true]) {
           const input = response.request().postDataJSON();
           return input.complete && input.positions.length === 1 && input.positions[0] === 1;
         });
-        await page.getByRole("button", { name: /example\/widgets.*total/ }).click();
+        await page.locator('[data-focus-key="repo:example/widgets"]').click();
         await collapsed;
         releasePR();
         await expect(page.locator('[data-focus-key="thread:1"] .subject-open')).toHaveCount(1);
         expect(canvas.requests.filter(path => path === "graphql")).toHaveLength(0);
-        await page.getByRole("button", { name: /example\/widgets.*total/ }).click();
+        await page.locator('[data-focus-key="repo:example/widgets"]').click();
         await expect(page.locator('[data-focus-key="thread:1"] .subject-merge-queued')).toBeVisible();
         await expect(page.locator('[data-focus-key="thread:2"] .subject-loading')).toBeVisible();
         expect(canvas.requests.filter(path => path === "graphql")).toHaveLength(1);

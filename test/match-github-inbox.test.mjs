@@ -435,7 +435,8 @@ test("renderer preserves the saved view through the Show notifications dropdown 
     thread("1"), thread("2", { unread: false }), thread("3", { unread: false, done: true }),
   ] });
   const button = key => ui.ids.get("groups").querySelectorAll("button").find(button => button.dataset.focusKey === key);
-  assert.equal(ui.ids.get("count").textContent, "2 total \u00b7 1 unread");
+  assert.equal(ui.ids.get("count").textContent, "2 loaded \u00b7 1 unread");
+  assert.equal(ui.ids.get("inbox-mode").hidden, true);
   assert.equal(button("read:2").disabled, true);
   assert.equal(button("done:2").disabled, false);
   assert.equal(button("bulk:shown").dataset.count, "1");
@@ -447,7 +448,8 @@ test("renderer preserves the saved view through the Show notifications dropdown 
   await settle();
   assert.equal(storedSettings.matchGitHubInbox, false);
   assert.equal(select.value, "unread");
-  assert.equal(ui.ids.get("count").textContent, "1 total \u00b7 1 unread");
+  assert.equal(ui.ids.get("count").textContent, "1 loaded \u00b7 1 unread");
+  assert.equal(ui.ids.get("inbox-mode").hidden, false);
   assert.equal(button("bulk-done:shown").dataset.count, "1");
   assert.deepEqual(ui.patches, []);
   assert.deepEqual(ui.deletions, []);
@@ -457,19 +459,22 @@ test("renderer preserves the saved view through the Show notifications dropdown 
   assert.equal(storedSettings.matchGitHubInbox, false);
   await runInContext('update("filters", { mode: "inbox" })', ui.context);
   assert.equal(select.disabled, false);
-  assert.equal(ui.ids.get("count").textContent, "1 total \u00b7 1 unread");
+  assert.equal(ui.ids.get("count").textContent, "1 loaded \u00b7 1 unread");
   select.value = "all";
   select.events.change();
   await settle();
-  assert.equal(ui.ids.get("count").textContent, "2 total \u00b7 1 unread");
+  assert.equal(ui.ids.get("count").textContent, "2 loaded \u00b7 1 unread");
+  assert.equal(ui.ids.get("inbox-mode").hidden, true);
   assert.equal(storedSettings.matchGitHubInbox, true);
   assert.equal(button("done:3"), undefined);
   await runInContext('update("filters", { mode: "unread" })', ui.context);
   assert.equal(select.value, "unread");
   assert.equal(select.disabled, true);
   assert.equal(storedSettings.matchGitHubInbox, true);
+  assert.equal(ui.ids.get("inbox-mode").hidden, false);
   await runInContext('update("filters", { mode: "inbox" })', ui.context);
   assert.equal(select.value, "all");
+  assert.equal(ui.ids.get("inbox-mode").hidden, true);
   ui.window.events.pagehide();
   ui.inbox.close();
 });
@@ -483,6 +488,7 @@ test("Show notifications preserves an existing unread preference and restores it
   t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
   const select = ui.ids.get("show-notifications");
   assert.equal(select.value, "unread");
+  assert.equal(ui.ids.get("inbox-mode").hidden, false);
   assert.equal(ui.calls.some(call => call.path === "/api/settings" && call.options.body), false);
   select.value = "all";
   select.events.change();
@@ -490,6 +496,7 @@ test("Show notifications preserves an existing unread preference and restores it
   assert.equal(select.value, "unread");
   assert.equal(storedSettings.matchGitHubInbox, false);
   assert.equal(ui.ids.get("settings-error").hidden, false);
+  assert.equal(ui.ids.get("inbox-mode").hidden, false);
   fail = false;
   select.value = "all";
   select.events.change();
@@ -497,6 +504,33 @@ test("Show notifications preserves an existing unread preference and restores it
   assert.equal(select.value, "all");
   assert.equal(storedSettings.matchGitHubInbox, true);
   assert.equal(ui.ids.get("settings-error").hidden, true);
+  assert.equal(ui.ids.get("inbox-mode").hidden, true);
   assert.deepEqual(ui.calls.filter(call => call.path === "/api/settings" && call.options.body)
     .map(call => JSON.parse(call.options.body)), [{ matchGitHubInbox: true }, { matchGitHubInbox: true }]);
+});
+
+test("the unread-only indicator follows retained rows when a saved view change fails", async t => {
+  for (const matchGitHubInbox of [false, true]) {
+    let fail = false;
+    const storedSettings = { matchGitHubInbox };
+    const ui = await renderer({ storedSettings, onFetch: () => fail ? http({}, {}, 503) : http([thread()]) });
+    t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+    const indicator = ui.ids.get("inbox-mode");
+    const select = ui.ids.get("show-notifications");
+    assert.equal(indicator.hidden, matchGitHubInbox);
+    fail = true;
+    select.value = matchGitHubInbox ? "unread" : "all";
+    select.events.change();
+    await settle();
+    assert.equal(storedSettings.matchGitHubInbox, !matchGitHubInbox);
+    assert.equal(ui.inbox.summary().status, "stale");
+    assert.equal(indicator.hidden, matchGitHubInbox);
+    fail = false;
+    ui.advance(120_000);
+    await ui.ids.get("force-refresh").events.click();
+    assert.equal(ui.inbox.summary().status, "ready");
+    assert.equal(indicator.hidden, !matchGitHubInbox);
+    assert.deepEqual(ui.patches, []);
+    assert.deepEqual(ui.deletions, []);
+  }
 });

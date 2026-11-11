@@ -82,21 +82,23 @@ for (const packaged of [false, true]) {
         for (const width of [480, 320, 360, 361, 400, 481, 960]) {
           await page.setViewportSize({ width, height: 800 });
           const stacked = width <= 360;
+          const gap = stacked ? 4 : 8;
           await expect(title).toHaveCSS("font-size", "24px");
           await expect(title).toHaveCSS("line-height", "30px");
           const heading = await title.boundingBox();
-          expect([38, 60]).toContain(heading.height);
-          if (stacked || width >= 480) expect(heading.height).toBe(38);
+          expect([30, 38, 60]).toContain(heading.height);
+          if (stacked) expect(heading.height).toBe(30);
+          else if (width >= 480) expect(heading.height).toBe(38);
           const toolbar = await page.locator(".toolbar").boundingBox();
-          expect(toolbar.height).toBe(heading.height + (stacked ? 46 : 0));
+          expect(toolbar.height).toBe(heading.height + (stacked ? 42 : 0));
           if (stacked) expect(heading.width).toBe(width - 24);
-          let previousRight = stacked ? heading.x - 8 : heading.x + heading.width;
+          let previousRight = stacked ? heading.x - gap : heading.x + heading.width;
           for (const selector of ["#open-inbox", "#force-refresh", "#shortcuts-toggle", "#settings-toggle"]) {
             const button = await page.locator(selector).boundingBox();
             expect(button.width).toBe(38);
             expect(button.height).toBe(38);
-            expect(button.y + button.height / 2).toBe(stacked ? heading.y + heading.height + 27 : heading.y + heading.height / 2);
-            expect(button.x).toBeGreaterThanOrEqual(previousRight + 8);
+            expect(button.y + button.height / 2).toBe(stacked ? heading.y + heading.height + 23 : heading.y + heading.height / 2);
+            expect(button.x).toBeGreaterThanOrEqual(previousRight + gap);
             previousRight = button.x + button.width;
           }
           expect(previousRight).toBe(width - 12);
@@ -105,8 +107,8 @@ for (const packaged of [false, true]) {
           expect(search.width).toBe(width - 24);
           expect(search.height).toBe(38);
           expect(search.y).toBe(toolbar.y + toolbar.height + 8);
-          expect(tabs.y).toBe(search.y + search.height + 8);
-          expect((await page.locator("header").boundingBox()).height).toBe(initialHeight + toolbar.height - 38);
+          expect(tabs.y).toBe(search.y + search.height + gap);
+          expect((await page.locator("header").boundingBox()).height).toBe(initialHeight + toolbar.height - 38 - (stacked ? 12 : 0));
           expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
           if (width === 320) await page.screenshot({ path: testInfo.outputPath(`header-${font}-320.png`) });
         }
@@ -242,7 +244,7 @@ test("attention tabs combine with search and constrain repository reads to match
   await page.getByRole("searchbox").fill("Needle");
   await page.getByRole("tab", { name: /^Review Requested \(\d+\)$/ }).click();
   await expect(page.locator(".row")).toHaveCount(3);
-  await expect(page.locator("#count")).toHaveText("50 total \u00b7 50 unread \u00b7 3 matching");
+  await expect(page.locator("#count")).toHaveText("50 loaded \u00b7 50 unread \u00b7 3 matching");
   await expect(page.getByRole("tab", { name: "All (50)", exact: true })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Review Requested (3)", exact: true })).toHaveAttribute("aria-selected", "true");
   await page.getByRole("button", { name: "Mark 2 as read in example/widgets; 2 shown, loaded notifications", exact: true }).click();
@@ -254,7 +256,7 @@ test("attention tabs combine with search and constrain repository reads to match
   await expect(page.getByRole("tab", { name: "Review Requested (3)", exact: true })).toBeVisible();
   await page.getByRole("tab", { name: /^Assigned \(\d+\)$/ }).click();
   await expect(page.locator("#empty-title")).toHaveText("No matches in loaded notifications");
-  await expect(page.locator("#count")).toHaveText("50 total \u00b7 48 unread \u00b7 0 matching");
+  await expect(page.locator("#count")).toHaveText("50 loaded \u00b7 48 unread \u00b7 0 matching");
   await expect(page.getByRole("tab", { name: "All (50)", exact: true })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Review Requested (3)", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Force refresh", exact: true }).click();
@@ -388,7 +390,7 @@ test("search preserves total tab counts and overflow controls without resizing",
   const counts = await strip.getByRole("tab").allTextContents();
   for (const [query, matching] of [["Needle", 3], ["No matching notification", 0], ["", 50]]) {
     await page.getByRole("searchbox").fill(query);
-    await expect(page.locator("#count")).toHaveText(query ? `50 total \u00b7 50 unread \u00b7 ${matching} matching` : "50 total \u00b7 50 unread");
+    await expect(page.locator("#count")).toHaveText(query ? `50 loaded \u00b7 50 unread \u00b7 ${matching} matching` : "50 loaded \u00b7 50 unread");
     await expect(strip.getByRole("tab")).toHaveText(counts);
     await expect(page.locator(".row")).toHaveCount(matching);
     await expect(next).toBeVisible();
@@ -503,10 +505,10 @@ test("repository group controls remain usable for a single matching notification
   canvas.rows.splice(2);
   await page.setViewportSize({ width: 320, height: 800 });
   await page.goto(canvas.url);
-  await expect(page.locator(".repo-count")).toHaveText("2 total \u00b7 2 unread");
+  await expect(page.locator(".repo-count")).toHaveText("2 loaded \u00b7 2 unread");
   await expect(page.locator(".repo-read")).toHaveCount(1);
   await page.getByRole("searchbox").fill("Needle widget 2");
-  await expect(page.locator(".repo-count")).toHaveText("1 total \u00b7 1 unread");
+  await expect(page.locator(".repo-count")).toHaveText("1 loaded \u00b7 1 unread");
   await expect(page.locator(".repo-read")).toHaveAccessibleDescription("Mark 1 as read");
   await expect(page.locator(".repo-done")).toBeVisible();
   await expect(page.locator('[data-focus-key="read:2"]')).toBeVisible();
@@ -514,7 +516,7 @@ test("repository group controls remain usable for a single matching notification
   await page.getByRole("searchbox").fill("");
   await expect(page.locator(".repo-read")).toHaveCount(1);
   await page.locator('[data-focus-key="read:1"]').click();
-  await expect(page.locator(".repo-count")).toHaveText("2 total \u00b7 1 unread");
+  await expect(page.locator(".repo-count")).toHaveText("2 loaded \u00b7 1 unread");
   await expect(page.locator(".repo-read")).toHaveAccessibleDescription("Mark 1 as read");
   await expect(page.locator('[data-focus-key="read:2"]')).toBeVisible();
   await expect(page.locator('[data-focus-key="done:2"]')).toBeVisible();
@@ -597,7 +599,7 @@ test("refresh preserves keyboard focus and collapsed repository state", async ({
   await page.goto(canvas.url);
   await expect(page.locator(".row")).toHaveCount(50);
   const disclosure = page.locator('[data-focus-key="repo:example/widgets"]');
-  await expect(disclosure).toHaveAccessibleName(/example\/widgets 49 total \u00b7 49 unread/);
+  await expect(disclosure).toHaveAccessibleName(/example\/widgets 49 loaded \u00b7 49 unread/);
   await disclosure.focus();
   await disclosure.press("Enter");
   await expect(disclosure).toHaveAttribute("aria-expanded", "false");
@@ -1027,14 +1029,14 @@ test("All notifications stays globally newest first through pagination, search a
   await grouping.selectOption("none");
   await expect(page.locator(".repo-group")).toHaveCount(1);
   await expect(page.locator(".repo-name")).toHaveText("All notifications");
-  await expect(page.locator(".repo-count")).toHaveText("50 total \u00b7 50 unread");
+  await expect(page.locator(".repo-count")).toHaveText("50 loaded \u00b7 50 unread");
   await expect(page.locator("#collapse")).toBeVisible();
   await expect(page.locator(".row .title")).toHaveText(canvas.rows.slice(0, 50).map(row => row.subject.title));
   await expect(page.locator(".row .repository").nth(2)).toHaveText("example/tools");
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Load more (up to 50)", exact: true }).click();
   await expect(page.locator(".row .title")).toHaveText(canvas.rows.map(row => row.subject.title));
-  await expect(page.locator(".repo-count")).toHaveText("53 total \u00b7 53 unread");
+  await expect(page.locator(".repo-count")).toHaveText("53 loaded \u00b7 53 unread");
   await page.getByRole("searchbox", { name: searchName }).fill("Needle");
   await expect(page.locator(".row .title")).toHaveText(canvas.rows.filter(row => row.subject.title.includes("Needle")).map(row => row.subject.title));
   await page.reload();
@@ -1084,18 +1086,18 @@ for (const width of [320, 480, 960]) {
       await expect(page.locator(".row")).toHaveCount(4);
       await expect(page.locator("html")).toHaveAttribute("data-notification-theme", theme);
       const search = page.getByRole("searchbox", { name: searchName });
-      await expect(search).toHaveAttribute("placeholder", "Search...");
+      await expect(search).toHaveAttribute("placeholder", "Search loaded notifications...");
       expect(await search.evaluate(node => {
         const style = getComputedStyle(node);
         const context = document.createElement("canvas").getContext("2d");
         context.font = `${style.fontSize} ${style.fontFamily}`;
         return context.measureText(node.placeholder).width <= node.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
       })).toBe(true);
-      await expect(page.locator(".repo-count")).toHaveText(["3 total \u00b7 3 unread", "1 total \u00b7 1 unread"]);
+      await expect(page.locator(".repo-count")).toHaveText(["3 loaded \u00b7 3 unread", "1 loaded \u00b7 1 unread"]);
       await expect(page.getByRole("button", { name: "Mark 1 as read in example/tools; 1 shown, loaded notifications", exact: true })).toBeVisible();
       await expect(page.getByRole("button", { name: "Mark 3 as read in example/widgets; 3 shown, loaded notifications", exact: true })).toBeVisible();
       await expect(page.getByRole("heading", { name: "GitHub Notifications", exact: true })).toBeVisible();
-      await expect(page.locator(".attention-navigation")).toHaveCSS("margin-top", "8px");
+      await expect(page.locator(".attention-navigation")).toHaveCSS("margin-top", width <= 360 ? "4px" : "8px");
       if (width <= 480) {
         const rows = await page.locator(".row").evaluateAll(nodes => nodes.map(node => {
           const time = node.querySelector("time").getBoundingClientRect();

@@ -43,13 +43,13 @@ test("renderer public controls survive bundling and minification", async () => {
     search.events.input();
     await ui.fireTimer(250);
     assert.equal(ui.document.querySelectorAll("article").length, 1);
-    assert.equal(ui.ids.get("count").textContent, "2 total \u00b7 2 unread \u00b7 1 matching");
+    assert.equal(ui.ids.get("count").textContent, "2 loaded \u00b7 2 unread \u00b7 1 matching");
     await ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.threadId === "2").events.click();
     assert.deepEqual(ui.patches, ["/notifications/threads/2"]);
     search.value = "";
     search.events.input();
     await ui.fireTimer(250);
-    assert.equal(ui.ids.get("count").textContent, "2 total \u00b7 1 unread");
+    assert.equal(ui.ids.get("count").textContent, "2 loaded \u00b7 1 unread");
     assert.equal(ui.document.querySelectorAll("article").length, 2);
   } finally {
     ui.window.events.pagehide();
@@ -586,7 +586,7 @@ test("issue and PR numbers appear in metadata in every grouping and search witho
       search.events.input();
       await ui.fireTimer(250);
       assert.equal(groups.querySelectorAll("article").length, 1);
-      assert.equal(ui.ids.get("count").textContent, "3 total \u00b7 3 unread \u00b7 1 matching");
+      assert.equal(ui.ids.get("count").textContent, "3 loaded \u00b7 3 unread \u00b7 1 matching");
       await groups.querySelectorAll("button").find(button => button.dataset.threadId === "101").events.click();
       assert.deepEqual(ui.patches, ["/notifications/threads/101"]);
     } finally {
@@ -602,26 +602,27 @@ test("canvas retains its document title with a compact heading and no decorative
   assert.doesNotMatch(html, /id="(?:all|unread|api-limit)"/);
 });
 
-test("inbox status always shows total and unread counts and adds matching counts only while searching", async () => {
+test("inbox status shows loaded and unread counts and adds matching counts only while searching", async () => {
   const ui = await renderer({ initialRows: [thread("1"), thread("2")] });
-  assert.equal(ui.ids.get("count").textContent, "2 total \u00b7 2 unread");
+  assert.equal(ui.ids.get("count").textContent, "2 loaded \u00b7 2 unread");
   assert.equal(ui.ids.get("count").hidden, false);
   assert.equal(ui.ids.has("coverage"), false);
   assert.doesNotMatch(script, /End of the available inbox|notifications loaded\./);
   assert.doesNotMatch(styles, /(?:^|\n)footer \{[^}]*border-top:/);
   await runInContext('update("filters", { query: "notification 1" })', ui.context);
-  assert.equal(ui.ids.get("count").textContent, "2 total \u00b7 2 unread \u00b7 1 matching");
+  assert.equal(ui.ids.get("count").textContent, "2 loaded \u00b7 2 unread \u00b7 1 matching");
   await runInContext('update("filters", { query: "no match" })', ui.context);
-  assert.equal(ui.ids.get("count").textContent, "2 total \u00b7 2 unread \u00b7 0 matching");
+  assert.equal(ui.ids.get("count").textContent, "2 loaded \u00b7 2 unread \u00b7 0 matching");
   assert.equal(ui.ids.get("count").hidden, false);
   await runInContext('update("filters", { query: "" })', ui.context);
-  assert.equal(ui.ids.get("count").textContent, "2 total \u00b7 2 unread");
+  assert.equal(ui.ids.get("count").textContent, "2 loaded \u00b7 2 unread");
   assert.match(html, /id="count"[^>]*title="Counts include loaded notifications only\."/);
   assert.match(html, /Search loaded notification titles, issue or PR numbers, and repositories/);
+  assert.match(html, /placeholder="Search loaded notifications\.\.\."/);
   ui.window.events.pagehide();
 });
 
-test("every grouping keeps the total and unread format for all-unread, mixed and all-read rows", async t => {
+test("every grouping keeps the loaded and unread format for all-unread, mixed and all-read rows", async t => {
   for (const groupBy of ["repo", "none", "date"]) {
     for (const unread of [0, 1, 2]) {
       const ui = await renderer({
@@ -629,7 +630,7 @@ test("every grouping keeps the total and unread format for all-unread, mixed and
         initialRows: [thread("1", { unread: unread > 0 }), thread("2", { unread: unread > 1 })],
       });
       t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
-      const expected = `2 total \u00b7 ${unread} unread`;
+      const expected = `2 loaded \u00b7 ${unread} unread`;
       assert.equal(ui.ids.get("count").textContent, expected);
       assert.equal(ui.ids.get("count").hidden, false);
       assert.deepEqual(ui.ids.get("groups").querySelectorAll(".repo-count").map(node => node.textContent), [expected]);
@@ -649,10 +650,10 @@ test("counts return on arrivals and hide immediately after completing the last n
   ui.setRows([thread("1")]);
   await ui.ids.get("force-refresh").events.click();
   assert.equal(ui.ids.get("count").hidden, false);
-  assert.equal(ui.ids.get("count").textContent, "1 total \u00b7 1 unread");
+  assert.equal(ui.ids.get("count").textContent, "1 loaded \u00b7 1 unread");
   await ui.ids.get("groups").querySelectorAll("button").find(node => node.dataset.focusKey === "done:1").events.click();
   await finishRows(ui);
-  assert.equal(ui.ids.get("count").textContent, "0 total \u00b7 0 unread");
+  assert.equal(ui.ids.get("count").textContent, "0 loaded \u00b7 0 unread");
   assert.equal(ui.ids.get("empty-title").textContent, "All caught up \u{1F389}");
   assert.equal(ui.ids.get("empty-refresh").hidden, true);
   assert.equal(ui.ids.get("count").hidden, true);
@@ -1134,18 +1135,18 @@ test("an empty inbox ends the caught-up heading with a party popper and hides th
 });
 
 test("loading, search and unavailable states restore the original icon tile without a celebration", async () => {
-  for (const setup of [
-    'state.status = "idle"',
-    'state.status = "loading"',
-    'state.filters.query = "no match"',
-    'state.error = { message: "GitHub unavailable" }',
-    'connectionError = "Connection unavailable"',
-    'state = undefined; connectionError = "Connection unavailable"',
+  for (const [setup, countsHidden] of [
+    ['state.status = "idle"', false],
+    ['state.status = "loading"', false],
+    ['state.filters.query = "no match"', false],
+    ['state.error = { message: "GitHub unavailable" }', false],
+    ['connectionError = "Connection unavailable"', false],
+    ['state = undefined; connectionError = "Connection unavailable"', true],
   ]) {
     const ui = await renderer({ initialRows: [] });
     await runInContext(`${setup}; render()`, ui.context);
     assert.equal(ui.ids.get("empty-symbol").hidden, false, setup);
-    assert.equal(ui.ids.get("count").hidden, false, setup);
+    assert.equal(ui.ids.get("count").hidden, countsHidden, setup);
     assert.doesNotMatch(ui.ids.get("empty-title").textContent, /\u{1F389}/u, setup);
   }
 });

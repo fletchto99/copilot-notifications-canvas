@@ -11,7 +11,7 @@ test("installed bundle supports search, saved settings and exact row writes in a
   await expect(page.locator(".metadata").getByText("Unread", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "GitHub Notifications", exact: true })).toBeVisible();
   await expect(page.locator(".eyebrow, #subtitle")).toHaveCount(0);
-  await expect(page.getByRole("searchbox")).toHaveAttribute("placeholder", "Search...");
+  await expect(page.getByRole("searchbox")).toHaveAttribute("placeholder", "Search loaded notifications...");
   await expect(page.getByRole("button", { name: "Mark 1 as read in example/tools; 1 shown, loaded notifications", exact: true })).toBeVisible();
   const next = page.getByRole("button", { name: "Scroll attention tabs right", exact: true });
   await expect(next).toBeVisible();

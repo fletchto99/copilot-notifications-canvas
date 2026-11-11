@@ -83,7 +83,9 @@ to creating a nested child. Actions are unavailable for custom development APIs.
 ## Starting a session
 
 By default, click the icon to inspect the selected reference and available
-sessions. **Start session** creates an independent, root-level session in the
+sessions. The dialog puts the task and reference first, followed by any repository
+setup warning. Privacy and confirmation preferences remain visible in a separate
+section below. **Start session** creates an independent, root-level session in the
 selected repository, not a child of the session containing the canvas.
 These generic sessions do not have the app's native issue/PR linkage.
 

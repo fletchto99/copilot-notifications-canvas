@@ -4,6 +4,50 @@ import { runInContext } from "node:vm";
 import { finishRows, renderer, settle } from "./renderer-fixtures.mjs";
 import { http, inboxNext as next, next as unreadNext, thread } from "./fixtures.mjs";
 
+test("counts stay unknown until a successful load and remain available during failed refreshes", async t => {
+  let response = http({}, { "retry-after": "120" }, 429);
+  let release;
+  const ui = await renderer({ onFetch: () => new Promise(resolve => {
+    release = () => resolve(response);
+  }) });
+  t.after(() => { release(); ui.window.events.pagehide(); ui.inbox.close(); });
+  const count = ui.ids.get("count");
+  const all = ui.ids.get("attention-tabs").children[0];
+  assert.equal(count.hidden, true);
+  assert.equal(all.textContent, "All");
+  release();
+  await settle();
+  assert.equal(ui.inbox.summary().status, "error");
+  assert.equal(count.hidden, true);
+  assert.equal(count.textContent, "");
+  assert.equal(all.textContent, "All");
+  assert.ok(ui.ids.get("attention-tabs").children.every(tab => !/\(\d/.test(tab.textContent)));
+
+  response = http([thread("1"), thread("2", { unread: false })], { link: next });
+  ui.advance(120_000);
+  let refresh = ui.ids.get("force-refresh").events.click();
+  await settle();
+  assert.equal(count.hidden, true);
+  release();
+  await refresh;
+  assert.equal(count.hidden, false);
+  assert.equal(count.textContent, "2 loaded \u00b7 1 unread");
+  assert.equal(all.textContent, "All (2)");
+
+  response = http({}, {}, 503);
+  refresh = ui.ids.get("force-refresh").events.click();
+  await settle();
+  assert.equal(count.hidden, false);
+  assert.equal(count.textContent, "2 loaded \u00b7 1 unread");
+  release();
+  await refresh;
+  assert.equal(ui.inbox.summary().status, "stale");
+  assert.equal(count.hidden, false);
+  assert.equal(count.textContent, "2 loaded \u00b7 1 unread");
+  assert.equal(all.textContent, "All (2)");
+  assert.match(ui.ids.get("notice").textContent, /Showing previously loaded notifications/);
+});
+
 test("clearing the last notifications is caught up immediately unless unloaded pages remain", async t => {
   for (const hasMore of [false, true]) {
     for (const matchGitHubInbox of [false, true]) {
