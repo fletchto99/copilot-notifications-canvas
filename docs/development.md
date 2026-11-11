@@ -231,7 +231,7 @@ real extension after SDK changes.
 | Platform | Non-delivering check |
 | --- | --- |
 | Windows | Construct real PowerShell XML/WinRT payloads with delivery removed; validate click targets, permission/sender failures, cancellation, and at-most-once behavior. XML round-trip tests allow 30 seconds; production keeps its 10-second timeout. |
-| macOS | Compile/decompile AppleScript with `osacompile` / `osadecompile`, never execute `display notification`. |
+| macOS | Compile/decompile AppleScript with `osacompile` / `osadecompile`, never execute `display notification`. Inject filesystem/process runners for terminal-notifier discovery, escaped arguments, click targets, sound, private image staging/cleanup, and no-retry failures; never send an alert. |
 | Linux | Run `notify-send` against an exclusively owned fake service on a private `dbus-run-session`; check escaping, Unicode, and sound hints. |
 
 For Linux, install `dbus-daemon`, `libnotify-bin`, `python3-dbus`, and `python3-gi`,
@@ -240,8 +240,16 @@ never uses the user's notification service, and fails rather than skips when
 tools are missing. It is separate from the dependency-free suite.
 
 Visible banners, real OS permissions, Focus/Do Not Disturb, and browser activation
-still need manual testing. Windows click targets are checked in the payload;
-Linux/macOS click navigation is not implemented.
+still need manual testing. Windows and macOS terminal-notifier click targets are
+checked in the payload; AppleScript fallback and Linux have no custom click target.
+
+The macOS content image is a 128x128 PNG embedded in `src/provider/github-mark.mjs`
+so source and packaged providers need no remote image or companion asset file.
+It is rasterized from the MIT-licensed Octicons GitHub mark identified in that
+module, with a `#24292f` mark, white background, and 16px padding. Preserve its
+license comment in release bundles. The notifier copies the attachment before
+returning; the extension then removes its private temporary image. Test this
+lifetime with fake process runners, not real native alerts.
 
 ### Coverage badge
 

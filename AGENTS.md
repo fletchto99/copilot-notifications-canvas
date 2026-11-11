@@ -150,7 +150,7 @@ in `test/fixtures/copilot-handoff.mjs` and the existing synthetic host fixture.
   between hosts or pass them into the renderer. Do not introduce telemetry or
   remote renderer assets.
 - Native alerts are the explicit opt-in exception: they send titles, repository
-  names, and Windows alerts' validated GitHub destinations to the OS.
+  names, and Windows/optional macOS terminal-notifier alerts' validated GitHub destinations to the OS.
   Do not enable desktop alerts or change preferences
   as a side effect of opening, updating, or testing the extension.
 - Bind each panel server to `127.0.0.1` on an ephemeral port. Preserve capability
@@ -294,7 +294,10 @@ notifications, or write to the user's real `COPILOT_HOME`.
 Native notification checks must stay non-delivering: Windows builds toast XML
 with native delivery removed, macOS compiles AppleScript without executing it,
 and Linux uses an exclusively owned fake notification service on a private
-D-Bus session. The Node.js 24 Linux CI job uses `ubuntu-latest` for its system
+D-Bus session. Test terminal-notifier discovery and argv with injected filesystem
+and process runners; never invoke it to send a real test alert. Its absence permits
+AppleScript fallback, but a failed delivery must never retry through another backend.
+The Node.js 24 Linux CI job uses `ubuntu-latest` for its system
 test packages; Node.js 22 coverage and source lint remain on `ubuntu-slim`.
 See [native notification coverage](docs/development.md#native-notification-coverage).
 

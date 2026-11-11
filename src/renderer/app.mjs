@@ -198,6 +198,13 @@ function renderSettingsError() {
 }
 
 function renderSettings() {
+  const desktopStatus = preferences?.desktopStatus;
+  $("desktop-recommendation").hidden = desktopStatus?.platform !== "darwin" ||
+    desktopStatus.backend !== "osascript" || preferences.terminalNotifierHintDismissed === true;
+  $("dismiss-terminal-notifier").disabled = settingsBusy;
+  $("check-terminal-notifier").disabled = settingsBusy;
+  $("desktop-backend").hidden = desktopStatus?.platform !== "darwin";
+  $("desktop-backend").textContent = desktopStatus?.platform === "darwin" ? desktopStatus.help : "";
   renderNotificationView();
   $("theme").disabled = settingsBusy || !preferences;
   renderTheme();
@@ -269,7 +276,8 @@ async function settingsRequest(input, quiet = false, path = "settings") {
   if (!visible()) return;
   const active = document.activeElement;
   // Settings must not restore a row action's focus while that action is pending.
-  const previousFocus = $("settings").contains(active) ? active?.closest("select") ?? active : null;
+  const previousFocus = $("settings").contains(active) || $("desktop-recommendation").contains(active)
+    ? active?.closest("select") ?? active : null;
   if (settingsBusy) {
     if (input && !pendingSettings) {
       pendingSettings = { input, path, focus: previousFocus };
@@ -306,7 +314,8 @@ async function settingsRequest(input, quiet = false, path = "settings") {
     settingsBusy = false;
     $("settings-status").hidden = !$("settings-status").textContent;
     renderSettings();
-    restoreFocus(previousFocus);
+    restoreFocus(previousFocus, $("desktop-recommendation").hidden && $("desktop-recommendation").contains(previousFocus)
+      ? $("search") : undefined);
     if (pendingSettings && visible()) {
       const next = pendingSettings;
       pendingSettings = undefined;
@@ -1638,6 +1647,11 @@ $("desktop-notifications").addEventListener("click", () => {
 });
 $("desktop-sound").addEventListener("change", () => {
   if (preferences && !$("desktop-sound").disabled) void settingsRequest({ desktopSound: $("desktop-sound").value });
+});
+
+$("check-terminal-notifier").addEventListener("click", () => { void settingsRequest(); });
+$("dismiss-terminal-notifier").addEventListener("click", () => {
+  if (preferences) void settingsRequest({ terminalNotifierHintDismissed: true });
 });
 $("theme").addEventListener("change", () => {
   if (preferences && !$("theme").disabled) {

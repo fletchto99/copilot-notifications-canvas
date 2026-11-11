@@ -687,13 +687,18 @@ kbd {
   overflow-wrap: anywhere;
 }
 
-.update-banner {
+.update-banner,
+.desktop-recommendation {
   margin: 10px 0;
   border: 1px solid var(--border);
   border-left: 3px solid var(--accent);
   border-radius: 8px;
   padding: 10px 12px;
   overflow-wrap: anywhere;
+}
+
+.desktop-recommendation p {
+  margin: 0 0 8px;
 }
 
 .update-heading {

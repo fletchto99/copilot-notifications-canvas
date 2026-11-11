@@ -13,6 +13,7 @@ const settingValidators = {
   matchGitHubInbox: booleanValue,
   autoOpen: booleanValue,
   desktopNotifications: booleanValue,
+  terminalNotifierHintDismissed: booleanValue,
   darkMode: value => value === null || booleanValue(value),
   desktopSound: validSound,
   groupBy: value => ["none", "repo", "date"].includes(value),
@@ -25,6 +26,7 @@ const settingsValue = data => ({
   matchGitHubInbox: data.matchGitHubInbox ?? true,
   autoOpen: data.autoOpen ?? false,
   desktopNotifications: data.desktopNotifications ?? false,
+  terminalNotifierHintDismissed: data.terminalNotifierHintDismissed ?? false,
   darkMode: data.darkMode ?? null,
   desktopSound: data.desktopSound ?? "default",
   groupBy: data.groupBy ?? "repo",
@@ -57,7 +59,7 @@ export class Preferences {
       return data;
     } catch (error) {
       if (error.code === "ENOENT") return {};
-      throw new InboxError("settings_read", "Could not read notification settings. Check artifacts/settings.json; matchGitHubInbox, autoOpen, desktopNotifications, copilotIntegration, confirmCopilotActions, hideEmptyTabs and keyboardShortcuts must be booleans, darkMode must be a boolean or null, desktopSound must be a supported sound name, and groupBy must be none, repo, or date.", 500);
+      throw new InboxError("settings_read", "Could not read notification settings. Check artifacts/settings.json; matchGitHubInbox, autoOpen, desktopNotifications, terminalNotifierHintDismissed, copilotIntegration, confirmCopilotActions, hideEmptyTabs and keyboardShortcuts must be booleans, darkMode must be a boolean or null, desktopSound must be a supported sound name, and groupBy must be none, repo, or date.", 500);
     } finally {
       await file?.close();
     }
@@ -91,7 +93,7 @@ export class Preferences {
         Object.keys(input).length === 0 ||
         Object.keys(input).some(key => !Object.hasOwn(settingValidators, key)) ||
         Object.entries(settingValidators).some(([key, valid]) => Object.hasOwn(input, key) && !valid(input[key]))) {
-      throw new InboxError("invalid_settings", "Settings accept matchGitHubInbox, autoOpen, desktopNotifications, copilotIntegration, confirmCopilotActions, hideEmptyTabs and keyboardShortcuts booleans, darkMode as a boolean or null, desktopSound as a supported sound name, and groupBy set to none, repo, or date.", 400);
+      throw new InboxError("invalid_settings", "Settings accept matchGitHubInbox, autoOpen, desktopNotifications, terminalNotifierHintDismissed, copilotIntegration, confirmCopilotActions, hideEmptyTabs and keyboardShortcuts booleans, darkMode as a boolean or null, desktopSound as a supported sound name, and groupBy set to none, repo, or date.", 400);
     }
     return settingsValue(await this.#write(input));
   }

@@ -1,11 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { readFileSync, statSync } from "node:fs";
+import * as fs from "node:fs/promises";
+import { mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, win32 } from "node:path";
+import { dirname, isAbsolute, join, win32 } from "node:path";
 import { promisify } from "node:util";
-import { notifyDesktop, notificationScript, windowsSenderScript, windowsDeliveryScript, windowsScript, desktopCapabilities, validSound } from "../src/provider/notifier.mjs";
+import { notifyDesktop, notificationScript, windowsSenderScript, windowsDeliveryScript, windowsScript, desktopCapabilities, findTerminalNotifier, validSound } from "../src/provider/notifier.mjs";
 
 const title = "example/widgets";
 const body = 'Fix <widget> & "quotes"; $(do-not-run)\nUnicode: caf\u00e9';
@@ -19,7 +21,7 @@ function decodeNotifySendBody(value) {
 
 async function command(platform, sound = "none", overrides = {}) {
   let call;
-  await notifyDesktop({ title, body, platform, sound, execute: (...args) => {
+  await notifyDesktop({ title, body, platform, sound, findNotifier: async () => null, execute: (...args) => {
     call = args.slice(0, 3);
     args[3](null);
   }, ...overrides });
@@ -35,6 +37,158 @@ test("macOS passes repository, untrusted title and selected sound as data, never
     assert.deepEqual(args, ["-e", notificationScript, title, body, sound === "default" ? "DefaultSoundName" : sound]);
     assert.equal(notificationScript.includes(body), false);
   }
+});
+
+test("terminal-notifier discovery checks absolute PATH entries and both Homebrew locations without running a command", async () => {
+  for (const installed of ["/custom/bin/terminal-notifier", "/opt/homebrew/bin/terminal-notifier", "/usr/local/bin/terminal-notifier", null]) {
+    const checked = [];
+    const result = await findTerminalNotifier({
+      env: { PATH: ":.:relative:/custom/bin:/custom/bin" },
+      io: {
+        access: async path => {
+          checked.push(path);
+          if (path !== installed) throw Object.assign(new Error("not installed"), { code: "ENOENT" });
+        },
+        stat: async () => ({ isFile: () => true }),
+      },
+    });
+    assert.equal(result, installed);
+    const candidates = ["/custom/bin/terminal-notifier", "/opt/homebrew/bin/terminal-notifier", "/usr/local/bin/terminal-notifier"];
+    assert.deepEqual(checked, candidates.slice(0, installed ? candidates.indexOf(installed) + 1 : undefined));
+  }
+  assert.equal(await findTerminalNotifier({ env: {}, io: {
+    access: async () => {}, stat: async () => ({ isFile: () => false }),
+  } }), null);
+  assert.equal(await findTerminalNotifier({ env: {}, io: {
+    access: async () => { throw Object.assign(new Error(), { code: "ENOTDIR" }); },
+  } }), null);
+  await assert.rejects(findTerminalNotifier({ env: {}, io: {
+    access: async () => { throw Object.assign(new Error("private path"), { code: "EACCES" }); },
+  } }), error => error.code === "desktop_backend" && !error.message.includes("private"));
+});
+
+test("terminal-notifier uses escaped data, validated click URLs and optional sounds without sender spoofing or shell actions", async () => {
+  const program = "/opt/homebrew/bin/terminal-notifier";
+  for (const sound of ["none", "default", "Glass"]) {
+    for (const value of [body, "[array]", "(list)", "{dictionary}", '"quote"', "-execute", "-message", "\\literal", ""]) {
+      const [executable, args] = await command("darwin", sound, {
+        title: value, body: value, url: "https://github.com/example/widgets/issues/7", findNotifier: async () => program,
+      });
+      assert.equal(executable, program);
+      assert.deepEqual(args, ["-title", `\\${value}`, "-message", `\\${value}`, "-open",
+        "https://github.com/example/widgets/issues/7", ...(sound === "none" ? [] : ["-sound", sound]),
+        "-contentImage", args.at(-1)]);
+      assert.equal(args.includes("-execute"), false);
+      assert.equal(args.includes("-sender"), false);
+      assert.equal(args.includes("-activate"), false);
+    }
+  }
+  const [, args] = await command("darwin", "none", { terminalNotifier: program });
+  assert.equal(args[args.indexOf("-open") + 1], "https://github.com/notifications");
+  assert.equal(desktopCapabilities("darwin", program).backend, "terminal-notifier");
+  assert.equal(desktopCapabilities("darwin", null).backend, "osascript");
+});
+
+test("terminal-notifier failures are sanitized, remove their images and never retry through AppleScript", async t => {
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "notification-image-failure-"));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  for (const failure of [{ code: "ENOENT" }, { code: "EACCES" }, { killed: true }, new Error(body)]) {
+    const calls = [];
+    await assert.rejects(command("darwin", "none", {
+      terminalNotifier: "/opt/homebrew/bin/terminal-notifier",
+      temporaryRoot,
+      execute: (...args) => { calls.push(args[0]); args[3](failure, body, body); },
+    }), error => error.code === "desktop_delivery" && error.message.includes("terminal-notifier") &&
+      error.message.endsWith("This alert will not be retried.") && !error.message.includes(body));
+    assert.deepEqual(calls, ["/opt/homebrew/bin/terminal-notifier"]);
+    assert.deepEqual(await readdir(temporaryRoot), []);
+  }
+});
+
+test("concurrent terminal-notifier deliveries keep private local PNGs until completion and clean only their own files", async t => {
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "notification image test "));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  await writeFile(join(temporaryRoot, "keep.txt"), "unrelated");
+  const pending = [];
+  const sends = Array.from({ length: 2 }, () => notifyDesktop({
+    title, body, platform: "darwin", terminalNotifier: "/synthetic/terminal-notifier", temporaryRoot,
+    execute: (program, args, options, callback) => {
+      const path = args[args.indexOf("-contentImage") + 1];
+      assert.equal(program, "/synthetic/terminal-notifier");
+      assert.equal(isAbsolute(path), true);
+      assert.equal(dirname(dirname(path)), temporaryRoot);
+      const image = readFileSync(path);
+      assert.equal(image.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
+      assert.equal(image.readUInt32BE(16), 128);
+      assert.equal(image.readUInt32BE(20), 128);
+      if (process.platform !== "win32") {
+        assert.equal(statSync(path).mode & 0o777, 0o600);
+        assert.equal(statSync(dirname(path)).mode & 0o777, 0o700);
+      }
+      pending.push({ path, callback });
+      if (pending.length === 2) {
+        assert.notEqual(pending[0].path, pending[1].path);
+        for (const item of pending) {
+          assert.ok(statSync(item.path).isFile());
+          item.callback(null);
+        }
+      }
+    },
+  }));
+  await Promise.all(sends);
+  assert.equal(pending.length, 2);
+  for (const { path } of pending) await assert.rejects(stat(dirname(path)), { code: "ENOENT" });
+  assert.deepEqual(await readdir(temporaryRoot), ["keep.txt"]);
+});
+
+test("image preparation errors and cancellation do not send alerts or leave temporary files", async t => {
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "notification-image-preparation-"));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  for (const stage of ["mkdtemp", "writeFile", "cancel"]) {
+    const controller = new AbortController();
+    const io = { ...fs };
+    if (stage === "cancel") {
+      io.writeFile = async (...args) => { await fs.writeFile(...args); controller.abort(); };
+    } else {
+      io[stage] = async () => { throw new Error(body); };
+    }
+    await assert.rejects(notifyDesktop({
+      title, body, platform: "darwin", terminalNotifier: "/synthetic/terminal-notifier", temporaryRoot, io,
+      signal: controller.signal, execute: () => assert.fail("Image preparation must finish before sending"),
+    }), error => error.code === (stage === "cancel" ? "closed" : "desktop_image") && !error.message.includes(body));
+    assert.deepEqual(await readdir(temporaryRoot), []);
+  }
+});
+
+test("image cleanup failures are explicit and cannot replay a delivered alert", async t => {
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "notification-image-cleanup-"));
+  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  let delivered = 0;
+  await assert.rejects(notifyDesktop({
+    title, body, platform: "darwin", terminalNotifier: "/synthetic/terminal-notifier", temporaryRoot,
+    io: { ...fs, rm: async () => { throw new Error(body); } },
+    execute: (program, args, options, callback) => { delivered++; callback(null); },
+  }), error => error.code === "desktop_image_cleanup" && !error.message.includes(body) &&
+    error.message.endsWith("This alert will not be retried."));
+  assert.equal(delivered, 1);
+});
+
+test("AppleScript fallback and other platforms never stage or attach an image", async () => {
+  for (const platform of ["darwin", "win32", "linux"]) {
+    const [, args] = await command(platform, "none", {
+      io: { mkdtemp: () => assert.fail("Only terminal-notifier needs a content image") },
+    });
+    assert.equal(args.includes("-contentImage"), false);
+  }
+});
+
+test("cancellation during terminal-notifier discovery prevents native delivery", async () => {
+  const controller = new AbortController();
+  await assert.rejects(command("darwin", "none", {
+    signal: controller.signal,
+    findNotifier: async () => { controller.abort(); return "/opt/homebrew/bin/terminal-notifier"; },
+    execute: () => assert.fail("cancelled discovery must not deliver"),
+  }), { code: "closed" });
 });
 
 test("macOS compiles the actual notification script without executing it or showing an alert", {
@@ -138,7 +292,7 @@ $root = $roundtrip.DocumentElement
   }
 });
 
-test("adding a destination does not change macOS or Linux delivery commands", async () => {
+test("adding a destination does not change AppleScript fallback or Linux delivery commands", async () => {
   const url = "https://github.com/example/widgets/issues/7";
   for (const platform of ["darwin", "linux"]) {
     const [program, args] = await command(platform);

@@ -208,6 +208,9 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
   for (const id of ["batch-retry", "batch-dismiss"]) ids.get(id).parentNode = ids.get("batch-buttons");
   ids.get("batch-progress").contains = node =>
     ["batch-progress", "batch-buttons", "batch-retry", "batch-dismiss"].some(id => ids.get(id) === node);
+  for (const id of ["check-terminal-notifier", "dismiss-terminal-notifier"]) {
+    ids.get("desktop-recommendation").append(ids.get(id));
+  }
   ids.get("settings").contains = node =>
     node === ids.get("settings") ||
     ["settings-toggle", "settings-panel", "show-notifications", "auto-open", "theme", "group-by", "copilot-integration", "copilot-confirmations", "hide-empty-tabs", "keyboard-shortcuts", "check-updates", "desktop-notifications", "desktop-sound",
