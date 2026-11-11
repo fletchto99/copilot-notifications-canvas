@@ -992,12 +992,8 @@ test("Settings supports keyboard dismissal and persists theme and auto-open acro
   await page.goto(canvas.url);
   const settings = page.getByLabel("Settings", { exact: true });
   await settings.focus();
-  await Promise.all([
-    page.evaluate(() => new Promise(resolve => {
-      document.getElementById("settings").addEventListener("toggle", () => resolve(), { once: true });
-    })),
-    settings.press("Enter"),
-  ]);
+  await settings.press("Enter");
+  await expect(settings).toHaveAttribute("aria-expanded", "true");
   const theme = page.getByRole("combobox", { name: "Theme", exact: true });
   await expect(theme).toBeEnabled();
   await expect(theme.locator("option")).toHaveText(["Match Copilot", "Dark", "Light"]);

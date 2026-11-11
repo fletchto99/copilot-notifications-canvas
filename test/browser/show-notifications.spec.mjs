@@ -18,12 +18,8 @@ for (const packaged of [false, true]) {
           await page.getByRole("searchbox").focus();
           await page.keyboard.press("Shift+Tab");
           await expect(settings).toBeFocused();
-          await Promise.all([
-            page.evaluate(() => new Promise(resolve => {
-              document.getElementById("settings").addEventListener("toggle", () => resolve(), { once: true });
-            })),
-            page.keyboard.press("Enter"),
-          ]);
+          await page.keyboard.press("Enter");
+          await expect(settings).toHaveAttribute("aria-expanded", "true");
           await expect(grouping).toBeEnabled();
           await expect(page.locator("#show-notifications, #inbox-mode")).toHaveCount(0);
           await page.keyboard.press("Tab");
@@ -33,6 +29,7 @@ for (const packaged of [false, true]) {
           await page.mouse.move(0, 0);
           expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
           await page.keyboard.press("Escape");
+          await expect(settings).toHaveAttribute("aria-expanded", "false");
           await expect(settings).toBeFocused();
         }
       }

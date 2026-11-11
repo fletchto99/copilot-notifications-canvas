@@ -1,16 +1,12 @@
-/* global document */
 import { test as base, expect } from "@playwright/test";
 import { createCanvasFixture } from "../canvas-fixtures.mjs";
 
 export { expect };
 
 export async function openSettings(page) {
-  await Promise.all([
-    page.evaluate(() => new Promise(resolve => {
-      document.getElementById("settings").addEventListener("toggle", () => resolve(), { once: true });
-    })),
-    page.locator("#settings-toggle").click(),
-  ]);
+  const settings = page.locator("#settings-toggle");
+  await settings.click();
+  await expect(settings).toHaveAttribute("aria-expanded", "true");
   await expect(page.locator("#theme")).toBeEnabled();
 }
 
