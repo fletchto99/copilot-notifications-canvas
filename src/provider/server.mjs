@@ -392,12 +392,20 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         throw new InboxError("invalid_grouping", "Choose a supported notification grouping.", 400);
       }
       if (timeZone !== null || groupBy === "date") groupThreadsByDate([], timeZone);
+      assertMethod(req.method, route);
+      let input;
+      if (req.method === "POST") {
+        if (req.headers.origin !== origin) throw new InboxError("origin", "A same-origin request is required.", 403);
+        input = await readBody(req);
+        if (!route.acceptsInput && Object.keys(input).length) {
+          throw new InboxError("invalid_input", "This action takes an empty object.", 400);
+        }
+      }
       const settings = preferences && ["/api/state", "/api/refresh", "/api/more", "/api/filters",
         "/api/batch/start", "/api/batch/retry"].includes(path)
         ? await inbox.syncSettings(preferences) : null;
       if (settings) copilot?.setSettings(settings);
       setSubjectView({ groupBy: groupBy ?? settings?.groupBy ?? subjectView.groupBy, timeZone });
-      assertMethod(req.method, route);
       if (req.method === "GET") {
         if (path === "/api/state" && req.headers["x-notification-acknowledged-version"] !== undefined) {
           inbox.batch.acknowledge(req.headers["x-notification-acknowledged-version"]);
@@ -409,11 +417,6 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
           return json(200, await settingsSnapshot(settings));
         }
       } else {
-        if (req.headers.origin !== origin) throw new InboxError("origin", "A same-origin request is required.", 403);
-        const input = await readBody(req);
-        if (!route.acceptsInput && Object.keys(input).length) {
-          throw new InboxError("invalid_input", "This action takes an empty object.", 400);
-        }
         if (path === "/api/subjects") return json(200, selectSubjects(input));
         if (path === "/api/copilot") {
           if (!copilot || developmentAPI?.target.custom) throw new InboxError("copilot_unavailable", "Copilot actions are unavailable in this panel.", 503);

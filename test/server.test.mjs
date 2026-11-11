@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { request } from "node:http";
+import { IncomingMessage, request } from "node:http";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -243,6 +243,91 @@ test("methods, paths, origins, hosts, JSON, filter input and oversized bodies ar
     req.end();
   });
   assert.equal(hostStatus, 403);
+});
+
+test("streamed batch bodies cannot outlive the shared-filter check", async t => {
+  for (const operation of ["start", "retry"]) {
+    for (const action of ["read", "done"]) {
+      await t.test(`${operation}: ${action}`, { timeout: 5000 }, async subtest => {
+        const directory = await mkdtemp(join(tmpdir(), "notification-streamed-batch-"));
+        const preferences = new Preferences({ directory });
+        const writer = new Preferences({ directory });
+        const writes = [];
+        let fail = operation === "retry";
+        const { origin, headers, inbox } = await setup(subtest, async args => {
+          if (args.includes("GET")) return http([
+            thread("1", { subject: { type: "Issue", title: "Synthetic issue", url: null } }), thread("2"),
+          ]);
+          writes.push(args.at(-1));
+          return fail ? http({}, {}, 500) : http(null, {}, action === "done" ? 204 : 205);
+        }, { preferences });
+        subtest.after(() => rm(directory, { recursive: true, force: true }));
+        let now = Date.now();
+        inbox.client.now = () => now;
+        const post = (path, body) => fetch(`${origin}/api/${path}`, {
+          method: "POST", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify(body),
+        });
+        const initial = await (await post("refresh", {})).json();
+        const start = { scope: "shown", selectionKey: initial.selectionKey, action };
+        if (operation === "retry") {
+          assert.equal((await post("batch/start", start)).status, 202);
+          await inbox.batch.done;
+          now = inbox.client.blockedUntil;
+          fail = false;
+          writes.length = 0;
+        }
+        const input = operation === "start" ? start : retrySelection(inbox, { token: inbox.batch.snapshot().token });
+        const path = `/api/batch/${operation}`;
+        let bodyStarted;
+        const reading = new Promise(resolve => { bodyStarted = resolve; });
+        // Observe body consumption without draining the request or relying on a delay.
+        const descriptor = Object.getOwnPropertyDescriptor(IncomingMessage.prototype, Symbol.asyncIterator);
+        const iterate = IncomingMessage.prototype[Symbol.asyncIterator];
+        Object.defineProperty(IncomingMessage.prototype, Symbol.asyncIterator, {
+          configurable: true,
+          value: function () {
+            if (this.url === path && this.headers.host === new URL(origin).host) bodyStarted();
+            return iterate.call(this);
+          },
+        });
+        subtest.after(() => {
+          if (descriptor) Object.defineProperty(IncomingMessage.prototype, Symbol.asyncIterator, descriptor);
+          else delete IncomingMessage.prototype[Symbol.asyncIterator];
+        });
+        const body = JSON.stringify(input);
+        let pending;
+        const response = new Promise((resolve, reject) => {
+          pending = request(`${origin}${path}`, {
+            method: "POST", headers: { ...headers, "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) },
+          }, result => {
+            let content = "";
+            result.setEncoding("utf8");
+            result.on("data", chunk => { content += chunk; });
+            result.on("end", () => resolve({ status: result.statusCode, body: content }));
+            result.on("error", reject);
+          });
+          pending.on("error", reject);
+          pending.write(body.slice(0, -1));
+        });
+        subtest.after(() => pending.destroy());
+        await Promise.race([reading, response.then(() => assert.fail("Batch responded before its body was complete"))]);
+        await writer.updateFilters({ type: "Issue" });
+        pending.end(body.slice(-1));
+        const result = await response;
+        assert.equal(result.status, 409);
+        assert.equal(JSON.parse(result.body).error.code, "selection_changed");
+        assert.deepEqual(writes, []);
+        const reviewed = await (await fetch(`${origin}/api/state`, { headers })).json();
+        const fresh = operation === "start"
+          ? { ...start, selectionKey: reviewed.selectionKey }
+          : { token: reviewed.batch.token, selectionKey: reviewed.batch.retrySelectionKey };
+        assert.equal((await post(`batch/${operation}`, fresh)).status, 202);
+        await inbox.batch.done;
+        assert.deepEqual(writes, ["/notifications/threads/1"]);
+        assert.equal(inbox.loadedItems().find(item => item.id === "2").unread, true);
+      });
+    }
+  }
 });
 
 test("HTTP filters combine refinements, attention and search without fetching or writing GitHub state", async t => {

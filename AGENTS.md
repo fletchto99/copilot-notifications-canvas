@@ -202,7 +202,8 @@ in `test/fixtures/copilot-handoff.mjs` and the existing synthetic host fixture.
   stamps a UTC `updatedAt` and increments a safe-integer `revision`; order
   observations by revision, not wall-clock time. Ignore stale reads and write
   responses. Failed or uncertain shared saves must not replay old edits
-  automatically. Sync preferences before new batch starts/retries so stale
+  automatically. Parse the request body before syncing preferences, then validate
+  new batch starts/retries without another intervening await so stale
   selection keys are rejected; running batches retain their captured targets.
   Retry requests must carry the rendered retry-selection key, binding current
   filters and eligible original targets; reject a changed key before any write.
