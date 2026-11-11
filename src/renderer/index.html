@@ -14,36 +14,25 @@
         <h1>GitHub Notifications</h1>
         <div id="inbox-control" class="tooltip-anchor">
           <a id="open-inbox" class="icon-button" role="link" aria-disabled="true" tabindex="-1" target="_blank" rel="noopener noreferrer" aria-label="Open GitHub inbox" aria-describedby="inbox-tooltip">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true" focusable="false">
-              <path d="M4 4h16l2 10v6H2v-6Z"/>
-              <path d="M2 14h6l2 3h4l2-3h6"/>
-            </svg>
+            <svg id="inbox-icon" width="18" height="18" aria-hidden="true" focusable="false"></svg>
           </a>
           <span id="inbox-tooltip" class="tooltip" role="tooltip"><span class="tooltip-content">Open GitHub inbox</span></span>
         </div>
         <div id="refresh-control" class="tooltip-anchor">
           <button id="force-refresh" class="icon-button" type="button" aria-label="Force refresh" aria-describedby="refresh-tooltip" aria-busy="false">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-              <path d="M20 4v6h-6M20 10a8 8 0 1 0-2.3 7.7"/>
-            </svg>
+            <svg id="refresh-icon" width="18" height="18" aria-hidden="true" focusable="false"></svg>
           </button>
           <span id="refresh-tooltip" class="tooltip" role="tooltip"><span id="refresh-tooltip-text" class="tooltip-content">Not updated yet</span></span>
         </div>
         <div id="shortcuts-control" class="tooltip-anchor">
           <button id="shortcuts-toggle" class="icon-button" type="button" aria-label="Keyboard shortcuts" aria-describedby="shortcuts-tooltip" aria-haspopup="dialog" aria-controls="shortcuts-dialog">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-              <rect x="2" y="5" width="20" height="14" rx="2"/>
-              <path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M7 15h10"/>
-            </svg>
+            <svg id="shortcuts-icon" width="18" height="18" aria-hidden="true" focusable="false"></svg>
           </button>
           <span id="shortcuts-tooltip" class="tooltip" role="tooltip"><span id="shortcuts-tooltip-text" class="tooltip-content">Keyboard shortcuts (?)</span></span>
         </div>
         <details id="settings" class="settings">
           <summary id="settings-toggle" class="icon-button tooltip-anchor" aria-label="Settings" aria-describedby="settings-tooltip" aria-controls="settings-panel" aria-expanded="false">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true" focusable="false">
-              <path d="M10 2h4l.6 2.8L17 6.2l2.7-.9 2 3.4-2.1 1.9v2.8l2.1 1.9-2 3.4-2.7-.9-2.4 1.4L14 22h-4l-.6-2.8L7 17.8l-2.7.9-2-3.4 2.1-1.9v-2.8L2.3 8.7l2-3.4 2.7.9 2.4-1.4Z"/>
-              <circle cx="12" cy="12" r="3.2"/>
-            </svg>
+            <svg id="settings-icon" width="18" height="18" aria-hidden="true" focusable="false"></svg>
             <span id="settings-tooltip" class="tooltip" role="tooltip"><span class="tooltip-content">Settings</span></span>
           </summary>
           <div id="settings-panel" class="settings-panel" role="group" aria-label="Notification settings">
@@ -133,9 +122,7 @@
           <button id="copy-update" type="button">Copy update prompt</button>
           <a id="release-notes" target="_blank" rel="noopener noreferrer">Release notes</a>
           <button id="update-details-toggle" type="button" aria-expanded="false" aria-controls="update-prompt-details">
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true" focusable="false">
-              <path d="M4 2 9 6 4 10Z"/>
-            </svg>
+            <svg id="update-details-icon" width="12" height="12" aria-hidden="true" focusable="false"></svg>
             Update details
           </button>
           <p id="copy-status" class="settings-help" role="status" aria-live="polite"></p>
@@ -163,15 +150,11 @@
       </label>
       <div id="attention-navigation" class="attention-navigation">
         <button id="attention-previous" class="attention-scroll" type="button" aria-label="Scroll attention tabs left" aria-controls="attention-tabs" aria-disabled="true" hidden>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-            <path d="m14 6-6 6 6 6"/>
-          </svg>
+          <svg id="attention-previous-icon" width="18" height="18" aria-hidden="true" focusable="false"></svg>
         </button>
         <div id="attention-tabs" class="attention-tabs" role="tablist" aria-label="Attention filters"></div>
         <button id="attention-next" class="attention-scroll" type="button" aria-label="Scroll attention tabs right" aria-controls="attention-tabs" aria-disabled="true" hidden>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-            <path d="m10 6 6 6-6 6"/>
-          </svg>
+          <svg id="attention-next-icon" width="18" height="18" aria-hidden="true" focusable="false"></svg>
         </button>
       </div>
       <div class="status-line">

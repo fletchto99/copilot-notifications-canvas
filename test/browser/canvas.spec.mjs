@@ -696,6 +696,15 @@ test("the refresh icon exposes pending state, preserves queued clicks, and respe
     await expect(refresh.locator("svg")).toHaveCSS("animation-name", "none");
     await page.emulateMedia({ reducedMotion: "no-preference" });
     await expect(refresh.locator("svg")).toHaveCSS("animation-name", "refresh-spin");
+    const rotation = await refresh.locator("svg").evaluate(node => {
+      const animation = node.getAnimations()[0];
+      animation.pause();
+      animation.currentTime = animation.effect.getTiming().duration / 4;
+      const transform = new DOMMatrix(getComputedStyle(node).transform);
+      animation.play();
+      return Math.atan2(transform.b, transform.a) * 180 / Math.PI;
+    });
+    expect(rotation, "The sync arrows rotate counterclockwise").toBeCloseTo(-90, 1);
     await refresh.click();
     await expect(page.locator("#refresh-tooltip-text")).toHaveText(/^Refresh queued\. Last updated /);
     canvas.setRequestHook(undefined);

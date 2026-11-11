@@ -5,17 +5,17 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-test("CI runs ESLint, Stylelint and Prettier checks without allowing warnings", async () => {
+test("CI runs lint and generated icon checks without allowing warnings or stale artwork", async () => {
   const [workflow, { scripts }] = await Promise.all([
-    readFile(new URL("../.github/workflows/tests.yml", import.meta.url), "utf8"),
+    readFile(new URL("../.github/workflows/tests.yml", import.meta.url), "utf8").then(text => text.replaceAll("\r\n", "\n")),
     readFile(new URL("../package.json", import.meta.url), "utf8").then(JSON.parse),
   ]);
   const lint = workflow.match(/\n {2}lint:\n([\s\S]*?)(?=\n {2}[a-z][\w-]*:|$)/)?.[1];
   assert.ok(lint, "CI must have a lint job");
-  for (const script of ["lint:js", "lint:css", "format:css:check", "lint:recovery"]) {
+  for (const script of ["lint:js", "lint:css", "format:css:check", "lint:recovery", "icons:check"]) {
     assert.match(lint, new RegExp(`^\\s+run: npm run ${script}$`, "m"));
   }
-  assert.equal(scripts.lint, "npm run lint:js && npm run lint:css && npm run format:css:check && npm run lint:recovery");
+  assert.equal(scripts.lint, "npm run lint:js && npm run lint:css && npm run format:css:check && npm run lint:recovery && npm run icons:check");
   assert.equal(scripts["lint:js"], "eslint . --max-warnings=0");
   assert.equal(scripts["lint:css"], 'stylelint "src/**/*.css" --max-warnings=0');
   assert.equal(scripts["format:css:check"], 'prettier --check "src/**/*.css"');

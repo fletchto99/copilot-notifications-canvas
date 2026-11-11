@@ -49,6 +49,12 @@ dependencies there and update the dependency-free renderer fixture when adding
 imports. Keep source coverage discovery recursive and retain the packaged
 renderer checks when moving or extracting modules.
 
+Renderer Octicons use the pinned dependency's 24px artwork scaled to the existing
+display sizes; preserve the 24-unit viewBox. Update the selected names in
+`scripts/generate-icons.mjs`, then run `npm run icons:generate`;
+never hand-edit `src/renderer/octicons.mjs`. Commit regenerated output alongside
+dependency updates. `npm run icons:check`, lint, CI, and release builds reject drift.
+
 Keep API methods, input policy, and batch dispatch metadata in the route table
 in `provider/server.mjs`; authentication, readiness, origin checks, and error
 translation remain shared request guards. Copilot tests are split into

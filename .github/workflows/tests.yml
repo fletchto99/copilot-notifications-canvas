@@ -99,6 +99,8 @@ jobs:
         run: npm run format:css:check
       - name: Lint embedded recovery JavaScript and CSS
         run: npm run lint:recovery
+      - name: Check generated Octicons match the pinned dependency
+        run: npm run icons:check
   actionlint:
     name: Actionlint
     permissions:

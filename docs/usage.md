@@ -91,11 +91,13 @@ Returning to `mode: "inbox"` restores that preference.
 These describe the issue, PR, discussion, or check, **not Read/Done state**.
 Icons distinguish states by shape as well as color; screen-reader descriptions
 provide status, freshness, and failures without extra visible text or hover tooltips.
+Notification and toolbar artwork uses [Primer Octicons](https://primer.style/octicons/),
+bundled locally with the extension.
 
 | Subject | States |
 | --- | --- |
 | Issue / PR | Green open; purple completed issue or merged PR; red closed unmerged PR; gray draft PR; gray slashed circle for not-planned or duplicate issues; yellow dotted merge icon for queued PRs |
-| Discussion | Purple overlapping checkmarked bubbles for resolved; green checkmarked bubble for answered; gray open/reopened, slashed duplicate, or clock-marked outdated |
+| Discussion | Purple overlapping checkmarked bubbles for resolved; green circled checkmark for answered; gray open/reopened, slashed duplicate, or clock-marked outdated |
 | Check suite | Green passing checkmark, red failure/timeout/startup-failure cross, amber pending clock; distinct descriptions for other outcomes |
 | Release / Commit | Static tag / commit icon |
 | Security advisory or vulnerability / Dependabot alert | Static shield |
@@ -287,7 +289,7 @@ pages remain; automatic refresh continues. Otherwise, refresh before loading mor
 | I | Mark only the focused notification as read, then advance to the next visible row |
 | Shift+E | Mark only the focused notification as done |
 | / | Focus search without changing the query |
-| ? or the toolbar keyboard icon (before Settings) | Open the keyboard shortcut guide |
+| ? or the question-mark toolbar icon (before Settings) | Open the keyboard shortcut guide |
 | Left/Right Arrow, Home, End | Switch visible attention tabs; edge scroll buttons do not change selection |
 | Tab | Visit row links and separate Read/Done controls; empty-state panels remain focusable |
 | Hover / focus a button | Show its action tooltip |

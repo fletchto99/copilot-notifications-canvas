@@ -206,6 +206,7 @@ test("the extension entry point wires an isolated session through its complete l
       for (const [route, file] of [
         ["/", "renderer/index.html"], ["/app.mjs", "renderer/app.mjs"],
         ["/presentation.mjs", "renderer/presentation.mjs"],
+        ["/octicons.mjs", "renderer/octicons.mjs"],
         ["/update-notice.mjs", "renderer/update-notice.mjs"],
         ["/shared/model.mjs", "shared/model.mjs"], ["/styles.css", "renderer/styles.css"],
       ]) {

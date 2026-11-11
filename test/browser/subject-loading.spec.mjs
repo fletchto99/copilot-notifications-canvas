@@ -47,6 +47,7 @@ for (const packaged of [false, true]) {
           await expect(icon.locator("svg")).toHaveAttribute("width", "16");
           await page.emulateMedia({ reducedMotion: "no-preference" });
           await expect(icon.locator("svg")).toHaveCSS("animation-name", "refresh-spin");
+          await expect(icon.locator("svg")).toHaveCSS("animation-direction", "reverse");
           await page.emulateMedia({ reducedMotion: "reduce" });
           await expect(icon.locator("svg")).toHaveCSS("animation-name", "none");
           expect((await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze()).violations).toEqual([]);

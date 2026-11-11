@@ -73,11 +73,14 @@ test("Copilot controls precede Read, confirm explicitly, preserve focus, and nev
   assert.equal(controls[0], button(ui));
   assert.equal(controls[1].dataset.action, "read");
   const icon = button(ui).querySelectorAll("svg")[0];
-  assert.equal(icon.getAttribute("viewBox"), "0 0 16 16");
+  assert.equal(icon.getAttribute("viewBox"), "0 0 24 24");
+  assert.equal(icon.getAttribute("width"), "18");
+  assert.equal(icon.getAttribute("height"), "18");
   assert.equal(icon.getAttribute("fill"), "currentColor");
   assert.equal(icon.getAttribute("stroke"), "none");
   assert.equal(icon.getAttribute("aria-hidden"), "true");
-  assert.equal(controls[1].querySelectorAll("svg")[0].getAttribute("stroke"), "currentColor");
+  assert.equal(controls[1].querySelectorAll("svg")[0].getAttribute("stroke"), "none");
+  assert.equal(controls[1].querySelectorAll("svg")[0].getAttribute("fill"), "currentColor");
   await open(ui);
   assert.equal(ui.ids.get("copilot-dialog").open, true);
   assert.equal(ui.document.activeElement, ui.ids.get("copilot-close"));

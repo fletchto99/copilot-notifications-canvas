@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { runInContext } from "node:vm";
 import { staticSubjectTypes, thread } from "./fixtures.mjs";
 import { renderer, settle } from "./renderer-fixtures.mjs";
+import { octicons } from "../src/renderer/octicons.mjs";
+
+const shape = node => node.querySelectorAll("path").map(path => path.attributes.d).join(" ");
+const expectedShape = name => octicons[name].paths.join(" ");
 
 test("state icons have accessible names without hover tooltips or visible status text in every view", async () => {
   const cases = [
@@ -47,22 +52,21 @@ test("state icons have accessible names without hover tooltips or visible status
         assert.equal(field.dataset.subjectType, cases[index][0]);
       }
       const issueShapes = fields.filter(field => field.dataset.subjectType === "Issue")
-        .map(field => field.querySelectorAll("path")[0].attributes.d);
-      assert.equal(issueShapes[3], "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM6 18 18 6",
+        .map(shape);
+      assert.equal(issueShapes[3], expectedShape("skip"),
         "duplicate issues show a slashed circle");
       assert.equal(issueShapes[3], issueShapes[2], "duplicate and not-planned issues share a slashed circle");
       assert.notEqual(issueShapes[3], issueShapes[1], "duplicate issues do not show the completed checkmark");
-      const queuedShape = fields[cases.findIndex(([, state]) => state === "merge_queued")].querySelectorAll("path")[0].attributes.d;
-      assert.equal(queuedShape,
-        "M6 11v6M8 19a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM21 12a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM6.75 5a.75 .75 0 1 1-1.5 0 .75 .75 0 0 1 1.5 0ZM12.25 8.5a.75 .75 0 1 1-1.5 0 .75 .75 0 0 1 1.5 0Z",
+      const queuedShape = shape(fields[cases.findIndex(([, state]) => state === "merge_queued")]);
+      assert.equal(queuedShape, expectedShape("git-merge-queue"),
         "queued PRs show two dots leading into merge nodes");
-      const shapes = fields.slice(4, 8).map(field => field.querySelectorAll("path")[0].attributes.d);
+      const shapes = fields.slice(4, 8).map(shape);
       assert.equal(new Set([...shapes, queuedShape]).size, 5, "open, draft, closed, merged, and queued PRs have different shapes");
       const discussions = fields.filter(field => field.dataset.subjectType === "Discussion")
-        .map(field => field.querySelectorAll("path")[0].attributes.d);
+        .map(shape);
       assert.equal(new Set(discussions).size, 5, "open, answered, closed, duplicate and outdated discussions have distinct shapes");
-      assert.equal(discussions[1], "M3 4h18v13H9l-6 4V4ZM7 10l3 3 6-6", "answered discussions have a single checkmarked bubble");
-      assert.match(discussions[2], /M6 9l2 2 5-5$/, "closed discussions have a checkmark");
+      assert.equal(discussions[1], expectedShape("check-circle"), "answered discussions have an answer checkmark");
+      assert.equal(discussions[2], expectedShape("discussion-closed"), "closed discussions have a checkmark");
     }
     assert.deepEqual(ui.patches, []);
     assert.deepEqual(ui.deletions, []);
@@ -101,7 +105,7 @@ test("release notifications have static tag icons in every view without status l
         const svg = icon.querySelectorAll("svg")[0];
         assert.equal(svg.attributes["aria-hidden"], "true");
         assert.equal(svg.attributes.width, "16");
-        assert.equal(svg.querySelectorAll("path")[0].attributes.d, "M3 3h7l11 11-7 7L3 10V3ZM7 7h.01");
+        assert.equal(shape(svg), expectedShape("tag"));
       }
       assert.deepEqual(groups.querySelectorAll(".row-link").map(link => link.href),
         ["https://github.com/example/widgets/releases", "https://github.com/example/widgets/releases"]);
@@ -124,7 +128,7 @@ test("release notifications have static tag icons in every view without status l
 test("known types get static icons and unknown or untrusted types get an accessible bell", async () => {
   const types = [...staticSubjectTypes, "FutureSubject", "__proto__", "constructor", "toString", "<img src=x onerror=alert(1)>", "", " "];
   const labels = types.map(type => type.replace(/([a-z])([A-Z])/g, "$1 $2").trim() || "Notification");
-  const bell = "M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9ZM10 21a2 2 0 0 0 4 0";
+  const bell = expectedShape("bell");
   const ui = await renderer({
     initialRows: types.map((type, index) => thread(String(index + 1), {
       unread: index % 2 === 0, subject: { type, title: `Synthetic type ${index}`, url: null },
@@ -154,7 +158,7 @@ test("known types get static icons and unknown or untrusted types get an accessi
         const svg = icon.querySelectorAll("svg")[0];
         assert.equal(svg.attributes["aria-hidden"], "true");
         assert.equal(svg.attributes.width, "16");
-        paths.push(svg.querySelectorAll("path")[0].attributes.d);
+        paths.push(shape(svg));
       }
       assert.ok(paths.slice(0, staticSubjectTypes.length).every(path => path && path !== bell));
       assert.ok(paths.slice(staticSubjectTypes.length).every(path => path === bell));
@@ -359,6 +363,39 @@ test("CI rows wait for their initial destination even with a known result and th
     assert.deepEqual(ui.deletions, []);
   } finally {
     ui.window.events.pagehide();
+  }
+});
+
+test("multi-path icons add and remove paths across loading, closed and reopened states without replacing controls", async t => {
+  const subjectStates = { 1: { subjectState: "open" } };
+  const ui = await renderer({
+    initialRows: [thread("1", { subject: { type: "Issue", title: "Synthetic issue",
+      url: "https://api.github.com/repos/example/widgets/issues/1" } })],
+    subjectStates,
+  });
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  const groups = ui.ids.get("groups");
+  const icon = groups.querySelectorAll(".subject-icon")[0];
+  const svg = icon.children[0];
+  const firstPath = svg.children[0];
+  const read = groups.querySelectorAll(".mark-read")[0];
+  read.focus();
+  for (const [subjectState, subjectLoading, name] of [
+    ["open", false, "issue-opened"], ["closed", false, "issue-closed"],
+    [null, true, "sync"], ["open", false, "issue-opened"],
+  ]) {
+    subjectStates[1] = { subjectState };
+    ui.setSubjectsLoading(subjectLoading);
+    await runInContext("update()", ui.context);
+    assert.equal(icon.children[0], svg);
+    assert.equal(svg.children[0], firstPath);
+    assert.deepEqual(svg.querySelectorAll("path").map(path => path.attributes.d), octicons[name].paths);
+    assert.equal(svg.getAttribute("viewBox"), `0 0 ${octicons[name].width} 24`);
+    assert.equal(svg.getAttribute("width"), "16");
+    assert.equal(svg.getAttribute("height"), "16");
+    assert.equal(svg.getAttribute("fill"), "currentColor");
+    assert.equal(svg.getAttribute("stroke"), "none");
+    assert.equal(ui.document.activeElement, read);
   }
 });
 

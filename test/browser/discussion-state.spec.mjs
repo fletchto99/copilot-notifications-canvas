@@ -1,6 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { test, expect } from "./fixtures.mjs";
 import { http, thread } from "../fixtures.mjs";
+import { octicons } from "../../src/renderer/octicons.mjs";
 
 const resolved = { closed: true, isAnswered: false, stateReason: "RESOLVED" };
 const discussion = (id, subjectDetails, url = `https://api.github.com/repos/example/widgets/discussions/${id}`) =>
@@ -51,9 +52,10 @@ for (const packaged of [false, true]) {
           for (const index of [0, 5]) await expect(fields.nth(index).getByRole("img")).toHaveCSS("color", colors.closed);
           await expect(fields.nth(2).getByRole("img")).toHaveCSS("color", colors.answered);
           for (const index of [1, 3, 4, 6, 7]) await expect(fields.nth(index).getByRole("img")).toHaveCSS("color", colors.muted);
-          const shapes = await fields.locator("path").evaluateAll(nodes => nodes.map(node => node.getAttribute("d")));
-          expect(shapes[0]).toMatch(/M6 9l2 2 5-5$/);
-          expect(shapes[2]).toBe("M3 4h18v13H9l-6 4V4ZM7 10l3 3 6-6");
+          const shapes = await fields.evaluateAll(nodes => nodes.map(node =>
+            [...node.querySelectorAll("path")].map(path => path.getAttribute("d")).join(" ")));
+          expect(shapes[0]).toBe(octicons["discussion-closed"].paths.join(" "));
+          expect(shapes[2]).toBe(octicons["check-circle"].paths.join(" "));
           expect(new Set(shapes).size).toBe(5);
           for (const width of [320, 960]) {
             await page.setViewportSize({ width, height: 900 });

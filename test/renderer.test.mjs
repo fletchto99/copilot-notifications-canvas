@@ -702,7 +702,7 @@ test("Force refresh is an accessible, always-enabled icon before keyboard shortc
   assert.match(button[1], /aria-describedby="refresh-tooltip"/);
   assert.doesNotMatch(button[1], /\btitle=/);
   assert.match(button[2], /<svg\b[^>]*aria-hidden="true"[^>]*focusable="false"/);
-  assert.match(button[2], /^\s*<svg\b[^>]*>\s*<path\b[^>]*\/>\s*<\/svg>\s*$/);
+  assert.match(button[2], /^\s*<svg\b[^>]*id="refresh-icon"[^>]*><\/svg>\s*$/);
   assert.match(html, /<div id="refresh-control" class="tooltip-anchor">[\s\S]*?<\/div>\s*<div id="shortcuts-control" class="tooltip-anchor">[\s\S]*?<\/div>\s*<details id="settings"/);
   assert.match(html, /id="refresh-tooltip"[^>]*role="tooltip"/);
   assert.match(styles, /\.tooltip-anchor:not\(\[data-tooltip-dismissed\]\):is\(\s*:hover,\s*\[data-tooltip-keyboard="true"\]:focus-within\s*\)\s*> \.tooltip \{\s+visibility: visible;\s+\}/);
@@ -712,6 +712,7 @@ test("Force refresh is an accessible, always-enabled icon before keyboard shortc
   assert.match(extension, /name: "refresh"/);
   const ui = await renderer();
   assert.equal(ui.ids.get("force-refresh").disabled, false);
+  assert.ok(ui.ids.get("refresh-icon").querySelectorAll("path")[0].getAttribute("d"));
   assert.ok(ui.calls.some(call => call.path === "/api/refresh"));
   assert.equal(ui.githubCalls.length, 1);
   assert.equal(ui.ids.get("refresh-tooltip-text").textContent, "Last updated 0 seconds ago");
