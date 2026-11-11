@@ -73,9 +73,9 @@ session = await joinSession({
       },
       {
         name: "get_state",
-        description: "Return counts, status and pagination metadata, never notification content or repository names.",
+        description: "Sync shared filters and return loaded-item counts, status and pagination metadata, never notification content or repository names.",
         inputSchema: emptySchema,
-        handler: ctx => action(ctx, inbox => inbox.summary()),
+        handler: ctx => action(ctx, inbox => inbox.summary(), true),
       },
       {
         name: "refresh",
