@@ -1,10 +1,35 @@
 import AxeBuilder from "@axe-core/playwright";
 import { test, expect } from "./fixtures.mjs";
 import { thread } from "../fixtures.mjs";
+import octicons from "@primer/octicons";
 
 for (const packaged of [false, true]) {
   test.describe(`compact ordered views (${packaged ? "packaged" : "source"})`, () => {
     test.use({ packaged, timezoneId: "UTC" });
+
+    test("toolbar and row actions render complete upstream Octicons with inherited colors and accessible controls", async ({ page, canvas }) => {
+      canvas.rows.splice(1);
+      await page.goto(canvas.url);
+      await expect(page.locator(".row")).toHaveCount(1);
+      for (const [selector, name] of [
+        ["#inbox-icon", "inbox"], ["#refresh-icon", "sync"], ["#shortcuts-icon", "command-palette"],
+        ["#settings-icon", "gear"], ["#attention-previous-icon", "chevron-left"],
+        ["#attention-next-icon", "chevron-right"], ["#update-details-icon", "triangle-right"],
+        [".mark-read svg", "read"], [".mark-done svg", "check"],
+      ]) {
+        const svg = page.locator(selector);
+        const expected = octicons[name].heights[16];
+        await expect(svg).toHaveAttribute("viewBox", `0 0 ${expected.width} 16`);
+        await expect(svg).toHaveAttribute("fill", "currentColor");
+        await expect(svg).toHaveAttribute("stroke", "none");
+        await expect(svg).toHaveAttribute("aria-hidden", "true");
+        await expect(svg).toHaveAttribute("focusable", "false");
+        expect(await svg.locator("path").evaluateAll(paths => paths.map(path => path.getAttribute("d"))))
+          .toEqual(expected.ast.children.map(path => path.attributes.d));
+      }
+      expect((await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze()).violations).toEqual([]);
+      expect(canvas.writes).toEqual([]);
+    });
 
     test("date and flat views preserve interleaved API order and date actions target the displayed day", async ({ page, canvas }) => {
       canvas.rows.splice(3);

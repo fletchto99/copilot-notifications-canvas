@@ -178,7 +178,7 @@ test("the published archive installs and upgrades a self-contained provider with
   const bundle = await loadPackage(directory, tag);
   assert.ok(bundle.content.includes(githubMarkPNG.toString("base64")), "The release must embed the notification PNG.");
   const imageSource = await readFile(new URL("../src/provider/github-mark.mjs", import.meta.url), "utf8");
-  const imageNotice = imageSource.match(/\/\*![\s\S]*?\*\//)?.[0];
+  const imageNotice = imageSource.replaceAll("\r\n", "\n").match(/\/\*![\s\S]*?\*\//)?.[0];
   assert.ok(imageNotice && bundle.content.includes(imageNotice), "The release must retain the GitHub mark's MIT license.");
   const installer = join(directory, "install.mjs");
   const env = { ...process.env, COPILOT_HOME: copilotHome };
@@ -381,9 +381,9 @@ try {
     const source = await readFile(new URL(`../src/renderer/${file}`, import.meta.url));
     assert.ok(built.length < source.length, `${file} must be minified`);
     if (file === "app.mjs") {
-      const presentation = await readFile(new URL("../src/renderer/presentation.mjs", import.meta.url), "utf8");
-      const notice = presentation.match(/\/\*![\s\S]*?\*\//)?.[0];
-      assert.ok(notice && built.includes(notice), "The packaged renderer must retain the Copilot icon's MIT license.");
+      const icons = await readFile(new URL("../src/renderer/octicons.mjs", import.meta.url), "utf8");
+      const notice = icons.replaceAll("\r\n", "\n").match(/\/\*![\s\S]*?\*\//)?.[0];
+      assert.ok(notice && built.includes(notice), "The packaged renderer must retain the Octicons MIT license.");
     }
   }
 });

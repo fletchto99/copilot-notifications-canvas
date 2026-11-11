@@ -4,6 +4,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { build, transform } from "esbuild";
 import { create as createTar } from "tar";
 import { validateReleaseTag } from "./check-release.mjs";
+import { generateIcons } from "./generate-icons.mjs";
 import { archiveName, encodeBundle, hash, loadPackage, name } from "./package.mjs";
 import metadata from "../version.json" with { type: "json" };
 
@@ -37,6 +38,7 @@ export async function loadAssets() { return new Map(assets); }`,
 
 export async function buildRelease({ tag = `v${metadata.version}`, directory = resolve("dist") } = {}) {
   validateReleaseTag(tag);
+  await generateIcons({ check: true });
   await mkdir(directory, { recursive: true });
   const stage = await mkdtemp(join(directory, ".package-"));
   try {

@@ -1,8 +1,13 @@
 import { apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle } from "../shared/model.mjs";
-import { element, setControlText, actionIcon, subjectMetadata, relativeTime, updateSubjectDescription } from "./presentation.mjs";
+import { element, setControlText, actionIcon, setIcon, subjectMetadata, relativeTime, updateSubjectDescription } from "./presentation.mjs";
 import { createUpdateNotice } from "./update-notice.mjs";
 
 const $ = id => document.getElementById(id);
+for (const [id, name] of [
+  ["inbox-icon", "inbox"], ["refresh-icon", "sync"], ["shortcuts-icon", "command-palette"],
+  ["settings-icon", "gear"], ["update-details-icon", "triangle-right"],
+  ["attention-previous-icon", "chevron-left"], ["attention-next-icon", "chevron-right"],
+]) setIcon($(id), name);
 const token = location.hash.slice(1);
 const hasCapability = /^[a-f0-9]{64}$/.test(token);
 const collapsed = new Set();

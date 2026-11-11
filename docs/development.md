@@ -57,6 +57,33 @@ and installed providers appear, select `extensionId: project:github-notification
 Sessions keep their loaded code and assets until reloaded; never delete a
 checkout still in use. See [Settings](settings.md) for auto-open and dismissal.
 
+### Notification icons
+
+Renderer icons come from the exact `@primer/octicons` development dependency,
+not hand-maintained SVG copies. `scripts/generate-icons.mjs` selects the 16px
+variants used by the UI and writes their paths and upstream MIT license to
+`src/renderer/octicons.mjs`. The generated module is committed so source loading,
+synthetic previews, and Node tests still work without installed dependencies.
+Release builds embed only this selected artwork, not the complete library or
+an external runtime dependency; no icons are downloaded at runtime.
+
+After updating Octicons in `package.json` and `package-lock.json`, or changing
+the selected names in the generator:
+
+```sh
+npm run icons:generate
+npm run icons:check
+```
+
+Commit the generated module with the dependency change. The existing Dependabot
+npm configuration tracks Octicons; dependency-update PRs must regenerate it too.
+Lint, CI, and release builds reject stale output, including an upstream version
+change with identical artwork. Generation stops if a selected 16px icon disappears
+or gains unsupported SVG markup, rather than silently dropping it. Inspect the UI
+and refresh the [README screenshot](#readme-screenshot) when artwork changes.
+Do not edit the generated paths manually. The native desktop sender PNG is a
+separate raster asset described under [native notification coverage](#native-notification-coverage).
+
 ### Selecting a development API
 
 In a source-loaded canvas, open **Settings > Development API**, choose

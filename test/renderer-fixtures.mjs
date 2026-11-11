@@ -6,6 +6,7 @@ import { Inbox } from "../src/provider/inbox.mjs";
 import { GitHubClient } from "../src/provider/github.mjs";
 import { desktopCapabilities } from "../src/provider/notifier.mjs";
 import { apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle } from "../src/shared/model.mjs";
+import { octicons } from "../src/renderer/octicons.mjs";
 import { http, thread } from "./fixtures.mjs";
 
 export const script = await readFile(process.env.NOTIFICATIONS_TEST_SCRIPT ??
@@ -17,7 +18,8 @@ const presentation = await readFile(presentationUrl, "utf8");
 const updateNoticeUrl = new URL("../src/renderer/update-notice.mjs", import.meta.url);
 const updateNotice = await readFile(updateNoticeUrl, "utf8");
 const modelImport = /^import \{ apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle \} from "\.\.\/shared\/model\.mjs";/m;
-const presentationImport = /^import \{ element, setControlText, actionIcon, subjectMetadata, relativeTime, updateSubjectDescription \} from "\.\/presentation\.mjs";/m;
+const presentationImport = /^import \{ element, setControlText, actionIcon, setIcon, subjectMetadata, relativeTime, updateSubjectDescription \} from "\.\/presentation\.mjs";/m;
+const octiconsImport = /^import \{ octicons \} from "\.\/octicons\.mjs";/m;
 const updateNoticeImport = /^import \{ createUpdateNotice \} from "\.\/update-notice\.mjs";/m;
 export const settle = () => new Promise(resolve => setImmediate(resolve));
 export const groupActionText = button => button.parentNode.querySelectorAll(".tooltip-content")[0].textContent;
@@ -394,14 +396,16 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
     assert.match(script, modelImport);
     assert.match(script, presentationImport);
     assert.match(script, updateNoticeImport);
+    assert.match(presentation, octiconsImport);
     const helpers = createContext({
-      document, Intl, Date: context.Date, navigator: context.navigator,
+      document, Intl, Date: context.Date, navigator: context.navigator, octicons,
       setTimeout: context.setTimeout, clearTimeout: context.clearTimeout,
     });
     // Keep helpers in their own scope while preserving source offsets for coverage.
-    runInContext(presentation.replace(/^export /gm, "       "), helpers, { filename: fileURLToPath(presentationUrl) });
+    runInContext(presentation.replace(octiconsImport, match => " ".repeat(match.length)).replace(/^export /gm, "       "),
+      helpers, { filename: fileURLToPath(presentationUrl) });
     runInContext(updateNotice.replace(/^export /gm, "       "), helpers, { filename: fileURLToPath(updateNoticeUrl) });
-    Object.assign(context, runInContext("({ element, setControlText, actionIcon, subjectMetadata, relativeTime, updateSubjectDescription, createUpdateNotice })", helpers));
+    Object.assign(context, runInContext("({ element, setControlText, actionIcon, setIcon, subjectMetadata, relativeTime, updateSubjectDescription, createUpdateNotice })", helpers));
   }
   // Preserve source offsets for the coverage report when removing injected imports.
   runInContext(script.replace(modelImport, match => " ".repeat(match.length))

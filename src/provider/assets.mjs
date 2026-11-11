@@ -6,6 +6,7 @@ const assets = [
   ["/", "../renderer/index.html", "text/html; charset=utf-8"],
   ["/app.mjs", "../renderer/app.mjs", "text/javascript; charset=utf-8"],
   ["/presentation.mjs", "../renderer/presentation.mjs", "text/javascript; charset=utf-8"],
+  ["/octicons.mjs", "../renderer/octicons.mjs", "text/javascript; charset=utf-8"],
   ["/update-notice.mjs", "../renderer/update-notice.mjs", "text/javascript; charset=utf-8"],
   ["/shared/model.mjs", "../shared/model.mjs", "text/javascript; charset=utf-8"],
   ["/styles.css", "../renderer/styles.css", "text/css; charset=utf-8"],

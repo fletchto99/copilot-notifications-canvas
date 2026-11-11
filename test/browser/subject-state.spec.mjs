@@ -1,6 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { test, expect } from "./fixtures.mjs";
 import { http, staticSubjectTypes, thread } from "../fixtures.mjs";
+import { octicons } from "../../src/renderer/octicons.mjs";
 
 for (const packaged of [false, true]) {
   test.describe(`subject state icons (${packaged ? "packaged" : "source"})`, () => {
@@ -43,7 +44,7 @@ for (const packaged of [false, true]) {
               await expect(icon).not.toHaveAttribute("data-checked-at");
               await expect(icon.locator("svg")).toHaveAttribute("aria-hidden", "true");
               await expect(icon.locator("svg")).toHaveCSS("width", "16px");
-              await expect(icon.locator("path")).toHaveAttribute("d", /^M/);
+              for (const path of await icon.locator("path").all()) await expect(path).toHaveAttribute("d", /^[Mm]/);
               const layout = await field.evaluate(node => {
                 const label = node.querySelector(".notification-type");
                 const range = document.createRange();
@@ -71,9 +72,10 @@ for (const packaged of [false, true]) {
           const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
           expect(results.violations).toEqual([]);
           await page.screenshot({ path: testInfo.outputPath(`type-icons-${theme}.png`), fullPage: true });
-          const shapes = await fields.locator("path").evaluateAll(nodes => nodes.map(node => node.getAttribute("d")));
-          const bell = "M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9ZM10 21a2 2 0 0 0 4 0";
-          expect(shapes[0]).toBe("M3 3h7l11 11-7 7L3 10V3ZM7 7h.01");
+          const shapes = await fields.evaluateAll(nodes => nodes.map(node =>
+            [...node.querySelectorAll("path")].map(path => path.getAttribute("d")).join(" ")));
+          const bell = octicons.bell.paths.join(" ");
+          expect(shapes[0]).toBe(octicons.tag.paths.join(" "));
           expect(shapes[1]).toBe(shapes[0]);
           expect(shapes.slice(0, staticSubjectTypes.length + 1).every(shape => shape !== bell)).toBe(true);
           expect(shapes.slice(staticSubjectTypes.length + 1).every(shape => shape === bell)).toBe(true);
@@ -150,11 +152,10 @@ for (const packaged of [false, true]) {
           await page.keyboard.press("Escape");
           await expect.poll(labels).toEqual(expectedLabels);
           const issueIcons = page.locator('.notification-subject[data-subject-type="Issue"] .subject-icon');
-          const completedIcon = issueIcons.nth(1);
-          const notPlannedIcon = issueIcons.nth(2);
-          const duplicateIcon = issueIcons.nth(3);
-          await expect(duplicateIcon.locator("path")).toHaveAttribute("d", await notPlannedIcon.locator("path").getAttribute("d"));
-          await expect(duplicateIcon.locator("path")).not.toHaveAttribute("d", await completedIcon.locator("path").getAttribute("d"));
+          const issueShapes = await issueIcons.evaluateAll(nodes => nodes.map(node =>
+            [...node.querySelectorAll("path")].map(path => path.getAttribute("d"))));
+          expect(issueShapes[3]).toEqual(issueShapes[2]);
+          expect(issueShapes[3]).not.toEqual(issueShapes[1]);
           await expect.poll(() => issueIcons.evaluateAll(nodes => {
             const [, completed, notPlanned, duplicate] = nodes.map(node => getComputedStyle(node).color);
             return {

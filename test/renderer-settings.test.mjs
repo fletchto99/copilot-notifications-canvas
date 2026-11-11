@@ -106,7 +106,7 @@ test("GitHub inbox is an accessible icon link before Refresh and Settings in the
   assert.doesNotMatch(attributes, /\btitle=/);
   assert.doesNotMatch(attributes, /\bhidden\b/);
   assert.match(content, /<svg\b[^>]*aria-hidden="true"[^>]*focusable="false"/);
-  assert.match(content, /^\s*<svg\b[^>]*>\s*<path\b[^>]*\/>\s*<path\b[^>]*\/>\s*<\/svg>\s*$/);
+  assert.match(content, /^\s*<svg\b[^>]*id="inbox-icon"[^>]*><\/svg>\s*$/);
   assert.match(html, /<div class="toolbar">\s*<h1>GitHub Notifications<\/h1>\s*<div id="inbox-control"[^>]*>[\s\S]*?<\/div>\s*<div id="refresh-control"[^>]*>[\s\S]*?<\/div>\s*<div id="shortcuts-control"[^>]*>[\s\S]*?<\/div>\s*<details id="settings"/);
   assert.equal([...html.matchAll(/href="https:\/\/github\.com\/notifications"/g)].length, 0);
 });
@@ -122,7 +122,7 @@ test("Settings uses an icon-only toggle with an accessible name and tooltip", ()
   assert.match(attributes, /aria-controls="settings-panel"/);
   assert.match(attributes, /aria-expanded="false"/);
   assert.match(content, /<svg\b[^>]*aria-hidden="true"[^>]*focusable="false"/);
-  assert.match(content, /^\s*<svg\b[^>]*>\s*<path\b[^>]*\/>\s*<circle\b[^>]*\/>\s*<\/svg>\s*<span id="settings-tooltip" class="tooltip" role="tooltip"><span class="tooltip-content">Settings<\/span><\/span>\s*$/);
+  assert.match(content, /^\s*<svg\b[^>]*id="settings-icon"[^>]*><\/svg>\s*<span id="settings-tooltip" class="tooltip" role="tooltip"><span class="tooltip-content">Settings<\/span><\/span>\s*$/);
   assert.match(styles, /\.settings\[open\] > summary > \.tooltip \{\s+display: none;\s+\}/);
 });
 
