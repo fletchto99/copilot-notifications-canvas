@@ -60,10 +60,12 @@ checkout still in use. See [Settings](settings.md) for auto-open and dismissal.
 ### Notification icons
 
 Renderer icons come from the exact `@primer/octicons` development dependency,
-not hand-maintained SVG copies. `scripts/generate-icons.mjs` selects the 16px
+not hand-maintained SVG copies. `scripts/generate-icons.mjs` selects the 24px
 variants used by the UI and writes their paths and upstream MIT license to
 `src/renderer/octicons.mjs`. The generated module is committed so source loading,
 synthetic previews, and Node tests still work without installed dependencies.
+The renderer scales the 24px artwork into the existing 16px status and 18px
+action/toolbar sizes for a lighter visual weight; control sizes stay unchanged.
 Release builds embed only this selected artwork, not the complete library or
 an external runtime dependency; no icons are downloaded at runtime.
 
@@ -78,7 +80,7 @@ npm run icons:check
 Commit the generated module with the dependency change. The existing Dependabot
 npm configuration tracks Octicons; dependency-update PRs must regenerate it too.
 Lint, CI, and release builds reject stale output, including an upstream version
-change with identical artwork. Generation stops if a selected 16px icon disappears
+change with identical artwork. Generation stops if a selected 24px icon disappears
 or gains unsupported SVG markup, rather than silently dropping it. Inspect the UI
 and refresh the [README screenshot](#readme-screenshot) when artwork changes.
 Do not edit the generated paths manually. The native desktop sender PNG is a

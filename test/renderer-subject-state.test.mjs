@@ -390,7 +390,9 @@ test("multi-path icons add and remove paths across loading, closed and reopened 
     assert.equal(icon.children[0], svg);
     assert.equal(svg.children[0], firstPath);
     assert.deepEqual(svg.querySelectorAll("path").map(path => path.attributes.d), octicons[name].paths);
-    assert.equal(svg.getAttribute("viewBox"), `0 0 ${octicons[name].width} 16`);
+    assert.equal(svg.getAttribute("viewBox"), `0 0 ${octicons[name].width} 24`);
+    assert.equal(svg.getAttribute("width"), "16");
+    assert.equal(svg.getAttribute("height"), "16");
     assert.equal(svg.getAttribute("fill"), "currentColor");
     assert.equal(svg.getAttribute("stroke"), "none");
     assert.equal(ui.document.activeElement, read);

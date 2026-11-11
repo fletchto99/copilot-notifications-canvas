@@ -18,8 +18,10 @@ for (const packaged of [false, true]) {
         [".mark-read svg", "read"], [".mark-done svg", "check"],
       ]) {
         const svg = page.locator(selector);
-        const expected = octicons[name].heights[16];
-        await expect(svg).toHaveAttribute("viewBox", `0 0 ${expected.width} 16`);
+        const expected = octicons[name].heights[24];
+        await expect(svg).toHaveAttribute("viewBox", `0 0 ${expected.width} 24`);
+        await expect(svg).toHaveAttribute("width", selector === "#update-details-icon" ? "12" : "18");
+        await expect(svg).toHaveAttribute("height", selector === "#update-details-icon" ? "12" : "18");
         await expect(svg).toHaveAttribute("fill", "currentColor");
         await expect(svg).toHaveAttribute("stroke", "none");
         await expect(svg).toHaveAttribute("aria-hidden", "true");

@@ -6,21 +6,24 @@ import { generateIcons, iconNames, renderIcons } from "../scripts/generate-icons
 
 function fixture() {
   const path = d => ({ name: "path", attributes: { d }, children: [] });
-  const variant = { width: 16, ast: { children: [path("M0 0h16v16H0Z"), path("M2 2h2v2H2Z")] } };
+  const variant = { width: 24, ast: { children: [path("M0 0h24v24H0Z"), path("M2 2h2v2H2Z")] } };
   return {
-    icons: Object.fromEntries([...iconNames, "unused"].map(name => [name, { heights: { 16: structuredClone(variant) } }])),
+    icons: Object.fromEntries([...iconNames, "unused"].map(name => [name, { heights: {
+      16: { width: 16, ast: { children: [path("M0 0h16v16H0Z")] } },
+      24: structuredClone(variant),
+    } }])),
     version: "1.2.3",
     license: "MIT License\n\nSynthetic test license.\n",
   };
 }
 
-test("icon generation selects only required 16px artwork and preserves separate paths and the upstream license", async () => {
+test("icon generation selects 24px rather than 16px artwork and preserves separate paths and the upstream license", async () => {
   const data = fixture();
-  data.icons.agent.heights[16].width = 20;
+  data.icons.agent.heights[24].width = 30;
   const content = renderIcons(data);
   const generated = await import(`data:text/javascript,${encodeURIComponent(content)}`);
   assert.deepEqual(Object.keys(generated.octicons), iconNames);
-  assert.deepEqual(generated.octicons.agent, { width: 20, paths: ["M0 0h16v16H0Z", "M2 2h2v2H2Z"] });
+  assert.deepEqual(generated.octicons.agent, { width: 30, paths: ["M0 0h24v24H0Z", "M2 2h2v2H2Z"] });
   assert.match(content, /@primer\/octicons@1\.2\.3/);
   assert.match(content, /\/\*!\n \* MIT License\n \*\n \* Synthetic test license\.\n \*\//);
   assert.equal(renderIcons(data), content);
@@ -29,13 +32,13 @@ test("icon generation selects only required 16px artwork and preserves separate 
 test("upstream icons missing a selected variant or changing SVG structure fail rather than losing artwork", () => {
   for (const change of [
     data => delete data.icons.agent,
-    data => delete data.icons.agent.heights[16],
-    data => { data.icons.agent.heights[16].width = 0; },
-    data => { data.icons.agent.heights[16].ast.children = []; },
-    data => { data.icons.agent.heights[16].ast.children[0].name = "circle"; },
-    data => { data.icons.agent.heights[16].ast.children[0].children.push({}); },
-    data => { data.icons.agent.heights[16].ast.children[0].attributes.transform = "translate(1 1)"; },
-    data => { data.icons.agent.heights[16].ast.children[0].attributes.d = ""; },
+    data => delete data.icons.agent.heights[24],
+    data => { data.icons.agent.heights[24].width = 0; },
+    data => { data.icons.agent.heights[24].ast.children = []; },
+    data => { data.icons.agent.heights[24].ast.children[0].name = "circle"; },
+    data => { data.icons.agent.heights[24].ast.children[0].children.push({}); },
+    data => { data.icons.agent.heights[24].ast.children[0].attributes.transform = "translate(1 1)"; },
+    data => { data.icons.agent.heights[24].ast.children[0].attributes.d = ""; },
   ]) {
     const data = fixture();
     change(data);

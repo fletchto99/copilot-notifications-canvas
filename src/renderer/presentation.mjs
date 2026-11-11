@@ -80,7 +80,7 @@ export function actionIcon(action) {
 
 export function setIcon(svg, name) {
   const icon = octicons[name];
-  svg.setAttribute("viewBox", `0 0 ${icon.width} 16`);
+  svg.setAttribute("viewBox", `0 0 ${icon.width} 24`);
   svg.setAttribute("fill", "currentColor");
   svg.setAttribute("stroke", "none");
   for (const [index, d] of icon.paths.entries()) {

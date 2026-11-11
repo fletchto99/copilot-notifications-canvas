@@ -141,8 +141,9 @@ for (const packaged of [false, true]) {
         await expect(row.locator(".dot")).toHaveCSS("visibility", index % 2 === 0 ? "visible" : "hidden");
       }
       await expect(page.locator(".subject-icon").nth(13)).toHaveAttribute("aria-label", /Reported by this notification; may not reflect a later rerun/);
-      const shapes = await page.locator('.notification-subject[data-subject-type="PullRequest"] path')
-        .evaluateAll(paths => paths.map(path => path.getAttribute("d")));
+      const shapes = await page.locator('.notification-subject[data-subject-type="PullRequest"] .subject-icon')
+        .evaluateAll(nodes => nodes.map(node =>
+          [...node.querySelectorAll("path")].map(path => path.getAttribute("d")).join(" ")));
       expect(new Set(shapes).size).toBe(5);
       for (const theme of ["light", "dark"]) {
         for (const groupBy of ["repo", "none", "date"]) {
@@ -242,12 +243,13 @@ for (const packaged of [false, true]) {
       await page.goto(canvas.url);
       const icon = page.locator(".subject-icon");
       await expect(icon).toHaveAttribute("aria-label", /^Pull Request: In merge queue\. Checked /, { timeout: 15_000 });
-      const queuedShape = await icon.locator("path").getAttribute("d");
+      const shape = () => icon.locator("path").evaluateAll(paths => paths.map(path => path.getAttribute("d")));
+      const queuedShape = await shape();
       await expect(icon).toHaveCSS("color", "rgb(154, 103, 0)");
       canvas.rows[0].mergeQueued = false;
       await page.locator("#force-refresh").click();
       await expect(icon).toHaveAttribute("aria-label", /^Pull Request: Open\. Checked /, { timeout: 15_000 });
-      await expect(icon.locator("path")).not.toHaveAttribute("d", queuedShape);
+      await expect.poll(shape).not.toEqual(queuedShape);
       await expect(icon).toHaveCSS("color", "rgb(26, 127, 55)");
       canvas.setRequestHook(args => args.at(-1) === "graphql"
         ? http({ errors: [{ message: "Synthetic SSO error" }] }) : undefined);

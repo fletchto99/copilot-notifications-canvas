@@ -13,9 +13,9 @@ export const iconNames = [
 
 export function renderIcons({ icons, version, license }) {
   const selected = Object.fromEntries(iconNames.map(name => {
-    const icon = icons[name]?.heights[16];
+    const icon = icons[name]?.heights[24];
     if (!icon || !Number.isInteger(icon.width) || icon.width <= 0 || !icon.ast?.children.length) {
-      throw new Error(`Octicon ${name} is missing a supported 16px variant.`);
+      throw new Error(`Octicon ${name} is missing a supported 24px variant.`);
     }
     const paths = icon.ast.children.map(node => {
       if (node.name !== "path" || node.children.length ||
