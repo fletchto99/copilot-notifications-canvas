@@ -41,6 +41,7 @@ async function fixture(t, { enabled = true } = {}) {
     make(overrides = {}) {
       const watcher = new DesktopNotifications({
         preferences, platform: "darwin", now: () => now,
+        findNotifier: async () => null,
         client: new GitHubClient({ now: () => now, sleep: async delay => { now += delay; }, run: async args => {
           calls.push(args);
           return response ? response(args) : http(rows);
@@ -127,7 +128,7 @@ test("initial backlog is silent and small batches retain each thread's title and
   f.rows([updated("2", time), updated("3", time - 1000), thread()]);
   await watcher.check();
   assert.equal(f.deliveries.length, 2);
-  assert.deepEqual(Object.keys(f.deliveries[0]).sort(), ["body", "platform", "signal", "sound", "title", "url"]);
+  assert.deepEqual(Object.keys(f.deliveries[0]).sort(), ["body", "platform", "signal", "sound", "terminalNotifier", "title", "url"]);
   assert.equal(f.deliveries[0].sound, "default");
   assert.equal(f.deliveries[0].title, "example/widgets");
   assert.equal(f.deliveries[0].body, "#42 Synthetic notification 2");
@@ -898,10 +899,10 @@ test("individual desktop alerts include issue and PR numbers but not unrelated I
   }
 });
 
-test("Windows check alerts resolve direct, suite and inferred destinations after checkpointing", async t => {
+for (const platform of ["win32", "darwin"]) test(`${platform} check alerts resolve direct, suite and inferred destinations after checkpointing`, async t => {
   for (const kind of ["direct", "suite", "inferred"]) {
     const f = await fixture(t);
-    const watcher = f.make({ platform: "win32" });
+    const watcher = f.make({ platform, findNotifier: async () => "/opt/homebrew/bin/terminal-notifier" });
     await watcher.check();
     const time = f.advance();
     const row = updated("2", time);
@@ -983,10 +984,10 @@ test("Windows check alerts retain fresh failed-job destinations during inherited
   }
 });
 
-test("Windows check alerts preserve safe fallbacks and report metadata failures without content", async t => {
+for (const platform of ["win32", "darwin"]) test(`${platform} check alerts preserve safe fallbacks and report metadata failures without content`, async t => {
   for (const kind of ["run", "ambiguous", "denied", "unsafe", "jobs-denied"]) {
     const f = await fixture(t);
-    const watcher = f.make({ platform: "win32" });
+    const watcher = f.make({ platform, findNotifier: async () => "/opt/homebrew/bin/terminal-notifier" });
     await watcher.check();
     const time = f.advance();
     const row = updated("2", time);
@@ -1021,10 +1022,10 @@ test("Windows check alerts preserve safe fallbacks and report metadata failures 
   }
 });
 
-test("Windows check link lookups respect backoff and cancellation without replay or opt-out delivery", async t => {
+for (const platform of ["win32", "darwin"]) test(`${platform} check link lookups respect backoff and cancellation without replay or opt-out delivery`, async t => {
   for (const kind of ["rate-limited", "disabled", "closed"]) {
     const f = await fixture(t);
-    const watcher = f.make({ platform: "win32" });
+    const watcher = f.make({ platform, findNotifier: async () => "/opt/homebrew/bin/terminal-notifier" });
     await watcher.check();
     const time = f.advance();
     const row = updated("2", time);
@@ -1069,9 +1070,9 @@ test("Windows check link lookups respect backoff and cancellation without replay
   }
 });
 
-test("Windows burst clicks open the repository inbox without resolving individual check links", async t => {
+for (const platform of ["win32", "darwin"]) test(`${platform} burst clicks open the repository inbox without resolving individual check links`, async t => {
   const f = await fixture(t);
-  const watcher = f.make({ platform: "win32" });
+  const watcher = f.make({ platform, findNotifier: async () => "/opt/homebrew/bin/terminal-notifier" });
   await watcher.check();
   const time = f.advance();
   f.rows(Array.from({ length: 5 }, (_, i) => thread(String(i + 2), {

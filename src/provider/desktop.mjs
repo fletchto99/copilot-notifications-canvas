@@ -6,7 +6,7 @@ import { setTimeout as wait } from "node:timers/promises";
 import { GitHubClient, firstPage, POLL_MS, RETRY_MS } from "./github.mjs";
 import { groupThreads, InboxError, notificationTitle, orderedThreads } from "../shared/model.mjs";
 import { acquireLock, ownerPattern, processAlive, removeFile } from "./lock.mjs";
-import { notifyDesktop, desktopCapabilities, validSound } from "./notifier.mjs";
+import { notifyDesktop, desktopCapabilities, findTerminalNotifier, validSound } from "./notifier.mjs";
 
 const CHECK_MS = 5000;
 const BURST_THRESHOLD = 5;
@@ -113,12 +113,13 @@ function notificationMessages(arrivals) {
 export class DesktopNotifications {
   constructor({ preferences, client = new GitHubClient(), notify = notifyDesktop, log = () => {},
     platform = process.platform, now = Date.now, alive = processAlive,
-    schedule = setTimeout, cancel = clearTimeout } = {}) {
+    schedule = setTimeout, cancel = clearTimeout, findNotifier = findTerminalNotifier } = {}) {
     this.preferences = preferences;
     this.client = client;
     this.notify = notify;
     this.log = log;
     this.platform = platform;
+    this.findNotifier = findNotifier;
     this.capabilities = desktopCapabilities(platform);
     this.supported = this.capabilities.supported;
     this.now = now;
@@ -138,6 +139,14 @@ export class DesktopNotifications {
 
   snapshot() {
     return { ...this.status, ...this.capabilities };
+  }
+
+  async refreshCapabilities() {
+    if (this.platform === "darwin") {
+      this.terminalNotifier = await this.findNotifier();
+      this.capabilities = desktopCapabilities(this.platform, this.terminalNotifier);
+    }
+    return this.snapshot();
   }
 
   setStatus(state, message) {
@@ -354,6 +363,9 @@ export class DesktopNotifications {
     if (!validSound(settings.desktopSound ?? "default", this.platform)) {
       throw new InboxError("desktop_sound", "Choose a notification sound supported by this operating system.", 400);
     }
+    await this.refreshCapabilities();
+    const terminalNotifier = this.terminalNotifier;
+    signal.throwIfAborted();
     this.observeActivation(settings);
     const activation = this.activation;
     await this.register();
@@ -416,7 +428,7 @@ export class DesktopNotifications {
         // Claim activity durably before delivery: a crash may lose an alert, but never replay it.
         await saveDocument(this.statePath, state);
         for (const { item, ...message } of notificationMessages(arrivals)) {
-          if (this.platform === "win32" && item?.type === "CheckSuite") {
+          if ((this.platform === "win32" || terminalNotifier) && item?.type === "CheckSuite") {
             try {
               await this.client.refreshSubjects([item], signal);
             } finally {
@@ -426,7 +438,7 @@ export class DesktopNotifications {
             const subject = this.client.subjectSnapshot(item);
             message.url = subject.url ?? item.url;
             if (subject.subjectLinkError || subject.subjectStateError) {
-              this.log("Could not fully resolve a Windows notification's check-run link; using the available GitHub destination.",
+              this.log("Could not fully resolve a desktop notification's check-run link; using the available GitHub destination.",
                 { level: "warning" });
             }
           }
@@ -434,6 +446,7 @@ export class DesktopNotifications {
           signal.throwIfAborted();
           if (!current.desktopNotifications || generation(current) !== state.generation) break;
           await this.notify({ ...message,
+            ...(this.platform === "darwin" ? { terminalNotifier } : {}),
             sound: current.desktopSound ?? "default", platform: this.platform, signal });
         }
         this.setStatus("watching", watchingMessage);

@@ -83,8 +83,8 @@ See [Usage](docs/usage.md) for status icons and controls,
 - **Confirmations:** Handoffs require a row click; confirmation is on by default. Cloning,
   inferred CI matches, and existing/new session choices always require confirmation.
 - **Desktop alerts:** Opt-in alerts share repository names and titles with your OS,
-  which may retain them or show them on the lock screen. Windows also receives a
-  validated GitHub destination URL.
+  which may retain them or show them on the lock screen. Windows and optional
+  macOS `terminal-notifier` alerts also include a validated GitHub destination URL.
 - **Local data:** `artifacts/` stores settings and desktop coordination data,
   including timestamps, hashed IDs, process markers, and sanitized errors.
   Status and authorship are cached only in memory.

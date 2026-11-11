@@ -1,6 +1,10 @@
 import { execFile } from "node:child_process";
-import { win32 } from "node:path";
+import { constants } from "node:fs";
+import * as fs from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, posix, win32 } from "node:path";
 import { InboxError } from "../shared/model.mjs";
+import { githubMarkPNG } from "./github-mark.mjs";
 
 const platformSounds = {
   darwin: ["Basso", "Blow", "Bottle", "Frog", "Funk", "Glass", "Hero", "Morse", "Ping", "Pop", "Purr", "Sosumi", "Submarine", "Tink"],
@@ -12,14 +16,36 @@ export function validSound(value, platform) {
   return typeof value === "string" && ["none", "default", ...(platform ? platformSounds[platform] ?? [] : Object.values(platformSounds).flat())].includes(value);
 }
 
-export function desktopCapabilities(platform = process.platform) {
+export async function findTerminalNotifier({ env = process.env, io = fs } = {}) {
+  const directories = [...new Set([...(env.PATH ?? "").split(":").filter(posix.isAbsolute),
+    "/opt/homebrew/bin", "/usr/local/bin"])];
+  for (const directory of directories) {
+    const path = posix.join(directory, "terminal-notifier");
+    try {
+      await io.access(path, constants.X_OK);
+      if ((await io.stat(path)).isFile()) return path;
+    } catch (error) {
+      if (["ENOENT", "ENOTDIR"].includes(error.code)) continue;
+      throw new InboxError("desktop_backend",
+        "Could not check terminal-notifier. Check executable permissions in PATH and the standard Homebrew bin directories.", 503);
+    }
+  }
+  return null;
+}
+
+export function desktopCapabilities(platform = process.platform, terminalNotifier) {
   return {
     supported: Object.hasOwn(platformSounds, platform),
     platform,
     sounds: ["none", "default", ...(platformSounds[platform] ?? [])].map(value => ({
       value, label: value === "none" ? "None" : value === "default" ? "System default" : value,
     })),
-    help: platform === "darwin" ? "Uses macOS notifications. System notification and Focus settings control delivery." :
+    ...(platform === "darwin" && terminalNotifier !== undefined ? {
+      backend: terminalNotifier ? "terminal-notifier" : "osascript",
+    } : {}),
+    help: platform === "darwin" ? (terminalNotifier
+      ? "Uses terminal-notifier. Clicking an alert opens GitHub. Allow terminal-notifier in System Settings; notification and Focus settings control delivery."
+      : "Uses built-in AppleScript notifications; clicking an alert may open Script Editor. For GitHub click targets, optionally install terminal-notifier with: brew install terminal-notifier") :
       platform === "win32" ? "Uses Windows PowerShell and Windows 10/11 toasts. Windows notification settings control delivery." :
       platform === "linux" ? "Requires notify-send and a graphical desktop session. Sound choices and silence are hints; your desktop may ignore them." :
         "Desktop notifications are supported on macOS, Windows and Linux.",
@@ -127,7 +153,8 @@ function notificationURL(value) {
 }
 
 export async function notifyDesktop({ title, body, url, sound = "default", signal, platform = process.platform,
-  execute = execFile, env = process.env } = {}) {
+  execute = execFile, env = process.env, terminalNotifier, findNotifier = findTerminalNotifier,
+  io = fs, temporaryRoot = tmpdir() } = {}) {
   if (!desktopCapabilities(platform).supported) {
     throw new InboxError("desktop_unsupported", "Desktop notifications are supported on macOS, Windows and Linux.", 400);
   }
@@ -140,9 +167,17 @@ export async function notifyDesktop({ title, body, url, sound = "default", signa
   let command;
   let args;
   if (platform === "darwin") {
-    command = "/usr/bin/osascript";
-    // Foundation's NSUserNotificationDefaultSoundName uses this identifier.
-    args = ["-e", notificationScript, heading, text, sound === "default" ? "DefaultSoundName" : sound];
+    if (terminalNotifier === undefined) terminalNotifier = await findNotifier({ env });
+    if (terminalNotifier) {
+      command = terminalNotifier;
+      // NSUserDefaults parses option-looking/plist values; the notifier removes one leading backslash.
+      args = ["-title", `\\${heading}`, "-message", `\\${text}`, "-open", destination || "https://github.com/notifications"];
+      if (sound !== "none") args.push("-sound", sound);
+    } else {
+      command = "/usr/bin/osascript";
+      // Foundation's NSUserNotificationDefaultSoundName uses this identifier.
+      args = ["-e", notificationScript, heading, text, sound === "default" ? "DefaultSoundName" : sound];
+    }
   } else if (platform === "win32") {
     command = win32.join(env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
     args = ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", windowsScript];
@@ -155,7 +190,9 @@ export async function notifyDesktop({ title, body, url, sound = "default", signa
     if (!["none", "default"].includes(sound)) args.push(`--hint=string:sound-name:${sound}`);
     args.push("--", heading, escapeLinuxBody(text));
   }
-  return new Promise((resolve, reject) => {
+  if (signal?.aborted) throw new InboxError("closed", "Desktop notification watching stopped.", 410);
+  const send = () => new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new InboxError("closed", "Desktop notification watching stopped.", 410));
     execute(command, args, options, (error, stdout) => {
         if (signal?.aborted) return reject(new InboxError("closed", "Desktop notification watching stopped.", 410));
         if (error) {
@@ -163,10 +200,32 @@ export async function notifyDesktop({ title, body, url, sound = "default", signa
             (error.code === "ENOENT" ? "notify-send is missing. Install your distribution's libnotify tools to use desktop notifications; nothing was installed automatically." :
               "Linux could not send a desktop notification. Check your graphical session, D-Bus connection and notification service.") :
             platform === "win32" ? windowsFailure(error, stdout) :
-              "macOS could not send a desktop notification. Check notification permissions for the script sender in System Settings.";
+              terminalNotifier
+                ? "macOS could not send a desktop notification with terminal-notifier. Check its installation and notification permissions in System Settings."
+                : "macOS could not send a desktop notification. Check notification permissions for the script sender in System Settings.";
           return reject(new InboxError("desktop_delivery", `${message} This alert will not be retried.`, 503));
         }
         resolve();
     });
   });
+  if (platform !== "darwin" || !terminalNotifier) return send();
+  let directory;
+  try {
+    try {
+      directory = await io.mkdtemp(join(temporaryRoot, "github-notifications-image-"));
+      const path = join(directory, "github.png");
+      await io.writeFile(path, githubMarkPNG, { flag: "wx", mode: 0o600 });
+      args.push("-contentImage", path);
+    } catch {
+      throw new InboxError("desktop_image", "Could not prepare the GitHub notification image. Check temporary-directory permissions and free space. No alert was sent.", 503);
+    }
+    // terminal-notifier copies the attachment before completing delivery.
+    return await send();
+  } finally {
+    if (directory) {
+      await io.rm(directory, { recursive: true, force: true }).catch(() => {
+        throw new InboxError("desktop_image_cleanup", "Could not remove the temporary GitHub notification image. Check temporary-directory permissions. This alert will not be retried.", 503);
+      });
+    }
+  }
 }

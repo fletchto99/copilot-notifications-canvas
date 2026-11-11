@@ -15,6 +15,7 @@ import { encodeBundle, inspectBundle, loadPackage, verifyArchive } from "../scri
 import { home } from "./install-fixtures.mjs";
 import { startPackagedCanvas } from "./browser/package-fixtures.mjs";
 import { createCanvasFixture } from "./canvas-fixtures.mjs";
+import { githubMarkPNG } from "../src/provider/github-mark.mjs";
 
 const execute = promisify(execFile);
 const tag = `v${CURRENT_VERSION}`;
@@ -144,6 +145,27 @@ test("embedded assets round-trip through the JSON loader without becoming JavaSc
   assert.equal(globalThis.notificationAssetExecuted, undefined);
 });
 
+test("the bundled notifier attaches its embedded GitHub PNG without source assets or native delivery", async t => {
+  const temporaryRoot = await home(t);
+  const result = await build({
+    entryPoints: [fileURLToPath(new URL("../src/provider/notifier.mjs", import.meta.url))],
+    bundle: true, platform: "node", format: "esm", target: "node22", minify: true, write: false,
+  });
+  const { notifyDesktop } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString("base64")}`);
+  let image;
+  await notifyDesktop({
+    title: "Synthetic title", body: "Synthetic body", platform: "darwin",
+    terminalNotifier: "/synthetic/terminal-notifier", temporaryRoot,
+    execute: (command, args, options, callback) => {
+      assert.equal(command, "/synthetic/terminal-notifier");
+      image = readFile(args[args.indexOf("-contentImage") + 1]);
+      void image.then(() => callback(null), callback);
+    },
+  });
+  assert.deepEqual(await image, githubMarkPNG);
+  assert.deepEqual(await readdir(temporaryRoot), []);
+});
+
 test("the published archive installs and upgrades a self-contained provider with working minified assets", { timeout: 60_000 }, async t => {
   const root = await home(t);
   const directory = join(root, "package");
@@ -154,6 +176,10 @@ test("the published archive installs and upgrades a self-contained provider with
   assert.deepEqual(listing.stdout.trim().split(/\r?\n/).sort(), ["extension.mjs", "install.mjs", "release.json"]);
   await execute("tar", ["-xzf", archive, "-C", directory]);
   const bundle = await loadPackage(directory, tag);
+  assert.ok(bundle.content.includes(githubMarkPNG.toString("base64")), "The release must embed the notification PNG.");
+  const imageSource = await readFile(new URL("../src/provider/github-mark.mjs", import.meta.url), "utf8");
+  const imageNotice = imageSource.match(/\/\*![\s\S]*?\*\//)?.[0];
+  assert.ok(imageNotice && bundle.content.includes(imageNotice), "The release must retain the GitHub mark's MIT license.");
   const installer = join(directory, "install.mjs");
   const env = { ...process.env, COPILOT_HOME: copilotHome };
   const installed = await execute(process.execPath, [installer, tag], { env, cwd: root });

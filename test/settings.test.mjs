@@ -9,14 +9,53 @@ import { Preferences } from "../src/provider/settings.mjs";
 import { startServer } from "../src/provider/server.mjs";
 import { Inbox } from "../src/provider/inbox.mjs";
 import { GitHubClient } from "../src/provider/github.mjs";
+import { DesktopNotifications } from "../src/provider/desktop.mjs";
+import { InboxError } from "../src/shared/model.mjs";
 
-const defaults = { matchGitHubInbox: true, autoOpen: false, darkMode: null, desktopNotifications: false, desktopSound: "default", groupBy: "repo", copilotIntegration: true, confirmCopilotActions: true, hideEmptyTabs: true, keyboardShortcuts: true };
+const defaults = { matchGitHubInbox: true, autoOpen: false, darkMode: null, desktopNotifications: false, terminalNotifierHintDismissed: false, desktopSound: "default", groupBy: "repo", copilotIntegration: true, confirmCopilotActions: true, hideEmptyTabs: true, keyboardShortcuts: true };
 
 async function setup(t, io) {
   const directory = await fs.mkdtemp(join(tmpdir(), "notification-settings-test-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   return new Preferences({ directory, io });
 }
+
+test("the optional macOS hint is read-only until dismissal, persists across instances, and never enables alerts", async t => {
+  const preferences = await setup(t);
+  let installed = null;
+  const desktop = new DesktopNotifications({ preferences, platform: "darwin", findNotifier: async () => {
+    if (installed instanceof Error) throw installed;
+    return installed;
+  } });
+  const server = await startServer(new Inbox(new GitHubClient()), { preferences, desktop });
+  t.after(() => server.close());
+  const url = new URL(server.url);
+  const headers = { Authorization: `Bearer ${url.hash.slice(1)}`, Origin: url.origin, "Content-Type": "application/json" };
+  const read = async () => {
+    const response = await fetch(`${url.origin}/api/settings`, { headers });
+    assert.equal(response.status, 200);
+    return response.json();
+  };
+  assert.equal((await read()).desktopStatus.backend, "osascript");
+  assert.deepEqual(await fs.readdir(preferences.directory), []);
+  await fs.writeFile(preferences.path, '{"future":42,"autoOpen":true}');
+  const response = await fetch(`${url.origin}/api/settings`, {
+    method: "POST", headers, body: JSON.stringify({ terminalNotifierHintDismissed: true }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).terminalNotifierHintDismissed, true);
+  const other = new Preferences({ directory: preferences.directory });
+  assert.equal((await other.read()).terminalNotifierHintDismissed, true);
+  assert.deepEqual(await other.document(), { future: 42, autoOpen: true, terminalNotifierHintDismissed: true });
+  installed = "/opt/homebrew/bin/terminal-notifier";
+  const settings = await read();
+  assert.equal(settings.desktopStatus.backend, "terminal-notifier");
+  assert.equal(settings.desktopNotifications, false);
+  assert.equal(JSON.stringify(settings).includes(installed), false);
+  installed = new InboxError("desktop_backend", "Could not check terminal-notifier.", 503);
+  assert.equal((await read()).desktopStatus.backend, "unavailable");
+  assert.equal((await read()).desktopStatus.message, installed.message);
+});
 
 test("settings default to auto-open off, app theme and repo grouping, persist across instances and preserve unknown keys", async t => {
   const preferences = await setup(t);
@@ -88,6 +127,7 @@ test("hiding empty tabs defaults on and persists without replacing unrelated or 
 test("malformed stored settings and invalid updates fail explicitly without overwriting data", async t => {
   const preferences = await setup(t);
   for (const data of ["{", "[]", "null", '{"autoOpen":"yes"}', '{"desktopNotifications":1}',
+    '{"terminalNotifierHintDismissed":null}', '{"terminalNotifierHintDismissed":"true"}',
     '{"matchGitHubInbox":null}', '{"matchGitHubInbox":"true"}', '{"matchGitHubInbox":0}',
     '{"hideEmptyTabs":null}', '{"hideEmptyTabs":"true"}', '{"hideEmptyTabs":0}',
     '{"keyboardShortcuts":null}', '{"keyboardShortcuts":"true"}', '{"keyboardShortcuts":0}',
@@ -101,6 +141,7 @@ test("malformed stored settings and invalid updates fail explicitly without over
     assert.equal(await fs.readFile(preferences.path, "utf8"), data);
   }
   for (const input of [null, [], {}, { autoOpen: "yes" }, { darkMode: "dark" }, { darkMode: 0 },
+    { terminalNotifierHintDismissed: null }, { terminalNotifierHintDismissed: "true" },
     { matchGitHubInbox: null }, { matchGitHubInbox: "true" }, { matchGitHubInbox: 0 },
     { hideEmptyTabs: null }, { hideEmptyTabs: "true" }, { hideEmptyTabs: 0 },
     { keyboardShortcuts: null }, { keyboardShortcuts: "true" }, { keyboardShortcuts: 0 },

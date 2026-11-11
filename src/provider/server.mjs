@@ -279,8 +279,15 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
   };
   const settingsSnapshot = async settings => {
     copilot?.setSettings(settings);
+    let desktopStatus;
+    try {
+      desktopStatus = await desktop?.refreshCapabilities?.() ?? desktop?.snapshot();
+    } catch (error) {
+      if (!(error instanceof InboxError) || error.code !== "desktop_backend") throw error;
+      desktopStatus = { ...desktop.snapshot(), backend: "unavailable", state: "error", message: error.message, help: error.message };
+    }
     return {
-      ...settings, desktopStatus: desktop?.snapshot() ?? {
+      ...settings, desktopStatus: desktopStatus ?? {
         supported: false, state: "off", message: developmentAPI?.target.custom
           ? "Desktop notifications are disabled for custom development APIs." : "Desktop notifications are unavailable.",
       },
