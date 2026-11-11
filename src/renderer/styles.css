@@ -1297,10 +1297,12 @@ footer:has(#development-build[hidden]) {
 
   #force-refresh[aria-busy="true"] svg {
     animation: refresh-spin 0.8s linear infinite;
+    animation-direction: reverse;
   }
 
   .subject-loading .subject-icon svg {
     animation: refresh-spin 0.8s linear infinite;
+    animation-direction: reverse;
   }
 
   .repo-actions button[aria-busy="true"]::after,

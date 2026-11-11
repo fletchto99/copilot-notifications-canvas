@@ -4,7 +4,7 @@ import { createUpdateNotice } from "./update-notice.mjs";
 
 const $ = id => document.getElementById(id);
 for (const [id, name] of [
-  ["inbox-icon", "inbox"], ["refresh-icon", "sync"], ["shortcuts-icon", "command-palette"],
+  ["inbox-icon", "inbox"], ["refresh-icon", "sync"], ["shortcuts-icon", "question"],
   ["settings-icon", "gear"], ["update-details-icon", "triangle-right"],
   ["attention-previous-icon", "chevron-left"], ["attention-next-icon", "chevron-right"],
 ]) setIcon($(id), name);

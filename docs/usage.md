@@ -289,7 +289,7 @@ pages remain; automatic refresh continues. Otherwise, refresh before loading mor
 | I | Mark only the focused notification as read, then advance to the next visible row |
 | Shift+E | Mark only the focused notification as done |
 | / | Focus search without changing the query |
-| ? or the toolbar shortcut icon (before Settings) | Open the keyboard shortcut guide |
+| ? or the question-mark toolbar icon (before Settings) | Open the keyboard shortcut guide |
 | Left/Right Arrow, Home, End | Switch visible attention tabs; edge scroll buttons do not change selection |
 | Tab | Visit row links and separate Read/Done controls; empty-state panels remain focusable |
 | Hover / focus a button | Show its action tooltip |

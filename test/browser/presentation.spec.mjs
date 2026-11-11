@@ -12,7 +12,7 @@ for (const packaged of [false, true]) {
       await page.goto(canvas.url);
       await expect(page.locator(".row")).toHaveCount(1);
       for (const [selector, name] of [
-        ["#inbox-icon", "inbox"], ["#refresh-icon", "sync"], ["#shortcuts-icon", "command-palette"],
+        ["#inbox-icon", "inbox"], ["#refresh-icon", "sync"], ["#shortcuts-icon", "question"],
         ["#settings-icon", "gear"], ["#attention-previous-icon", "chevron-left"],
         ["#attention-next-icon", "chevron-right"], ["#update-details-icon", "triangle-right"],
         [".mark-read svg", "read"], [".mark-done svg", "check"],

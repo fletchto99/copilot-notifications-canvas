@@ -4,10 +4,10 @@ import { pathToFileURL } from "node:url";
 const output = new URL("../src/renderer/octicons.mjs", import.meta.url);
 export const iconNames = [
   "agent", "bell", "check", "check-circle", "checklist", "chevron-left", "chevron-right",
-  "circle-slash", "clock", "command-palette", "comment-discussion", "copilot", "dash",
+  "circle-slash", "clock", "comment-discussion", "copilot", "dash",
   "discussion-closed", "discussion-duplicate", "discussion-outdated", "gear", "git-commit",
   "git-merge", "git-merge-queue", "git-pull-request", "git-pull-request-closed",
-  "git-pull-request-draft", "inbox", "issue-closed", "issue-opened", "mail", "read",
+  "git-pull-request-draft", "inbox", "issue-closed", "issue-opened", "mail", "question", "read",
   "report", "shield-lock", "skip", "sync", "tag", "triangle-right", "workflow", "x",
 ];
 
