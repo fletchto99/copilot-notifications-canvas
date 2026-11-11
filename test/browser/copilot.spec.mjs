@@ -250,9 +250,9 @@ for (const packaged of [false, true]) {
       const start = page.getByRole("button", { name: "Start session", exact: true });
       await expect(start).toBeVisible();
       if (change.includes("during")) {
-        let queries = 0;
         canvas.setRequestHook(args => {
-          if (args.at(-1) !== "graphql" || !args.some(arg => arg.includes("headRefOid")) || ++queries !== 2) return;
+          if (args.at(-1) !== "graphql" ||
+              canvas.copilotHost.calls.filter(call => call.name === "list_sessions_and_chats").length !== 3) return;
           if (change.startsWith("head")) canvas.rows[0].subjectDetails.head.sha = "c".repeat(40);
           else canvas.rows[0].subjectDetails.state = "closed";
         });
@@ -626,6 +626,46 @@ for (const packaged of [false, true]) {
       await expect(page.locator("#copilot-status")).toHaveAttribute("role", "alert");
       expect(readsAfterSetup).toBeGreaterThan(0);
       expect(canvas.copilotHost.calls.some(call => ["create_session", "navigate_to"].includes(call.name))).toBe(false);
+      expect(canvas.writes).toEqual([]);
+      expect(canvas.deliveries).toEqual([]);
+    });
+
+    for (const boundary of ["setup", "inspection"]) test(
+      `queue entry during repository ${boundary} blocks checkout or fetch`, async ({ page, canvas }) => {
+      canvas.rows.splice(1);
+      const row = canvas.rows[0];
+      row.subject = { title: "Synthetic PR", type: "PullRequest",
+        url: "https://api.github.com/repos/example/widgets/pulls/1" };
+      row.subjectDetails = { state: "open", merged: false, draft: false, head: { sha: "b".repeat(40) } };
+      if (boundary === "setup") canvas.copilotHost.repositories.splice(0);
+      const execute = canvas.copilotHost.rpc.execute;
+      canvas.copilotHost.rpc.execute = async input => {
+        const result = await execute(input);
+        if (input.name === "add_repository") row.mergeQueued = true;
+        return result;
+      };
+      const run = canvas.copilotHost.rpc.runGit;
+      let present = false;
+      canvas.copilotHost.rpc.runGit = async input => {
+        if (input.args.includes("--verify") && !present) {
+          if (boundary === "inspection") row.mergeQueued = true;
+          throw Object.assign(new Error("Missing synthetic commit"), { code: 1 });
+        }
+        if (input.args.includes("fetch")) present = true;
+        return run(input);
+      };
+      await page.goto(canvas.url);
+      await page.getByRole("button", { name: /^Review with Copilot:/ }).click();
+      await page.getByRole("button", {
+        name: boundary === "setup" ? "Clone repository and start" : "Start session", exact: true,
+      }).click();
+      await expect(page.locator("#copilot-status")).toContainText("merge-queued");
+      await expect(page.locator("#copilot-status")).toHaveAttribute("role", "alert");
+      expect(row.mergeQueued).toBe(true);
+      expect(canvas.copilotHost.gitCalls.some(call => call.args.includes("fetch"))).toBe(false);
+      if (boundary === "setup") expect(canvas.copilotHost.gitCalls).toEqual([]);
+      expect(canvas.copilotHost.calls.some(call => ["create_session", "navigate_to"].includes(call.name))).toBe(false);
+      expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
       expect(canvas.writes).toEqual([]);
       expect(canvas.deliveries).toEqual([]);
     });

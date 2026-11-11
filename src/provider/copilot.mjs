@@ -469,10 +469,11 @@ export class CopilotHandoff {
       await this.#active(input.id, input.direct);
       await this.#remember(input);
       if (target.sha) {
+        await this.#active(input.id, input.direct, { forceQueue: true });
         progress("Preparing checkout...");
         await this.host.prepareCommit(repository, target, {
           signal: this.inbox.controller.signal, beforeFetch: async () => {
-            await this.#active(input.id, input.direct);
+            await this.#active(input.id, input.direct, { forceQueue: true });
             progress("Fetching selected commit...");
           },
         });

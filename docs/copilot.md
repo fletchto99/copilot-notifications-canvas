@@ -65,9 +65,10 @@ skips it; its hover tooltip explains why the action is unavailable. Notification
 links and Read/Done remain available. Open or draft PR handoffs wait for verified
 merge-queue membership; pending or failed checks cannot authorize a session.
 Fresh REST PR metadata determines whether that check is needed, not the cached
-row state. Starting a handoff rechecks queue membership before checkout and
-again immediately before session creation rather than trusting a cached
-non-queued result. These checks still respect failure and rate-limit backoff.
+row state. Starting a handoff rechecks queue membership after repository setup,
+immediately before checkout, before fetching a missing commit, and immediately
+before session creation rather than trusting a cached non-queued result.
+These checks still respect failure and rate-limit backoff.
 The fresh queue response also verifies the confirmed PR state and head commit,
 so a push, closure, or merge during that request stops the handoff.
 Closed and merged PR summaries do not require merge-queue access.

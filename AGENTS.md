@@ -123,8 +123,9 @@ in `test/fixtures/copilot-handoff.mjs` and the existing synthetic host fixture.
   a changed task needs a fresh action.
   Resolve fresh PR metadata before checking merge-queue membership. Require the
   queue check for open/draft PRs, not for closed/merged summaries, regardless of
-  missing or stale row state. Revalidate queue membership before checkout and
-  immediately before creation; cached non-queued results cannot authorize these
+  missing or stale row state. After setup, revalidate queue membership immediately
+  before checkout, before fetching a missing commit, and immediately before
+  creation; cached non-queued results cannot authorize these
   steps. Validate PR state and head commit from that same fresh queue response,
   not solely from the preceding REST lookup. Preserve failure and rate-limit backoff.
   Closed issues use summary-only prompts, not fixing or reopening prompts.

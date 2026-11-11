@@ -179,10 +179,9 @@ test("PR changes during the final queue request cannot authorize a stale session
     const held = deferred();
     t.after(() => held.resolve());
     const pull = { state: "open", merged: false, head: { sha: prSha } };
-    let queries = 0;
     const f = await fixture(t, { type: "PullRequest", pull, onGitHub: async args => {
       if (args.at(-1) !== "graphql") return;
-      if (++queries === 3) {
+      if (f.calls.filter(call => call.name === "list_sessions_and_chats").length === 3) {
         entered.resolve();
         await held.promise;
       }
@@ -719,6 +718,40 @@ test("PRs entering the merge queue after confirmation, checkout, or discovery ca
     assert.equal(queued, true);
     assert.equal(f.handoff.snapshot().status, "error");
     assert.match(f.handoff.snapshot().message, /merge-queued/);
+    assert.equal(f.calls.some(call => ["create_session", "navigate_to"].includes(call.name)), false);
+    assert.equal(f.host.reservations.size, 0);
+  });
+});
+
+test("PRs entering the merge queue during setup or checkout inspection never fetch", async t => {
+  for (const boundary of ["setup", "inspection"]) await t.test(boundary, async t => {
+    let queued = false;
+    let present = false;
+    const f = await fixture(t, { type: "PullRequest",
+      ...(boundary === "setup" ? { repositories: [] } : {}),
+      onExecute: name => {
+        if (name === "add_repository") queued = true;
+      },
+      onGitHub: args => {
+        if (args.at(-1) === "graphql") return http({ data: { repository: { pullRequest: {
+          isInMergeQueue: queued, state: "OPEN", headRefOid: prSha,
+        } } } });
+      },
+      onGit: args => {
+        if (args.includes("--verify") && !present) {
+          if (boundary === "inspection") queued = true;
+          throw Object.assign(new Error("Missing synthetic commit"), { code: 1 });
+        }
+        if (args.includes("fetch")) present = true;
+      },
+    });
+    await prepare(f);
+    const result = await start(f, boundary === "setup" ? { clone: true } : {});
+    assert.equal(queued, true);
+    assert.equal(f.gitCalls.some(call => call.args.includes("fetch")), false);
+    if (boundary === "setup") assert.deepEqual(f.gitCalls, []);
+    assert.equal(result.status, "error");
+    assert.match(result.message, /merge-queued/);
     assert.equal(f.calls.some(call => ["create_session", "navigate_to"].includes(call.name)), false);
     assert.equal(f.host.reservations.size, 0);
   });
