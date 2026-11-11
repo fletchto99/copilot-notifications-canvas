@@ -1,15 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInContext } from "node:vm";
 import { firstPage, GitHubClient, nextPage, POLL_MS } from "../src/provider/github.mjs";
-import { apiTarget } from "../src/shared/model.mjs";
+import { apiTarget, InboxError } from "../src/shared/model.mjs";
 import { Inbox } from "../src/provider/inbox.mjs";
 import { Preferences } from "../src/provider/settings.mjs";
 import { startServer } from "../src/provider/server.mjs";
-import { http, thread } from "./fixtures.mjs";
+import { http, retrySelection, thread } from "./fixtures.mjs";
 import { renderer, settle } from "./renderer-fixtures.mjs";
 
 function fixture(rows = [thread("1"), thread("2", { unread: false }), thread("3", { unread: false, done: true })]) {
@@ -41,96 +41,12 @@ function fixture(rows = [thread("1"), thread("2", { unread: false }), thread("3"
   return { client, calls, rows, advance: () => { now += POLL_MS; } };
 }
 
-test("switching cached views after Done never skips a shifted pagination boundary", async t => {
-  for (const switchMode of [false, true]) {
-    for (const cachedSecondPage of [false, true]) {
-      const { client } = fixture(Array.from({ length: 100 }, (_, index) => thread(String(index + 1))));
-      const inbox = new Inbox(client);
-      t.after(() => inbox.close());
-      await inbox.refresh();
-      if (cachedSecondPage) await inbox.more();
-      inbox.queueThread({ id: "1" }, "done");
-      await inbox.batch.done;
-      if (switchMode) {
-        await inbox.setFilters({ mode: "unread" });
-        await inbox.setFilters({ mode: "inbox" });
-      } else {
-        inbox.setMatchGitHubInbox(false);
-        await inbox.refresh();
-        inbox.setMatchGitHubInbox(true);
-        await inbox.refresh();
-      }
-      assert.equal(inbox.summary().loaded, 50);
-      assert.equal(inbox.summary().needsRefresh, false);
-      await inbox.more();
-      assert.deepEqual(inbox.loadedItems().map(item => item.id),
-        Array.from({ length: 99 }, (_, index) => String(index + 2)));
-      assert.equal(inbox.summary().hasMore, false);
-    }
-  }
-});
-
-test("saved view changes do not reset explicit unread pagination or its polling deadline", async t => {
-  const { client, calls } = fixture(Array.from({ length: 100 }, (_, index) => thread(String(index + 1))));
-  const inbox = new Inbox(client, { mode: "unread" });
-  t.after(() => inbox.close());
-  await inbox.refresh();
-  const deadline = inbox.nextRefreshAt;
-  inbox.setMatchGitHubInbox(false);
-  assert.equal(inbox.summary().needsRefresh, false);
-  assert.equal(inbox.nextRefreshAt, deadline);
-  await inbox.more();
-  const count = calls.length;
-  for (const value of [true, false]) {
-    inbox.setMatchGitHubInbox(value);
-    await inbox.refresh();
-    assert.equal(inbox.summary().loaded, 100);
-    assert.equal(inbox.summary().needsRefresh, false);
-    assert.equal(inbox.nextRefreshAt, deadline);
-    assert.equal(calls.length, count);
-  }
-});
-
-test("a preference change during an explicit unread refresh keeps every loaded page", async t => {
-  const { client, advance } = fixture(Array.from({ length: 100 }, (_, index) => thread(String(index + 1))));
-  const inbox = new Inbox(client, { mode: "unread" });
-  t.after(() => inbox.close());
-  await inbox.refresh();
-  await inbox.more();
-  advance();
-  let enter;
-  let release;
-  const entered = new Promise(resolve => { enter = resolve; });
-  const held = new Promise(resolve => { release = resolve; });
-  const run = client.run;
-  let started = false;
-  client.run = async args => {
-    if (!started) {
-      started = true;
-      enter();
-      await held;
-    }
-    return run(args);
-  };
-  const refreshing = inbox.refresh();
-  await entered;
-  inbox.setMatchGitHubInbox(false);
-  release();
-  await refreshing;
-  assert.equal(inbox.summary().loaded, 100);
-  assert.equal(inbox.summary().needsRefresh, false);
-  assert.ok(inbox.nextRefreshAt > client.now());
-});
-
-test("inbox matching and unread queries preserve their exact scope through pagination", async () => {
+test("full inbox and desktop unread queries preserve their exact scope through pagination", () => {
   assert.equal(firstPage(), "/notifications?all=false&per_page=50&page=1");
   assert.equal(firstPage({ mode: "inbox" }), "/notifications?all=true&is_done=false&per_page=50&page=1");
-  assert.equal(firstPage({ mode: "inbox", matchGitHubInbox: true }), "/notifications?all=true&is_done=false&per_page=50&page=1");
-  assert.equal(firstPage({ mode: "inbox", matchGitHubInbox: false }), firstPage());
-  assert.equal(firstPage({ mode: "unread", matchGitHubInbox: true }), firstPage());
   for (const target of [apiTarget(), apiTarget("https://git.example.com/api/v3")]) {
-    for (const options of [{}, { mode: "inbox" }, { mode: "inbox", matchGitHubInbox: false }]) {
-      const first = firstPage(options);
+    for (const mode of ["inbox", "unread"]) {
+      const first = firstPage({ mode });
       const url = new URL(`${target.baseUrl}${first}`);
       url.searchParams.set("page", "2");
       const link = () => `<${url.href}>; rel="next"`;
@@ -152,99 +68,300 @@ test("inbox matching and unread queries preserve their exact scope through pagin
   assert.equal(calls.length, 0);
 });
 
-test("read and Done confirmations update inbox and unread caches across both toggle states", async t => {
+test("legacy preferences seed each panel once without writing settings or limiting fetched items", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "notification-read-filter-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const preferences = new Preferences({ directory });
+  const saved = '{"matchGitHubInbox":false,"autoOpen":true,"futureSetting":"preserved"}\n';
+  await writeFile(preferences.path, saved);
+  const { client, calls } = fixture();
+  for (const [input, expected] of [[{}, "unread"], [{ readState: "all" }, "all"], [{ readState: "read" }, "read"],
+    [{ mode: "unread" }, "unread"], [{ mode: "inbox" }, "all"], [{ mode: "unread", readState: "read" }, "read"]]) {
+    const inbox = new Inbox(client, input);
+    t.after(() => inbox.close());
+    await inbox.syncSettings(preferences);
+    await inbox.refresh();
+    assert.equal(inbox.filters.readState, expected);
+    assert.equal(inbox.summary().loaded, 2);
+    assert.equal(inbox.summary().matching, expected === "all" ? 2 : 1);
+    await inbox.setFilters({ readState: "all" });
+    const pages = inbox.pages;
+    await inbox.syncSettings(preferences);
+    assert.equal(inbox.filters.readState, "all");
+    assert.equal(inbox.pages, pages);
+  }
+  assert.equal(calls.length, 1, "All panels share the full inbox cache");
+  assert.match(calls[0].at(-1), /all=true&is_done=false/);
+  assert.equal(await readFile(preferences.path, "utf8"), saved);
+  assert.deepEqual(await readdir(directory), ["settings.json"]);
+});
+
+test("a late or recovered settings read cannot overwrite an explicitly selected read filter", async t => {
+  for (const failure of [false, true]) {
+    const inbox = new Inbox(fixture().client);
+    t.after(() => inbox.close());
+    if (failure) {
+      await inbox.syncSettings({ read: async () => { throw new InboxError("settings_read", "Synthetic settings failure", 500); } });
+      assert.equal(inbox.summary().settingsError.code, "settings_read");
+    }
+    let finish;
+    const reading = inbox.syncSettings({ read: () => new Promise(resolve => { finish = resolve; }) });
+    await inbox.setFilters({ readState: "read" });
+    finish({ matchGitHubInbox: false });
+    await reading;
+    assert.equal(inbox.filters.readState, "read");
+    assert.equal(inbox.summary().settingsError, null);
+  }
+});
+
+test("initial inputs and recovered choices win until the shared filters change", async t => {
+  const filterDefaults = { type: "PullRequest", readState: "unread", reason: "mention", age: "older_7d" };
+  const settings = { read: async () => ({ matchGitHubInbox: false, filterDefaults }) };
+  for (const input of [{}, { type: "Issue", readState: "all" }, { mode: "inbox", age: "all" }]) {
+    const inbox = new Inbox(fixture().client, input);
+    t.after(() => inbox.close());
+    await inbox.syncSettings(settings);
+    assert.equal(inbox.filters.type, input.type ?? filterDefaults.type);
+    assert.equal(inbox.filters.readState, input.readState ?? (input.mode === "inbox" ? "all" : filterDefaults.readState));
+    assert.equal(inbox.filters.age, input.age ?? filterDefaults.age);
+    assert.equal(inbox.filters.reason, "mention");
+    assert.equal(inbox.filters.query, "");
+    assert.equal(inbox.filters.attention, "all");
+    await inbox.syncSettings({ read: async () => ({ filterDefaults: { ...filterDefaults, type: "Release" } }) });
+    assert.deepEqual(inbox.filters, { query: "", attention: "all", ...filterDefaults, type: "Release" });
+  }
+  const inbox = new Inbox(fixture().client);
+  t.after(() => inbox.close());
+  await inbox.syncSettings({ read: async () => { throw new InboxError("settings_read", "Synthetic settings failure", 500); } });
+  await inbox.setFilters({ type: "Issue", age: "last_24h" });
+  await inbox.syncSettings(settings);
+  assert.deepEqual(inbox.filters, { query: "", attention: "all",
+    type: "Issue", readState: "unread", reason: "mention", age: "last_24h" });
+  await assert.rejects(inbox.syncSettings({ read: async () => ({ filterDefaults: {} }) }), { code: "invalid_settings" });
+});
+
+test("older reads, read failures and completed writes cannot restore stale shared filters", async t => {
+  const inbox = new Inbox(fixture().client);
+  t.after(() => inbox.close());
+  const first = { revision: 1, filterDefaults: { type: "Issue", readState: "all", reason: "all", age: "all" } };
+  inbox.applySettings(first);
+  let release;
+  const pending = inbox.syncSettings({ read: () => new Promise(resolve => { release = resolve; }) });
+  const second = { revision: 2, filterDefaults: { ...first.filterDefaults, type: "Release" } };
+  inbox.applySettings(second);
+  release(first);
+  assert.equal(await pending, undefined);
+  assert.equal(inbox.filters.type, "Release");
+  assert.equal(inbox.snapshot().settingsRevision, 2);
+  const failing = inbox.syncSettings({ read: () => new Promise((resolve, reject) => {
+    release = () => reject(new InboxError("settings_read", "Old read failed", 500));
+  }) });
+  inbox.applySettings({ ...second, revision: 3 });
+  release();
+  await failing;
+  assert.equal(inbox.settingsError, null);
+  const writing = inbox.syncFilters({ type: "PullRequest", query: "local" }, {
+    updateFilters: () => new Promise(resolve => { release = resolve; }),
+  });
+  inbox.applySettings({ ...second, revision: 5 });
+  release({ revision: 4, filterDefaults: { ...first.filterDefaults, type: "PullRequest" } });
+  await writing;
+  assert.equal(inbox.filters.type, "Release");
+  assert.equal(inbox.filters.query, "local");
+  assert.equal(inbox.snapshot().settingsRevision, 5);
+  await assert.rejects(inbox.syncFilters({ type: "Issue" }), { code: "settings_unavailable" });
+  await assert.rejects(inbox.syncFilters({ type: "Issue", query: 1 }, {
+    updateFilters: () => assert.fail("Invalid local input must not write shared settings"),
+  }), { code: "invalid_filters" });
+  const overridden = new Inbox(fixture().client, { type: "Issue", query: "local" });
+  t.after(() => overridden.close());
+  const cleared = { revision: 1, filterDefaults: { type: "all", readState: "all", reason: "all", age: "all" } };
+  overridden.applySettings(cleared);
+  assert.equal(overridden.filters.type, "Issue");
+  overridden.applySettings({ ...cleared, revision: 2 });
+  assert.equal(overridden.filters.type, "all", "A shared clear also replaces an initial override when saved values were already clear");
+  assert.equal(overridden.filters.query, "local");
+});
+
+test("HTTP filter patches sync active canvases, preserve local search and reject stale batches", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "notification-filter-defaults-http-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const preferences = new Preferences({ directory });
+  await preferences.update({ matchGitHubInbox: false });
+  const { client, calls } = fixture();
+  const panels = [new Inbox(client), new Inbox(client)];
+  const servers = await Promise.all(panels.map(inbox => startServer(inbox, { preferences })));
+  t.after(() => Promise.all(servers.map(server => server.close())));
+  const request = async (server, path, body, status = 200) => {
+    const url = new URL(server.url);
+    const response = await fetch(`${url.origin}/api/${path}`, {
+      method: body === undefined ? "GET" : "POST",
+      headers: { Authorization: `Bearer ${url.hash.slice(1)}`, Origin: url.origin, "Content-Type": "application/json" },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    assert.equal(response.status, status);
+    return response.json();
+  };
+  await Promise.all(servers.map(server => request(server, "refresh", {})));
+  const old = panels[1].snapshot();
+  await request(servers[0], "filters", { readState: "all", query: "notification 2", attention: "review_requested" });
+  const rejected = await request(servers[1], "batch/start",
+    { scope: "shown", selectionKey: old.selectionKey, action: "done" }, 409);
+  assert.equal(rejected.error.code, "selection_changed");
+  const filterDefaults = { type: "PullRequest", readState: "all", reason: "review_requested", age: "all" };
+  await request(servers[1], "filters", { type: "PullRequest", reason: "review_requested" });
+  for (const [index, server] of servers.entries()) {
+    const state = await request(server, "state");
+    assert.deepEqual(state.filters, { ...filterDefaults, query: index === 0 ? "notification 2" : "",
+      attention: index === 0 ? "review_requested" : "all" });
+    assert.equal(state.settingsRevision, 3);
+  }
+  const fresh = new Inbox(client);
+  panels.push(fresh);
+  const freshServer = await startServer(fresh, { preferences: new Preferences({ directory }) });
+  servers.push(freshServer);
+  const state = await request(freshServer, "refresh", {});
+  assert.deepEqual(state.filters, { query: "", attention: "all", ...filterDefaults });
+  assert.equal(state.matching, 2, "Saved All overrides the legacy unread-only default");
+  assert.deepEqual((await preferences.document()).filterDefaults, filterDefaults);
+  await request(servers[0], "filters", { type: "all", readState: "all", reason: "all", age: "all" });
+  for (const server of servers) assert.equal((await request(server, "state")).filters.type, "all");
+  assert.equal((await preferences.read()).matchGitHubInbox, false);
+  assert.ok(calls.every(args => args.includes("GET")));
+});
+
+test("HTTP retries reject shared-filter changes before writing, across scopes and actions", async t => {
+  for (const scope of ["repository", "date", "shown"]) {
+    for (const action of ["read", "done"]) {
+      const directory = await mkdtemp(join(tmpdir(), "notification-retry-selection-"));
+      t.after(() => rm(directory, { recursive: true, force: true }));
+      const preferences = new Preferences({ directory });
+      const { client, advance } = fixture([
+        thread("1", { subject: { type: "Issue", title: "Synthetic issue", url: null } }), thread("2"),
+      ]);
+      const run = client.run;
+      const writes = [];
+      let fail = true;
+      client.run = async (...args) => {
+        if (args[0].includes("PATCH") || args[0].includes("DELETE")) {
+          writes.push(args[0].at(-1));
+          if (fail) return http({}, {}, 500);
+        }
+        return run(...args);
+      };
+      const inbox = new Inbox(client);
+      const server = await startServer(inbox, { preferences });
+      t.after(() => server.close());
+      const url = new URL(server.url);
+      const request = async (path, body, status = 200) => {
+        const response = await fetch(`${url.origin}/api/${path}`, {
+          method: body === undefined ? "GET" : "POST",
+          headers: { Authorization: `Bearer ${url.hash.slice(1)}`, Origin: url.origin, "Content-Type": "application/json" },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        });
+        assert.equal(response.status, status);
+        return response.json();
+      };
+      const initial = await request("refresh", {});
+      const selection = scope === "repository" ? {
+        repository: initial.groups[0].repository, selectionKey: initial.groups[0].selectionKey,
+      } : { scope, selectionKey: initial.selectionKey,
+        ...(scope === "date" ? { date: "2026-01-10", timeZone: "UTC" } : {}) };
+      await request("batch/start", { ...selection, action }, 202);
+      await inbox.batch.done;
+      await preferences.updateFilters({ type: "Issue" });
+      const filtered = await request("state");
+      assert.deepEqual(filtered.batch.retryableThreadIds, ["1"]);
+      const retry = { token: filtered.batch.token, selectionKey: filtered.batch.retrySelectionKey };
+      assert.doesNotMatch(JSON.stringify(inbox.summary()), /retrySelectionKey/);
+      fail = false;
+      advance();
+      advance();
+      await preferences.updateFilters({ type: "all" });
+      const before = [...writes];
+      assert.equal((await request("batch/retry", retry, 409)).error.code, "selection_changed");
+      assert.deepEqual(writes, before);
+      assert.equal(inbox.batch.snapshot().token, retry.token);
+      await preferences.updateFilters({ type: "Issue" });
+      const reviewed = await request("state");
+      await request("batch/retry", { token: reviewed.batch.token, selectionKey: reviewed.batch.retrySelectionKey }, 202);
+      await inbox.batch.done;
+      assert.deepEqual(writes.slice(before.length), ["/notifications/threads/1"]);
+      assert.equal(inbox.loadedItems().find(item => item.id === "2").unread, true);
+    }
+  }
+});
+
+test("filters and legacy mode aliases keep pagination, cached data and polling deadlines unchanged", async t => {
+  const { client, calls } = fixture(Array.from({ length: 100 }, (_, index) =>
+    thread(String(index + 1), { unread: index % 2 === 0 })));
+  const inbox = new Inbox(client);
+  t.after(() => inbox.close());
+  inbox.applySettings({ matchGitHubInbox: false });
+  await inbox.refresh();
+  await inbox.more();
+  const pages = inbox.pages;
+  const deadline = inbox.nextRefreshAt;
+  for (const input of [{ readState: "read" }, { mode: "inbox" }, { mode: "unread" }, { readState: "all" }]) {
+    await inbox.setFilters(input);
+    inbox.applySettings({ matchGitHubInbox: false });
+    assert.equal(inbox.pages, pages);
+    assert.equal(inbox.summary().loaded, 100);
+    assert.equal(inbox.summary().matching, inbox.filters.readState === "all" ? 100 : 50);
+    assert.equal(inbox.nextRefreshAt, deadline);
+    assert.equal(inbox.summary().needsRefresh, false);
+    assert.equal(calls.length, 2);
+  }
+});
+
+test("changing read state after Done does not bypass page reconciliation or skip a shifted boundary", async t => {
+  for (const cachedSecondPage of [false, true]) {
+    const { client } = fixture(Array.from({ length: 100 }, (_, index) => thread(String(index + 1))));
+    const inbox = new Inbox(client);
+    t.after(() => inbox.close());
+    await inbox.refresh();
+    if (cachedSecondPage) await inbox.more();
+    inbox.queueThread({ id: "1" }, "done");
+    await inbox.batch.done;
+    await inbox.setFilters({ readState: "unread" });
+    await inbox.setFilters({ readState: "all" });
+    assert.equal(inbox.summary().needsRefresh, true);
+    await assert.rejects(inbox.more(), { code: "refresh_required" });
+    await inbox.refresh({ force: true });
+    if (inbox.summary().hasMore) await inbox.more();
+    assert.deepEqual(inbox.loadedItems().map(item => item.id),
+      Array.from({ length: 99 }, (_, index) => String(index + 2)));
+    assert.equal(inbox.summary().hasMore, false);
+  }
+});
+
+test("read and Done confirmations synchronize full inbox panels and the desktop unread cache", async t => {
   const { client, calls } = fixture();
   const inbox = new Inbox(client);
-  const unmatched = new Inbox(client);
-  const unread = new Inbox(client, { mode: "unread" });
-  unmatched.setMatchGitHubInbox(false);
-  t.after(() => { inbox.close(); unmatched.close(); unread.close(); });
+  const unread = new Inbox(client, { readState: "unread" });
+  t.after(() => { inbox.close(); unread.close(); });
   await inbox.refresh();
-  await unmatched.refresh();
   await unread.refresh();
-  assert.deepEqual([inbox.summary().loaded, unmatched.summary().loaded, unread.summary().loaded], [2, 1, 1]);
+  await client.page(firstPage());
   assert.equal(client.cache.size, 2);
+  assert.equal(unread.summary().loaded, 2);
+  assert.equal(unread.summary().matching, 1);
   inbox.queueThread({ id: "1" }, "read");
   await inbox.batch.done;
-  assert.deepEqual([inbox.summary().loaded, unmatched.summary().loaded, unread.summary().loaded], [2, 0, 0]);
-  assert.equal(inbox.summary().unread, 0);
+  assert.equal(inbox.summary().loaded, 2);
+  assert.equal(unread.summary().loaded, 2);
+  assert.equal(unread.summary().matching, 0);
   assert.throws(() => inbox.queueThread({ id: "1" }, "read"), { code: "unknown_thread" });
   inbox.queueThread({ id: "2" }, "done");
   await inbox.batch.done;
-  assert.deepEqual([inbox.summary().loaded, unmatched.summary().loaded], [1, 0]);
-  for (const panel of [inbox, unmatched, unread]) {
+  for (const panel of [inbox, unread]) {
+    assert.equal(panel.summary().loaded, 1);
     assert.equal(panel.summary().needsRefresh, true);
     assert.doesNotMatch(JSON.stringify(panel.summary()), /Synthetic|example\/|selectionKey|title|"items"/);
   }
   for (const page of client.cache.values()) assert.equal(page.etag, undefined);
   assert.equal(calls.filter(args => args.includes("GET")).length, 2);
   assert.equal(calls.filter(args => args.includes("PATCH") || args.includes("DELETE")).length, 2);
-});
-
-test("Match GitHub Inbox switches atomically, resets pagination and keeps the previous view through failures", async t => {
-  let now = 0;
-  let fail = false;
-  const calls = [];
-  const client = new GitHubClient({ now: () => now, run: async args => {
-    calls.push(args);
-    const url = new URL(args.at(-1), "https://api.github.com");
-    if (!url.searchParams.has("is_done")) return fail ? http({}, {}, 500) : http([thread("3")]);
-    if (url.searchParams.get("page") === "2") return http([thread("2", { unread: false })]);
-    url.searchParams.set("page", "2");
-    return http([thread("1")], { link: `<${url.href}>; rel="next"` });
-  } });
-  const inbox = new Inbox(client, { query: "Synthetic", attention: "review_requested" });
-  t.after(() => inbox.close());
-  await inbox.refresh();
-  await inbox.more();
-  const before = inbox.snapshot();
-  for (const value of [null, undefined, "true", 1]) assert.throws(() => inbox.setMatchGitHubInbox(value), { code: "invalid_settings" });
-  inbox.setMatchGitHubInbox(false);
-  await assert.rejects(inbox.more(), { code: "refresh_required" });
-  fail = true;
-  await assert.rejects(inbox.refresh(), { code: "github_http" });
-  assert.equal(inbox.snapshot().matchGitHubInbox, true);
-  assert.deepEqual(inbox.snapshot().groups, before.groups);
-  assert.equal(inbox.snapshot().status, "stale");
-  const count = calls.length;
-  await assert.rejects(inbox.refresh(), { code: "github_http" });
-  assert.equal(calls.length, count);
-  fail = false;
-  now = client.blockedUntil;
-  await inbox.refresh();
-  assert.equal(inbox.snapshot().matchGitHubInbox, false);
-  assert.equal(inbox.pages.length, 1);
-  assert.equal(inbox.summary().loaded, 1);
-  assert.deepEqual(inbox.filters, before.filters);
-  inbox.setMatchGitHubInbox(true);
-  await inbox.refresh();
-  assert.equal(inbox.snapshot().matchGitHubInbox, true);
-  assert.equal(inbox.pages.length, 1);
-  assert.equal(inbox.summary().hasMore, true);
-});
-
-test("a setting changed during a refresh is reconciled by the next refresh", async t => {
-  let finish;
-  const { client } = fixture();
-  const run = client.run;
-  client.run = async args => {
-    await new Promise(resolve => { finish = resolve; });
-    return run(args);
-  };
-  const inbox = new Inbox(client);
-  t.after(() => inbox.close());
-  const refreshing = inbox.refresh();
-  await settle();
-  inbox.setMatchGitHubInbox(false);
-  finish();
-  await refreshing;
-  assert.equal(inbox.snapshot().matchGitHubInbox, true);
-  assert.equal(inbox.summary().needsRefresh, true);
-  assert.equal(inbox.nextRefreshAt, 0);
-  client.run = run;
-  await inbox.refresh();
-  assert.equal(inbox.snapshot().matchGitHubInbox, false);
-  assert.equal(inbox.summary().loaded, 1);
 });
 
 test("mixed-state batches select unread items for Read and all shown items for Done in every scope", async t => {
@@ -265,16 +382,14 @@ test("mixed-state batches select unread items for Read and all shown items for D
         action === "read" ? 1 : 2);
       assert.equal(inbox.summary().loaded, action === "read" ? 2 : 0);
       assert.equal(inbox.summary().unread, 0);
-      if (action === "read") {
-        const selection = scope === "repository" ? { repository: "example/widgets", selectionKey: inbox.groups()[0].selectionKey } :
-          { ...input, selectionKey: inbox.snapshot().selectionKey };
-        assert.throws(() => inbox.batch.start(selection), { code: "invalid_selection" });
-      }
     }
   }
 });
 
-test("changing Match GitHub Inbox cannot widen or interrupt a running batch", async t => {
+test("changing read state cannot widen or interrupt a running batch and retries stay scoped", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "notification-running-filter-sync-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const preferences = new Preferences({ directory });
   const { client, calls, advance } = fixture();
   const run = client.run;
   const finishes = [];
@@ -290,42 +405,39 @@ test("changing Match GitHub Inbox cannot widen or interrupt a running batch", as
   };
   const inbox = new Inbox(client);
   t.after(() => inbox.close());
+  await inbox.syncSettings(preferences);
   await inbox.refresh();
   inbox.batch.start({ scope: "shown", selectionKey: inbox.snapshot().selectionKey, action: "done" });
   await settle();
-  inbox.setMatchGitHubInbox(false);
-  await assert.rejects(inbox.refresh(), { code: "busy" });
+  await preferences.updateFilters({ readState: "unread" });
+  await inbox.syncSettings(preferences);
   const token = inbox.batch.snapshot().token;
   finishes.forEach(finish => finish());
   await inbox.batch.done;
   assert.equal(inbox.batch.snapshot().total, 2);
   assert.equal(inbox.batch.snapshot().succeeded, 1);
   assert.equal(inbox.batch.snapshot().failed, 1);
-  assert.equal(inbox.snapshot().matchGitHubInbox, true);
   client.run = run;
   advance();
   advance();
-  await inbox.refresh();
-  assert.equal(inbox.snapshot().matchGitHubInbox, false);
-  assert.throws(() => inbox.batch.retry({ token }), { code: "no_remaining" });
-  inbox.setMatchGitHubInbox(true);
-  await inbox.refresh();
-  inbox.batch.retry({ token });
+  assert.throws(() => inbox.batch.retry(retrySelection(inbox, { token })), { code: "no_remaining" });
+  await preferences.updateFilters({ readState: "all" });
+  await inbox.syncSettings(preferences);
+  inbox.batch.retry(retrySelection(inbox, { token }));
   assert.equal(inbox.batch.snapshot().total, 1);
   await inbox.batch.done;
-  assert.deepEqual(calls.filter(args => args.includes("DELETE")).map(args => args.at(-1)),
+  assert.deepEqual(calls.filter(args => args.includes("DELETE")).map(args => args.at(-1)).sort(),
     ["/notifications/threads/1", "/notifications/threads/2", "/notifications/threads/2"]);
   assert.equal(inbox.summary().loaded, 0);
 });
 
-test("older caches in other views cannot veto the latest selected read state", async t => {
+test("older unread caches cannot veto the latest selected read state", async t => {
   for (const action of ["read", "done"]) {
     const { client, rows, calls } = fixture();
-    const older = new Inbox(client, { mode: action === "read" ? "inbox" : "unread" });
-    const inbox = new Inbox(client, { mode: action === "read" ? "unread" : "inbox" });
-    t.after(() => { older.close(); inbox.close(); });
+    const inbox = new Inbox(client);
+    t.after(() => inbox.close());
     rows[0].unread = action !== "read";
-    await older.refresh();
+    await client.page(firstPage());
     rows[0].unread = action === "read";
     await inbox.refresh();
     inbox.batch.start({ scope: "shown", selectionKey: inbox.snapshot().selectionKey, action });
@@ -336,7 +448,7 @@ test("older caches in other views cannot veto the latest selected read state", a
   }
 });
 
-test("queued row writes block mode switches until they finish", async t => {
+test("a queued row action retains its target when the display filter changes", async t => {
   for (const action of ["read", "done"]) {
     const { client } = fixture();
     const run = client.run;
@@ -350,57 +462,23 @@ test("queued row writes block mode switches until they finish", async t => {
     t.after(() => { finish(); inbox.close(); });
     await inbox.refresh();
     inbox.queueThread({ id: "1" }, action);
-    await assert.rejects(inbox.setFilters({ mode: "unread" }), { code: "busy" });
-    assert.equal(inbox.filters.mode, "inbox");
+    await inbox.setFilters({ mode: "unread" });
+    assert.equal(inbox.filters.readState, "unread");
     finish();
     await inbox.batch.done;
-    assert.equal(inbox.batch.snapshot().status, "completed");
-    await inbox.setFilters({ mode: "unread" });
-    assert.equal(inbox.filters.mode, "unread");
-    assert.equal(inbox.summary().loaded, 0);
+    assert.equal(inbox.summary().matching, 0);
+    await inbox.setFilters({ readState: "all" });
+    assert.equal(inbox.summary().matching, action === "read" ? 2 : 1);
   }
 });
 
-test("mode switches retain previous data on failure and reject changed or closed responses", async t => {
-  for (const change of ["failure", "revision", "closed", "setting"]) {
-    const { client } = fixture();
-    const inbox = new Inbox(client);
-    t.after(() => inbox.close());
-    await inbox.refresh();
-    const before = inbox.snapshot().groups;
-    const run = client.run;
-    client.run = async args => {
-      if (change === "failure") return http({}, {}, 500);
-      if (change === "revision") client.revision++;
-      if (change === "closed") inbox.close();
-      if (change === "setting") inbox.setMatchGitHubInbox(false);
-      return run(args);
-    };
-    if (change === "setting") {
-      await inbox.setFilters({ mode: "unread" });
-      assert.equal(inbox.filters.mode, "unread");
-      assert.ok(inbox.nextRefreshAt > client.now());
-      assert.equal(inbox.summary().needsRefresh, false);
-    } else {
-      await assert.rejects(inbox.setFilters({ mode: "unread" }), {
-        code: change === "failure" ? "github_http" : change === "closed" ? "closed" : "inbox_changed",
-      });
-      assert.equal(inbox.filters.mode, "inbox");
-      assert.deepEqual(inbox.snapshot().groups, change === "closed" ? [] : before);
-    }
-  }
-});
-
-test("Match GitHub Inbox persists only a boolean, synchronizes panels, and never changes desktop preferences", async t => {
-  const directory = await mkdtemp(join(tmpdir(), "match-github-inbox-test-"));
+test("HTTP panels seed legacy preferences, then synchronize read-state changes without enabling alerts", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "notification-read-filter-http-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const preferences = new Preferences({ directory });
-  assert.equal((await preferences.read()).matchGitHubInbox, true);
-  await preferences.update({ autoOpen: true, groupBy: "date" });
+  await preferences.update({ matchGitHubInbox: false, autoOpen: true });
   const { client, calls } = fixture();
-  const inbox = new Inbox(client);
-  const other = new Inbox(client);
-  const servers = await Promise.all([inbox, other].map(panel => startServer(panel, { preferences })));
+  const servers = await Promise.all([new Inbox(client), new Inbox(client)].map(inbox => startServer(inbox, { preferences })));
   t.after(() => Promise.all(servers.map(server => server.close())));
   const request = async (server, path, body) => {
     const url = new URL(server.url);
@@ -409,128 +487,47 @@ test("Match GitHub Inbox persists only a boolean, synchronizes panels, and never
       headers: { Authorization: `Bearer ${url.hash.slice(1)}`, Origin: url.origin, "Content-Type": "application/json" },
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
-    return { status: response.status, data: await response.json() };
+    assert.equal(response.status, 200);
+    return response.json();
   };
-  await request(servers[0], "refresh", {});
-  const saved = await request(servers[0], "settings", { matchGitHubInbox: false });
-  assert.equal(saved.status, 200);
-  assert.equal(saved.data.matchGitHubInbox, false);
-  assert.equal(saved.data.desktopNotifications, false);
-  const snapshot = await request(servers[1], "refresh", {});
-  assert.equal(snapshot.data.matchGitHubInbox, false);
-  assert.equal(snapshot.data.loaded, 1);
-  assert.deepEqual(JSON.parse(await readFile(preferences.path, "utf8")), { autoOpen: true, groupBy: "date", matchGitHubInbox: false });
-  assert.deepEqual(await readdir(directory), ["settings.json"]);
-  assert.ok(calls.every(args => args.includes("GET")));
-  for (const value of [null, 1, "true"]) {
-    assert.equal((await request(servers[0], "settings", { matchGitHubInbox: value })).status, 400);
-    assert.equal((await preferences.read()).matchGitHubInbox, false);
+  for (const server of servers) {
+    const state = await request(server, "refresh", {});
+    assert.equal(state.filters.readState, "unread");
+    assert.equal(state.loaded, 2);
+    assert.equal(state.matching, 1);
   }
-  assert.equal((await new Preferences({ directory }).read()).matchGitHubInbox, false);
+  assert.equal((await request(servers[0], "filters", { readState: "all" })).matching, 2);
+  assert.equal((await request(servers[0], "state")).filters.readState, "all");
+  assert.equal((await request(servers[1], "state")).filters.readState, "all");
+  assert.equal((await preferences.read()).matchGitHubInbox, false);
+  assert.equal((await preferences.read()).filterDefaults.readState, "all");
+  assert.equal((await preferences.read()).desktopNotifications, false);
+  assert.ok(calls.every(args => args.includes("GET")));
 });
 
-test("renderer preserves the saved view through the Show notifications dropdown without writes", async () => {
-  const storedSettings = { groupBy: "none" };
+test("renderer offers only Read state and keeps legacy preferences unchanged when it is cleared", async t => {
+  const storedSettings = { matchGitHubInbox: false, groupBy: "none" };
   const ui = await renderer({ storedSettings, initialRows: [
     thread("1"), thread("2", { unread: false }), thread("3", { unread: false, done: true }),
   ] });
-  const button = key => ui.ids.get("groups").querySelectorAll("button").find(button => button.dataset.focusKey === key);
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  assert.equal(ui.ids.has("show-notifications"), false);
+  assert.equal(ui.ids.has("inbox-mode"), false);
+  assert.equal(ui.ids.get("filter-readState").value, "unread");
+  assert.equal(ui.ids.get("count").textContent, "2 loaded \u00b7 1 unread \u00b7 1 matching");
+  assert.equal(ui.ids.get("filters-toggle").textContent, "Filters (1)");
+  await ui.ids.get("filters-reset").events.click();
+  await runInContext("update()", ui.context);
+  assert.equal(ui.ids.get("filter-readState").value, "all");
   assert.equal(ui.ids.get("count").textContent, "2 loaded \u00b7 1 unread");
-  assert.equal(ui.ids.get("inbox-mode").hidden, true);
-  assert.equal(button("read:2").disabled, true);
-  assert.equal(button("done:2").disabled, false);
-  assert.equal(button("bulk:shown").dataset.count, "1");
-  assert.equal(button("bulk-done:shown").dataset.count, "2");
-  const select = ui.ids.get("show-notifications");
-  assert.equal(select.value, "all");
-  select.value = "unread";
-  select.events.change();
-  await settle();
+  const select = ui.ids.get("filter-readState");
+  select.value = "read";
+  await select.events.change();
+  assert.deepEqual(ui.ids.get("groups").querySelectorAll(".row-link").map(node => node.dataset.threadId), ["2"]);
   assert.equal(storedSettings.matchGitHubInbox, false);
-  assert.equal(select.value, "unread");
-  assert.equal(ui.ids.get("count").textContent, "1 loaded \u00b7 1 unread");
-  assert.equal(ui.ids.get("inbox-mode").hidden, false);
-  assert.equal(button("bulk-done:shown").dataset.count, "1");
+  assert.equal(storedSettings.groupBy, "none");
+  assert.equal(storedSettings.filterDefaults.readState, "read");
+  assert.equal(ui.calls.some(call => call.path === "/api/settings" && call.options.body), false);
   assert.deepEqual(ui.patches, []);
   assert.deepEqual(ui.deletions, []);
-  await runInContext('update("filters", { mode: "unread" })', ui.context);
-  assert.equal(select.disabled, true);
-  select.events.change();
-  assert.equal(storedSettings.matchGitHubInbox, false);
-  await runInContext('update("filters", { mode: "inbox" })', ui.context);
-  assert.equal(select.disabled, false);
-  assert.equal(ui.ids.get("count").textContent, "1 loaded \u00b7 1 unread");
-  select.value = "all";
-  select.events.change();
-  await settle();
-  assert.equal(ui.ids.get("count").textContent, "2 loaded \u00b7 1 unread");
-  assert.equal(ui.ids.get("inbox-mode").hidden, true);
-  assert.equal(storedSettings.matchGitHubInbox, true);
-  assert.equal(button("done:3"), undefined);
-  await runInContext('update("filters", { mode: "unread" })', ui.context);
-  assert.equal(select.value, "unread");
-  assert.equal(select.disabled, true);
-  assert.equal(storedSettings.matchGitHubInbox, true);
-  assert.equal(ui.ids.get("inbox-mode").hidden, false);
-  await runInContext('update("filters", { mode: "inbox" })', ui.context);
-  assert.equal(select.value, "all");
-  assert.equal(ui.ids.get("inbox-mode").hidden, true);
-  ui.window.events.pagehide();
-  ui.inbox.close();
-});
-
-test("Show notifications preserves an existing unread preference and restores it after failed saves", async t => {
-  let fail = true;
-  const storedSettings = { matchGitHubInbox: false, groupBy: "repo" };
-  const ui = await renderer({ storedSettings, onSettings: input => {
-    if (input && fail) throw new Error("Could not save notification settings.");
-  } });
-  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
-  const select = ui.ids.get("show-notifications");
-  assert.equal(select.value, "unread");
-  assert.equal(ui.ids.get("inbox-mode").hidden, false);
-  assert.equal(ui.calls.some(call => call.path === "/api/settings" && call.options.body), false);
-  select.value = "all";
-  select.events.change();
-  await settle();
-  assert.equal(select.value, "unread");
-  assert.equal(storedSettings.matchGitHubInbox, false);
-  assert.equal(ui.ids.get("settings-error").hidden, false);
-  assert.equal(ui.ids.get("inbox-mode").hidden, false);
-  fail = false;
-  select.value = "all";
-  select.events.change();
-  await settle();
-  assert.equal(select.value, "all");
-  assert.equal(storedSettings.matchGitHubInbox, true);
-  assert.equal(ui.ids.get("settings-error").hidden, true);
-  assert.equal(ui.ids.get("inbox-mode").hidden, true);
-  assert.deepEqual(ui.calls.filter(call => call.path === "/api/settings" && call.options.body)
-    .map(call => JSON.parse(call.options.body)), [{ matchGitHubInbox: true }, { matchGitHubInbox: true }]);
-});
-
-test("the unread-only indicator follows retained rows when a saved view change fails", async t => {
-  for (const matchGitHubInbox of [false, true]) {
-    let fail = false;
-    const storedSettings = { matchGitHubInbox };
-    const ui = await renderer({ storedSettings, onFetch: () => fail ? http({}, {}, 503) : http([thread()]) });
-    t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
-    const indicator = ui.ids.get("inbox-mode");
-    const select = ui.ids.get("show-notifications");
-    assert.equal(indicator.hidden, matchGitHubInbox);
-    fail = true;
-    select.value = matchGitHubInbox ? "unread" : "all";
-    select.events.change();
-    await settle();
-    assert.equal(storedSettings.matchGitHubInbox, !matchGitHubInbox);
-    assert.equal(ui.inbox.summary().status, "stale");
-    assert.equal(indicator.hidden, matchGitHubInbox);
-    fail = false;
-    ui.advance(120_000);
-    await ui.ids.get("force-refresh").events.click();
-    assert.equal(ui.inbox.summary().status, "ready");
-    assert.equal(indicator.hidden, !matchGitHubInbox);
-    assert.deepEqual(ui.patches, []);
-    assert.deepEqual(ui.deletions, []);
-  }
 });

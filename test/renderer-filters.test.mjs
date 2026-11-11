@@ -10,6 +10,297 @@ const tab = (ui, value) => ui.document.getElementById(`attention-${value}`);
 const shown = ui => ui.ids.get("groups").querySelectorAll("button")
   .filter(button => button.dataset.action === "read").map(button => button.dataset.threadId);
 
+async function refine(ui, key, value) {
+  const select = ui.ids.get(`filter-${key}`);
+  select.value = value;
+  return select.events.change();
+}
+
+test("the filter popover combines refinements, preserves search on clear, and distinguishes no matches", async t => {
+  const ui = await renderer({ initialRows: [
+    thread("1"), thread("2", { unread: false }), thread("3", { reason: "mention" }),
+    thread("4", { subject: { type: "Release", title: "Synthetic release", url: null } }),
+  ] });
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  await refine(ui, "type", "PullRequest");
+  await refine(ui, "readState", "unread");
+  await refine(ui, "reason", "review_requested");
+  await refine(ui, "age", "older_7d");
+  assert.deepEqual(shown(ui), ["1"]);
+  assert.equal(ui.ids.get("filters-toggle").textContent, "Filters (4)");
+  assert.equal(tab(ui, "all").textContent, "All (1)");
+  assert.match(ui.ids.get("count").textContent, /4 loaded.*3 unread.*1 matching/);
+  await runInContext('update("filters", { query: "notification 2" })', ui.context);
+  assert.deepEqual(shown(ui), []);
+  assert.equal(ui.ids.get("empty-title").textContent, "No matches in loaded notifications");
+  assert.match(ui.ids.get("empty-description").textContent, /clear Filters/);
+  assert.equal(ui.ids.get("count").hidden, false);
+  await ui.ids.get("filters-reset").events.click();
+  assert.deepEqual(shown(ui), ["2"]);
+  assert.equal(ui.inbox.filters.query, "notification 2");
+  assert.equal(ui.ids.get("filters-toggle").textContent, "Filters");
+  assert.equal(ui.ids.get("filters-reset").getAttribute("aria-disabled"), "true");
+  assert.deepEqual(ui.patches, []);
+  assert.deepEqual(ui.deletions, []);
+});
+
+test("dropdown edits and Clear filters sync across canvases while search and attention stay local", async t => {
+  const storedSettings = { matchGitHubInbox: false, groupBy: "repo", future: 42 };
+  const options = { storedSettings, initialRows: [thread("1"), thread("2", { unread: false })] };
+  const ui = await renderer(options);
+  const other = await renderer(options);
+  const panels = [ui, other];
+  t.after(() => { for (const panel of panels) { panel.window.events.pagehide(); panel.inbox.close(); } });
+  await runInContext('update("filters", { query: "notification 1", attention: "review_requested" })', ui.context);
+  await runInContext('update("filters", { query: "notification 2" })', other.context);
+  await refine(ui, "type", "PullRequest");
+  await refine(other, "readState", "all");
+  await refine(ui, "reason", "review_requested");
+  const filterDefaults = { type: "PullRequest", readState: "all", reason: "review_requested", age: "all" };
+  assert.deepEqual(storedSettings.filterDefaults, filterDefaults);
+  assert.equal(storedSettings.revision, 3);
+  assert.equal(new Date(storedSettings.updatedAt).toISOString(), storedSettings.updatedAt);
+  assert.equal(storedSettings.future, 42);
+  assert.equal(ui.ids.has("filters-save"), false);
+  await runInContext("update()", other.context);
+  assert.equal(other.inbox.filters.readState, "all");
+  assert.equal(other.inbox.filters.type, "PullRequest");
+  assert.equal(other.ids.get("filter-readState").dataset.active, "false");
+  assert.equal(other.ids.get("filter-type").dataset.active, "true");
+  assert.deepEqual(shown(other), ["2"]);
+  const fresh = await renderer(options);
+  panels.push(fresh);
+  assert.deepEqual(fresh.inbox.filters, { query: "", attention: "all", ...filterDefaults });
+  assert.deepEqual(shown(fresh), ["1", "2"]);
+  await ui.ids.get("filters-reset").events.click();
+  assert.equal(ui.inbox.filters.readState, "all");
+  assert.equal(ui.inbox.filters.type, "all");
+  assert.equal(ui.inbox.filters.query, "notification 1");
+  assert.equal(ui.inbox.filters.attention, "review_requested");
+  await runInContext("update()", other.context);
+  assert.equal(other.inbox.filters.type, "all");
+  assert.equal(other.ids.get("filter-type").dataset.active, "false");
+  assert.equal(other.inbox.filters.query, "notification 2");
+  assert.equal(other.inbox.filters.attention, "all");
+  assert.deepEqual(storedSettings.filterDefaults, { type: "all", readState: "all", reason: "all", age: "all" });
+  assert.equal(ui.calls.filter(call => call.path === "/api/settings" && call.options.body).length, 0);
+  assert.deepEqual(ui.patches, []);
+  assert.deepEqual(ui.deletions, []);
+});
+
+test("shared saves preserve later local edits and merge newer fields from another canvas", async t => {
+  let releaseFilter;
+  const storedSettings = {};
+  const ui = await renderer({ storedSettings,
+    onFilters: () => releaseFilter === undefined ? new Promise(resolve => { releaseFilter = resolve; }) : undefined });
+  const other = await renderer({ storedSettings });
+  t.after(() => {
+    releaseFilter?.();
+    for (const panel of [ui, other]) { panel.window.events.pagehide(); panel.inbox.close(); }
+  });
+  const filtering = refine(ui, "type", "PullRequest");
+  await settle();
+  assert.equal(ui.ids.get("filter-sync-status").textContent, "Syncing filters...");
+  await refine(other, "age", "older_7d");
+  ui.ids.get("filter-type").focus();
+  await refine(ui, "type", "Release");
+  releaseFilter();
+  await filtering;
+  await settle();
+  assert.equal(storedSettings.filterDefaults.type, "Release");
+  assert.equal(storedSettings.filterDefaults.age, "older_7d");
+  assert.equal(ui.inbox.filters.type, "Release");
+  assert.equal(ui.document.activeElement, ui.ids.get("filter-type"));
+  assert.equal(ui.ids.get("filter-sync-status").hidden, true);
+});
+
+test("failed shared saves surface an explicit retry without silently replaying old preferences", async t => {
+  let fail = true;
+  const storedSettings = {};
+  const ui = await renderer({ storedSettings, onFilters: () => {
+    if (fail) throw new Error("Synthetic filter write failure");
+  } });
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  await refine(ui, "readState", "read");
+  assert.match(ui.ids.get("filter-sync-status").textContent, /Could not sync filters.*Synthetic filter write failure.*change it again to retry/);
+  assert.equal(ui.ids.get("filter-sync-status").hidden, false);
+  assert.equal(ui.ids.get("filter-sync-status").className, "settings-help");
+  assert.equal(ui.ids.get("settings-error").hidden, false);
+  assert.equal(ui.ids.get("filter-readState").value, "all");
+  assert.equal(ui.ids.get("filter-readState").dataset.active, "false");
+  assert.equal(storedSettings.filterDefaults, undefined);
+  await runInContext("update()", ui.context);
+  assert.equal(ui.calls.filter(call => call.path === "/api/filters").length, 1);
+  fail = false;
+  await refine(ui, "readState", "read");
+  assert.equal(storedSettings.filterDefaults.readState, "read");
+  assert.equal(ui.ids.get("settings-error").hidden, true);
+  assert.deepEqual(ui.patches, []);
+  assert.deepEqual(ui.deletions, []);
+});
+
+test("a lost shared-save response never replays over a newer canvas edit", async t => {
+  const storedSettings = {};
+  let lost = false;
+  const ui = await renderer({ storedSettings, onFilterResponse: () => {
+    if (!lost) {
+      lost = true;
+      storedSettings.filterDefaults = { ...storedSettings.filterDefaults, type: "Release" };
+      storedSettings.revision++;
+      throw new Error("Synthetic lost filter response");
+    }
+  } });
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  await refine(ui, "type", "PullRequest");
+  await runInContext("update()", ui.context);
+  await settle();
+  assert.equal(storedSettings.filterDefaults.type, "Release");
+  assert.equal(ui.ids.get("filter-type").value, "Release");
+  assert.equal(ui.calls.filter(call => call.path === "/api/filters").length, 1);
+  assert.match(ui.ids.get("filter-sync-status").textContent, /Could not sync filters/);
+});
+
+test("a successful queued shared edit clears its predecessor's sync error, unlike a local search", async t => {
+  for (const queued of [{ type: "Release" }, { query: "local" }]) {
+    let reject;
+    let calls = 0;
+    const ui = await renderer({ onFilters: () => ++calls === 1
+      ? new Promise((resolve, fail) => { reject = fail; }) : undefined });
+    t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+    const first = refine(ui, "type", "PullRequest");
+    await settle();
+    await runInContext(`update("filters", ${JSON.stringify(queued)})`, ui.context);
+    reject(new Error("Synthetic first save failure"));
+    await first;
+    assert.match(ui.ids.get("filter-sync-status").textContent, /Could not sync filters/);
+    await runInContext("update()", ui.context);
+    await settle();
+    assert.equal(calls, 2);
+    const shared = Object.hasOwn(queued, "type");
+    assert.equal(ui.ids.get("filter-sync-status").hidden, shared);
+    assert.equal(ui.ids.get("settings-error").hidden, shared);
+    assert.equal(ui.ids.get("filter-type").value, shared ? "Release" : "all");
+    assert.deepEqual(ui.patches, []);
+    assert.deepEqual(ui.deletions, []);
+  }
+});
+
+test("pending refinements block writes and preserve the newest controls while requests are in flight", async t => {
+  let release;
+  let count = 0;
+  const ui = await renderer({ initialRows: [thread("1"), thread("2", { reason: "mention" })],
+    onFilters: () => ++count === 1 ? new Promise(resolve => { release = resolve; }) : undefined });
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  const original = ui.ids.get("groups").querySelectorAll("button")
+    .filter(button => button.dataset.action || button.dataset.batchAction);
+  const filtering = refine(ui, "type", "PullRequest");
+  await settle();
+  await refine(ui, "reason", "review_requested");
+  await refine(ui, "reason", "mention");
+  await runInContext("render()", ui.context);
+  assert.equal(ui.ids.get("filter-type").value, "PullRequest");
+  assert.equal(ui.ids.get("filter-reason").value, "mention");
+  assert.equal(ui.ids.get("filter-type").dataset.active, "true");
+  assert.equal(ui.ids.get("filter-reason").dataset.active, "true");
+  assert.equal(ui.ids.get("filters-toggle").textContent, "Filters (2)");
+  assert.equal(ui.ids.get("filter-sync-status").textContent, "Syncing filters...");
+  assert.equal(ui.ids.get("filter-sync-status").className, "sr-only");
+  assert.equal(original.every(disabled), true);
+  for (const button of original) await button.events.click();
+  assert.deepEqual(ui.patches, []);
+  assert.deepEqual(ui.deletions, []);
+  release();
+  await filtering;
+  await settle();
+  assert.deepEqual(shown(ui), ["2"]);
+  assert.equal(ui.ids.get("filter-reason").value, "mention");
+  assert.equal(ui.ids.get("filters-toggle").textContent, "Filters (2)");
+  assert.deepEqual(ui.calls.filter(call => call.path === "/api/filters").map(call => JSON.parse(call.options.body)), [
+    { type: "PullRequest" }, { reason: "mention" },
+  ]);
+});
+
+test("unread refinements remove read rows from the view without removing them from the loaded inbox", async t => {
+  const ui = await renderer({ initialRows: [thread("1"), thread("2")] });
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  await refine(ui, "readState", "unread");
+  const read = ui.ids.get("groups").querySelectorAll(".mark-read")[0];
+  read.focus();
+  await read.events.click();
+  await finishRows(ui);
+  assert.deepEqual(shown(ui), ["2"]);
+  assert.equal(ui.inbox.loadedItems().length, 2);
+  await refine(ui, "readState", "read");
+  assert.deepEqual(shown(ui), ["1"]);
+  assert.deepEqual(ui.patches, ["/notifications/threads/1"]);
+});
+
+test("failed shared refinements retain usable rows, restore confirmed controls and require a fresh change", async t => {
+  let fail = true;
+  const ui = await renderer({ initialRows: [thread("1"), thread("2", { reason: "mention" })],
+    onFilters: () => { if (fail) throw new Error("Synthetic filter failure"); } });
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  await refine(ui, "reason", "mention");
+  assert.deepEqual(shown(ui), ["1", "2"]);
+  assert.equal(ui.ids.get("filter-reason").value, "all");
+  assert.match(ui.ids.get("notice").textContent, /Synthetic filter failure/);
+  assert.equal(ui.ids.get("groups").querySelectorAll(".mark-done").some(disabled), false);
+  fail = false;
+  await runInContext("update()", ui.context);
+  await settle();
+  assert.deepEqual(shown(ui), ["1", "2"]);
+  assert.equal(ui.ids.get("settings-error").hidden, false);
+  await refine(ui, "reason", "mention");
+  assert.deepEqual(shown(ui), ["2"]);
+  assert.equal(ui.ids.get("settings-error").hidden, true);
+  assert.equal(ui.ids.get("groups").querySelectorAll(".mark-done").some(disabled), false);
+  assert.deepEqual(ui.deletions, []);
+});
+
+test("filter controls handle legacy defaults, dismissal, focus and disabled capabilities", async t => {
+  const ui = await renderer({ storedSettings: { matchGitHubInbox: false },
+    initialRows: [thread("1"), thread("2", { unread: false })] });
+  t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+  await refine(ui, "readState", "read");
+  assert.deepEqual(shown(ui), ["2"]);
+  await runInContext('update("filters", { mode: "unread" })', ui.context);
+  assert.equal(ui.ids.get("filter-readState").value, "unread");
+  assert.equal(ui.ids.get("filter-readState").disabled, false);
+  const filters = ui.ids.get("filters");
+  const open = () => { filters.open = true; filters.events.toggle(); };
+  ui.ids.get("settings").open = true;
+  open();
+  assert.equal(ui.ids.get("settings").open, false);
+  assert.equal(ui.ids.get("filters-toggle").getAttribute("aria-expanded"), "true");
+  assert.equal(ui.ids.get("filters-panel").dataset.placement, "below");
+  ui.ids.get("filter-type").focus();
+  ui.document.events.focusin({ target: ui.ids.get("filter-type") });
+  assert.equal(filters.open, true);
+  ui.document.events.keydown({ key: "/", preventDefault() { assert.fail("Shortcuts must pause inside Filters"); } });
+  ui.document.events.keydown({ key: "Escape", preventDefault() {} });
+  assert.equal(filters.open, false);
+  assert.equal(ui.document.activeElement, ui.ids.get("filters-toggle"));
+  for (const event of ["click", "focusin"]) {
+    open();
+    ui.document.events[event]({ target: ui.ids.get("search") });
+    assert.equal(filters.open, false);
+  }
+  open();
+  ui.window.innerHeight = 320;
+  ui.window.events.resize();
+  assert.equal(ui.ids.get("filters-panel").dataset.placement, "above");
+  ui.ids.get("filters-toggle").bounds = { top: -50, bottom: -12 };
+  ui.window.events.scroll();
+  assert.equal(filters.open, false);
+  const blocked = await renderer({ token: "invalid" });
+  t.after(() => { blocked.window.events.pagehide(); blocked.inbox.close(); });
+  assert.equal(blocked.ids.get("filter-type").disabled, true);
+  assert.equal(blocked.ids.get("filters-reset").disabled, true);
+  await refine(blocked, "type", "Issue");
+  await blocked.ids.get("filters-reset").events.click();
+  assert.deepEqual(blocked.calls, []);
+});
+
 test("Mine distinguishes pending, unavailable and confirmed authorship without replacing row controls", async t => {
   const ui = await renderer({ initialRows: [thread("1", { reason: "mention" })] });
   t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
@@ -435,7 +726,7 @@ test("latest tab and search edits are merged while a filter request is in flight
   release();
   await filtering;
   await settle();
-  assert.deepEqual(ui.inbox.filters, { mode: "inbox", query: "notification 2", attention: "mentioned" });
+  assert.deepEqual(ui.inbox.filters, { readState: "all", query: "notification 2", attention: "mentioned" });
   assert.deepEqual(shown(ui), ["2"]);
   assert.equal(ui.document.activeElement, tab(ui, "mentioned"));
   assert.deepEqual(ui.calls.filter(call => call.path === "/api/filters").map(call => JSON.parse(call.options.body)), [
@@ -621,7 +912,7 @@ test("clearing search preserves the selected attention tab and focus without fet
     search.value = "";
     search.events.input();
     await ui.fireTimer(250);
-    assert.deepEqual(ui.inbox.filters, { mode: "inbox", query: "", attention });
+    assert.deepEqual(ui.inbox.filters, { readState: "all", query: "", attention });
     assert.equal(search.value, "");
     assert.equal(tab(ui, attention).attributes["aria-selected"], "true");
     assert.equal(ui.document.activeElement, search);
@@ -650,7 +941,7 @@ test("a failed search clear retries without changing the attention tab", async (
   assert.equal(search.value, "");
   fail = false;
   await ui.fireTimer();
-  assert.deepEqual(ui.inbox.filters, { mode: "inbox", query: "", attention: "mentioned" });
+  assert.deepEqual(ui.inbox.filters, { readState: "all", query: "", attention: "mentioned" });
   assert.deepEqual(shown(ui), ["2"]);
   assert.equal(ui.document.activeElement, search);
   assert.deepEqual(ui.patches, []);
@@ -724,11 +1015,12 @@ test("arrows disappear when tabs fit the full strip, respond to count widths, an
   ui.resizeAttention();
   ui.fireAnimationFrame();
   assert.equal(next.hidden, true);
-  assert.equal(ui.attentionObserved.length, 10);
+  assert.equal(ui.attentionObserved.length, 11);
   assert.equal(ui.attentionObserved[0], navigation);
   assert.equal(ui.attentionObserved.includes(tab(ui, "participating")), true);
   assert.equal(ui.attentionObserved.includes(ui.ids.get("inbox-header")), true);
   assert.equal(ui.attentionObserved.includes(ui.ids.get("settings-panel")), true);
+  assert.equal(ui.attentionObserved.includes(ui.ids.get("filters-panel")), true);
   ui.window.events.pagehide();
   assert.equal(ui.attentionDisconnected, true);
   assert.equal(strip.events.scroll, undefined);

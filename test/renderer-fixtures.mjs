@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { Inbox } from "../src/provider/inbox.mjs";
 import { GitHubClient } from "../src/provider/github.mjs";
 import { desktopCapabilities } from "../src/provider/notifier.mjs";
-import { apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle } from "../src/shared/model.mjs";
+import { apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, refinementFilters, sharedFilters } from "../src/shared/model.mjs";
 import { octicons } from "../src/renderer/octicons.mjs";
 import { http, thread } from "./fixtures.mjs";
 
@@ -17,7 +17,7 @@ const presentationUrl = new URL("../src/renderer/presentation.mjs", import.meta.
 const presentation = await readFile(presentationUrl, "utf8");
 const updateNoticeUrl = new URL("../src/renderer/update-notice.mjs", import.meta.url);
 const updateNotice = await readFile(updateNoticeUrl, "utf8");
-const modelImport = /^import \{ apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle \} from "\.\.\/shared\/model\.mjs";/m;
+const modelImport = /^import \{ apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, refinementFilters \} from "\.\.\/shared\/model\.mjs";/m;
 const presentationImport = /^import \{ element, setControlText, actionIcon, setIcon, subjectMetadata, relativeTime, updateSubjectDescription \} from "\.\/presentation\.mjs";/m;
 const octiconsImport = /^import \{ octicons \} from "\.\/octicons\.mjs";/m;
 const updateNoticeImport = /^import \{ createUpdateNotice \} from "\.\/update-notice\.mjs";/m;
@@ -33,8 +33,8 @@ export async function finishRows(ui) {
 
 // Minimal DOM/event/timer doubles exercise the actual renderer without a browser dependency.
 export async function renderer({ hidden = false, token = "a".repeat(64), readFailure = false,
-  initialRows, subjectStates = {}, subjectsLoading = false, onWrite, onFetch, onState, onFilters, onActionResponse, initialOffline = false, release, development = null,
-  onUpdates, clipboardFailure = false, onSettings, onSubjects, developmentApi, onDevelopment, retainDisabledFocus = false, desktopPlatform = "darwin", desktopStatus = {},
+  initialRows, subjectStates = {}, subjectsLoading = false, onWrite, onFetch, onState, onFilters, onFilterResponse, onActionResponse, initialOffline = false, release, development = null,
+  onUpdates, clipboardFailure = false, onSettings, onSettingsResponse, onSubjects, developmentApi, onDevelopment, retainDisabledFocus = false, desktopPlatform = "darwin", desktopStatus = {},
   storedSettings = { autoOpen: false, darkMode: null, desktopNotifications: false, desktopSound: "default" },
   appColorMode = "light", systemDark = false, navigatorPlatform, userAgentData, onCopilot, copilotOperation, copilotLoading = false } = {}) {
   const calls = [];
@@ -191,8 +191,11 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
   const desktopLabel = new Node("span");
   desktopLabel.textContent = "Desktop notifications";
   ids.get("desktop-notifications").append(desktopLabel);
+  ids.get("desktop-sound-setting").append(ids.get("desktop-sound"));
   ids.get("settings-toggle").bounds = { top: 175, bottom: 213, left: 270, right: 308, width: 38, height: 38 };
   ids.get("settings-panel").scrollHeight = 364;
+  ids.get("filters-toggle").bounds = { top: 225, bottom: 263, left: 230, right: 308, width: 78, height: 38 };
+  ids.get("filters-panel").scrollHeight = 310;
   for (const [anchor, tooltip] of [
     ["inbox-control", "inbox-tooltip"], ["refresh-control", "refresh-tooltip"],
     ["shortcuts-control", "shortcuts-tooltip"], ["settings-toggle", "settings-tooltip"],
@@ -215,8 +218,11 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
   }
   ids.get("settings").contains = node =>
     node === ids.get("settings") ||
-    ["settings-toggle", "settings-panel", "show-notifications", "auto-open", "theme", "group-by", "copilot-integration", "copilot-confirmations", "hide-empty-tabs", "keyboard-shortcuts", "check-updates", "desktop-notifications", "desktop-sound",
-      "development-api", "development-api-url", "development-api-save"].some(id => ids.get(id).contains(node));
+    ["settings-toggle", "settings-panel", "auto-open", "theme", "group-by", "copilot-integration", "copilot-confirmations", "hide-empty-tabs", "keyboard-shortcuts", "check-updates", "desktop-notifications", "desktop-sound",
+      "development-toggle", "development-api", "development-api-url", "development-api-save"].some(id => ids.get(id).contains(node));
+  ids.get("filters").contains = node => node === ids.get("filters") ||
+    ["filters-toggle", "filters-panel", "filters-reset", ...refinementFilters.map(({ key }) => `filter-${key}`)]
+      .some(id => ids.get(id).contains(node));
   ids.get("copilot-dialog").contains = node => node === ids.get("copilot-dialog") ||
     ["copilot-close", "copilot-start", "copilot-skip-confirmation", "copilot-sessions"]
       .some(id => ids.get(id).contains(node));
@@ -291,7 +297,7 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
   };
   const context = createContext({
     document, window, location: { hash: `#${token}` }, Intl, URL, AbortController,
-    apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle,
+    apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, refinementFilters,
     navigator: { platform: navigatorPlatform, userAgentData, clipboard: { writeText: async text => {
       if (clipboardFailure) throw new Error("Clipboard denied");
       copied.push(text);
@@ -354,20 +360,24 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
           developmentApi.requiresReload = input.baseUrl !== developmentApi.baseUrl;
         } else {
           if (onSettings) await onSettings(input);
-          if (input) Object.assign(storedSettings, input);
+          if (input) Object.assign(storedSettings, input, {
+            revision: (storedSettings.revision ?? 0) + 1, updatedAt: new Date(now).toISOString(),
+          });
         }
         const capabilities = desktopCapabilities(desktopPlatform);
-        inbox.setMatchGitHubInbox(storedSettings.matchGitHubInbox ?? true);
-        return { ok: true, json: async () => ({ matchGitHubInbox: true, copilotIntegration: true, confirmCopilotActions: true, hideEmptyTabs: true, keyboardShortcuts: true, desktopNotifications: false, desktopSound: "default", ...storedSettings,
+        inbox.applySettings(storedSettings);
+        const settings = { matchGitHubInbox: true, copilotIntegration: true, confirmCopilotActions: true, hideEmptyTabs: true, keyboardShortcuts: true, desktopNotifications: false, desktopSound: "default", ...storedSettings,
           developmentApi, desktopStatus: { ...capabilities, state: "watching",
             message: capabilities.supported ? "Watching in the background." : capabilities.help, ...desktopStatus },
-        }) };
+        };
+        await onSettingsResponse?.(settings);
+        return { ok: true, json: async () => settings };
       }
       if (path === "/api/updates") {
         if (onUpdates) releaseMetadata = await onUpdates();
         return { ok: true, json: async () => releaseMetadata };
       }
-      if (["/api/refresh", "/api/state", "/api/more"].includes(path)) inbox.setMatchGitHubInbox(storedSettings.matchGitHubInbox ?? true);
+      if (["/api/refresh", "/api/state", "/api/more", "/api/filters", "/api/batch/start", "/api/batch/retry"].includes(path)) inbox.applySettings(storedSettings);
       if (path === "/api/refresh") await inbox.refresh(JSON.parse(options.body));
       if (path === "/api/more") await inbox.more();
       if (path === "/api/state") {
@@ -379,7 +389,16 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
       if (path === "/api/filters") {
         const input = JSON.parse(options.body);
         if (onFilters) await onFilters(input);
-        await inbox.setFilters(input);
+        await inbox.syncFilters(input, { updateFilters: async changes => {
+          Object.assign(storedSettings, { filterDefaults: { ...sharedFilters(storedSettings), ...changes },
+            revision: (storedSettings.revision ?? 0) + 1, updatedAt: new Date(now).toISOString() });
+          return { ...storedSettings };
+        } });
+        if (onFilterResponse) {
+          const state = snapshot();
+          await onFilterResponse(state);
+          return { ok: true, json: async () => state };
+        }
       }
       const rowActionToken = ["/api/read", "/api/done"].includes(path)
         ? inbox.queueThread(JSON.parse(options.body), path === "/api/done" ? "done" : "read") : undefined;

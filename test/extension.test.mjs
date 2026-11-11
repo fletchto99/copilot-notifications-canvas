@@ -127,7 +127,7 @@ test("the extension entry point wires an isolated session through its complete l
     }]);
     const { desktopStatus, ...settings } = await invoke("get_settings", "github-notifications-startup");
     assert.deepEqual(settings,
-      { matchGitHubInbox: true, autoOpen: true, darkMode: false, desktopNotifications: false, terminalNotifierHintDismissed: false, desktopSound: "default", groupBy: "repo", copilotIntegration: true, confirmCopilotActions: true, hideEmptyTabs: true, keyboardShortcuts: true, startupStatus: "opened" });
+      { revision: 0, updatedAt: null, matchGitHubInbox: true, autoOpen: true, darkMode: false, desktopNotifications: false, terminalNotifierHintDismissed: false, desktopSound: "default", groupBy: "repo", copilotIntegration: true, confirmCopilotActions: true, hideEmptyTabs: true, keyboardShortcuts: true, startupStatus: "opened" });
     assert.equal(desktopStatus.state, "off");
     assert.equal(desktopStatus.platform, process.platform);
     assert.equal(desktopStatus.supported, true);
@@ -256,14 +256,14 @@ test("the extension entry point wires an isolated session through its complete l
       await fs.writeFile(path, valid);
       await canvas.open({ instanceId: "settings-failure" });
       const initial = await invoke("refresh", "settings-failure");
-      assert.equal(initial.matchGitHubInbox, false);
+      assert.equal(initial.readState, "unread");
       const invalid = '{"autoOpen":"yes"}';
       await fs.writeFile(path, invalid);
       await assert.rejects(invoke("get_settings", "settings-failure"), { code: "settings_read" });
       for (const action of ["refresh", "load_more", "set_filters"]) {
         const state = await invoke(action, "settings-failure");
         assert.equal(state.settingsError.code, "settings_read");
-        assert.equal(state.matchGitHubInbox, false);
+        assert.equal(state.readState, "unread");
         assert.equal(state.error, null);
         assert.ok(state.loaded > 0);
         assert.doesNotMatch(JSON.stringify(state), /Synthetic notification|example\/widgets/);
@@ -456,7 +456,9 @@ test("SDK notification reads inherit another client's server deadline before a w
     assert.equal(readerClient.blockedUntil, 0);
     const before = calls.length;
     const input = action === "set_filters" ? { mode: "unread" } : {};
-    await assert.rejects(invoke(action, input), { code: "rate_limited" });
+    if (action === "set_filters") {
+      assert.equal((await invoke(action, input)).readState, "unread");
+    } else await assert.rejects(invoke(action, input), { code: "rate_limited" });
     assert.equal(calls.length, before, `${action} must not start an uncached request`);
     now = writerClient.serverBlockedUntil;
     const resumed = await invoke(action, input);

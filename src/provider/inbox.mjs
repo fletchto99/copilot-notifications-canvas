@@ -1,13 +1,23 @@
 import { firstPage, RETRY_MS } from "./github.mjs";
-import { attentionCounts, groupThreads, groupThreadsByDate, InboxError, uniqueThreads, validateFilters } from "../shared/model.mjs";
+import { attentionCounts, filterThreads, groupThreads, groupThreadsByDate, InboxError, refinementFilters, sharedFilters, uniqueThreads, validateFilters, validFilterDefaults } from "../shared/model.mjs";
 import { NotificationBatch, selectionKey } from "./batch.mjs";
+
+function normalizeFilters(input) {
+  const { mode, ...filters } = validateFilters(input);
+  if (filters.readState === undefined && mode !== undefined) {
+    filters.readState = mode === "unread" ? "unread" : "all";
+  }
+  return filters;
+}
 
 export class Inbox {
   constructor(client, input = {}) {
     this.client = client;
-    this.filters = { mode: "inbox", query: "", attention: "all", ...validateFilters(input) };
-    this.matchGitHubInbox = true;
-    this.requestedMatchGitHubInbox = true;
+    const filters = normalizeFilters(input);
+    this.filters = { query: "", attention: "all", readState: "all", ...filters };
+    this.initializedRefinements = new Set(refinementFilters.filter(({ key }) => filters[key] !== undefined).map(({ key }) => key));
+    this.settingsRevision = 0;
+    this.sharedFiltersKey = undefined;
     this.pages = [];
     this.busy = false;
     this.snapshotVersion = 0;
@@ -18,10 +28,9 @@ export class Inbox {
     this.controller = new AbortController();
     this.needsRefresh = false;
     this.onThreadUpdated = (id, action = "done") => {
-      const retain = this.filters.mode === "inbox" && this.matchGitHubInbox && action === "read";
       this.pages = this.pages.map(page => ({
         ...page,
-        items: page.items.flatMap(item => item.id !== id ? [item] : retain ? [{ ...item, unread: false }] : []),
+        items: page.items.flatMap(item => item.id !== id ? [item] : action === "read" ? [{ ...item, unread: false }] : []),
       }));
       this.batch.clearRowResults(id);
       this.needsRefresh = true;
@@ -32,37 +41,50 @@ export class Inbox {
   loadedItems() {
     const sequences = new Map(this.pages.flatMap(page => page.items.map(item => [item, page.sequence])));
     return uniqueThreads([...sequences.keys()], (a, b) =>
-      sequences.get(a) - sequences.get(b) || a.updatedAt.localeCompare(b.updatedAt))
-      .filter(item => this.filters.mode === "inbox" && this.matchGitHubInbox || item.unread);
+      sequences.get(a) - sequences.get(b) || a.updatedAt.localeCompare(b.updatedAt));
   }
 
-  setMatchGitHubInbox(value) {
-    if (typeof value !== "boolean") throw new InboxError("invalid_settings", "The notification view preference must be a boolean.", 400);
+  applySettings({ matchGitHubInbox = true, filterDefaults, revision = 0 }, forceFilters = false) {
+    if (typeof matchGitHubInbox !== "boolean") throw new InboxError("invalid_settings", "The legacy notification view preference must be a boolean.", 400);
+    if (filterDefaults !== undefined && !validFilterDefaults(filterDefaults)) {
+      throw new InboxError("invalid_settings", "Saved filter defaults must contain only supported type, readState, reason and age values.", 400);
+    }
+    if (!Number.isSafeInteger(revision) || revision < 0) {
+      throw new InboxError("invalid_settings", "The settings revision must be a nonnegative safe integer.", 400);
+    }
+    if (revision < this.settingsRevision) return false;
     this.settingsError = null;
-    if (value === this.requestedMatchGitHubInbox) return;
-    this.requestedMatchGitHubInbox = value;
-    if (this.viewChanged) this.nextRefreshAt = 0;
-  }
-
-  get viewChanged() {
-    return firstPage({ mode: this.filters.mode, matchGitHubInbox: this.matchGitHubInbox }) !==
-      firstPage({ mode: this.filters.mode, matchGitHubInbox: this.requestedMatchGitHubInbox });
+    const shared = sharedFilters({ matchGitHubInbox, filterDefaults });
+    const key = JSON.stringify(shared);
+    if (forceFilters || this.sharedFiltersKey !== undefined &&
+        (key !== this.sharedFiltersKey || revision > this.settingsRevision)) {
+      this.filters = { ...this.filters, ...shared };
+    } else if (this.sharedFiltersKey === undefined) {
+      const defaults = filterDefaults ?? { readState: matchGitHubInbox ? "all" : "unread" };
+      this.filters = { ...this.filters, ...Object.fromEntries(refinementFilters
+        .filter(({ key }) => !this.initializedRefinements.has(key) && Object.hasOwn(defaults, key))
+        .map(({ key }) => [key, defaults[key]])) };
+    }
+    this.settingsRevision = revision;
+    this.sharedFiltersKey = key;
+    for (const { key } of refinementFilters) this.initializedRefinements.add(key);
+    return true;
   }
 
   async syncSettings(preferences) {
+    const revision = this.settingsRevision;
     try {
       const settings = await preferences.read();
-      this.setMatchGitHubInbox(settings.matchGitHubInbox);
-      return settings;
+      if (this.applySettings(settings)) return settings;
     } catch (error) {
       if (!(error instanceof InboxError) || error.code !== "settings_read") throw error;
-      this.settingsError = { code: error.code, message: error.message };
+      if (revision === this.settingsRevision) this.settingsError = { code: error.code, message: error.message };
     }
   }
 
-  groups(items = this.loadedItems()) {
+  groups(items = this.loadedItems(), now = this.client.now()) {
     const positions = new Map(items.map((item, index) => [item.id, index]));
-    return groupThreads(items.map(item => ({ ...item, ...this.client.authorshipSnapshot(item) })), this.filters).map(group => ({
+    return groupThreads(items.map(item => ({ ...item, ...this.client.authorshipSnapshot(item) })), this.filters, now).map(group => ({
       ...group,
       items: group.items.map(item => ({ ...item, apiPosition: positions.get(item.id) })),
       selectionKey: selectionKey(group, this.filters),
@@ -84,14 +106,16 @@ export class Inbox {
 
   snapshot() {
     const items = this.loadedItems();
-    const groups = this.groups(items);
+    const now = this.client.now();
+    const groups = this.groups(items, now);
     const snapshotVersion = ++this.snapshotVersion;
     const batches = this.batch.snapshots(items, groups, snapshotVersion);
-    const authoredItems = items.map(item => ({ ...item, ...this.client.authorshipSnapshot(item) }));
+    const authoredItems = filterThreads(items.map(item => ({ ...item, ...this.client.authorshipSnapshot(item) })),
+      { ...this.filters, query: "" }, now);
     return {
       snapshotVersion,
+      settingsRevision: this.settingsRevision,
       filters: { ...this.filters },
-      matchGitHubInbox: this.matchGitHubInbox,
       status: this.busy ? "loading" : this.error ? (this.pages.length ? "stale" : "error") :
         this.pages.length ? "ready" : "idle",
       error: this.error,
@@ -106,7 +130,7 @@ export class Inbox {
         unavailable: authoredItems.filter(item => item.mine === null && item.authorshipError).length,
       },
       hasMore: Boolean(this.pages.at(-1)?.next),
-      needsRefresh: this.needsRefresh || this.viewChanged,
+      needsRefresh: this.needsRefresh,
       lastFetchedAt: this.pages.length ? Math.min(...this.pages.map(page => page.fetchedAt)) : null,
       nextRefreshAt: Math.max(this.nextRefreshAt, this.client.blockedUntil),
       retryAt: this.client.blockedUntil,
@@ -120,10 +144,13 @@ export class Inbox {
 
   summary() {
     const { filters, groups, batch, batches, lockedThreadIds, threadWrites, snapshotVersion, selectionKey, ...state } = this.snapshot();
-    const counts = ({ repository, token, date, timeZone, threadId, remainingThreadIds, retryableThreadIds, ...batchCounts }) => batchCounts;
+    const counts = ({ repository, token, date, timeZone, threadId, remainingThreadIds, retryableThreadIds, retrySelectionKey, ...batchCounts }) => batchCounts;
     const operations = batches.filter(batch => batch.scope !== "thread" || batch.status !== "completed");
-    return { ...state, batch: operations.length ? counts(operations.at(-1)) : null, batches: operations.map(counts), mode: filters.mode, attention: filters.attention,
-      searchActive: Boolean(filters.query), repositories: groups.length };
+    return { ...state, batch: operations.length ? counts(operations.at(-1)) : null, batches: operations.map(counts),
+      mode: filters.readState === "unread" ? "unread" : "inbox", readState: filters.readState, attention: filters.attention,
+      searchActive: Boolean(filters.query),
+      refinementsActive: refinementFilters.some(({ key }) => filters[key] !== undefined && filters[key] !== "all"),
+      repositories: groups.length };
   }
 
   async execute(operation, source = "refresh") {
@@ -164,10 +191,9 @@ export class Inbox {
     }
     return this.execute(async () => {
       const revision = this.client.revision;
-      const matchGitHubInbox = this.requestedMatchGitHubInbox;
       const pages = [];
-      let next = firstPage({ mode: this.filters.mode, matchGitHubInbox });
-      const target = this.viewChanged ? 1 : Math.max(1, this.pages.length);
+      let next = firstPage({ mode: "inbox" });
+      const target = Math.max(1, this.pages.length);
       while (next && pages.length < target) {
         const page = await this.client.page(next, this.controller.signal, { force: input.force });
         pages.push(page);
@@ -177,16 +203,15 @@ export class Inbox {
       if (revision !== this.client.revision) throw new InboxError("inbox_changed", "The inbox changed while refreshing. The next automatic refresh will reconcile it.", 409);
       this.pages = pages;
       this.batch.clearRowResults();
-      this.matchGitHubInbox = matchGitHubInbox;
       this.needsRefresh = pages.some(page => page.invalidated);
-      this.nextRefreshAt = this.viewChanged ? 0 : Math.max(...pages.map(page => page.nextRefreshAt));
+      this.nextRefreshAt = Math.max(...pages.map(page => page.nextRefreshAt));
     });
   }
 
   async more() {
     if (this.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
-    if (this.needsRefresh || this.viewChanged) {
-      throw new InboxError("refresh_required", "Refresh notifications before loading more after changing the inbox or notification view.", 409);
+    if (this.needsRefresh) {
+      throw new InboxError("refresh_required", "Refresh notifications before loading more after changing the inbox.", 409);
     }
     if (!this.pages.at(-1)?.next) throw new InboxError("no_more_pages", "No more notifications to load.", 409);
     return this.execute(async () => {
@@ -204,25 +229,34 @@ export class Inbox {
     }, "more");
   }
 
-  async setFilters(input) {
-    validateFilters(input);
+  #filterInput(input) {
+    const filters = normalizeFilters(input);
     if (this.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
     if (this.busy) throw new InboxError("busy", "An inbox request is already running.", 409);
-    if (input.mode !== undefined && input.mode !== this.filters.mode) {
-      return this.execute(async () => {
-        const revision = this.client.revision;
-        const matchGitHubInbox = this.requestedMatchGitHubInbox;
-        const page = await this.client.page(firstPage({ mode: input.mode, matchGitHubInbox }), this.controller.signal);
-        if (this.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
-        if (revision !== this.client.revision) throw new InboxError("inbox_changed", "The inbox changed while switching views. Try again.", 409);
-        this.filters = { ...this.filters, ...input };
-        this.pages = [page];
-        this.matchGitHubInbox = matchGitHubInbox;
-        this.needsRefresh = Boolean(page.invalidated);
-        this.nextRefreshAt = this.viewChanged ? 0 : page.nextRefreshAt;
-      });
+    return filters;
+  }
+
+  async syncFilters(input, preferences) {
+    const filters = this.#filterInput(input);
+    const changes = Object.fromEntries(refinementFilters
+      .filter(({ key }) => Object.hasOwn(filters, key)).map(({ key }) => [key, filters[key]]));
+    if (!Object.keys(changes).length) return this.setFilters(input);
+    if (!preferences) throw new InboxError("settings_unavailable", "Shared notification filter settings are unavailable.", 503);
+    const settings = await preferences.updateFilters(changes);
+    if (this.controller.signal.aborted) throw new InboxError("closed", "The canvas was closed after saving shared filters.", 410);
+    this.applySettings(settings, true);
+    for (const key of ["query", "attention"]) {
+      if (filters[key] !== undefined) this.filters = { ...this.filters, [key]: filters[key] };
     }
-    this.filters = { ...this.filters, ...input };
+    return this.summary();
+  }
+
+  async setFilters(input) {
+    const filters = this.#filterInput(input);
+    for (const { key } of refinementFilters) {
+      if (filters[key] !== undefined) this.initializedRefinements.add(key);
+    }
+    this.filters = { ...this.filters, ...filters };
     return this.summary();
   }
 

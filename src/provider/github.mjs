@@ -16,8 +16,8 @@ const MERGE_QUEUE_QUERY = "query($owner:String!,$name:String!,$number:Int!){repo
 const DISCUSSION_QUERY = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){discussion(number:$number){closed isAnswered stateReason viewerDidAuthor}}}";
 const SUBJECT_CONCURRENCY = 20;
 
-export function firstPage({ mode = "unread", matchGitHubInbox = true } = {}) {
-  const inbox = mode === "inbox" && matchGitHubInbox;
+export function firstPage({ mode = "unread" } = {}) {
+  const inbox = mode === "inbox";
   return `/notifications?all=${inbox ? "true&is_done=false" : "false"}&per_page=50&page=1`;
 }
 

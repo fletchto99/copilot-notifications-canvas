@@ -175,17 +175,43 @@ in `test/fixtures/copilot-handoff.mjs` and the existing synthetic host fixture.
 
 ### Inbox and read/done behavior
 
-- Show notifications defaults to All (`matchGitHubInbox: true`) and uses
-  `all=true&is_done=false` to mirror GitHub's read and unread inbox. Unread only
-  (`matchGitHubInbox: false`) uses `all=false`, as does desktop polling.
-  Neither view includes done notifications.
+- The canvas always uses `all=true&is_done=false` to mirror GitHub's read and
+  unread inbox, excluding Done. Read state only filters loaded items and never
+  refetches or resets pagination. Desktop polling keeps its separate `all=false` feed.
+  Preserve the legacy `matchGitHubInbox` preference without rewriting it: false
+  seeds a new panel's initial unread filter when no shared filters are saved,
+  unless explicitly overridden.
+  Apply that default once, never over a subsequent user choice, including after
+  a failed settings read. Legacy mode inputs are read-state aliases, not API modes
+  or locks. Opening inputs do not save preferences; their initial dropdown
+  overrides are replaced by the next shared-settings update.
   Search and counts cover **loaded items**, not the entire GitHub inbox.
   Refresh reconciles loaded pages; a failed refresh must not discard usable data.
+- Type, read-state, reason and age filters sync across canvases sharing a
+  settings directory. Explicit dropdown edits, Clear filters and `set_filters`
+  changes persist only those four validated enum choices in `filterDefaults`.
+  Merge field-level patches under the existing settings lock; never write a
+  stale full snapshot for a single-dropdown edit. Search and attention remain
+  local, and filtering never loads more pages.
+  Attention counts apply these four filters but ignore text search and the
+  selected tab. Age uses rolling `updated_at` cutoffs from the provider clock;
+  include the exact cutoff in recent matches, not older matches. Bind every
+  filter and the resulting item set into batch selection keys, including
+  changes caused by time passing. Never persist search text, attention tabs,
+  notification content or notification history. Every settings write atomically
+  stamps a UTC `updatedAt` and increments a safe-integer `revision`; order
+  observations by revision, not wall-clock time. Ignore stale reads and write
+  responses. Failed or uncertain shared saves must not replay old edits
+  automatically. Parse the request body before syncing preferences, then validate
+  new batch starts/retries without another intervening await so stale
+  selection keys are rejected; running batches retain their captured targets.
+  Retry requests must carry the rendered retry-selection key, binding current
+  filters and eligible original targets; reject a changed key before any write.
 - Mine matches confirmed authorship of loaded issues, PRs, and discussions, not
   the notification reason. Resolve authorship even for filtered or collapsed
   rows, share the bounded detail cache, and expose incomplete counts explicitly.
   Runtime updates must replace `Inbox.pages`, not mutate its arrays in place,
-  so authorship selections stay stable until loaded pages or inbox mode change.
+  so authorship selections stay stable until loaded pages change.
   Keep author/viewer IDs provider-only and in memory; no per-item authorship in
   agent results or desktop polling.
 - All views preserve API row order. REST `updated_at` is not the inbox ordering
@@ -195,7 +221,7 @@ in `test/fixtures/copilot-handoff.mjs` and the existing synthetic host fixture.
 - Read and done updates require explicit panel actions. Read targets loaded
   unread threads; Done also accepts loaded read threads. Repository, date, and
   shown-list batches target the loaded
-  attention/search matches identified by their selection key. Shown-list batches
+  attention/search/popover-filter matches identified by their selection key. Shown-list batches
   may span repositories, but never fetch or include unloaded items. Read is the
   default, and retries retain the original scope and explicitly chosen action
   without adding new items. Keep selection keys out of agent-facing summaries.

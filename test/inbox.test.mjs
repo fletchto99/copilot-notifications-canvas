@@ -5,13 +5,67 @@ import { Inbox } from "../src/provider/inbox.mjs";
 import { InboxError } from "../src/shared/model.mjs";
 import { http, inboxNext as next, thread } from "./fixtures.mjs";
 
+test("refinements keep loaded pages, narrow tab counts independently of search, and stay panel-local", async t => {
+  let requests = 0;
+  const client = new GitHubClient({ run: async () => {
+    requests++;
+    return http([
+      thread("1"),
+      thread("2", { reason: "mention" }),
+      thread("3", { unread: false }),
+      thread("4", { subject: { type: "Release", title: "Synthetic release", url: null } }),
+    ], { link: next });
+  } });
+  const inbox = new Inbox(client);
+  const other = new Inbox(client);
+  t.after(() => { inbox.close(); other.close(); });
+  await inbox.refresh();
+  const pages = inbox.pages;
+  const summary = await inbox.setFilters({ type: "PullRequest", readState: "unread", query: "notification 1" });
+  assert.equal(requests, 1);
+  assert.equal(inbox.pages, pages);
+  assert.equal(summary.loaded, 4);
+  assert.equal(summary.unread, 3);
+  assert.equal(summary.matching, 1);
+  assert.equal(summary.attentionCounts.all, 2);
+  assert.equal(summary.attentionCounts.mentioned, 1);
+  assert.equal(summary.refinementsActive, true);
+  assert.equal(summary.hasMore, true);
+  assert.doesNotMatch(JSON.stringify(summary), /example\/|Synthetic|selectionKey|"filters"|"query"|"groups"/);
+  assert.equal(other.summary().refinementsActive, false);
+  assert.equal((await inbox.setFilters({ type: "Release", readState: "all", query: "" })).authorship.pending, 0);
+  const before = inbox.snapshot().filters;
+  await assert.rejects(inbox.setFilters({ reason: "unsupported" }), { code: "invalid_filters" });
+  assert.deepEqual(inbox.filters, before);
+  await inbox.setFilters({ type: "all", readState: "all" });
+  assert.equal(inbox.summary().refinementsActive, false);
+  assert.equal(inbox.summary().matching, 4);
+});
+
+test("read-state filters use the same full inbox without fetching or changing saved settings", async t => {
+  const requests = [];
+  const inbox = new Inbox(new GitHubClient({ run: async args => {
+    requests.push(args.at(-1));
+    return http([thread("1"), thread("2", { unread: false })]);
+  } }));
+  t.after(() => inbox.close());
+  inbox.applySettings({ matchGitHubInbox: false });
+  await inbox.refresh();
+  assert.equal(inbox.summary().matching, 1);
+  assert.equal((await inbox.setFilters({ readState: "read" })).matching, 1);
+  assert.deepEqual(inbox.shownSelection().items.map(item => item.id), ["2"]);
+  assert.equal(requests.length, 1);
+  assert.match(requests[0], /all=true&is_done=false/);
+  assert.equal((await inbox.setFilters({ readState: "all" })).matching, 2);
+});
+
 test("settings-read failures preserve the requested view and surface an independent warning", async t => {
   const inbox = new Inbox(new GitHubClient({ run: async () => http([thread()]) }));
   t.after(() => inbox.close());
   const unavailable = new InboxError("settings_read", "Saved settings are unavailable.", 500);
   const failing = { read: async () => { throw unavailable; } };
   await inbox.syncSettings(failing);
-  assert.equal(inbox.requestedMatchGitHubInbox, true);
+  assert.equal(inbox.filters.readState, "all");
   await inbox.refresh();
   assert.equal(inbox.summary().status, "ready");
   assert.equal(inbox.summary().settingsError.code, "settings_read");
@@ -19,8 +73,7 @@ test("settings-read failures preserve the requested view and surface an independ
   await inbox.refresh();
   const deadline = inbox.nextRefreshAt;
   await inbox.syncSettings(failing);
-  assert.equal(inbox.requestedMatchGitHubInbox, false);
-  assert.equal(inbox.matchGitHubInbox, false);
+  assert.equal(inbox.filters.readState, "unread");
   assert.equal(inbox.nextRefreshAt, deadline);
   assert.deepEqual(inbox.summary().settingsError, { code: "settings_read", message: unavailable.message });
   assert.equal(inbox.summary().error, null);
@@ -83,7 +136,7 @@ test("repository order follows the loaded API sequence in both inbox and unread-
     const inbox = new Inbox(new GitHubClient({ run: async args =>
       http(args.at(-1).includes("all=false") ? rows.filter(row => row.unread) : rows) }));
     t.after(() => inbox.close());
-    inbox.setMatchGitHubInbox(matchGitHubInbox);
+    inbox.applySettings({ matchGitHubInbox });
     await inbox.refresh();
     assert.deepEqual(inbox.groups().map(group => group.repository), matchGitHubInbox
       ? ["example/zulu", "example/alpha"] : ["example/alpha", "example/zulu"]);
@@ -105,7 +158,7 @@ test("pagination and refresh preserve API rank even when update timestamps and d
       ], { link: `<${url.href}>; rel="next"` });
     } }));
     t.after(() => inbox.close());
-    inbox.setMatchGitHubInbox(matchGitHubInbox);
+    inbox.applySettings({ matchGitHubInbox });
     await inbox.refresh();
     await inbox.more();
     for (const force of [false, true]) {
@@ -198,7 +251,7 @@ test("duplicates within one response still use the newest notification timestamp
   assert.equal(inbox.summary().unread, 1);
 });
 
-test("search is local, unread mode excludes read items, and summaries never contain personal content", async () => {
+test("search and legacy unread mode filter locally, and summaries never contain personal content", async () => {
   let calls = 0;
   const client = new GitHubClient({ run: async () => {
     calls++;
@@ -212,8 +265,9 @@ test("search is local, unread mode excludes read items, and summaries never cont
   assert.equal(calls, 1);
   assert.equal(inbox.summary().searchActive, true);
   await inbox.setFilters({ mode: "unread" });
-  assert.equal(calls, 2);
-  assert.equal(inbox.summary().loaded, 1);
+  assert.equal(calls, 1);
+  assert.equal(inbox.summary().loaded, 2);
+  assert.equal(inbox.summary().matching, 1);
   assert.equal(inbox.summary().unread, 1);
   const summary = JSON.stringify(inbox.summary());
   assert.equal(summary.includes("widgets"), false);
@@ -275,7 +329,7 @@ test("attention is panel-local, survives pagination and refresh, and returns onl
   assert.equal(inbox.summary().matching, 1);
   assert.equal(inbox.summary().loaded, 3);
   assert.deepEqual(inbox.summary().attentionCounts, { all: 3, mine: 0, review_requested: 2, mentioned: 1, team_mentioned: 0, assigned: 0, participating: 3 });
-  assert.deepEqual(inbox.filters, { mode: "inbox", query: "notification 3", attention: "review_requested" });
+  assert.deepEqual(inbox.filters, { readState: "all", query: "notification 3", attention: "review_requested" });
   await assert.rejects(inbox.setFilters({ attention: "bad" }), { code: "invalid_filters" });
   assert.equal(inbox.filters.attention, "review_requested");
   await inbox.setFilters({ attention: "all" });

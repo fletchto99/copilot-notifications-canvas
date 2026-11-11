@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { test, expect } from "./fixtures.mjs";
+import { http } from "../fixtures.mjs";
 
 test.beforeEach(async ({ canvas }) => {
   for (const row of canvas.rows) row.subject.url = `https://api.github.com/repos/${row.repository.full_name}/issues/${row.id}`;
@@ -31,6 +32,464 @@ test("attention tabs use tighter horizontal spacing without shrinking their heig
 for (const packaged of [false, true]) {
   test.describe(`GitHub attention filters (${packaged ? "packaged" : "source"})`, () => {
     test.use({ packaged });
+    test("a shared filter change cannot widen a retry after its button is clicked", async ({ page, canvas }) => {
+      canvas.rows.splice(2);
+      canvas.rows[0].subject = { type: "Issue", title: "Synthetic issue", url: null };
+      canvas.rows[1].subject = { type: "PullRequest", title: "Synthetic PR", url: null };
+      await page.goto(canvas.url);
+      await expect(page.locator(".row")).toHaveCount(2);
+      canvas.setRequestHook(args => args.includes("DELETE") ? http({}, {}, 500) : undefined);
+      await page.locator(".repo-done").click();
+      await expect(page.locator("#batch-error")).toContainText("HTTP 500");
+      canvas.setRequestHook(undefined);
+      await page.clock.setFixedTime(new Date(await canvas.advanceProviderTime(121_000)));
+      await page.locator("#filters-toggle").click();
+      await page.getByLabel("Type", { exact: true }).selectOption("Issue");
+      await expect(page.locator(".row")).toHaveCount(1);
+      await page.keyboard.press("Escape");
+      const retry = page.locator("#batch-retry");
+      await expect(retry).toBeEnabled({ timeout: 10_000 });
+      await page.route("**/api/batch/retry", async route => {
+        expect(route.request().postDataJSON().selectionKey).toMatch(/^[a-f0-9]{64}$/);
+        await canvas.preferences.updateFilters({ type: "all" });
+        await route.continue();
+      });
+      canvas.expectConsoleError("/api/batch/retry", "Failed to load resource: the server responded with a status of 409 (Conflict)");
+      await retry.click();
+      await expect(page.locator("#notice")).toContainText("The retry selection changed");
+      await expect(page.locator(".row")).toHaveCount(2);
+      expect(canvas.doneWrites).toEqual([]);
+      await page.unroute("**/api/batch/retry");
+      await page.locator("#filters-toggle").click();
+      await page.getByLabel("Type", { exact: true }).selectOption("Issue");
+      await expect(page.locator(".row")).toHaveCount(1);
+      await page.keyboard.press("Escape");
+      await retry.click();
+      await expect.poll(() => canvas.doneWrites).toEqual(["1"]);
+      expect(canvas.rows[1].unread).toBe(true);
+      expect(canvas.deliveries).toEqual([]);
+    });
+
+    for (const initialType of ["all", "Issue"]) {
+      test(`changing Type from ${initialType} keeps the header stable without flashing a scrollbar`, async ({ page, canvas }) => {
+        canvas.rows.splice(4);
+        const type = "RepositoryDependabotAlertsThread";
+        for (const [index, row] of canvas.rows.entries()) {
+          row.subject = { type: index === 3 ? type : "Issue", title: `Sample ${index + 1}`, url: null };
+          row.repository.full_name = "example/widgets";
+          row.reason = "security_advisory_credit";
+        }
+        await canvas.preferences.updateFilters({
+          type: initialType, reason: initialType === "all" ? "all" : "security_advisory_credit",
+        });
+        await page.setViewportSize({ width: 320, height: 900 });
+        await page.goto(canvas.url);
+        const count = initialType === "all" ? 4 : 3;
+        await expect(page.locator(".row")).toHaveCount(count);
+        await page.locator("#filters-toggle").click();
+        const height = await page.evaluate(() => Math.ceil(document.body.getBoundingClientRect().height + 8));
+        await page.setViewportSize({ width: 320, height });
+        const layout = () => page.evaluate(() => ({
+          headerHeight: document.getElementById("inbox-header").getBoundingClientRect().height,
+          pageOverflow: document.documentElement.scrollHeight > document.documentElement.clientHeight,
+        }));
+        const before = await layout();
+        expect(before.pageOverflow).toBe(false);
+        let release;
+        await page.route("**/api/filters", async route => {
+          await new Promise(resolve => { release = resolve; });
+          await route.continue();
+        });
+        await page.evaluate(() => {
+          window.filterOverflowFrames = [];
+          const sample = () => {
+            const root = document.documentElement;
+            if (root.scrollHeight > root.clientHeight) {
+              window.filterOverflowFrames.push({ height: root.scrollHeight, viewport: root.clientHeight });
+            }
+            window.filterOverflowFrame = requestAnimationFrame(sample);
+          };
+          sample();
+        });
+        try {
+          await page.getByLabel("Type", { exact: true }).selectOption(type);
+          await expect.poll(() => typeof release).toBe("function");
+          await expect(page.locator("#filter-sync-status")).toBeVisible();
+          await expect(page.locator(".row")).toHaveCount(count);
+          expect(await layout()).toEqual(before);
+          release();
+          await expect(page.locator("#filter-sync-status")).toBeHidden();
+          await expect(page.locator(".row")).toHaveCount(1);
+          await expect(page.locator("#filters-toggle")).toHaveText(`Filters (${initialType === "all" ? 1 : 2})`);
+          expect(await layout()).toEqual(before);
+          await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+          expect(await page.evaluate(() => window.filterOverflowFrames)).toEqual([]);
+          expect(canvas.writes).toEqual([]);
+          expect(canvas.deliveries).toEqual([]);
+        } finally {
+          release?.();
+          await page.evaluate(() => cancelAnimationFrame(window.filterOverflowFrame));
+        }
+      });
+    }
+
+    for (const surface of ["popover", "page"]) {
+      test(`pending filters do not flash a ${surface} scrollbar`, async ({ page, canvas }) => {
+        canvas.rows.splice(2);
+        const type = surface === "page" ? "PullRequest" : "Issue";
+        for (const [index, row] of canvas.rows.entries()) {
+          row.subject = { type, title: `Sample ${index + 1}`, url: null };
+        }
+        await canvas.preferences.updateFilters({ readState: "unread" });
+        await page.setViewportSize(surface === "page" ? { width: 320, height: 900 } : { width: 480, height: 440 });
+        await page.goto(canvas.url);
+        await expect(page.locator(".row")).toHaveCount(2);
+        await page.locator("#filters-toggle").click();
+        if (surface === "page") {
+          const height = await page.evaluate(() => Math.ceil(document.body.getBoundingClientRect().height + 8));
+          await page.setViewportSize({ width: 320, height });
+        }
+        const layout = () => page.evaluate(() => {
+          const panel = document.getElementById("filters-panel");
+          return {
+            panelHeight: panel.getBoundingClientRect().height,
+            headerHeight: document.getElementById("inbox-header").getBoundingClientRect().height,
+            panelOverflow: panel.scrollHeight > panel.clientHeight,
+            pageOverflow: document.documentElement.scrollHeight > document.documentElement.clientHeight,
+          };
+        });
+        await expect.poll(async () => (await layout()).panelOverflow).toBe(false);
+        const before = await layout();
+        if (surface === "page") expect(before.pageOverflow).toBe(false);
+        let release;
+        await page.route("**/api/filters", async route => {
+          await new Promise(resolve => { release = resolve; });
+          await route.continue();
+        });
+        try {
+          await page.getByLabel("Type", { exact: true }).selectOption(type);
+          await expect.poll(() => typeof release).toBe("function");
+          await expect(page.getByRole("status").filter({ hasText: "Syncing filters..." })).toHaveCount(1);
+          await expect.poll(layout).toEqual(before);
+          release();
+          await expect(page.locator("#filter-sync-status")).toBeHidden();
+          await expect.poll(layout).toEqual(before);
+          await page.setViewportSize({ width: 320, height: 320 });
+          const panel = page.locator("#filters-panel");
+          await expect(panel).toHaveCSS("overflow-y", "auto");
+          await expect.poll(async () => (await layout()).panelOverflow).toBe(true);
+          const clear = page.getByRole("button", { name: "Clear filters", exact: true });
+          await clear.focus();
+          await expect(clear).toBeFocused();
+          const bounds = await clear.boundingBox();
+          expect(bounds.y).toBeGreaterThanOrEqual(8);
+          expect(bounds.y + bounds.height).toBeLessThanOrEqual(312);
+          expect(canvas.writes).toEqual([]);
+          expect(canvas.deliveries).toEqual([]);
+        } finally { release?.(); }
+      });
+    }
+
+    for (const darkMode of [false, true]) {
+      test(`active dropdowns match the Filters button border in ${darkMode ? "dark" : "light"} mode`, async ({ page, canvas }) => {
+        canvas.rows.splice(2);
+        await canvas.preferences.update({ darkMode });
+        await page.goto(canvas.url);
+        await expect(page.locator(".row")).toHaveCount(2);
+        const toggle = page.locator("#filters-toggle");
+        await toggle.click();
+        const rows = page.locator("#filters-panel .select-setting");
+        const neutralBorder = await rows.first().evaluate(node => getComputedStyle(node).borderTopColor);
+        for (const row of await rows.all()) await expect(row).toHaveCSS("border-top-color", neutralBorder);
+        const choices = [
+          ["Read state", "unread"], ["Type", "Issue"], ["Reason", "review_requested"], ["Age", "older_7d"],
+        ];
+        let activeBorder;
+        for (const [index, [label, value]] of choices.entries()) {
+          await page.getByLabel(label, { exact: true }).selectOption(value);
+          await expect(page.locator("#filter-sync-status")).toBeHidden();
+          activeBorder = await toggle.evaluate(node => getComputedStyle(node).borderTopColor);
+          expect(activeBorder).not.toBe(neutralBorder);
+          for (let row = 0; row < choices.length; row++) {
+            await expect(rows.nth(row)).toHaveCSS("border-top-color", row <= index ? activeBorder : neutralBorder);
+          }
+        }
+        await page.getByLabel("Type", { exact: true }).selectOption("all");
+        await expect(rows.nth(1)).toHaveCSS("border-top-color", neutralBorder);
+        await expect(rows.nth(0)).toHaveCSS("border-top-color", activeBorder);
+        await expect(rows.nth(2)).toHaveCSS("border-top-color", activeBorder);
+        await expect(rows.nth(3)).toHaveCSS("border-top-color", activeBorder);
+        await page.getByRole("button", { name: "Clear filters", exact: true }).click();
+        await expect(toggle).toHaveText("Filters");
+        for (const row of await rows.all()) await expect(row).toHaveCSS("border-top-color", neutralBorder);
+        expect(canvas.writes).toEqual([]);
+        expect(canvas.deliveries).toEqual([]);
+      });
+
+      test(`Clear filters distinguishes disabled and hovered states in ${darkMode ? "dark" : "light"} mode`, async ({ page, canvas }) => {
+        canvas.rows.splice(2);
+        await canvas.preferences.update({ darkMode });
+        await page.goto(canvas.url);
+        await expect(page.locator(".row")).toHaveCount(2);
+        await page.locator("#filters-toggle").click();
+        const clear = page.getByRole("button", { name: "Clear filters", exact: true });
+        await expect(clear).toBeDisabled();
+        await expect(clear).toHaveCSS("opacity", "0.55");
+        await expect(clear).toHaveCSS("cursor", "default");
+        const inactiveBackground = await clear.evaluate(node => getComputedStyle(node).backgroundColor);
+        await clear.hover();
+        await expect(clear).toHaveCSS("background-color", inactiveBackground);
+        const revision = (await canvas.preferences.read()).revision;
+        await clear.dispatchEvent("click");
+        expect((await canvas.preferences.read()).revision).toBe(revision);
+        await page.getByLabel("Read state", { exact: true }).selectOption("unread");
+        await expect(page.locator("#filter-sync-status")).toBeHidden();
+        await expect(clear).toBeEnabled();
+        await expect(clear).toHaveCSS("opacity", "1");
+        await expect(clear).toHaveCSS("cursor", "pointer");
+        await page.mouse.move(0, 0);
+        await expect(clear).toHaveCSS("background-color", inactiveBackground);
+        await clear.hover();
+        await expect.poll(() => clear.evaluate(node => getComputedStyle(node).backgroundColor)).not.toBe(inactiveBackground);
+        await clear.focus();
+        await clear.press("Enter");
+        await expect(clear).toBeDisabled();
+        await expect(clear).toHaveCSS("opacity", "0.55");
+        await expect(clear).toHaveCSS("background-color", inactiveBackground);
+        await expect(clear).toBeFocused();
+        expect(canvas.writes).toEqual([]);
+        expect(canvas.deliveries).toEqual([]);
+      });
+    }
+
+    test("dropdowns save automatically and Clear filters clears shared choices without saving search or tabs", async ({ page, canvas }) => {
+      canvas.rows.splice(3);
+      canvas.rows[0].reason = "mention";
+      canvas.rows[1].reason = "mention";
+      canvas.rows[1].unread = false;
+      const settingsWrites = [];
+      page.on("request", request => {
+        if (request.method() === "POST" && new URL(request.url()).pathname === "/api/settings") {
+          settingsWrites.push(request.postDataJSON());
+        }
+      });
+      await page.goto(canvas.url);
+      await expect(page.locator(".row")).toHaveCount(3);
+      await page.getByRole("tab", { name: "Mentioned (2)", exact: true }).click();
+      await page.getByRole("searchbox").fill("widget");
+      await expect(page.locator(".row")).toHaveCount(2);
+      await page.locator("#filters-toggle").click();
+      for (const [label, value] of [["Type", "Issue"], ["Read state", "unread"], ["Reason", "mention"], ["Age", "older_7d"]]) {
+        await page.getByLabel(label, { exact: true }).selectOption(value);
+      }
+      await expect(page.locator(".row")).toHaveCount(1);
+      await expect(page.getByRole("button", { name: "Save as default", exact: true })).toHaveCount(0);
+      await expect(page.locator("#filter-sync-status")).toBeHidden();
+      const filterDefaults = { type: "Issue", readState: "unread", reason: "mention", age: "older_7d" };
+      expect((await canvas.preferences.read()).filterDefaults).toEqual(filterDefaults);
+      expect(settingsWrites).toEqual([]);
+      const saved = await canvas.preferences.read();
+      expect(saved.revision).toBeGreaterThan(0);
+      expect(new Date(saved.updatedAt).toISOString()).toBe(saved.updatedAt);
+      const clear = page.getByRole("button", { name: "Clear filters", exact: true });
+      await clear.focus();
+      await clear.press("Enter");
+      await expect(page.locator(".row")).toHaveCount(2);
+      await expect(page.locator("#filters-toggle")).toHaveText("Filters");
+      await expect(page.getByRole("searchbox")).toHaveValue("widget");
+      await expect(page.locator("#attention-mentioned")).toHaveAttribute("aria-selected", "true");
+      expect((await canvas.preferences.read()).filterDefaults).toEqual({
+        type: "all", readState: "all", reason: "all", age: "all",
+      });
+      await page.keyboard.press("Escape");
+      await page.locator("#force-refresh").click();
+      await expect(page.locator("#filter-type")).toHaveValue("all");
+      await expect(page.locator("#filter-readState")).toHaveValue("all");
+      await expect(page.locator(".row")).toHaveCount(2);
+      expect(settingsWrites).toHaveLength(0);
+      expect(canvas.writes).toEqual([]);
+      expect(canvas.deliveries).toEqual([]);
+    });
+
+    test("visible canvases pick up shared filter changes on polling while keeping local search and tabs", async ({ page, canvas }) => {
+      canvas.rows.splice(3);
+      canvas.rows[0].reason = "mention";
+      canvas.rows[1].reason = "mention";
+      canvas.rows[1].unread = false;
+      const filterDefaults = { type: "Issue", readState: "all", reason: "mention", age: "all" };
+      await canvas.preferences.update({ matchGitHubInbox: false, filterDefaults });
+      await page.goto(canvas.url);
+      await expect(page.locator(".row")).toHaveCount(2);
+      for (const [key, value] of Object.entries(filterDefaults)) {
+        await expect(page.locator(`#filter-${key}`)).toHaveValue(value);
+      }
+      await expect(page.getByRole("searchbox")).toHaveValue("");
+      await expect(page.locator("#attention-all")).toHaveAttribute("aria-selected", "true");
+      await page.getByRole("tab", { name: "Mentioned (2)", exact: true }).click();
+      await page.getByRole("searchbox").fill("widget");
+      await canvas.preferences.updateFilters({ readState: "unread" });
+      await expect(page.locator("#filter-readState")).toHaveValue("unread", { timeout: 10_000 });
+      await expect(page.locator(".row")).toHaveCount(1);
+      await expect(page.getByRole("searchbox")).toHaveValue("widget");
+      await expect(page.locator("#attention-mentioned")).toHaveAttribute("aria-selected", "true");
+      await canvas.preferences.updateFilters({ type: "Release" });
+      await expect(page.locator("#filter-type")).toHaveValue("Release", { timeout: 10_000 });
+      await expect(page.locator(".row")).toHaveCount(0);
+      await expect(page.getByRole("searchbox")).toHaveValue("widget");
+      expect(canvas.writes).toEqual([]);
+      expect(canvas.deliveries).toEqual([]);
+    });
+
+    test("a delayed dropdown write merges with a newer change to another shared field", async ({ page, canvas }) => {
+      canvas.rows.splice(2);
+      await page.goto(canvas.url);
+      await expect(page.locator(".row")).toHaveCount(2);
+      let release;
+      await page.route("**/api/filters", async route => {
+        await new Promise(resolve => { release = resolve; });
+        await route.continue();
+      });
+      try {
+        await page.locator("#filters-toggle").click();
+        await page.getByLabel("Type", { exact: true }).selectOption("Issue");
+        await expect.poll(() => typeof release).toBe("function");
+        await expect(page.locator("#filter-sync-status")).toHaveText("Syncing filters...");
+        await canvas.preferences.updateFilters({ age: "older_7d" });
+        release();
+        await expect(page.locator("#filter-sync-status")).toBeHidden();
+        await expect(page.locator("#filter-type")).toHaveValue("Issue");
+        await expect(page.locator("#filter-age")).toHaveValue("older_7d");
+        expect((await canvas.preferences.read()).filterDefaults).toEqual({
+          type: "Issue", readState: "all", reason: "all", age: "older_7d",
+        });
+        expect(canvas.writes).toEqual([]);
+        expect(canvas.deliveries).toEqual([]);
+      } finally { release?.(); }
+    });
+
+    test("Filters combines all refinements with search and tabs, and clearing preserves the search", async ({ page, canvas }) => {
+      canvas.rows.splice(5);
+      for (const [index, row] of canvas.rows.entries()) {
+        row.subject.type = index === 4 ? "Release" : "PullRequest";
+        row.subject.url = null;
+        row.subject.title = index === 0 || index === 3 ? "Needle review" : "Another item";
+        row.updated_at = new Date(Date.now() - (index === 3 ? 1 : 14) * 86_400_000).toISOString();
+        row.reason = index === 2 ? "mention" : "review_requested";
+        row.unread = index !== 1;
+      }
+      await page.goto(canvas.url);
+      await expect(page.locator(".row")).toHaveCount(5);
+      await page.getByRole("tab", { name: "Review Requested (4)", exact: true }).click();
+      await page.getByRole("searchbox").fill("Needle");
+      await expect(page.locator(".row")).toHaveCount(2);
+      await page.locator("#filters-toggle").click();
+      for (const [label, value] of [["Type", "PullRequest"], ["Read state", "unread"],
+        ["Reason", "review_requested"], ["Age", "older_7d"]]) {
+        await page.getByLabel(label, { exact: true }).selectOption(value);
+      }
+      await expect(page.locator(".row")).toHaveCount(1);
+      await expect(page.locator('[data-focus-key="thread:1"]')).toBeVisible();
+      await expect(page.locator("#filters-toggle")).toHaveText("Filters (4)");
+      await expect(page.locator("#count")).toHaveText("5 loaded · 4 unread · 1 matching");
+      await expect(page.locator("#attention-all")).toHaveText("All (1)");
+      const reset = page.getByRole("button", { name: "Clear filters", exact: true });
+      await reset.focus();
+      await reset.press("Enter");
+      await expect(page.locator(".row")).toHaveCount(2);
+      await expect(page.getByRole("searchbox")).toHaveValue("Needle");
+      await expect(page.locator("#attention-review_requested")).toHaveAttribute("aria-selected", "true");
+      await expect(page.locator("#filters-toggle")).toHaveText("Filters");
+      await expect(page.getByRole("button", { name: "Clear filters", exact: true })).toBeFocused();
+      await page.keyboard.press("Escape");
+      await expect(page.locator("#filters-panel")).toBeHidden();
+      await expect(page.locator("#filters-toggle")).toBeFocused();
+      expect(canvas.writes).toEqual([]);
+      expect(canvas.deliveries).toEqual([]);
+    });
+
+    test("Filters is accessible at narrow widths and dismisses without changing legacy preferences", async ({ page, canvas }) => {
+      canvas.rows.splice(2);
+      await canvas.preferences.update({ matchGitHubInbox: false });
+      await page.setViewportSize({ width: 320, height: 480 });
+      await page.goto(canvas.url);
+      await expect(page.locator(".row")).toHaveCount(2);
+      const toggle = page.locator("#filters-toggle");
+      const panel = page.locator("#filters-panel");
+      await toggle.focus();
+      await toggle.press("Enter");
+      await expect(toggle).toHaveAttribute("aria-expanded", "true");
+      await expect(panel.locator("label")).toHaveText(["Read state", "Type", "Reason", "Age"]);
+      await expect(panel.locator("p:visible")).toHaveCount(0);
+      await expect(panel).not.toHaveAttribute("aria-describedby");
+      await page.keyboard.press("Tab");
+      await expect(page.getByLabel("Read state", { exact: true })).toBeFocused();
+      await page.getByLabel("Read state", { exact: true }).selectOption("read");
+      await expect(page.locator(".row")).toHaveCount(0);
+      await expect(page.locator("#empty-title")).toHaveText("No matches in loaded notifications");
+      await expect(toggle).toHaveText("Filters (1)");
+      await expect(page.locator("#show-notifications, #filter-view-help")).toHaveCount(0);
+      await page.mouse.move(0, 0);
+      for (const height of [480, 320]) {
+        await page.setViewportSize({ width: 320, height });
+        await expect.poll(async () => {
+          const box = await panel.boundingBox();
+          return box && box.x >= 0 && box.x + box.width <= 320 && box.y >= 8 && box.y + box.height <= height - 8;
+        }).toBe(true);
+        const accessibility = await new AxeBuilder({ page })
+          .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+        expect(accessibility.violations).toEqual([]);
+      }
+      await page.getByRole("searchbox").focus();
+      await expect(panel).toBeHidden();
+      await expect(toggle).toHaveAttribute("aria-expanded", "false");
+      await toggle.click();
+      await page.locator("#settings-toggle").click();
+      await expect(panel).toBeHidden();
+      await expect(page.locator("#settings-panel")).toBeVisible();
+      expect((await canvas.preferences.read()).matchGitHubInbox).toBe(false);
+      expect(canvas.writes).toEqual([]);
+      expect(canvas.deliveries).toEqual([]);
+    });
+
+    for (const groupBy of packaged ? ["repo"] : ["repo", "none", "date"]) {
+      test(`pending refinements protect ${groupBy} bulk actions and never include unloaded matches`, async ({ page, canvas }) => {
+        for (const row of canvas.rows) row.reason = ["1", "3", "51"].includes(row.id) ? "mention" : "subscribed";
+        await canvas.preferences.update({ groupBy });
+        await page.goto(canvas.url);
+        await expect(page.locator(".row")).toHaveCount(50);
+        let release;
+        let hold = true;
+        await page.route("**/api/filters", async route => {
+          if (hold) await new Promise(resolve => { release = resolve; });
+          await route.continue();
+        });
+        try {
+          await page.locator("#filters-toggle").click();
+          await page.getByLabel("Reason", { exact: true }).selectOption("mention");
+          await expect.poll(() => typeof release).toBe("function");
+          const blocked = await page.evaluate(() => {
+            const actions = [...document.querySelectorAll(".repo-actions button, .row-actions button")];
+            for (const button of actions) button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+            return actions.every(button => button.disabled || button.getAttribute("aria-disabled") === "true");
+          });
+          expect(blocked).toBe(true);
+          expect(canvas.writes).toEqual([]);
+          hold = false;
+          release();
+          await expect(page.locator(".row")).toHaveCount(2);
+          await page.keyboard.press("Escape");
+          await page.locator(".repo-done").first().click();
+          const expected = groupBy === "repo" ? ["1"] : ["1", "3"];
+          await expect.poll(() => [...canvas.doneWrites].sort()).toEqual(expected);
+          expect(canvas.rows[50].unread).toBe(true);
+          expect(canvas.requests.some(endpoint => endpoint.includes("page=2"))).toBe(false);
+        } finally {
+          hold = false;
+          release?.();
+        }
+      });
+    }
+
     test("tab order, participation and separate personal/team mentions match GitHub", async ({ page, canvas }) => {
       const reasons = ["review_requested", "author", "comment", "mention", "team_mention",
         "assign", "manual", "state_change", "invitation", "security_advisory_credit", "subscribed", "ci_activity"];

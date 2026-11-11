@@ -3,14 +3,18 @@ import { constants } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { apiTarget, InboxError } from "../shared/model.mjs";
+import { apiTarget, InboxError, sharedFilters, validFilterChanges, validFilterDefaults } from "../shared/model.mjs";
 import { validSound } from "./notifier.mjs";
 import { acquireLock } from "./lock.mjs";
 
 const MAX_SETTINGS_BYTES = 16_384;
 const booleanValue = value => typeof value === "boolean";
+const validUpdatedAt = value => typeof value === "string" && Number.isFinite(Date.parse(value)) &&
+  new Date(value).toISOString() === value;
 const settingValidators = {
+  // Retained for older providers and the initial panel read-state filter.
   matchGitHubInbox: booleanValue,
+  filterDefaults: validFilterDefaults,
   autoOpen: booleanValue,
   desktopNotifications: booleanValue,
   terminalNotifierHintDismissed: booleanValue,
@@ -23,7 +27,10 @@ const settingValidators = {
   keyboardShortcuts: booleanValue,
 };
 const settingsValue = data => ({
+  revision: data.revision ?? 0,
+  updatedAt: data.updatedAt ?? null,
   matchGitHubInbox: data.matchGitHubInbox ?? true,
+  ...(data.filterDefaults === undefined ? {} : { filterDefaults: { ...data.filterDefaults } }),
   autoOpen: data.autoOpen ?? false,
   desktopNotifications: data.desktopNotifications ?? false,
   terminalNotifierHintDismissed: data.terminalNotifierHintDismissed ?? false,
@@ -38,10 +45,11 @@ const settingsValue = data => ({
 
 export class Preferences {
   constructor({ directory = join(process.env.COPILOT_HOME || join(homedir(), ".copilot"),
-    "extensions", "github-notifications", "artifacts"), io = fs } = {}) {
+    "extensions", "github-notifications", "artifacts"), io = fs, now = Date.now } = {}) {
     this.directory = directory;
     this.path = join(directory, "settings.json");
     this.io = io;
+    this.now = now;
   }
 
   async document() {
@@ -53,13 +61,15 @@ export class Preferences {
       const data = JSON.parse(await file.readFile("utf8"));
       if (!data || typeof data !== "object" || Array.isArray(data) ||
           Object.entries(settingValidators).some(([key, valid]) => data[key] !== undefined && !valid(data[key])) ||
+          (data.revision !== undefined && (!Number.isSafeInteger(data.revision) || data.revision < 0)) ||
+          (data.updatedAt !== undefined && !validUpdatedAt(data.updatedAt)) ||
           (data.desktopGeneration !== undefined && typeof data.desktopGeneration !== "string")) {
         throw new Error("Invalid settings object");
       }
       return data;
     } catch (error) {
       if (error.code === "ENOENT") return {};
-      throw new InboxError("settings_read", "Could not read notification settings. Check artifacts/settings.json; matchGitHubInbox, autoOpen, desktopNotifications, terminalNotifierHintDismissed, copilotIntegration, confirmCopilotActions, hideEmptyTabs and keyboardShortcuts must be booleans, darkMode must be a boolean or null, desktopSound must be a supported sound name, and groupBy must be none, repo, or date.", 500);
+      throw new InboxError("settings_read", "Could not read notification settings. Check artifacts/settings.json; matchGitHubInbox, autoOpen, desktopNotifications, terminalNotifierHintDismissed, copilotIntegration, confirmCopilotActions, hideEmptyTabs and keyboardShortcuts must be booleans, darkMode must be a boolean or null, desktopSound must be a supported sound name, groupBy must be none, repo, or date, filterDefaults must contain only supported type, readState, reason and age values, revision must be a nonnegative safe integer, and updatedAt must be a UTC ISO timestamp.", 500);
     } finally {
       await file?.close();
     }
@@ -93,12 +103,19 @@ export class Preferences {
         Object.keys(input).length === 0 ||
         Object.keys(input).some(key => !Object.hasOwn(settingValidators, key)) ||
         Object.entries(settingValidators).some(([key, valid]) => Object.hasOwn(input, key) && !valid(input[key]))) {
-      throw new InboxError("invalid_settings", "Settings accept matchGitHubInbox, autoOpen, desktopNotifications, terminalNotifierHintDismissed, copilotIntegration, confirmCopilotActions, hideEmptyTabs and keyboardShortcuts booleans, darkMode as a boolean or null, desktopSound as a supported sound name, and groupBy set to none, repo, or date.", 400);
+      throw new InboxError("invalid_settings", "Settings accept matchGitHubInbox, autoOpen, desktopNotifications, terminalNotifierHintDismissed, copilotIntegration, confirmCopilotActions, hideEmptyTabs and keyboardShortcuts booleans, darkMode as a boolean or null, desktopSound as a supported sound name, groupBy set to none, repo, or date, and filterDefaults containing only supported type, readState, reason and age values.", 400);
     }
     return settingsValue(await this.#write(input));
   }
 
-  async #write(input) {
+  async updateFilters(input) {
+    if (!validFilterChanges(input)) {
+      throw new InboxError("invalid_filters", "Change only supported type, readState, reason and age choices.", 400);
+    }
+    return settingsValue(await this.#write(input, true));
+  }
+
+  async #write(input, mergeFilters = false) {
     const lockPath = join(this.directory, ".settings.lock");
     const temporary = join(this.directory, `.settings-${randomUUID()}.tmp`);
     let release;
@@ -116,7 +133,12 @@ export class Preferences {
       release = await acquireLock(lockPath, { label: "settings" });
       if (!release) throw new InboxError("settings_busy", "Notification settings are being updated. Retry shortly.", 409);
       const current = await this.document();
-      const updated = { ...current, ...input };
+      if (current.revision === Number.MAX_SAFE_INTEGER) {
+        throw new InboxError("settings_write", "The settings revision limit was reached. Inspect the settings file before saving again.", 500);
+      }
+      if (mergeFilters) input = { filterDefaults: { ...sharedFilters(current), ...input } };
+      const updated = { ...current, ...input, revision: (current.revision ?? 0) + 1,
+        updatedAt: new Date(this.now()).toISOString() };
       if (input.desktopNotifications === true && !current.desktopNotifications) {
         updated.desktopGeneration = randomUUID();
       }

@@ -4,7 +4,7 @@ import { GitHubClient, RETRY_MS, SUBJECT_POLL_MS } from "../src/provider/github.
 import { Inbox } from "../src/provider/inbox.mjs";
 import { apiTarget, attentionCounts, groupThreads, normalizeThreads } from "../src/shared/model.mjs";
 import { startServer } from "../src/provider/server.mjs";
-import { http, inboxNext, thread } from "./fixtures.mjs";
+import { http, inboxNext, retrySelection, thread } from "./fixtures.mjs";
 
 function row(id, type = "Issue", overrides = {}, baseUrl = "https://api.github.com") {
   const resource = { Issue: "issues", PullRequest: "pulls", Discussion: "discussions" }[type];
@@ -105,7 +105,7 @@ test("cached authorship selections follow pagination and triage while requests a
   const client = new GitHubClient({ run: async args => {
     const endpoint = args.at(-1);
     if (endpoint.startsWith("/notifications?")) return endpoint.includes("page=2")
-      ? http([row("51"), row("52")]) : http(rows, { link: inboxNext.replace("all=true&is_done=false", "all=false") });
+      ? http([row("51"), row("52")]) : http(rows, { link: inboxNext });
     if (endpoint === "/user") return http({ id: 100 });
     requested.push(endpoint);
     if (requested.length === 20) entered();
@@ -132,7 +132,7 @@ test("cached authorship selections follow pagination and triage while requests a
     inbox.onThreadUpdated("22", "done");
     release();
     await loading;
-    const expected = [...rows.map(item => item.id), "51", "52"].filter(id => !["21", "22"].includes(id))
+    const expected = [...rows.map(item => item.id), "51", "52"].filter(id => id !== "22")
       .map(id => `/repos/example/widgets/issues/${id}`);
     assert.deepEqual(requested, expected);
     assert.equal(inbox.snapshot().attentionCounts.mine, 50);
@@ -274,7 +274,7 @@ test("Mine read/done batches and retries never add newly confirmed authorship", 
         client.invalidateSubjects(inbox.loadedItems());
         await client.refreshAuthorship(inbox.loadedItems());
         assert.ok(inbox.groups()[0].items.some(item => item.id === "3"), "A new confirmed match is visible before retry");
-        inbox.batch.retry({ token });
+        inbox.batch.retry(retrySelection(inbox, { token }));
         await inbox.batch.done;
         assert.deepEqual([...writes].sort(), action === "done"
           ? ["/notifications/threads/1", "/notifications/threads/1", "/notifications/threads/2"]

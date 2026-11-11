@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { request } from "node:http";
+import { IncomingMessage, request } from "node:http";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,7 +9,7 @@ import { Inbox } from "../src/provider/inbox.mjs";
 import { startServer } from "../src/provider/server.mjs";
 import { DesktopNotifications } from "../src/provider/desktop.mjs";
 import { Preferences } from "../src/provider/settings.mjs";
-import { http, thread } from "./fixtures.mjs";
+import { http, retrySelection, thread } from "./fixtures.mjs";
 
 async function setup(t, run = async () => http([thread()]), options = {}) {
   const client = new GitHubClient({ run: args => args.at(-1) === "graphql"
@@ -42,9 +42,10 @@ test("unreadable or invalid preferences warn without disabling a loaded inbox", 
       const { origin, headers } = await setup(subtest, async args => {
         assert.ok(args.includes("GET"));
         const url = new URL(args.at(-1), "https://api.github.com");
-        assert.equal(url.searchParams.get("all"), "false");
+        assert.equal(url.searchParams.get("all"), "true");
+        assert.equal(url.searchParams.get("is_done"), "false");
         const page = Number(url.searchParams.get("page"));
-        const selected = rows.filter(row => row.unread);
+        const selected = rows;
         url.searchParams.set("page", String(page + 1));
         return http(selected.slice((page - 1) * 50, page * 50),
           selected.length > page * 50 ? { link: `<${url.href}>; rel="next"` } : {});
@@ -65,8 +66,8 @@ test("unreadable or invalid preferences warn without disabling a loaded inbox", 
         assert.equal(status, 200, path);
         assert.equal(data.settingsError.code, "settings_read", path);
         assert.equal(data.error, null);
-        assert.equal(data.matchGitHubInbox, false);
-        assert.equal(data.unread, data.loaded);
+        assert.equal(data.filters.readState, "unread");
+        assert.equal(data.matching, data.unread);
       }
       const settings = await call("settings", "GET");
       assert.equal(settings.status, 500);
@@ -77,7 +78,7 @@ test("unreadable or invalid preferences warn without disabling a loaded inbox", 
       const repaired = await call("state", "GET");
       assert.equal(repaired.status, 200);
       assert.equal(repaired.data.settingsError, null);
-      assert.equal(repaired.data.loaded, 52);
+      assert.equal(repaired.data.loaded, 53);
     });
   }
 });
@@ -244,25 +245,118 @@ test("methods, paths, origins, hosts, JSON, filter input and oversized bodies ar
   assert.equal(hostStatus, 403);
 });
 
-test("HTTP filters combine attention and search without fetching or writing GitHub state", async t => {
+test("streamed batch bodies cannot outlive the shared-filter check", async t => {
+  for (const operation of ["start", "retry"]) {
+    for (const action of ["read", "done"]) {
+      await t.test(`${operation}: ${action}`, { timeout: 5000 }, async subtest => {
+        const directory = await mkdtemp(join(tmpdir(), "notification-streamed-batch-"));
+        const preferences = new Preferences({ directory });
+        const writer = new Preferences({ directory });
+        const writes = [];
+        let fail = operation === "retry";
+        const { origin, headers, inbox } = await setup(subtest, async args => {
+          if (args.includes("GET")) return http([
+            thread("1", { subject: { type: "Issue", title: "Synthetic issue", url: null } }), thread("2"),
+          ]);
+          writes.push(args.at(-1));
+          return fail ? http({}, {}, 500) : http(null, {}, action === "done" ? 204 : 205);
+        }, { preferences });
+        subtest.after(() => rm(directory, { recursive: true, force: true }));
+        let now = Date.now();
+        inbox.client.now = () => now;
+        const post = (path, body) => fetch(`${origin}/api/${path}`, {
+          method: "POST", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify(body),
+        });
+        const initial = await (await post("refresh", {})).json();
+        const start = { scope: "shown", selectionKey: initial.selectionKey, action };
+        if (operation === "retry") {
+          assert.equal((await post("batch/start", start)).status, 202);
+          await inbox.batch.done;
+          now = inbox.client.blockedUntil;
+          fail = false;
+          writes.length = 0;
+        }
+        const input = operation === "start" ? start : retrySelection(inbox, { token: inbox.batch.snapshot().token });
+        const path = `/api/batch/${operation}`;
+        let bodyStarted;
+        const reading = new Promise(resolve => { bodyStarted = resolve; });
+        // Observe body consumption without draining the request or relying on a delay.
+        const descriptor = Object.getOwnPropertyDescriptor(IncomingMessage.prototype, Symbol.asyncIterator);
+        const iterate = IncomingMessage.prototype[Symbol.asyncIterator];
+        Object.defineProperty(IncomingMessage.prototype, Symbol.asyncIterator, {
+          configurable: true,
+          value: function () {
+            if (this.url === path && this.headers.host === new URL(origin).host) bodyStarted();
+            return iterate.call(this);
+          },
+        });
+        subtest.after(() => {
+          if (descriptor) Object.defineProperty(IncomingMessage.prototype, Symbol.asyncIterator, descriptor);
+          else delete IncomingMessage.prototype[Symbol.asyncIterator];
+        });
+        const body = JSON.stringify(input);
+        let pending;
+        const response = new Promise((resolve, reject) => {
+          pending = request(`${origin}${path}`, {
+            method: "POST", headers: { ...headers, "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) },
+          }, result => {
+            let content = "";
+            result.setEncoding("utf8");
+            result.on("data", chunk => { content += chunk; });
+            result.on("end", () => resolve({ status: result.statusCode, body: content }));
+            result.on("error", reject);
+          });
+          pending.on("error", reject);
+          pending.write(body.slice(0, -1));
+        });
+        subtest.after(() => pending.destroy());
+        await Promise.race([reading, response.then(() => assert.fail("Batch responded before its body was complete"))]);
+        await writer.updateFilters({ type: "Issue" });
+        pending.end(body.slice(-1));
+        const result = await response;
+        assert.equal(result.status, 409);
+        assert.equal(JSON.parse(result.body).error.code, "selection_changed");
+        assert.deepEqual(writes, []);
+        const reviewed = await (await fetch(`${origin}/api/state`, { headers })).json();
+        const fresh = operation === "start"
+          ? { ...start, selectionKey: reviewed.selectionKey }
+          : { token: reviewed.batch.token, selectionKey: reviewed.batch.retrySelectionKey };
+        assert.equal((await post(`batch/${operation}`, fresh)).status, 202);
+        await inbox.batch.done;
+        assert.deepEqual(writes, ["/notifications/threads/1"]);
+        assert.equal(inbox.loadedItems().find(item => item.id === "2").unread, true);
+      });
+    }
+  }
+});
+
+test("HTTP filters combine refinements, attention and search without fetching or writing GitHub state", async t => {
   const calls = [];
+  const directory = await mkdtemp(join(tmpdir(), "notification-http-filters-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const preferences = new Preferences({ directory });
   const { origin, headers } = await setup(t, async args => {
     calls.push(args);
     return http([thread("1", { reason: "review_requested" }), thread("2", { reason: "mention" })]);
-  });
+  }, { preferences });
   const options = { method: "POST", headers: { ...headers, "Content-Type": "application/json" } };
   await fetch(`${origin}/api/refresh`, { ...options, body: "{}" });
   const response = await fetch(`${origin}/api/filters`, {
-    ...options, body: JSON.stringify({ attention: "review_requested", query: "widgets" }),
+    ...options, body: JSON.stringify({ attention: "review_requested", query: "widgets",
+      type: "PullRequest", readState: "unread", reason: "review_requested", age: "all" }),
   });
   assert.equal(response.status, 200);
   const state = await response.json();
-  assert.deepEqual(state.filters, { mode: "inbox", query: "widgets", attention: "review_requested" });
+  assert.deepEqual(state.filters, { query: "widgets", attention: "review_requested",
+    type: "PullRequest", readState: "unread", reason: "review_requested", age: "all" });
   assert.equal(state.loaded, 2);
   assert.equal(state.matching, 1);
   assert.deepEqual(state.groups[0].items.map(item => item.id), ["1"]);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].includes("PATCH"), false);
+  const invalid = await fetch(`${origin}/api/filters`, { ...options, body: '{"age":"yesterday"}' });
+  assert.equal(invalid.status, 400);
+  assert.equal((await invalid.json()).error.code, "invalid_filters");
 });
 
 test("every API route keeps its method policy behind capability checks", async t => {
@@ -438,7 +532,7 @@ test("all HTTP notification request paths inherit another client's server deadli
     const blockedState = await blocked.json();
     await finish();
     const queued = ["batch/start", "read", "done"].includes(path);
-    assert.equal(blocked.status, path === "state" ? 200 : queued ? 202 : 429, path);
+    assert.equal(blocked.status, ["state", "filters"].includes(path) ? 200 : queued ? 202 : 429, path);
     if (queued) {
       const batch = inbox.batch.snapshot();
       assert.equal(batch.error.code, "rate_limited");
@@ -446,11 +540,13 @@ test("all HTTP notification request paths inherit another client's server deadli
       assert.equal(batch.notAttempted, 1, "a blocked write was never in flight");
     } else if (path === "state") {
       assert.equal(readerClient.subjectSnapshot(inbox.loadedItems()[0]).subjectStateError.includes("rate limit"), true);
+    } else if (path === "filters") {
+      assert.equal(blockedState.filters.readState, "unread");
     } else assert.equal(blockedState.error.code, "rate_limited");
     assert.equal(calls.length, before, `${path} must not start an uncached request`);
     now = writerClient.serverBlockedUntil;
     const resumed = path === "batch/start"
-      ? await call("batch/retry", { token: inbox.batch.snapshot().token }) : await call();
+      ? await call("batch/retry", retrySelection(inbox, { token: inbox.batch.snapshot().token })) : await call();
     const resumedState = await resumed.json();
     await finish();
     assert.equal(resumed.status, queued ? 202 : 200);
@@ -459,7 +555,7 @@ test("all HTTP notification request paths inherit another client's server deadli
     if (["read", "done"].includes(path)) assert.equal(inbox.batch.snapshot().status, "completed");
     if (path === "done") assert.equal(inbox.snapshot().loaded, 0);
     if (path === "state") assert.equal(readerClient.subjectSnapshot(inbox.loadedItems()[0]).subjectState, "open");
-    assert.equal(calls.length, before + (path === "state" ? 2 : 1));
+    assert.equal(calls.length, before + (path === "state" ? 2 : path === "filters" ? 0 : 1));
     await reader.foregroundPending;
   }
 });
@@ -603,6 +699,9 @@ test("activation during an in-flight foreground request establishes a fresh gene
         rows = [thread("3", { updated_at: new Date(now).toISOString() }), ...rows];
         await post("/api/refresh", { force: true });
         await desktop.foregroundPending;
+        assert.deepEqual(deliveries, [], "Panel refreshes do not bypass the separate unread feed's polling deadline");
+        now += POLL_MS;
+        await desktop.check();
         assert.deepEqual(deliveries.map(message => message.body), ["#42 Synthetic notification 3"]);
       });
     }

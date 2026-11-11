@@ -386,8 +386,8 @@ export class DesktopNotifications {
         state.cohort !== this.cohort || state.generation !== generation(settings);
       state.watchers = (await this.activeWatchers()).map(watcher => watcher.owner);
       signal.throwIfAborted();
-      // Foreground reads already refreshed the shared cache. Failed or interrupted
-      // polls still retain their durable retry reservation, including older checkpoints.
+      // Foreground checks may reuse the unread cache, independently of panel filters.
+      // Failed or interrupted polls retain their durable retry reservation.
       if (this.now() < (foreground ? reservedUntil : Math.max(state.nextPollAt, this.deferredUntil))) {
         if (JSON.stringify(state) !== previous) await saveDocument(this.statePath, state);
         this.setStatus(state.error ? "error" : "watching", state.error || watchingMessage);

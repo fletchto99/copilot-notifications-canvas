@@ -213,7 +213,7 @@ test("customizable dropdowns preserve keyboard selection, cancellation, focus an
   expect(canvas.deliveries).toEqual([]);
 });
 
-test("background settings polling restores focus from the Show notifications picker", async ({ page, canvas }) => {
+test("background settings polling preserves focus in the grouping picker", async ({ page, canvas }) => {
   canvas.rows.splice(1);
   await page.clock.install();
   let settingsReads = 0;
@@ -223,12 +223,12 @@ test("background settings polling restores focus from the Show notifications pic
   await page.goto(canvas.url);
   await expect(page.locator(".row")).toHaveCount(1);
   await openSettings(page);
-  const view = page.getByRole("combobox", { name: "Show notifications", exact: true });
+  const view = page.getByRole("combobox", { name: "Group By", exact: true });
   await expect(view).toBeEnabled();
   await view.focus();
   await view.press("Space");
   await page.keyboard.press("ArrowDown");
-  await expect(view.locator('option[value="unread"]')).toBeFocused();
+  await expect(view.locator('option[value="date"]')).toBeFocused();
   const before = settingsReads;
   await page.clock.runFor(5000);
   await expect.poll(() => settingsReads).toBeGreaterThan(before);
@@ -240,9 +240,9 @@ test("background settings polling restores focus from the Show notifications pic
   })).toBe(true);
   if (await view.evaluate(node => node.matches(":open"))) await page.keyboard.press("Escape");
   await expect(view).toBeFocused();
-  await expect(view).toHaveValue("all");
+  await expect(view).toHaveValue("repo");
   await expect(page.locator("#settings-panel")).toBeVisible();
-  expect((await canvas.preferences.read()).matchGitHubInbox).toBe(true);
+  expect((await canvas.preferences.read()).groupBy).toBe("repo");
   expect(canvas.writes).toEqual([]);
   expect(canvas.deliveries).toEqual([]);
 });

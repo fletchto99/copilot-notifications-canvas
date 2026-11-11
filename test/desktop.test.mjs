@@ -169,7 +169,7 @@ test("background desktop checks run at one minute, never earlier", async t => {
   assert.equal(f.deliveries.length, 1);
 });
 
-test("unread-mode foreground refreshes share results with alerts and retain the polling cadence", async t => {
+test("unread-filtered panels use separate reads while desktop alerts retain their polling cadence", async t => {
   const f = await fixture(t);
   const watcher = f.make();
   const inbox = new Inbox(watcher.client, { mode: "unread" });
@@ -177,35 +177,35 @@ test("unread-mode foreground refreshes share results with alerts and retain the 
   await watcher.prepareForeground();
   await inbox.refresh();
   await watcher.sync();
-  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls.length, 2);
   assert.equal(f.deliveries.length, 0);
   const time = f.advance(60_000);
   f.rows([updated("2", time), thread()]);
   await inbox.refresh();
   await watcher.sync();
-  assert.equal(f.calls.length, 2, "desktop delivery reuses the foreground response");
+  assert.equal(f.calls.length, 4, "desktop delivery reads its separate unread feed");
   assert.equal(inbox.snapshot().groups[0].items[0].id, "2");
   assert.deepEqual(f.deliveries.map(alert => alert.body), ["#42 Synthetic notification 2"]);
   assert.equal((await f.state()).nextPollAt, time + 60_000);
   assert.equal((await f.state()).polling, false);
   f.rows([updated("3", f.advance(30_000)), thread()]);
   await watcher.check();
-  assert.equal(f.calls.length, 2);
+  assert.equal(f.calls.length, 4);
   f.advance(29_999);
   await watcher.check();
-  assert.equal(f.calls.length, 2);
+  assert.equal(f.calls.length, 4);
   f.advance(1);
   await watcher.check();
-  assert.equal(f.calls.length, 3);
+  assert.equal(f.calls.length, 5);
   assert.equal(f.deliveries.length, 2);
 });
 
-test("inbox matching uses a separate cache while disabling it shares the unread desktop feed", async t => {
+test("all panel read filters share the inbox cache, separately from the desktop unread feed", async t => {
   const f = await fixture(t);
   const watcher = f.make();
   const inbox = new Inbox(watcher.client);
   const unmatched = new Inbox(watcher.client);
-  unmatched.setMatchGitHubInbox(false);
+  unmatched.applySettings({ matchGitHubInbox: false });
   t.after(() => { inbox.close(); unmatched.close(); });
   let unread = [thread("1")];
   f.response(args => {
@@ -218,7 +218,8 @@ test("inbox matching uses a separate cache while disabling it shares the unread 
   await unmatched.refresh();
   await watcher.sync();
   assert.equal(f.calls.length, 2);
-  assert.equal(unmatched.summary().loaded, 1);
+  assert.equal(unmatched.summary().loaded, 2);
+  assert.equal(unmatched.summary().matching, 1);
   assert.equal((await f.state()).watermark, epoch);
   assert.deepEqual(f.deliveries, []);
   const time = f.advance(POLL_MS);
@@ -231,7 +232,7 @@ test("inbox matching uses a separate cache while disabling it shares the unread 
   assert.equal(inbox.summary().unread, 2);
 });
 
-test("an immediate unread-mode foreground return feeds activity to alerts without waiting", async t => {
+test("forcing a panel refresh does not bypass the separate unread feed's polling deadline", async t => {
   const f = await fixture(t);
   const watcher = f.make();
   const inbox = new Inbox(watcher.client, { mode: "unread" });
@@ -242,10 +243,14 @@ test("an immediate unread-mode foreground return feeds activity to alerts withou
   f.rows([updated("2", f.advance(1000)), thread()]);
   await inbox.refresh({ force: true });
   await watcher.sync();
-  assert.equal(f.calls.length, 2);
-  assert.equal(f.deliveries.length, 1);
+  assert.equal(f.calls.length, 3);
+  assert.equal(f.deliveries.length, 0);
   await watcher.sync();
-  assert.equal(f.calls.length, 2);
+  assert.equal(f.calls.length, 3);
+  assert.equal(f.deliveries.length, 0);
+  f.advance(59_000);
+  await watcher.check();
+  assert.equal(f.calls.length, 4);
   assert.equal(f.deliveries.length, 1);
 });
 
@@ -268,7 +273,7 @@ test("opening another panel with cached results does not postpone the background
     await watcher.prepareForeground();
     await second.refresh();
     await watcher.sync();
-    assert.equal(f.calls.length, 1, "the second panel and watcher reuse the original response");
+    assert.equal(f.calls.length, 2, "the second panel and watcher reuse their separate cached responses");
     assert.equal((await f.state()).nextPollAt, deadline);
     assert.equal((await f.state()).polling, false);
     assert.deepEqual(f.deliveries, []);
@@ -276,10 +281,10 @@ test("opening another panel with cached results does not postpone the background
     f.response(undefined);
     f.rows([updated("2", f.advance(29_999)), thread()]);
     await watcher.check();
-    assert.equal(f.calls.length, 1);
+    assert.equal(f.calls.length, 2);
     f.advance(1);
     await watcher.check();
-    assert.equal(f.calls.length, 2, "the original polling deadline still triggers a network request");
+    assert.equal(f.calls.length, 3, "the original polling deadline still triggers a network request");
     assert.deepEqual(f.deliveries.map(alert => alert.body), ["#42 Synthetic notification 2"]);
   }
 });
@@ -300,18 +305,16 @@ test("a delayed silent baseline preserves the cached response's polling deadline
   assert.deepEqual(f.deliveries.map(alert => alert.body), ["#42 Synthetic notification 2"]);
 });
 
-test("quota-exhausting foreground responses establish silent baselines without hiding later arrivals", async t => {
+test("quota-exhausting cached unread responses establish silent baselines without hiding later arrivals", async t => {
   for (const initialRows of [[], [thread()]]) {
     const f = await fixture(t);
     const watcher = f.make();
-    const inbox = new Inbox(watcher.client, { mode: "unread" });
-    t.after(() => inbox.close());
     f.response(() => http(initialRows, {
       date: new Date(epoch).toUTCString(),
       "x-ratelimit-remaining": "0", "x-ratelimit-reset": String((epoch + 600_000) / 1000),
     }));
     await watcher.prepareForeground();
-    await inbox.refresh();
+    await watcher.client.page(firstPage());
     await watcher.sync();
     assert.equal(f.calls.length, 1);
     assert.equal(watcher.snapshot().state, "watching");
@@ -334,11 +337,9 @@ test("an established watcher immediately delivers fresh cached activity even whe
   const f = await fixture(t);
   const watcher = f.make();
   await watcher.check();
-  const inbox = new Inbox(watcher.client, { mode: "unread" });
-  t.after(() => inbox.close());
   const time = f.advance(60_000);
   f.response(() => http([updated("2", time), thread()], { "x-ratelimit-remaining": "0" }));
-  await inbox.refresh();
+  await watcher.client.page(firstPage());
   await watcher.sync();
   assert.equal(f.calls.length, 2);
   assert.deepEqual(f.deliveries.map(alert => alert.body), ["#42 Synthetic notification 2"]);
@@ -350,22 +351,21 @@ test("an established watcher immediately delivers fresh cached activity even whe
   assert.equal(f.deliveries.length, 1);
 });
 
-test("complete foreground scans can deliver across cached pages when the final response exhausts quota", async t => {
+test("complete unread scans can deliver across cached pages when the final response exhausts quota", async t => {
   const f = await fixture(t);
   const watcher = f.make();
-  const inbox = new Inbox(watcher.client, { mode: "unread" });
-  t.after(() => inbox.close());
   const backlog = Array.from({ length: 50 }, (_, index) => thread(String(index + 1)));
   f.response(args => args.at(-1).includes("page=1") ? http(backlog, { link: next }) : http([thread("51")]));
   await watcher.prepareForeground();
-  await inbox.refresh();
-  await inbox.more();
+  const first = await watcher.client.page(firstPage());
+  await watcher.client.page(first.next);
   await watcher.sync();
   const time = f.advance(60_000);
   const arrivals = Array.from({ length: 51 }, (_, index) => updated(String(100 + index), time - index));
   f.response(args => args.at(-1).includes("page=1") ? http(arrivals.slice(0, 50), { link: next })
     : http(arrivals.slice(50), { "x-ratelimit-remaining": "0" }));
-  await inbox.refresh();
+  const refreshed = await watcher.client.page(firstPage());
+  await watcher.client.page(refreshed.next);
   await watcher.sync();
   assert.equal(f.calls.length, 4, "both refreshed pages are consumed from cache");
   assert.deepEqual(f.deliveries.map(alert => alert.body), ["51 new notifications"]);
@@ -378,8 +378,6 @@ test("quota-paused scans reject missing and stale continuations without committi
   for (const cachedContinuation of [false, true]) {
     const f = await fixture(t);
     const watcher = f.make();
-    const inbox = new Inbox(watcher.client, { mode: "unread" });
-    t.after(() => inbox.close());
     if (cachedContinuation) {
       const backlog = Array.from({ length: 50 }, (_, index) => thread(String(index + 1)));
       f.response(args => args.at(-1).includes("page=1") ? http(backlog, { link: next }) : http([thread("51")]));
@@ -390,7 +388,7 @@ test("quota-paused scans reject missing and stale continuations without committi
     const arrivals = Array.from({ length: 50 }, (_, index) => updated(String(100 + index), time));
     f.response(() => http(arrivals, { link: next, "x-ratelimit-remaining": "0" }));
     await watcher.prepareForeground();
-    await inbox.refresh({ force: true });
+    await watcher.client.page(firstPage(), undefined, { force: true });
     const before = f.calls.length;
     await watcher.sync();
     assert.equal(f.calls.length, before, "a missing or stale continuation must not trigger an upstream request");
@@ -410,11 +408,12 @@ test("foreground alerts scan all new activity pages without changing the canvas'
   await watcher.sync();
   const time = f.advance(60_000);
   const arrivals = Array.from({ length: 60 }, (_, index) => updated(String(index + 2), time));
-  f.response(args => args.at(-1).includes("page=1") ? http(arrivals.slice(0, 50), { link: next }) :
-    http([...arrivals.slice(50), thread()]));
+  f.response(args => args.at(-1).includes("page=1") ? http(arrivals.slice(0, 50), {
+    link: args.at(-1).includes("all=false") ? next : next.replace("all=false", "all=true&is_done=false"),
+  }) : http([...arrivals.slice(50), thread()]));
   await inbox.refresh();
   await watcher.sync();
-  assert.equal(f.calls.length, 3, "one shared first-page read and one desktop-only continuation");
+  assert.equal(f.calls.length, 5, "separate first-page reads and a desktop-only continuation");
   assert.equal(inbox.pages.length, 1);
   assert.equal(inbox.filters.query, "notification 2");
   assert.equal(inbox.summary().loaded, 50);
@@ -534,8 +533,6 @@ test("newer later-page baseline activity requires the first response's valid API
 test("a fresh first page cannot advance the watermark past arrivals hidden by an older cached continuation", async t => {
   const f = await fixture(t);
   const watcher = f.make();
-  const inbox = new Inbox(watcher.client, { mode: "unread" });
-  t.after(() => inbox.close());
   const backlog = Array.from({ length: 51 }, (_, index) => updated(String(index + 1), epoch));
   let rows = backlog;
   f.response(args => {
@@ -545,32 +542,29 @@ test("a fresh first page cannot advance the watermark past arrivals hidden by an
       ? { link: `<https://api.github.com/notifications?all=false&per_page=50&page=${page + 1}>; rel="next"` } : {});
   });
   await watcher.prepareForeground();
-  await inbox.refresh();
+  await watcher.client.page(firstPage());
   await watcher.sync();
   assert.equal(f.calls.length, 2);
   assert.equal(f.deliveries.length, 0);
 
   const time = f.advance(1000);
   rows = [...Array.from({ length: 60 }, (_, index) => updated(String(100 + index), time - index)), ...backlog];
-  await inbox.refresh({ force: true });
+  await watcher.client.page(firstPage(), undefined, { force: true });
   await watcher.sync();
   assert.equal(f.calls.length, 5, "the stale continuation must be revalidated before scanning the final page");
   assert.equal(f.advance(0), epoch + 60_000, "revalidation respects the cached polling deadline");
   assert.equal((await f.state()).nextPollAt, epoch + 120_000, "the background delay starts after the scan finishes");
-  assert.equal(inbox.pages.length, 1);
   assert.deepEqual(f.deliveries.map(alert => alert.body), ["60 new notifications"]);
   f.advance();
-  await inbox.refresh();
+  await watcher.client.page(firstPage());
   await watcher.sync();
   assert.deepEqual(f.deliveries.map(alert => alert.body), ["60 new notifications"]);
 });
 
-test("enabling desktop alerts silently baselines activity missing from a pre-activation foreground cache", async t => {
+test("enabling desktop alerts silently baselines activity missing from a pre-activation unread cache", async t => {
   const f = await fixture(t, { enabled: false });
   const watcher = f.make();
-  const inbox = new Inbox(watcher.client, { mode: "unread" });
-  t.after(() => inbox.close());
-  await inbox.refresh();
+  await watcher.client.page(firstPage());
   f.rows([updated("2", f.advance(1000)), thread()]);
   await f.preferences.update({ desktopNotifications: true });
   await watcher.check();
@@ -579,7 +573,7 @@ test("enabling desktop alerts silently baselines activity missing from a pre-act
   assert.equal((await f.state()).nextPollAt, epoch + 120_000);
   assert.equal(f.deliveries.length, 0);
   f.advance(1000);
-  await inbox.refresh({ force: true });
+  await watcher.client.page(firstPage(), undefined, { force: true });
   await watcher.sync();
   assert.equal(f.deliveries.length, 0);
 });
@@ -650,8 +644,6 @@ test("foreground synchronization retries contention on the timer and consumes th
     await held;
   } });
   const newer = f.make({ schedule: clock.schedule, cancel: clock.cancel });
-  const inbox = new Inbox(newer.client, { mode: "unread" });
-  t.after(() => inbox.close());
   await older.check();
   await newer.check();
   const olderTime = f.advance(60_000);
@@ -662,7 +654,7 @@ test("foreground synchronization retries contention on the timer and consumes th
     const newerTime = f.advance(1000);
     f.rows([updated("3", newerTime), updated("2", olderTime), thread()]);
     await newer.prepareForeground();
-    await inbox.refresh();
+    await newer.client.page(firstPage());
     await newer.sync();
     assert.equal(newer.snapshot().state, "shared");
     assert.equal(newer.foregroundRequested, true);

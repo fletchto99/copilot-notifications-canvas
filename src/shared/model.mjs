@@ -46,25 +46,94 @@ export const attentionFilters = [
 
 export const authorshipTypes = ["Issue", "PullRequest", "Discussion"];
 
+export const refinementFilters = [
+  { key: "type", label: "Type", options: [
+    { value: "all", label: "All types" },
+    { value: "Issue", label: "Issues" },
+    { value: "PullRequest", label: "Pull requests" },
+    { value: "Discussion", label: "Discussions" },
+    { value: "CheckSuite", label: "Checks" },
+    { value: "Release", label: "Releases" },
+    { value: "Commit", label: "Commits" },
+    { value: "RepositoryVulnerabilityAlert", label: "Vulnerability alerts" },
+    { value: "RepositoryDependabotAlertsThread", label: "Dependabot alerts" },
+    { value: "RepositoryAdvisory", label: "Security advisories" },
+    { value: "RepositoryInvitation", label: "Repository invitations" },
+    { value: "WorkflowRun", label: "Workflow runs" },
+    { value: "AgentSessionThread", label: "Agent sessions" },
+    { value: "other", label: "Other types" },
+  ] },
+  { key: "readState", label: "Read state", options: [
+    { value: "all", label: "Read and unread" },
+    { value: "unread", label: "Unread" },
+    { value: "read", label: "Read" },
+  ] },
+  { key: "reason", label: "Reason", options: [
+    { value: "all", label: "All reasons" },
+    { value: "assign", label: "Assigned" },
+    { value: "author", label: "Author" },
+    { value: "comment", label: "Commented" },
+    { value: "ci_activity", label: "CI activity" },
+    { value: "invitation", label: "Invited" },
+    { value: "manual", label: "Manually subscribed" },
+    { value: "mention", label: "Mentioned" },
+    { value: "review_requested", label: "Review requested" },
+    { value: "security_advisory_credit", label: "Security advisory credit" },
+    { value: "security_alert", label: "Security alert" },
+    { value: "state_change", label: "State changed" },
+    { value: "subscribed", label: "Subscribed" },
+    { value: "team_mention", label: "Team mentioned" },
+    { value: "other", label: "Other reasons" },
+  ] },
+  { key: "age", label: "Age", options: [
+    { value: "all", label: "Any time" },
+    { value: "last_24h", label: "Past 24 hours", withinDays: 1 },
+    { value: "last_7d", label: "Past 7 days", withinDays: 7 },
+    { value: "last_30d", label: "Past 30 days", withinDays: 30 },
+    { value: "older_7d", label: "Older than 7 days", olderDays: 7 },
+    { value: "older_30d", label: "Older than 30 days", olderDays: 30 },
+  ] },
+];
+
 export const filterSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
-    mode: { type: "string", enum: ["inbox", "unread"] },
+    mode: { type: "string", enum: ["inbox", "unread"],
+      description: "Legacy shorthand for readState: inbox means all, unread means unread. An explicit readState takes precedence. The full inbox is always loaded." },
     query: { type: "string", maxLength: 200 },
     attention: { type: "string", enum: attentionFilters.map(filter => filter.value) },
+    ...Object.fromEntries(refinementFilters.map(({ key, options }) =>
+      [key, { type: "string", enum: options.map(option => option.value) }])),
   },
 };
 
 export const emptySchema = { type: "object", properties: {}, additionalProperties: false };
 
+export function validFilterDefaults(value) {
+  return validFilterChanges(value) && Object.keys(value).length === refinementFilters.length;
+}
+
+export function validFilterChanges(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value) &&
+    Object.keys(value).length > 0 && Object.entries(value).every(([key, choice]) =>
+      refinementFilters.some(filter => filter.key === key && filter.options.some(option => option.value === choice))));
+}
+
+export function sharedFilters({ filterDefaults, matchGitHubInbox = true } = {}) {
+  return Object.fromEntries(refinementFilters.map(({ key }) =>
+    [key, filterDefaults?.[key] ?? (key === "readState" && !matchGitHubInbox ? "unread" : "all")]));
+}
+
 export function validateFilters(input) {
   if (!input || typeof input !== "object" || Array.isArray(input) ||
-      Object.keys(input).some(key => !["mode", "query", "attention"].includes(key)) ||
+      Object.keys(input).some(key => !Object.hasOwn(filterSchema.properties, key)) ||
       (input.mode !== undefined && !["inbox", "unread"].includes(input.mode)) ||
       (input.query !== undefined && (typeof input.query !== "string" || input.query.length > 200)) ||
-      (input.attention !== undefined && !attentionFilters.some(filter => filter.value === input.attention))) {
-    throw new InboxError("invalid_filters", "Choose inbox or unread notifications. Search must be at most 200 characters. Choose a supported attention filter.", 400);
+      (input.attention !== undefined && !attentionFilters.some(filter => filter.value === input.attention)) ||
+      refinementFilters.some(({ key, options }) =>
+        input[key] !== undefined && !options.some(option => option.value === input[key]))) {
+    throw new InboxError("invalid_filters", "Choose inbox or unread notifications and supported attention, type, read state, reason and age filters. Search must be at most 200 characters.", 400);
   }
   return input;
 }
@@ -232,10 +301,22 @@ export function groupThreadsByDate(threads, timeZone) {
   return [...groups.values()].sort((a, b) => b.date.localeCompare(a.date));
 }
 
-function searchThreads(threads, query) {
+export function filterThreads(threads, filters = {}, now = Date.now()) {
+  validateFilters(filters);
+  const { query = "", type = "all", readState = "all", reason = "all", age = "all" } = filters;
   const search = query.trim().toLocaleLowerCase();
-  return uniqueThreads(threads).filter(thread =>
-    !search || `${notificationTitle(thread)}\n${thread.repository}`.toLocaleLowerCase().includes(search));
+  const matchesValue = (key, selected, value) => selected === "all" || (selected === "other"
+    ? !refinementFilters.find(filter => filter.key === key).options.some(option => option.value !== "all" && option.value !== "other" && option.value === value)
+    : selected === value);
+  const ageFilter = refinementFilters.find(filter => filter.key === "age").options.find(option => option.value === age);
+  const day = 24 * 60 * 60 * 1000;
+  return uniqueThreads(threads).filter(thread => (
+    (!search || `${notificationTitle(thread)}\n${thread.repository}`.toLocaleLowerCase().includes(search)) &&
+    matchesValue("type", type, thread.type) && matchesValue("reason", reason, thread.reason) &&
+    (readState === "all" || thread.unread === (readState === "unread")) &&
+    (ageFilter.withinDays === undefined || Date.parse(thread.updatedAt) >= now - ageFilter.withinDays * day) &&
+    (ageFilter.olderDays === undefined || Date.parse(thread.updatedAt) < now - ageFilter.olderDays * day)
+  ));
 }
 
 export function attentionCounts(threads) {
@@ -251,11 +332,12 @@ function matchesAttention(thread, filter) {
     : filter.reasons.includes(thread.reason));
 }
 
-export function groupThreads(threads, { query, attention = "all" }) {
+export function groupThreads(threads, filters, now = Date.now()) {
+  const { attention = "all" } = filters;
   const groups = new Map();
   const filter = attentionFilters.find(filter => filter.value === attention);
   if (!filter) throw new InboxError("invalid_filters", "Choose a supported attention filter.", 400);
-  for (const thread of searchThreads(threads, query)) {
+  for (const thread of filterThreads(threads, filters, now)) {
     if (!matchesAttention(thread, filter)) continue;
     let group = groups.get(thread.repository);
     if (!group) {

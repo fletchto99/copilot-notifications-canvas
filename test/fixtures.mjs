@@ -19,6 +19,11 @@ export function http(body = [], headers = {}, status = 200) {
   return `HTTP/2.0 ${status} Synthetic\r\n${Object.entries({ "content-type": "application/json", ...headers }).map(([key, value]) => `${key}: ${value}\r\n`).join("")}\r\n${status === 304 ? "" : JSON.stringify(body)}`;
 }
 
+export function retrySelection(inbox, input) {
+  const batch = inbox.batch.snapshots().find(batch => batch.token === input.token);
+  return { ...input, selectionKey: batch?.retrySelectionKey };
+}
+
 export function workflowRun(overrides = {}) {
   return {
     id: 123, name: "Synthetic build", head_branch: "main", run_attempt: 1,

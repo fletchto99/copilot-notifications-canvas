@@ -12,6 +12,40 @@ async function expectPanelInViewport(page) {
 for (const packaged of [false, true]) {
   test.describe(`settings viewport (${packaged ? "packaged" : "source"})`, () => {
     test.use({ packaged });
+    test("Sound follows desktop opt-in without resetting its saved choice or losing focus", async ({ page, canvas }) => {
+      canvas.rows.splice(1);
+      await canvas.preferences.update({ desktopSound: "none" });
+      await page.goto(canvas.url);
+      await page.locator("#settings-toggle").click();
+      await expect(page.locator("#theme")).toBeEnabled();
+      const desktop = page.getByRole("switch", { name: "Desktop notifications", exact: true });
+      const sound = page.locator("#desktop-sound");
+      await expect(sound).toBeHidden();
+      await desktop.focus();
+      await desktop.press("Tab");
+      await expect(page.locator("#theme")).toBeFocused();
+      await desktop.focus();
+      await desktop.press("Space");
+      await expect(sound).toBeVisible();
+      await expect(sound).toHaveValue("none");
+      await sound.focus();
+      await canvas.preferences.update({ desktopNotifications: false });
+      await expect(sound).toBeHidden({ timeout: 10_000 });
+      await expect(desktop).toBeFocused();
+      await expect(page.locator("#settings-panel")).toBeVisible();
+      expect((await canvas.preferences.read()).desktopSound).toBe("none");
+      await page.reload();
+      await page.locator("#settings-toggle").click();
+      await expect(desktop).toBeEnabled();
+      await expect(sound).toBeHidden();
+      await desktop.click();
+      await expect(sound).toBeVisible();
+      await expect(sound).toHaveValue("none");
+      expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+      expect(canvas.writes).toEqual([]);
+      expect(canvas.deliveries).toEqual([]);
+    });
+
     test("resize callbacks defer overflow and Settings mutations until an animation frame", async ({ page, canvas }) => {
       await page.addInitScript(() => {
         const NativeResizeObserver = window.ResizeObserver;
@@ -156,20 +190,20 @@ for (const packaged of [false, true]) {
 
     test("increased text spacing keeps setting labels, selected values and chevrons readable", async ({ page, canvas }) => {
       canvas.rows.splice(3);
-      await canvas.preferences.update({ matchGitHubInbox: false, groupBy: "none" });
+      await canvas.preferences.update({ matchGitHubInbox: false, groupBy: "none", desktopNotifications: true });
       await page.setViewportSize({ width: 320, height: 800 });
       await page.goto(canvas.url);
       await expect(page.locator(".row")).toHaveCount(3);
       await page.locator("#settings-toggle").click();
       await expect(page.locator("#theme")).toBeEnabled();
-      expect(await page.locator(".select-setting").evaluateAll(nodes => nodes
-        .map(node => node.getBoundingClientRect().height).filter(height => height > 0))).toEqual([38, 38, 38, 38]);
+      expect(await page.locator("#settings-panel .select-setting").evaluateAll(nodes => nodes
+        .map(node => node.getBoundingClientRect().height).filter(height => height > 0))).toEqual([38, 38, 38]);
       await page.addStyleTag({ content: `
         * { line-height: 1.5 !important; letter-spacing: 0.12em !important; word-spacing: 0.16em !important; }
         p { margin-bottom: 2em !important; }
       ` });
       await expectPanelInViewport(page);
-      const metrics = await page.locator(".select-setting select").evaluateAll(nodes => nodes
+      const metrics = await page.locator("#settings-panel .select-setting select").evaluateAll(nodes => nodes
         .filter(node => node.getBoundingClientRect().height)
         .map(node => {
           const style = getComputedStyle(node);
@@ -194,13 +228,13 @@ for (const packaged of [false, true]) {
             arrowOffset: Math.abs(center - (box.y + box.height / 2)),
           };
         }));
-      expect(metrics.length).toBe(4);
+      expect(metrics.length).toBe(3);
       for (const metric of metrics) {
         expect(metric.textWidth, `${metric.id} selected value fits`).toBeLessThanOrEqual(metric.available + 0.5);
         expect(metric.arrowOffset, `${metric.id} chevron follows the select`).toBeLessThanOrEqual(2);
       }
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
-      for (const id of ["show-notifications", "auto-open", "desktop-notifications", "theme", "group-by", "check-updates"]) {
+      for (const id of ["auto-open", "desktop-notifications", "theme", "group-by", "check-updates"]) {
         const control = page.locator(`#${id}`);
         await control.focus();
         await expect(control).toBeFocused();

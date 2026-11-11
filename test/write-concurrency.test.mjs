@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { GitHubClient, firstPage } from "../src/provider/github.mjs";
 import { Inbox } from "../src/provider/inbox.mjs";
 import { InboxError } from "../src/shared/model.mjs";
-import { http, thread } from "./fixtures.mjs";
+import { http, retrySelection, thread } from "./fixtures.mjs";
 
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const confirmed = method => http(null, {}, method === "DELETE" ? 204 : 205);
@@ -117,7 +117,7 @@ test("parallel failures stop unsent work, retain late successes and backoff, and
     assert.equal(f.first.batch.snapshot().status, "running");
     assert.equal(f.first.batch.snapshot().failed, 1);
     assert.equal(f.first.batch.snapshot().notAttempted, 5);
-    assert.throws(() => f.first.batch.retry(token), { code: "busy" });
+    assert.throws(() => f.first.batch.retry(retrySelection(f.first, token)), { code: "busy" });
     await f.drain();
     await f.first.batch.done;
     const stopped = f.first.batch.snapshot();
@@ -127,10 +127,10 @@ test("parallel failures stop unsent work, retain late successes and backoff, and
     assert.equal(stopped.status, "partial");
     assert.equal(f.client.lastError.code, "rate_limited", "Late successes must not erase a concurrent failure");
     assert.equal(f.client.blockedUntil, 600_000);
-    assert.throws(() => f.first.batch.retry(token), { code: "rate_limited" });
+    assert.throws(() => f.first.batch.retry(retrySelection(f.first, token)), { code: "rate_limited" });
     assert.throws(() => f.start(f.second, "example/second", "done"), { code: "rate_limited" });
     f.advance();
-    f.first.batch.retry(token);
+    f.first.batch.retry(retrySelection(f.first, token));
     assert.equal(f.first.batch.snapshot().action, action);
     assert.equal(f.first.batch.snapshot().total, 6);
     await settle();

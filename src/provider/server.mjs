@@ -147,10 +147,9 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
   let authorshipRetryAt = 0;
   let authorshipSelection;
   const loadedAuthorship = () => {
-    const inboxMode = inbox.filters.mode === "inbox" && inbox.matchGitHubInbox;
-    // Inbox mutations replace pages; query and grouping changes do not.
-    if (authorshipSelection?.pages !== inbox.pages || authorshipSelection.inboxMode !== inboxMode) {
-      authorshipSelection = { pages: inbox.pages, inboxMode, items: inbox.loadedItems() };
+    // Inbox mutations replace pages; display filter and grouping changes do not.
+    if (authorshipSelection?.pages !== inbox.pages) {
+      authorshipSelection = { pages: inbox.pages, items: inbox.loadedItems() };
     }
     return authorshipSelection.items;
   };
@@ -393,27 +392,31 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         throw new InboxError("invalid_grouping", "Choose a supported notification grouping.", 400);
       }
       if (timeZone !== null || groupBy === "date") groupThreadsByDate([], timeZone);
-      const settings = preferences && ["/api/state", "/api/refresh", "/api/more"].includes(path)
+      assertMethod(req.method, route);
+      let input;
+      if (req.method === "POST") {
+        if (req.headers.origin !== origin) throw new InboxError("origin", "A same-origin request is required.", 403);
+        input = await readBody(req);
+        if (!route.acceptsInput && Object.keys(input).length) {
+          throw new InboxError("invalid_input", "This action takes an empty object.", 400);
+        }
+      }
+      const settings = preferences && ["/api/state", "/api/refresh", "/api/more", "/api/filters",
+        "/api/batch/start", "/api/batch/retry"].includes(path)
         ? await inbox.syncSettings(preferences) : null;
       if (settings) copilot?.setSettings(settings);
       setSubjectView({ groupBy: groupBy ?? settings?.groupBy ?? subjectView.groupBy, timeZone });
-      assertMethod(req.method, route);
       if (req.method === "GET") {
         if (path === "/api/state" && req.headers["x-notification-acknowledged-version"] !== undefined) {
           inbox.batch.acknowledge(req.headers["x-notification-acknowledged-version"]);
         }
         if (path === "/api/settings") {
           const settings = await preferences.read();
-          inbox.setMatchGitHubInbox(settings.matchGitHubInbox);
+          inbox.applySettings(settings);
           setSubjectView({ groupBy: settings.groupBy ?? subjectView.groupBy, timeZone });
           return json(200, await settingsSnapshot(settings));
         }
       } else {
-        if (req.headers.origin !== origin) throw new InboxError("origin", "A same-origin request is required.", 403);
-        const input = await readBody(req);
-        if (!route.acceptsInput && Object.keys(input).length) {
-          throw new InboxError("invalid_input", "This action takes an empty object.", 400);
-        }
         if (path === "/api/subjects") return json(200, selectSubjects(input));
         if (path === "/api/copilot") {
           if (!copilot || developmentAPI?.target.custom) throw new InboxError("copilot_unavailable", "Copilot actions are unavailable in this panel.", 503);
@@ -433,7 +436,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
           if (input.force) inbox.client.invalidateSubjects(inbox.loadedItems());
         }
         if (path === "/api/more") await inbox.more();
-        if (path === "/api/filters") await inbox.setFilters(input);
+        if (path === "/api/filters") await inbox.syncFilters(input, preferences);
         if (path === "/api/settings") {
           if (input.desktopNotifications === true && !desktop?.supported) {
             throw new InboxError("desktop_unsupported", "Desktop notifications are supported on macOS, Windows and Linux.", 400);
@@ -442,7 +445,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
             throw new InboxError("desktop_sound", "Choose a notification sound supported by this operating system.", 400);
           }
           const settings = await preferences.update(input);
-          inbox.setMatchGitHubInbox(settings.matchGitHubInbox);
+          inbox.applySettings(settings);
           setSubjectView({ groupBy: settings.groupBy ?? subjectView.groupBy, timeZone });
           desktop?.wake(settings);
           return json(200, await settingsSnapshot(settings));

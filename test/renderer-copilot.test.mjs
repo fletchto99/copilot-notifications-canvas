@@ -325,6 +325,76 @@ test("turning integration off removes a prepared dialog's start action", async t
   assert.match(ui.ids.get("copilot-status").textContent, /integration is off/);
 });
 
+test("a delayed settings response cannot overwrite newer state integration or confirmation flags", async t => {
+  const storedSettings = { revision: 1, copilotIntegration: true, confirmCopilotActions: false };
+  let hold = false;
+  let holdState = false;
+  let release;
+  let releaseState;
+  const ui = await setup(t, { storedSettings, onSettingsResponse: () => hold
+    ? new Promise(resolve => { release = resolve; }) : undefined,
+  onState: () => holdState ? new Promise(resolve => { releaseState = resolve; }) : undefined });
+  t.after(() => { release?.(); releaseState?.(); });
+  hold = true;
+  const reading = runInContext("settingsRequest(undefined, true)", ui.context);
+  await settle();
+  Object.assign(storedSettings, { revision: 2, copilotIntegration: false, confirmCopilotActions: true });
+  await runInContext("update()", ui.context);
+  assert.equal(ui.document.documentElement.dataset.copilotIntegration, "false");
+  assert.equal(runInContext("copilotConfirmations()", ui.context), true);
+  release();
+  await reading;
+  assert.equal(ui.document.documentElement.dataset.copilotIntegration, "false");
+  assert.equal(runInContext("copilotConfirmations()", ui.context), true);
+  assert.equal(ui.ids.get("copilot-integration").getAttribute("aria-checked"), "false");
+  assert.equal(ui.ids.get("copilot-confirmations").hidden, true);
+  hold = false;
+  Object.assign(storedSettings, { revision: 3, copilotIntegration: true, confirmCopilotActions: false });
+  await runInContext("settingsRequest(undefined, true)", ui.context);
+  assert.equal(ui.document.documentElement.dataset.copilotIntegration, "true");
+  assert.equal(runInContext("copilotConfirmations()", ui.context), false);
+  holdState = true;
+  const polling = runInContext("update()", ui.context);
+  await settle();
+  Object.assign(storedSettings, { revision: 4, copilotIntegration: false, confirmCopilotActions: true });
+  await runInContext("settingsRequest(undefined, true)", ui.context);
+  releaseState();
+  await polling;
+  assert.equal(ui.document.documentElement.dataset.copilotIntegration, "false");
+  assert.equal(runInContext("copilotConfirmations()", ui.context), true);
+});
+
+test("confirmation settings follow integration without changing the saved choice or losing settings focus", async t => {
+  for (const confirmCopilotActions of [true, false]) {
+    const storedSettings = { copilotIntegration: false, confirmCopilotActions };
+    const ui = await setup(t, { storedSettings });
+    const confirmations = ui.ids.get("copilot-confirmations");
+    const toggle = ui.ids.get("copilot-integration");
+    assert.equal(confirmations.hidden, true);
+    assert.equal(confirmations.disabled, true);
+    await toggle.events.click();
+    await settle();
+    assert.equal(confirmations.hidden, false);
+    assert.equal(confirmations.disabled, false);
+    assert.equal(confirmations.getAttribute("aria-checked"), String(confirmCopilotActions));
+    confirmations.focus();
+    storedSettings.copilotIntegration = false;
+    storedSettings.revision++;
+    await runInContext("settingsRequest(undefined, true)", ui.context);
+    assert.equal(confirmations.hidden, true);
+    assert.equal(confirmations.disabled, true);
+    assert.equal(ui.document.activeElement, toggle);
+    storedSettings.copilotIntegration = true;
+    storedSettings.revision++;
+    await runInContext("settingsRequest(undefined, true)", ui.context);
+    assert.equal(confirmations.hidden, false);
+    assert.equal(confirmations.getAttribute("aria-checked"), String(confirmCopilotActions));
+    assert.equal(storedSettings.confirmCopilotActions, confirmCopilotActions);
+    assert.deepEqual(ui.calls.filter(call => call.path === "/api/settings" && call.options.body)
+      .map(call => JSON.parse(call.options.body)), [{ copilotIntegration: true }]);
+  }
+});
+
 test("the popup opt-out is submitted only with Start, not when cancelling", async t => {
   const requests = [];
   const ui = await setup(t, { onCopilot: input => {

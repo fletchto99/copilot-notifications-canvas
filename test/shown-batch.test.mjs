@@ -8,7 +8,7 @@ import { Inbox } from "../src/provider/inbox.mjs";
 import { InboxError, normalizeThreads } from "../src/shared/model.mjs";
 import { Preferences } from "../src/provider/settings.mjs";
 import { startServer } from "../src/provider/server.mjs";
-import { http, inboxNext as next, thread } from "./fixtures.mjs";
+import { http, inboxNext as next, retrySelection, thread } from "./fixtures.mjs";
 
 const confirmed = method => `HTTP/2 ${method === "DELETE" ? 204 : 205} Synthetic\r\n\r\n`;
 const settle = () => new Promise(resolve => setImmediate(resolve));
@@ -177,11 +177,11 @@ test("shown retries keep their scope and action while excluding successes, new a
   assert.equal(inbox.batch.snapshot().failed, 2);
   assert.equal(inbox.batch.snapshot().notAttempted, 0);
   assert.throws(() => inbox.batch.retry({ ...token, scope: "repository" }), { code: "invalid_batch" });
-  assert.throws(() => inbox.batch.retry(token), { code: "github_http" });
+  assert.throws(() => inbox.batch.retry(retrySelection(inbox, token)), { code: "github_http" });
   inbox.pages[0].items.push(...normalizeThreads([thread("30")]));
   await inbox.setFilters({ query: "notification 3" });
   advance();
-  inbox.batch.retry(token);
+  inbox.batch.retry(retrySelection(inbox, token));
   assert.equal(inbox.batch.snapshot().scope, "shown");
   assert.equal(inbox.batch.snapshot().action, "done");
   assert.equal(inbox.batch.snapshot().total, 1);
