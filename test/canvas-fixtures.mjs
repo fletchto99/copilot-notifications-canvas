@@ -66,7 +66,11 @@ export async function createCanvasFixture({
         viewerDidAuthor: row.authoredByViewer ?? false,
         ...(row.subjectDetails ?? { closed: false, isAnswered: false, stateReason: null }),
       } } } });
-      return http({ data: { repository: { pullRequest: { isInMergeQueue: row.mergeQueued ?? false } } } });
+      return http({ data: { repository: { pullRequest: {
+        isInMergeQueue: row.mergeQueued ?? false,
+        state: row.subjectDetails?.merged ? "MERGED" : (row.subjectDetails?.state ?? "open").toUpperCase(),
+        headRefOid: row.subjectDetails && Object.hasOwn(row.subjectDetails, "head") ? row.subjectDetails.head?.sha : "b".repeat(40),
+      } } } });
     }
     if (args.includes("PATCH") || args.includes("DELETE")) {
       const path = new URL(endpoint, target.origin).pathname.slice(target.prefix.length);

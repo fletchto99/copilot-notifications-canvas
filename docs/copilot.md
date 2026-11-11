@@ -65,7 +65,13 @@ skips it; its hover tooltip explains why the action is unavailable. Notification
 links and Read/Done remain available. Open or draft PR handoffs wait for verified
 merge-queue membership; pending or failed checks cannot authorize a session.
 Fresh REST PR metadata determines whether that check is needed, not the cached
-row state. Closed and merged PR summaries do not require merge-queue access.
+row state. Starting a handoff rechecks queue membership after repository setup,
+immediately before checkout, before fetching a missing commit, and immediately
+before session creation rather than trusting a cached non-queued result.
+These checks still respect failure and rate-limit backoff.
+The fresh queue response also verifies the confirmed PR state and head commit,
+so a push, closure, or merge during that request stops the handoff.
+Closed and merged PR summaries do not require merge-queue access.
 CI actions wait while run/job links load. Unresolved or ambiguous matches remain
 disabled rather than guessing a destination.
 
@@ -187,8 +193,10 @@ restores a branch, or makes changes without explicit approval. If you want
 help, it checks the current PR state, head branch availability, and permissions
 before proposing next steps.
 
-If a PR closes, merges, or reopens after a confirmation was shown, open the
-action again to confirm the updated task.
+If a PR closes, merges, reopens, or changes its head commit after a confirmation
+was shown, open the action again to confirm the updated task and commit.
+Head changes during checkout preparation or session discovery also stop creation;
+the extension never silently switches commits or starts on the outdated head.
 
 ### Discussions and commits
 

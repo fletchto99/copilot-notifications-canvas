@@ -259,7 +259,7 @@ export class GitHubClient {
       .exec(item?.url ?? "");
     const matchingRun = run && link && run[1] === item.repository && link[1] === run[1] && link[2] === run[2] &&
       (link[3] !== "attempts" || link[4] === run[3]) && (link[3] !== "job" || run[3] !== undefined);
-    const endpoint = kind === "viewer" ? "/user" : (["pull", "queue"].includes(kind) && item?.type === "PullRequest" ||
+    const endpoint = kind === "viewer" ? "/user" : (["pull", "queue", "pull-queue"].includes(kind) && item?.type === "PullRequest" ||
       kind === "issue" && item?.type === "Issue") ? subjectEndpoint(item, this.target) :
       kind === "commit" && item?.type === "Commit" ? `/repos/${item.repository}/commits/${item.commitRef}` :
       kind === "release" && item?.type === "Release"
@@ -273,14 +273,15 @@ export class GitHubClient {
           notificationLink({ type: "Release", url: `${this.target.baseUrl}${endpoint}` }, item.repository, this.target).releaseId !== item.releaseId)) {
       throw new InboxError("copilot_context", "Use a confirmed github.com item for this Copilot action.", 400);
     }
-    if (kind === "queue") {
-      return this.#refreshSubject(endpoint, item, signal, "queue", () => true).then(() => {
+    if (kind === "queue" || kind === "pull-queue") {
+      const verifyPull = kind === "pull-queue";
+      return this.#refreshSubject(endpoint, item, signal, "queue", () => true, { force: verifyPull, verifyPull }).then(() => {
         const result = this.mergeQueueCache.get(endpoint);
         if (result?.error) throw new InboxError(result.error.code, result.error.message);
         if (typeof result?.state !== "boolean" || !(result.nextRefreshAt > this.now())) {
           throw this.graphqlLastError ?? new InboxError("copilot_context", "GitHub could not verify merge queue membership. Retry when queue status is available.");
         }
-        return result.state;
+        return verifyPull ? { ...result.pull, queued: result.state } : result.state;
       });
     }
     return this.request(endpoint, signal, "GET", { subjectType: "Copilot", copilot: kind, force: ["pull", "issue", "commit", "release"].includes(kind) }).then(result => {
@@ -518,7 +519,7 @@ export class GitHubClient {
     });
   }
 
-  async #refreshSubject(endpoint, item, signal, kind, selected) {
+  async #refreshSubject(endpoint, item, signal, kind, selected, { force = false, verifyPull = false } = {}) {
     const mergeQueue = kind === "queue";
     const checkRun = kind === "run";
     const runMatch = kind === "match" ? workflowRunSearch(item, this.target) : null;
@@ -536,14 +537,14 @@ export class GitHubClient {
       await waitForWork(this.queue, signal);
       if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
       if (!selected()) return false;
-      if ((mergeQueue || item.type === "Discussion") && this.now() < this.graphqlBlockedUntil) return;
+      if (!force && (mergeQueue || item.type === "Discussion") && this.now() < this.graphqlBlockedUntil) return;
       const cached = cache.get(endpoint);
       const invalidationKey = runJobs || item.type === "Viewer" ? endpoint : subjectKey(item, this.target);
       const generation = this.subjectInvalidations.get(invalidationKey) ?? 0;
       try {
         started = true;
         const result = await this.request(endpoint, signal, "GET", {
-          subjectType: item.type, mergeQueue, checkRun, runMatch, runJobs, force: item.updatedAt > (cached?.updatedAt ?? ""),
+          subjectType: item.type, mergeQueue, verifyPull, checkRun, runMatch, runJobs, force: force || item.updatedAt > (cached?.updatedAt ?? ""),
           allowCachedDuringBackoff: item.type === "CheckSuite",
         });
         cache.set(endpoint, {
@@ -552,7 +553,7 @@ export class GitHubClient {
         });
       } catch (error) {
         if (!(error instanceof InboxError) || error.code === "closed") throw error;
-        if (error.code === "graphql_rate_limited" && error.requestDeferred) return;
+        if (!force && error.code === "graphql_rate_limited" && error.requestDeferred) return;
         cache.set(endpoint, {
           state: runMatch || runJobs ? null : cached?.state ?? null, checkedAt: cached?.checkedAt,
           ...(cached?.authorship ? { authorship: cached.authorship } : {}),
@@ -662,7 +663,7 @@ export class GitHubClient {
     return pending;
   }
 
-  async request(endpoint, signal, method = "GET", { force = false, minSequence = 0, allowCachedDuringBackoff = false, subjectType, mergeQueue = false, checkRun = false, runMatch = null, runJobs = null, beforeWrite, copilot } = {}) {
+  async request(endpoint, signal, method = "GET", { force = false, minSequence = 0, allowCachedDuringBackoff = false, subjectType, mergeQueue = false, verifyPull = false, checkRun = false, runMatch = null, runJobs = null, beforeWrite, copilot } = {}) {
     if (signal?.aborted) throw new InboxError("closed", "The canvas was closed.", 410);
     const discussion = subjectType === "Discussion";
     const graphql = mergeQueue || discussion;
@@ -710,7 +711,8 @@ export class GitHubClient {
           : "Merge queue status is unavailable for this API or pull request number.");
       }
       // gh groups fields into GraphQL variables only for this exact endpoint, without a leading slash.
-      args.push("-f", `query=${discussion ? DISCUSSION_QUERY : MERGE_QUEUE_QUERY}`, "-f", `owner=${match[1]}`, "-f", `name=${match[2]}`, "-F", `number=${match[4]}`, "graphql");
+      const queueQuery = verifyPull ? MERGE_QUEUE_QUERY.replace("isInMergeQueue", "isInMergeQueue state headRefOid") : MERGE_QUEUE_QUERY;
+      args.push("-f", `query=${discussion ? DISCUSSION_QUERY : queueQuery}`, "-f", `owner=${match[1]}`, "-f", `name=${match[2]}`, "-F", `number=${match[4]}`, "graphql");
     } else {
       if (cached?.etag) args.push("-H", `If-None-Match: ${cached.etag}`);
       else if (cached?.modified) args.push("-H", `If-Modified-Since: ${cached.modified}`);
@@ -782,6 +784,7 @@ export class GitHubClient {
       let authorship = cached?.authorship;
       let authorId = status === 304 ? cached?.authorId : undefined;
       let runUrl = status === 304 ? cached?.runUrl : undefined;
+      let pull;
       if (status === 200) {
         let body;
         try {
@@ -795,6 +798,7 @@ export class GitHubClient {
           runMatch ? inferredRunLink(body, runMatch, this.target, headers.link) : checkRun ? checkRunLink(body, endpoint, this.target) :
           mergeQueue ? mergeQueueState(body, retry > 0) : discussion ? discussionState(body, retry > 0) :
           subjectType ? subjectState(body, subjectType) : normalizeThreads(body, this.target);
+        if (verifyPull) pull = copilotDetails(body, "pull-queue", endpoint);
         if (subjectType && !mergeQueue && !checkRun && !runMatch && !runJobs) authorship = subjectAuthorship(body, subjectType);
         const directRun = subjectType === "CheckSuite" && !runJobs && !checkRun && !runMatch
           ? /^\/repos\/([^/]+\/[^/]+)\/actions\/runs\/([1-9]\d*)$/.exec(endpoint) : null;
@@ -815,6 +819,7 @@ export class GitHubClient {
           ...(authorship ? { authorship } : {}),
           ...(authorId ? { authorId } : {}),
           ...(runUrl ? { runUrl } : {}),
+          ...(pull ? { pull } : {}),
           checkedAt: fetchedAt,
           nextRefreshAt: Math.max(fetchedAt + poll, this.blockedUntil, graphql ? this.graphqlBlockedUntil : 0),
           etag: headers.etag ?? (status === 304 ? cached.etag : undefined),

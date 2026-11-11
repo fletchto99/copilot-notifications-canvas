@@ -272,8 +272,9 @@ test("the final context check rejects transitions back to the original stale row
     const issue = { state: "open" };
     const pull = { state: "open", merged: false };
     const endpoint = `/repos/example/widgets/${type === "Issue" ? "issues" : "pulls"}/1`;
+    let queries = 0;
     const f = await fixture(t, { type, issue, pull, repositories: [], onExecute: name => {
-      if (name === "add_repository") {
+      if (name === "list_sessions_and_chats" && ++queries === 3) {
         issue.state = "closed";
         pull.state = "closed";
         f.client.subjectCache.set(endpoint, { state: "closed" });
