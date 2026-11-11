@@ -202,6 +202,7 @@ export async function createCanvasFixture({
     registration = server.ready?.then(ready => {
       if (ready && !target.custom) desktop.add("synthetic-fixture");
     });
+    const advance = ms => { offset += ms; return now() + offset; };
     return {
       root, url: server.url, rows, writes, doneWrites, requests, preferences, deliveries, desktop, errors, warnings, close,
       copilot, copilotHost: syntheticHost,
@@ -214,7 +215,12 @@ export async function createCanvasFixture({
         }
       },
       setRequestHook: hook => { requestHook = hook; },
-      advance: ms => { offset += ms; return now() + offset; },
+      advance,
+      advanceProviderTime: async ms => {
+        const time = advance(ms);
+        if (packaged) await server.setTime(time);
+        return time;
+      },
       recoverAssets: () => { assetsUnavailable = false; },
     };
   } catch (error) {

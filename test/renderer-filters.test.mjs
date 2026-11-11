@@ -160,6 +160,31 @@ test("a lost shared-save response never replays over a newer canvas edit", async
   assert.match(ui.ids.get("filter-sync-status").textContent, /Could not sync filters/);
 });
 
+test("a successful queued shared edit clears its predecessor's sync error, unlike a local search", async t => {
+  for (const queued of [{ type: "Release" }, { query: "local" }]) {
+    let reject;
+    let calls = 0;
+    const ui = await renderer({ onFilters: () => ++calls === 1
+      ? new Promise((resolve, fail) => { reject = fail; }) : undefined });
+    t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
+    const first = refine(ui, "type", "PullRequest");
+    await settle();
+    await runInContext(`update("filters", ${JSON.stringify(queued)})`, ui.context);
+    reject(new Error("Synthetic first save failure"));
+    await first;
+    assert.match(ui.ids.get("filter-sync-status").textContent, /Could not sync filters/);
+    await runInContext("update()", ui.context);
+    await settle();
+    assert.equal(calls, 2);
+    const shared = Object.hasOwn(queued, "type");
+    assert.equal(ui.ids.get("filter-sync-status").hidden, shared);
+    assert.equal(ui.ids.get("settings-error").hidden, shared);
+    assert.equal(ui.ids.get("filter-type").value, shared ? "Release" : "all");
+    assert.deepEqual(ui.patches, []);
+    assert.deepEqual(ui.deletions, []);
+  }
+});
+
 test("pending refinements block writes and preserve the newest controls while requests are in flight", async t => {
   let release;
   let count = 0;

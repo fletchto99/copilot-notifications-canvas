@@ -49,8 +49,8 @@ export class NotificationBatch {
     }
   }
 
-  identify(input) {
-    if (!fields(input, ["token"]) || typeof input.token !== "string" ||
+  identify(input, required = ["token"]) {
+    if (!fields(input, required) || typeof input.token !== "string" ||
         !/^[a-f0-9-]{36}$/.test(input.token)) {
       throw new InboxError("invalid_batch", "Use the current notification operation token.", 400);
     }
@@ -189,9 +189,12 @@ export class NotificationBatch {
 
   retry(input) {
     this.assertAvailable();
-    const operation = this.identify(input);
+    const operation = this.identify(input, ["token", "selectionKey"]);
     if (this.isRunning(operation)) throw new InboxError("busy", "Wait for this batch to finish before retrying it.", 409);
     const remaining = this.retryItems(operation);
+    if (input.selectionKey !== selectionKey({ repository: operation.repository, items: remaining }, this.inbox.filters)) {
+      throw new InboxError("selection_changed", "The retry selection changed. Review its updated count and try again.", 409);
+    }
     if (!remaining.length) {
       throw new InboxError("no_remaining", "No unchanged, shown notifications remain from this batch. Wait for the next automatic refresh, then review the current selection.", 409);
     }
@@ -244,6 +247,8 @@ export class NotificationBatch {
     if (!operation) return null;
     const count = result => operation.items.filter(item => item.result === result).length;
     const inFlight = operation.items.filter(item => item.inFlight).length;
+    const canRetry = !this.isRunning(operation) && operation.status !== "completed";
+    const retryable = canRetry ? this.retryItems(operation, context) : [];
     return {
       token: operation.token, repository: operation.repository, scope: operation.scope, action: operation.action, status: operation.status,
       ...(operation.scope === "date" ? { date: operation.date, timeZone: operation.timeZone } : {}),
@@ -252,7 +257,8 @@ export class NotificationBatch {
       skipped: count("skipped"), notAttempted: count("pending") - inFlight,
       inFlight: inFlight > 0, searchActive: operation.searchActive,
       remainingThreadIds: operation.items.filter(item => ["pending", "failed"].includes(item.result)).map(item => item.id),
-      retryableThreadIds: this.isRunning(operation) || operation.status === "completed" ? [] : this.retryItems(operation, context).map(item => item.id),
+      retryableThreadIds: retryable.map(item => item.id),
+      retrySelectionKey: canRetry ? selectionKey({ repository: operation.repository, items: retryable }, this.inbox.filters) : null,
       error: operation.error, retryAt: this.inbox.client.blockedUntil,
     };
   }

@@ -144,7 +144,7 @@ export class Inbox {
 
   summary() {
     const { filters, groups, batch, batches, lockedThreadIds, threadWrites, snapshotVersion, selectionKey, ...state } = this.snapshot();
-    const counts = ({ repository, token, date, timeZone, threadId, remainingThreadIds, retryableThreadIds, ...batchCounts }) => batchCounts;
+    const counts = ({ repository, token, date, timeZone, threadId, remainingThreadIds, retryableThreadIds, retrySelectionKey, ...batchCounts }) => batchCounts;
     const operations = batches.filter(batch => batch.scope !== "thread" || batch.status !== "completed");
     return { ...state, batch: operations.length ? counts(operations.at(-1)) : null, batches: operations.map(counts),
       mode: filters.readState === "unread" ? "unread" : "inbox", readState: filters.readState, attention: filters.attention,

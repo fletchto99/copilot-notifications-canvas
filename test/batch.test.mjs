@@ -5,7 +5,7 @@ import { GitHubClient, POLL_MS } from "../src/provider/github.mjs";
 import { Inbox } from "../src/provider/inbox.mjs";
 import { InboxError, normalizeThreads } from "../src/shared/model.mjs";
 import { startServer } from "../src/provider/server.mjs";
-import { http, inboxNext as next, thread } from "./fixtures.mjs";
+import { http, inboxNext as next, retrySelection, thread } from "./fixtures.mjs";
 
 const ok = "HTTP/2 205 Reset Content\r\n\r\n";
 const settle = () => new Promise(resolve => setImmediate(resolve));
@@ -66,11 +66,11 @@ test("retrying a refined batch excludes newly matching rows and waits for origin
   await inbox.batch.done;
   const token = inbox.batch.snapshot().token;
   await inbox.setFilters({ reason: "subscribed" });
-  assert.throws(() => inbox.batch.retry({ token }), { code: "no_remaining" });
+  assert.throws(() => inbox.batch.retry(retrySelection(inbox, { token })), { code: "no_remaining" });
   fail = false;
   advance(120_000);
   await inbox.setFilters({ reason: "all" });
-  inbox.batch.retry({ token });
+  inbox.batch.retry(retrySelection(inbox, { token }));
   await inbox.batch.done;
   assert.deepEqual(writes, ["/notifications/threads/1", "/notifications/threads/1"]);
   assert.deepEqual(inbox.loadedItems().map(item => item.id), ["2"]);
@@ -206,7 +206,7 @@ test("date retries preserve the original day and zone and cannot reach changed d
   assert.throws(() => inbox.batch.retry({ ...token, timeZone: "Asia/Tokyo" }), { code: "invalid_batch" });
   advance();
   advance();
-  inbox.batch.retry(token);
+  inbox.batch.retry(retrySelection(inbox, token));
   assert.equal(inbox.batch.snapshot().date, "2026-01-12");
   assert.equal(inbox.batch.snapshot().timeZone, "UTC");
   assert.equal(inbox.batch.snapshot().scope, "date");
@@ -290,12 +290,12 @@ test("retry retains Done, never repeats successes or adds arrivals, and does not
   assert.equal(inbox.batch.snapshot().notAttempted, 0);
   inbox.pages[0].items.push(...normalizeThreads([thread("4")]));
   assert.throws(() => inbox.batch.retry({ ...token, action: "read" }), { code: "invalid_batch" });
-  assert.throws(() => inbox.batch.retry(token), { code: "github_http" });
+  assert.throws(() => inbox.batch.retry(retrySelection(inbox, token)), { code: "github_http" });
   assert.equal(methods.length, 3);
   advance();
   advance();
   fail = false;
-  inbox.batch.retry(token);
+  inbox.batch.retry(retrySelection(inbox, token));
   assert.equal(inbox.batch.snapshot().action, "done");
   assert.equal(inbox.batch.snapshot().total, 2);
   await inbox.batch.done;
@@ -446,7 +446,7 @@ test("retry excludes original batch items hidden by a new attention filter", asy
   await inbox.setFilters({ attention: "review_requested" });
   failing = false;
   advance(120_000);
-  inbox.batch.retry(token);
+  inbox.batch.retry(retrySelection(inbox, token));
   await inbox.batch.done;
   assert.deepEqual(writes, ["/notifications/threads/1", "/notifications/threads/2", "/notifications/threads/2"]);
 });
@@ -461,7 +461,7 @@ test("batch controls reject malformed, missing and stale operation tokens withou
       assert.throws(() => inbox.batch[action](input), { code: "invalid_batch" });
       assert.equal(inbox.batch.snapshot(), null);
     }
-    assert.throws(() => inbox.batch[action](unknown), { code: "unknown_batch" });
+    assert.throws(() => inbox.batch[action](action === "retry" ? retrySelection(inbox, unknown) : unknown), { code: "unknown_batch" });
   }
   const stale = start(inbox);
   await inbox.batch.done;
@@ -473,7 +473,7 @@ test("batch controls reject malformed, missing and stale operation tokens withou
   const before = inbox.batch.snapshot();
   for (const action of ["retry", "dismiss"]) {
     for (const input of [stale, unknown]) {
-      assert.throws(() => inbox.batch[action](input), { code: "unknown_batch" });
+      assert.throws(() => inbox.batch[action](action === "retry" ? retrySelection(inbox, input) : input), { code: "unknown_batch" });
       assert.deepEqual(inbox.batch.snapshot(), before);
     }
   }
@@ -644,7 +644,7 @@ test("disjoint batches and rows run together with isolated failures, retries, an
   assert.equal(client.threadReservations.size, 0);
   failing = false;
   advance(120_000);
-  inbox.batch.retry(second);
+  inbox.batch.retry(retrySelection(inbox, second));
   await inbox.batch.done;
   assert.deepEqual(writes.slice(-2), ["/notifications/threads/3", "/notifications/threads/4"]);
   assert.deepEqual(methods.slice(-2), ["DELETE", "DELETE"]);
@@ -847,7 +847,7 @@ test("dismissing a failed result and closing active batches affect only their ow
   await dispatched;
   inbox.batch.dismiss(failed);
   assert.equal(inbox.batch.snapshot().token, active.token);
-  assert.throws(() => inbox.batch.retry(active), { code: "busy" });
+  assert.throws(() => inbox.batch.retry(retrySelection(inbox, active)), { code: "busy" });
   start(inbox);
   assert.equal(inbox.batch.snapshots().length, 2);
   const done = inbox.batch.done;
@@ -883,10 +883,10 @@ test("auth/rate/network failures stop the batch with exact partial counts and re
     assert.equal(inbox.summary().unread, 1);
     failing = false;
     advance(client.blockedUntil - client.now());
-    inbox.batch.retry(token);
+    inbox.batch.retry(retrySelection(inbox, token));
     assert.equal(inbox.batch.snapshot().status, "running");
     assert.equal(inbox.batch.snapshot().total, 1);
-    assert.throws(() => inbox.batch.retry(token), { code: "unknown_batch" });
+    assert.throws(() => inbox.batch.retry(retrySelection(inbox, token)), { code: "unknown_batch" });
     await inbox.batch.done;
     assert.deepEqual(writes, ["/notifications/threads/1", "/notifications/threads/2", "/notifications/threads/3", "/notifications/threads/2"]);
     assert.equal(inbox.summary().loaded, 3);
@@ -904,7 +904,7 @@ test("retry keeps the old selection and respects a newly narrowed search", async
   await inbox.batch.done;
   await inbox.setFilters({ query: "notification 2" });
   client.blockedUntil = 0;
-  inbox.batch.retry(token);
+  inbox.batch.retry(retrySelection(inbox, token));
   assert.equal(inbox.batch.snapshot().total, 1);
   await inbox.batch.done;
   assert.equal(inbox.loadedItems().find(item => item.id === "2").unread, false);
@@ -925,7 +925,7 @@ test("retry rejects an entirely hidden or changed selection without writing or r
       if (change === "hidden") await inbox.setFilters({ query: "no matching notifications" });
       else inbox.pages = [{ ...inbox.pages[0], items: normalizeThreads([laterThread("1")]) }];
       const before = inbox.batch.snapshot();
-      assert.throws(() => inbox.batch.retry(token), { code: "no_remaining" });
+      assert.throws(() => inbox.batch.retry(retrySelection(inbox, token)), { code: "no_remaining" });
       assert.deepEqual(inbox.batch.snapshot(), before);
       assert.equal(inbox.summary().loaded, 1);
       assert.equal(client.threadReservations.size, 0);

@@ -34,7 +34,7 @@ export async function finishRows(ui) {
 // Minimal DOM/event/timer doubles exercise the actual renderer without a browser dependency.
 export async function renderer({ hidden = false, token = "a".repeat(64), readFailure = false,
   initialRows, subjectStates = {}, subjectsLoading = false, onWrite, onFetch, onState, onFilters, onFilterResponse, onActionResponse, initialOffline = false, release, development = null,
-  onUpdates, clipboardFailure = false, onSettings, onSubjects, developmentApi, onDevelopment, retainDisabledFocus = false, desktopPlatform = "darwin", desktopStatus = {},
+  onUpdates, clipboardFailure = false, onSettings, onSettingsResponse, onSubjects, developmentApi, onDevelopment, retainDisabledFocus = false, desktopPlatform = "darwin", desktopStatus = {},
   storedSettings = { autoOpen: false, darkMode: null, desktopNotifications: false, desktopSound: "default" },
   appColorMode = "light", systemDark = false, navigatorPlatform, userAgentData, onCopilot, copilotOperation, copilotLoading = false } = {}) {
   const calls = [];
@@ -366,10 +366,12 @@ export async function renderer({ hidden = false, token = "a".repeat(64), readFai
         }
         const capabilities = desktopCapabilities(desktopPlatform);
         inbox.applySettings(storedSettings);
-        return { ok: true, json: async () => ({ matchGitHubInbox: true, copilotIntegration: true, confirmCopilotActions: true, hideEmptyTabs: true, keyboardShortcuts: true, desktopNotifications: false, desktopSound: "default", ...storedSettings,
+        const settings = { matchGitHubInbox: true, copilotIntegration: true, confirmCopilotActions: true, hideEmptyTabs: true, keyboardShortcuts: true, desktopNotifications: false, desktopSound: "default", ...storedSettings,
           developmentApi, desktopStatus: { ...capabilities, state: "watching",
             message: capabilities.supported ? "Watching in the background." : capabilities.help, ...desktopStatus },
-        }) };
+        };
+        await onSettingsResponse?.(settings);
+        return { ok: true, json: async () => settings };
       }
       if (path === "/api/updates") {
         if (onUpdates) releaseMetadata = await onUpdates();

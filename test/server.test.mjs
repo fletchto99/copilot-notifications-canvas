@@ -9,7 +9,7 @@ import { Inbox } from "../src/provider/inbox.mjs";
 import { startServer } from "../src/provider/server.mjs";
 import { DesktopNotifications } from "../src/provider/desktop.mjs";
 import { Preferences } from "../src/provider/settings.mjs";
-import { http, thread } from "./fixtures.mjs";
+import { http, retrySelection, thread } from "./fixtures.mjs";
 
 async function setup(t, run = async () => http([thread()]), options = {}) {
   const client = new GitHubClient({ run: args => args.at(-1) === "graphql"
@@ -461,7 +461,7 @@ test("all HTTP notification request paths inherit another client's server deadli
     assert.equal(calls.length, before, `${path} must not start an uncached request`);
     now = writerClient.serverBlockedUntil;
     const resumed = path === "batch/start"
-      ? await call("batch/retry", { token: inbox.batch.snapshot().token }) : await call();
+      ? await call("batch/retry", retrySelection(inbox, { token: inbox.batch.snapshot().token })) : await call();
     const resumedState = await resumed.json();
     await finish();
     assert.equal(resumed.status, queued ? 202 : 200);

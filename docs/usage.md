@@ -313,6 +313,9 @@ cancels outstanding work.
 
 Retry conflicts consider only currently shown, unchanged, eligible targets, so
 an unrelated write to a filtered-out item does not block the remaining retry.
+Retry requests are bound to the displayed filters and eligible targets. If another
+canvas changes that selection before the request arrives, no retry writes start;
+review the refreshed selection and retry explicitly.
 Retries keep the original action and scope, including the
 date and time zone. They exclude successes, new arrivals, changed items, and
 items that no longer match your filters.

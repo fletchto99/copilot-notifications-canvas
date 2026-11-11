@@ -9,7 +9,7 @@ import { apiTarget, InboxError } from "../src/shared/model.mjs";
 import { Inbox } from "../src/provider/inbox.mjs";
 import { Preferences } from "../src/provider/settings.mjs";
 import { startServer } from "../src/provider/server.mjs";
-import { http, thread } from "./fixtures.mjs";
+import { http, retrySelection, thread } from "./fixtures.mjs";
 import { renderer, settle } from "./renderer-fixtures.mjs";
 
 function fixture(rows = [thread("1"), thread("2", { unread: false }), thread("3", { unread: false, done: true })]) {
@@ -230,6 +230,68 @@ test("HTTP filter patches sync active canvases, preserve local search and reject
   assert.ok(calls.every(args => args.includes("GET")));
 });
 
+test("HTTP retries reject shared-filter changes before writing, across scopes and actions", async t => {
+  for (const scope of ["repository", "date", "shown"]) {
+    for (const action of ["read", "done"]) {
+      const directory = await mkdtemp(join(tmpdir(), "notification-retry-selection-"));
+      t.after(() => rm(directory, { recursive: true, force: true }));
+      const preferences = new Preferences({ directory });
+      const { client, advance } = fixture([
+        thread("1", { subject: { type: "Issue", title: "Synthetic issue", url: null } }), thread("2"),
+      ]);
+      const run = client.run;
+      const writes = [];
+      let fail = true;
+      client.run = async (...args) => {
+        if (args[0].includes("PATCH") || args[0].includes("DELETE")) {
+          writes.push(args[0].at(-1));
+          if (fail) return http({}, {}, 500);
+        }
+        return run(...args);
+      };
+      const inbox = new Inbox(client);
+      const server = await startServer(inbox, { preferences });
+      t.after(() => server.close());
+      const url = new URL(server.url);
+      const request = async (path, body, status = 200) => {
+        const response = await fetch(`${url.origin}/api/${path}`, {
+          method: body === undefined ? "GET" : "POST",
+          headers: { Authorization: `Bearer ${url.hash.slice(1)}`, Origin: url.origin, "Content-Type": "application/json" },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        });
+        assert.equal(response.status, status);
+        return response.json();
+      };
+      const initial = await request("refresh", {});
+      const selection = scope === "repository" ? {
+        repository: initial.groups[0].repository, selectionKey: initial.groups[0].selectionKey,
+      } : { scope, selectionKey: initial.selectionKey,
+        ...(scope === "date" ? { date: "2026-01-10", timeZone: "UTC" } : {}) };
+      await request("batch/start", { ...selection, action }, 202);
+      await inbox.batch.done;
+      await preferences.updateFilters({ type: "Issue" });
+      const filtered = await request("state");
+      assert.deepEqual(filtered.batch.retryableThreadIds, ["1"]);
+      const retry = { token: filtered.batch.token, selectionKey: filtered.batch.retrySelectionKey };
+      assert.doesNotMatch(JSON.stringify(inbox.summary()), /retrySelectionKey/);
+      fail = false;
+      advance();
+      advance();
+      await preferences.updateFilters({ type: "all" });
+      const before = [...writes];
+      assert.equal((await request("batch/retry", retry, 409)).error.code, "selection_changed");
+      assert.deepEqual(writes, before);
+      assert.equal(inbox.batch.snapshot().token, retry.token);
+      await preferences.updateFilters({ type: "Issue" });
+      const reviewed = await request("state");
+      await request("batch/retry", { token: reviewed.batch.token, selectionKey: reviewed.batch.retrySelectionKey }, 202);
+      await inbox.batch.done;
+      assert.deepEqual(writes.slice(before.length), ["/notifications/threads/1"]);
+      assert.equal(inbox.loadedItems().find(item => item.id === "2").unread, true);
+    }
+  }
+});
+
 test("filters and legacy mode aliases keep pagination, cached data and polling deadlines unchanged", async t => {
   const { client, calls } = fixture(Array.from({ length: 100 }, (_, index) =>
     thread(String(index + 1), { unread: index % 2 === 0 })));
@@ -358,10 +420,10 @@ test("changing read state cannot widen or interrupt a running batch and retries 
   client.run = run;
   advance();
   advance();
-  assert.throws(() => inbox.batch.retry({ token }), { code: "no_remaining" });
+  assert.throws(() => inbox.batch.retry(retrySelection(inbox, { token })), { code: "no_remaining" });
   await preferences.updateFilters({ readState: "all" });
   await inbox.syncSettings(preferences);
-  inbox.batch.retry({ token });
+  inbox.batch.retry(retrySelection(inbox, { token }));
   assert.equal(inbox.batch.snapshot().total, 1);
   await inbox.batch.done;
   assert.deepEqual(calls.filter(args => args.includes("DELETE")).map(args => args.at(-1)).sort(),

@@ -4,7 +4,7 @@ import { GitHubClient, RETRY_MS, SUBJECT_POLL_MS } from "../src/provider/github.
 import { Inbox } from "../src/provider/inbox.mjs";
 import { apiTarget, attentionCounts, groupThreads, normalizeThreads } from "../src/shared/model.mjs";
 import { startServer } from "../src/provider/server.mjs";
-import { http, inboxNext, thread } from "./fixtures.mjs";
+import { http, inboxNext, retrySelection, thread } from "./fixtures.mjs";
 
 function row(id, type = "Issue", overrides = {}, baseUrl = "https://api.github.com") {
   const resource = { Issue: "issues", PullRequest: "pulls", Discussion: "discussions" }[type];
@@ -274,7 +274,7 @@ test("Mine read/done batches and retries never add newly confirmed authorship", 
         client.invalidateSubjects(inbox.loadedItems());
         await client.refreshAuthorship(inbox.loadedItems());
         assert.ok(inbox.groups()[0].items.some(item => item.id === "3"), "A new confirmed match is visible before retry");
-        inbox.batch.retry({ token });
+        inbox.batch.retry(retrySelection(inbox, { token }));
         await inbox.batch.done;
         assert.deepEqual([...writes].sort(), action === "done"
           ? ["/notifications/threads/1", "/notifications/threads/1", "/notifications/threads/2"]

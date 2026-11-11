@@ -322,7 +322,7 @@ async function settingsRequest(input, quiet = false, path = "settings") {
     const saved = await api(path, input);
     if (!preferences || (saved.revision ?? 0) >= (preferences.revision ?? 0)) preferences = saved;
     settingsError = "";
-    if (state) {
+    if (state && (preferences.revision ?? 0) >= (state.settingsRevision ?? 0)) {
       state.settingsError = null;
       state.copilotIntegration = preferences.copilotIntegration;
       state.confirmCopilotActions = preferences.confirmCopilotActions;
@@ -492,7 +492,14 @@ function lockedThreads() {
 
 function acceptState(snapshot) {
   // Concurrent action responses can arrive after a newer view has already rendered.
-  if (!state || snapshot.snapshotVersion >= state.snapshotVersion) state = snapshot;
+  if (!state || snapshot.snapshotVersion >= state.snapshotVersion) {
+    state = snapshot;
+    // Settings responses do not advance the inbox snapshot version.
+    if (preferences && (preferences.revision ?? 0) > (state.settingsRevision ?? 0)) {
+      state.copilotIntegration = preferences.copilotIntegration;
+      state.confirmCopilotActions = preferences.confirmCopilotActions;
+    }
+  }
 }
 
 function requestsPaused() {
@@ -598,7 +605,10 @@ async function batchRequest(action, input, ids = [], returnFocusKey) {
   const requestKey = input.token ?? returnFocusKey;
   if (!visible() || busy || batchRequests.has(requestKey)) return;
   const retryBatch = action === "retry" ? state.batches.find(batch => batch.token === input.token) : undefined;
-  if (action === "retry") ids = retryBatch?.retryableThreadIds ?? [];
+  if (action === "retry") {
+    ids = retryBatch?.retryableThreadIds ?? [];
+    input = { ...input, selectionKey: retryBatch?.retrySelectionKey };
+  }
   const locked = lockedThreads();
   if (["start", "retry"].includes(action) && (pendingFilters || ids.some(id => locked.has(id)))) return;
   batchRequests.set(requestKey, { ids, action: action === "start" ? input.action ?? "read" : retryBatch?.action });
@@ -745,6 +755,7 @@ async function performUpdate(path, input) {
   try {
     acceptState(await api(path, input));
     connectionError = "";
+    if (path === "filters" && changesSharedFilters(input)) filterSyncError = "";
     if (path === "refresh") actionError = "";
     return true;
   } catch (error) {

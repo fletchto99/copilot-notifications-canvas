@@ -204,6 +204,8 @@ in `test/fixtures/copilot-handoff.mjs` and the existing synthetic host fixture.
   responses. Failed or uncertain shared saves must not replay old edits
   automatically. Sync preferences before new batch starts/retries so stale
   selection keys are rejected; running batches retain their captured targets.
+  Retry requests must carry the rendered retry-selection key, binding current
+  filters and eligible original targets; reject a changed key before any write.
 - Mine matches confirmed authorship of loaded issues, PRs, and discussions, not
   the notification reason. Resolve authorship even for filtered or collapsed
   rows, share the bounded detail cache, and expose incomplete counts explicitly.

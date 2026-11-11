@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { test, expect } from "./fixtures.mjs";
+import { http } from "../fixtures.mjs";
 
 test.beforeEach(async ({ canvas }) => {
   for (const row of canvas.rows) row.subject.url = `https://api.github.com/repos/${row.repository.full_name}/issues/${row.id}`;
@@ -31,6 +32,44 @@ test("attention tabs use tighter horizontal spacing without shrinking their heig
 for (const packaged of [false, true]) {
   test.describe(`GitHub attention filters (${packaged ? "packaged" : "source"})`, () => {
     test.use({ packaged });
+    test("a shared filter change cannot widen a retry after its button is clicked", async ({ page, canvas }) => {
+      canvas.rows.splice(2);
+      canvas.rows[0].subject = { type: "Issue", title: "Synthetic issue", url: null };
+      canvas.rows[1].subject = { type: "PullRequest", title: "Synthetic PR", url: null };
+      await page.goto(canvas.url);
+      await expect(page.locator(".row")).toHaveCount(2);
+      canvas.setRequestHook(args => args.includes("DELETE") ? http({}, {}, 500) : undefined);
+      await page.locator(".repo-done").click();
+      await expect(page.locator("#batch-error")).toContainText("HTTP 500");
+      canvas.setRequestHook(undefined);
+      await page.clock.setFixedTime(new Date(await canvas.advanceProviderTime(121_000)));
+      await page.locator("#filters-toggle").click();
+      await page.getByLabel("Type", { exact: true }).selectOption("Issue");
+      await expect(page.locator(".row")).toHaveCount(1);
+      await page.keyboard.press("Escape");
+      const retry = page.locator("#batch-retry");
+      await expect(retry).toBeEnabled({ timeout: 10_000 });
+      await page.route("**/api/batch/retry", async route => {
+        expect(route.request().postDataJSON().selectionKey).toMatch(/^[a-f0-9]{64}$/);
+        await canvas.preferences.updateFilters({ type: "all" });
+        await route.continue();
+      });
+      canvas.expectConsoleError("/api/batch/retry", "Failed to load resource: the server responded with a status of 409 (Conflict)");
+      await retry.click();
+      await expect(page.locator("#notice")).toContainText("The retry selection changed");
+      await expect(page.locator(".row")).toHaveCount(2);
+      expect(canvas.doneWrites).toEqual([]);
+      await page.unroute("**/api/batch/retry");
+      await page.locator("#filters-toggle").click();
+      await page.getByLabel("Type", { exact: true }).selectOption("Issue");
+      await expect(page.locator(".row")).toHaveCount(1);
+      await page.keyboard.press("Escape");
+      await retry.click();
+      await expect.poll(() => canvas.doneWrites).toEqual(["1"]);
+      expect(canvas.rows[1].unread).toBe(true);
+      expect(canvas.deliveries).toEqual([]);
+    });
+
     for (const initialType of ["all", "Issue"]) {
       test(`changing Type from ${initialType} keeps the header stable without flashing a scrollbar`, async ({ page, canvas }) => {
         canvas.rows.splice(4);
