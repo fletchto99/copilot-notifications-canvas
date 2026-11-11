@@ -28,6 +28,7 @@ for (const packaged of [false, true]) {
           await page.mouse.move(0, 0);
           expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
           await page.keyboard.press("Escape");
+          await expect(settings).toHaveAttribute("aria-expanded", "false");
           await expect(settings).toBeFocused();
         }
       }
