@@ -21,6 +21,8 @@ for (const packaged of [false, true]) {
       await page.keyboard.press("Tab");
       await expect(page.getByRole("searchbox")).toBeFocused();
       await page.keyboard.press("Tab");
+      await expect(page.locator("#filters-toggle")).toBeFocused();
+      await page.keyboard.press("Tab");
       await expect(page.getByRole("tab", { name: "All (0)", exact: true })).toBeFocused();
       await page.keyboard.press("Tab");
       await expect(panel).toBeFocused();
