@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { attentionCounts, attentionFilters, dateLabel, filterSchema, groupThreads, groupThreadsByDate, normalizeThreads, notificationLink, notificationTitle, orderedThreads, uniqueThreads, validateFilters } from "../src/shared/model.mjs";
+import { attentionCounts, attentionFilters, dateLabel, filterSchema, filterThreads, groupThreads, groupThreadsByDate, normalizeThreads, notificationLink, notificationTitle, orderedThreads, refinementFilters, uniqueThreads, validateFilters } from "../src/shared/model.mjs";
 import { thread } from "./fixtures.mjs";
 
 test("calendar grouping uses the requested zone rather than the provider's local date", () => {
@@ -275,8 +275,56 @@ test("filters match the public schema and reject invalid or surplus input", () =
   for (const attention of filterSchema.properties.attention.enum) {
     assert.deepEqual(validateFilters({ attention }), { attention });
   }
+  for (const { key, options } of refinementFilters) {
+    assert.deepEqual(filterSchema.properties[key].enum, options.map(option => option.value));
+    for (const { value } of options) assert.deepEqual(validateFilters({ [key]: value }), { [key]: value });
+    for (const value of [null, 1, [], {}, "", "constructor", "unsupported"]) {
+      assert.throws(() => validateFilters({ [key]: value }), { code: "invalid_filters" });
+    }
+  }
   for (const input of [null, [], "all", { mode: "all" }, { mode: "read" }, { query: 1 }, { query: "x".repeat(201) }, { token: "x" },
     ...[null, 1, [], {}, "", "mention", "subscribed", "constructor"].map(attention => ({ attention }))]) {
     assert.throws(() => validateFilters(input), { code: "invalid_filters" });
+  }
+});
+
+test("refinements intersect search and attention without changing API order or dropping unknown categories", () => {
+  const items = normalizeThreads([
+    thread("9", { updated_at: "2026-01-02T00:00:00Z" }),
+    thread("8", { unread: false }),
+    thread("7", { reason: "mention" }),
+    thread("6", { subject: { type: "Release", title: "Synthetic release", url: null } }),
+    thread("5", { updated_at: "2026-01-03T00:00:00Z" }),
+    thread("4", { subject: { type: "FutureType", title: "Unrecognized type", url: null }, reason: "future_reason" }),
+    thread("3", { updated_at: "2026-01-09T00:00:00Z" }),
+    thread("2", { subject: { type: "RepositoryDependabotAlertsThread", title: "Synthetic alert", url: null } }),
+    thread("1", { subject: { type: "RepositoryAdvisory", title: "Synthetic advisory", url: null } }),
+  ]);
+  const filters = { query: "synthetic", attention: "review_requested", type: "PullRequest",
+    readState: "unread", reason: "review_requested", age: "older_7d" };
+  const groups = groupThreads(items, filters, Date.parse("2026-01-11T00:00:00Z"));
+  assert.deepEqual(groups[0].items.map(item => item.id), ["9", "5"]);
+  assert.equal(groups[0].unread, 2);
+  assert.deepEqual(groupThreads(items, { ...filters, attention: "mentioned" }), []);
+  assert.deepEqual(filterThreads(items, { readState: "read" }).map(item => item.id), ["8"]);
+  assert.deepEqual(filterThreads(items, { type: "Release" }).map(item => item.id), ["6"]);
+  assert.deepEqual(filterThreads(items, { type: "other", reason: "other" }).map(item => item.id), ["4"]);
+  assert.deepEqual(filterThreads(items, { type: "RepositoryDependabotAlertsThread" }).map(item => item.id), ["2"]);
+  assert.deepEqual(filterThreads(items, { type: "RepositoryAdvisory" }).map(item => item.id), ["1"]);
+  assert.equal(filterThreads(items).length, items.length);
+});
+
+test("age filters use exact rolling cutoffs, include the recent boundary, and exclude it from older matches", () => {
+  const now = Date.parse("2026-03-09T12:00:00Z");
+  for (const [days, recent, older] of [[1, "last_24h"], [7, "last_7d", "older_7d"], [30, "last_30d", "older_30d"]]) {
+    const boundary = now - days * 86_400_000;
+    const items = normalizeThreads([-1, 0, 1].map((delta, index) =>
+      thread(String(index + 1), { updated_at: new Date(boundary + delta).toISOString() })));
+    assert.deepEqual(filterThreads(items, { age: recent }, now).map(item => item.id), ["2", "3"]);
+    assert.deepEqual(filterThreads(items, { age: recent }, now + 1).map(item => item.id), ["3"]);
+    if (older) {
+      assert.deepEqual(filterThreads(items, { age: older }, now).map(item => item.id), ["1"]);
+      assert.deepEqual(filterThreads(items, { age: older }, now + 1).map(item => item.id), ["1", "2"]);
+    }
   }
 });

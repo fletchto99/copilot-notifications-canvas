@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { runInContext } from "node:vm";
 import { finishRows, renderer, settle } from "./renderer-fixtures.mjs";
-import { http, inboxNext as next, next as unreadNext, thread } from "./fixtures.mjs";
+import { http, inboxNext as next, thread } from "./fixtures.mjs";
 
 test("counts stay unknown until a successful load and remain available during failed refreshes", async t => {
   let response = http({}, { "retry-after": "120" }, 429);
@@ -52,7 +52,7 @@ test("clearing the last notifications is caught up immediately unless unloaded p
   for (const hasMore of [false, true]) {
     for (const matchGitHubInbox of [false, true]) {
       let fetches = 0;
-      const link = matchGitHubInbox ? next : unreadNext;
+      const link = next;
       const ui = await renderer({ storedSettings: { matchGitHubInbox }, onFetch: () => ++fetches === 1
         ? http([thread("1"), thread("2")], hasMore ? { link } : {})
         : http(hasMore ? [thread("3")] : []) });
@@ -68,17 +68,23 @@ test("clearing the last notifications is caught up immediately unless unloaded p
       assert.equal(ui.ids.get("empty").hidden, false);
       const refresh = ui.ids.get("empty-refresh");
       if (!hasMore) {
-        assert.equal(ui.ids.get("empty-title").textContent, "All caught up \u{1F389}");
-        assert.equal(ui.ids.get("empty-description").textContent, "New notifications will appear here, grouped by repository.");
-        assert.equal(ui.ids.get("count").hidden, true);
-        assert.equal(ui.ids.get("empty-symbol").hidden, true);
+        assert.equal(ui.ids.get("empty-title").textContent, matchGitHubInbox
+          ? "All caught up \u{1F389}" : "No matches in loaded notifications");
+        assert.equal(ui.ids.get("empty-description").textContent, matchGitHubInbox
+          ? "New notifications will appear here, grouped by repository."
+          : "Change or clear Filters, or try another attention tab or search.");
+        assert.equal(ui.ids.get("count").hidden, matchGitHubInbox);
+        assert.equal(ui.ids.get("empty-symbol").hidden, matchGitHubInbox);
         assert.equal(ui.ids.get("more").hidden, true);
         assert.equal(refresh.hidden, true);
         assert.equal(ui.document.activeElement, ui.ids.get("search"));
         continue;
       }
-      assert.equal(ui.ids.get("empty-title").textContent, "Loaded notifications cleared");
-      assert.equal(ui.ids.get("empty-description").textContent, "Refresh to check for remaining notifications.");
+      assert.equal(ui.ids.get("empty-title").textContent, matchGitHubInbox
+        ? "Loaded notifications cleared" : "No matches in loaded notifications");
+      assert.equal(ui.ids.get("empty-description").textContent, matchGitHubInbox
+        ? "Refresh to check for remaining notifications."
+        : "Change or clear Filters, or try another attention tab or search. Refresh to check for more notifications.");
       assert.equal(ui.ids.get("count").hidden, false);
       assert.equal(refresh.hidden, false);
       refresh.focus();
@@ -206,7 +212,7 @@ test("failed filters wait for the polling cadence while a foreground refresh is 
     await ui.fireTimer();
     await settle();
     assert.equal(attempts, 3);
-    assert.deepEqual(ui.inbox.filters, { mode: "inbox", query: "notification", attention: "review_requested" });
+    assert.deepEqual(ui.inbox.filters, { readState: "all", query: "notification", attention: "review_requested" });
     assert.equal(ui.ids.get("notice").hidden, true);
     assert.equal(fetches, recoverAtDeadline ? 2 : 1);
     if (!recoverAtDeadline) {
@@ -302,6 +308,6 @@ test("shared action errors use scope-neutral and read-or-Done wording", async t 
   });
   ui.inbox.needsRefresh = true;
   await assert.rejects(ui.inbox.more(), {
-    code: "refresh_required",     message: "Refresh notifications before loading more after changing the inbox or notification view.",
+    code: "refresh_required", message: "Refresh notifications before loading more after changing the inbox.",
   });
 });

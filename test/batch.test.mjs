@@ -11,6 +11,71 @@ const ok = "HTTP/2 205 Reset Content\r\n\r\n";
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const laterThread = id => thread(id, { updated_at: "2026-01-11T12:00:00Z" });
 
+test("repository, date and shown batches intersect refinements and reject changed filter contexts", async t => {
+  for (const scope of ["repository", "date", "shown"]) {
+    for (const action of ["read", "done"]) {
+      const { inbox, client, writes } = await fixture({ rows: [
+        thread("1", { reason: "mention" }), thread("2"), thread("3", { unread: false }),
+        thread("4", { subject: { title: "Synthetic issue", type: "Issue", url: null } }),
+      ] });
+      t.after(() => inbox.close());
+      client.now = () => Date.parse("2026-01-20T12:00:00Z");
+      const input = () => scope === "repository" ? { ...selection(inbox), action } :
+        scope === "date" ? dateSelection(inbox, "2026-01-10", "UTC", action) :
+        { scope, selectionKey: inbox.snapshot().selectionKey, action };
+      await inbox.setFilters({ type: "PullRequest", readState: "unread", age: "older_7d" });
+      const previous = input();
+      await inbox.setFilters({ reason: "review_requested" });
+      assert.throws(() => inbox.batch.start(previous), { code: "selection_changed" });
+      const unchangedItems = input();
+      await inbox.setFilters({ query: "Synthetic" });
+      assert.throws(() => inbox.batch.start(unchangedItems), { code: "selection_changed" });
+      inbox.batch.start(input());
+      await inbox.batch.done;
+      assert.deepEqual(writes, ["/notifications/threads/2"]);
+      assert.deepEqual(inbox.loadedItems().filter(item => item.unread).map(item => item.id), ["1", "4"]);
+    }
+  }
+});
+
+test("an age cutoff crossing invalidates all batch scopes before any write", async t => {
+  for (const scope of ["repository", "date", "shown"]) {
+    const { inbox, client, writes } = await fixture({ rows: [thread("1"), laterThread("2")] });
+    t.after(() => inbox.close());
+    let now = Date.parse("2026-01-17T12:00:00Z");
+    client.now = () => now;
+    await inbox.setFilters({ age: "last_7d" });
+    const snapshot = inbox.snapshot();
+    const input = scope === "repository" ? selection(inbox) : scope === "date"
+      ? dateSelection(inbox, "2026-01-10") : { scope, selectionKey: snapshot.selectionKey };
+    now++;
+    assert.equal(inbox.snapshot().matching, 1);
+    assert.throws(() => inbox.batch.start(input), { code: "selection_changed" });
+    assert.deepEqual(writes, []);
+  }
+});
+
+test("retrying a refined batch excludes newly matching rows and waits for original rows to be shown", async t => {
+  let fail = true;
+  const rows = [thread("1", { reason: "mention" }), thread("2", { reason: "subscribed" })];
+  const { inbox, writes, advance } = await fixture({ rows, run: args => args.includes("GET") ? http(rows) :
+    fail ? http({}, {}, 403) : "HTTP/2 204 No Content\r\n\r\n" });
+  t.after(() => inbox.close());
+  await inbox.setFilters({ reason: "mention" });
+  inbox.batch.start({ scope: "shown", selectionKey: inbox.snapshot().selectionKey, action: "done" });
+  await inbox.batch.done;
+  const token = inbox.batch.snapshot().token;
+  await inbox.setFilters({ reason: "subscribed" });
+  assert.throws(() => inbox.batch.retry({ token }), { code: "no_remaining" });
+  fail = false;
+  advance(120_000);
+  await inbox.setFilters({ reason: "all" });
+  inbox.batch.retry({ token });
+  await inbox.batch.done;
+  assert.deepEqual(writes, ["/notifications/threads/1", "/notifications/threads/1"]);
+  assert.deepEqual(inbox.loadedItems().map(item => item.id), ["2"]);
+});
+
 test("batch eligibility ignores discarded duplicates within one response", async t => {
   for (const action of ["read", "done"]) {
     for (const tied of [false, true]) {
@@ -513,7 +578,7 @@ test("duplicate groups, overlapping per-row reads and other-panel batches are bl
   assert.throws(() => inbox.queueThread({ id: "1" }, "read"), { code: "busy" });
   assert.throws(() => inbox.queueThread({ id: "1" }, "done"), { code: "busy" });
   await inbox.setFilters({ query: "changed" });
-  await assert.rejects(inbox.setFilters({ mode: "unread" }), { code: "busy" });
+  await inbox.setFilters({ mode: "unread" });
   await settle();
   assert.throws(() => other.queueThread({ id: "1" }, "read"), { code: "busy" });
   assert.throws(() => other.queueThread({ id: "1" }, "done"), { code: "busy" });
@@ -611,7 +676,8 @@ test("search and attention changes never change a running batch's captured targe
       assert.equal(inbox.summary().matching, 1);
       assert.deepEqual(inbox.batch.snapshot(), before);
       await assert.rejects(inbox.refresh({ force: true }), { code: "busy" });
-      await assert.rejects(inbox.setFilters({ mode: "unread" }), { code: "busy" });
+      await inbox.setFilters({ mode: "unread" });
+      assert.deepEqual(inbox.batch.snapshot(), before);
       release();
       await inbox.batch.done;
       assert.deepEqual(writes, ["/notifications/threads/1", "/notifications/threads/2"]);

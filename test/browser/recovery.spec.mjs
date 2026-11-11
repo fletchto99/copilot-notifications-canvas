@@ -21,7 +21,7 @@ for (const packaged of [false, true]) {
       await page.clock.pauseAt(new Date(Date.now() + 1000));
       await page.goto(canvas.url);
       await expect(page.locator(".row")).toHaveCount(2);
-      await expect(page.locator("#show-notifications")).toHaveValue("unread");
+      await expect(page.locator("#filter-readState")).toHaveValue("unread");
       const invalid = '{"matchGitHubInbox":false,"autoOpen":"yes"}';
       await writeFile(canvas.preferences.path, invalid);
       const error = await canvas.preferences.read().catch(error => error);
@@ -74,10 +74,10 @@ for (const packaged of [false, true]) {
       expect(await readFile(canvas.preferences.path, "utf8")).toBe("{");
       await writeFile(canvas.preferences.path, valid);
       await page.locator("#settings-toggle").click();
-      await expect(page.locator("#show-notifications")).toHaveValue("unread");
       await expect(page.locator("#settings-error")).toBeHidden();
       await page.keyboard.press("Escape");
       await page.locator("#force-refresh").click();
+      await expect(page.locator("#filter-readState")).toHaveValue("unread");
       await expect(page.locator(".row")).toHaveCount(1);
       await expect(page.locator(".row.read")).toHaveCount(0);
       expect(canvas.writes).toEqual([]);

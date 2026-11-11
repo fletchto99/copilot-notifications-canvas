@@ -1,4 +1,4 @@
-import { apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle } from "../shared/model.mjs";
+import { apiTarget, attentionFilters, dateLabel, groupThreadsByDate, notificationTitle, refinementFilters } from "../shared/model.mjs";
 import { element, setControlText, actionIcon, setIcon, subjectMetadata, relativeTime, updateSubjectDescription } from "./presentation.mjs";
 import { createUpdateNotice } from "./update-notice.mjs";
 
@@ -37,7 +37,7 @@ let searchComposing = false;
 let searchFocusRequested = false;
 let searchEnterHeld = false;
 let pendingFilters;
-let inFlightAttention;
+let inFlightFilters;
 let pendingRefresh = false;
 let refreshing = false;
 let pollPromise;
@@ -46,6 +46,7 @@ let connectionError = "";
 let preferences;
 let settingsBusy = false;
 let settingsError = "";
+let filterSyncError = "";
 let pendingSettings;
 let soundOptionsKey;
 let developmentSettingsKey;
@@ -73,6 +74,8 @@ const tooltipControls = [
   ["settings-toggle", "settings-toggle"],
 ];
 const updateNotice = createUpdateNotice({ api, visible, hasCapability });
+const sharedFilterKeys = new Set(["mode", ...refinementFilters.map(({ key }) => key)]);
+const changesSharedFilters = input => Object.keys(input ?? {}).some(key => sharedFilterKeys.has(key));
 
 function expandedSubjectSelection() {
   if (!state || !visible()) return;
@@ -187,17 +190,29 @@ function renderTheme() {
   $("theme").value = theme;
 }
 
-function renderNotificationView() {
-  const unreadOnly = state?.filters.mode === "unread";
-  $("show-notifications").value = unreadOnly || preferences?.matchGitHubInbox === false ? "unread" : "all";
-  const matchGitHubInbox = state?.lastFetchedAt != null ? state.matchGitHubInbox : preferences?.matchGitHubInbox;
-  $("inbox-mode").hidden = !unreadOnly && matchGitHubInbox !== false;
-  $("show-notifications").disabled = settingsBusy || !preferences || unreadOnly ||
-    busy || state?.status === "loading" || batchBusy || batchLocked() || marking.size > 0;
+function renderRefinements() {
+  const filters = { ...state?.filters, ...inFlightFilters, ...pendingFilters };
+  let active = 0;
+  for (const { key } of refinementFilters) {
+    const value = filters[key] ?? "all";
+    const select = $(`filter-${key}`);
+    select.value = value;
+    select.dataset.active = String(value !== "all");
+    select.disabled = !hasCapability;
+    if (value !== "all") active++;
+  }
+  setControlText($("filters-toggle"), active ? `Filters (${active})` : "Filters");
+  $("filters-toggle").dataset.active = String(active > 0);
+  $("filters-reset").disabled = !hasCapability;
+  $("filters-reset").setAttribute("aria-disabled", String(!hasCapability || !active));
+  const syncing = changesSharedFilters(inFlightFilters) || changesSharedFilters(pendingFilters);
+  $("filter-sync-status").className = filterSyncError ? "settings-help" : "sr-only";
+  $("filter-sync-status").hidden = !filterSyncError && !syncing;
+  setControlText($("filter-sync-status"), filterSyncError || (syncing ? "Syncing filters..." : ""));
 }
 
 function renderSettingsError() {
-  const message = settingsError || state?.settingsError?.message || "";
+  const message = settingsError || filterSyncError || state?.settingsError?.message || "";
   $("settings-error").textContent = message;
   $("settings-error").hidden = !message;
 }
@@ -210,11 +225,11 @@ function renderSettings() {
   $("check-terminal-notifier").disabled = settingsBusy;
   $("desktop-backend").hidden = desktopStatus?.platform !== "darwin";
   $("desktop-backend").textContent = desktopStatus?.platform === "darwin" ? desktopStatus.help : "";
-  renderNotificationView();
   $("theme").disabled = settingsBusy || !preferences;
   renderTheme();
   $("group-by").disabled = settingsBusy || !preferences;
   $("group-by").value = preferences?.groupBy ?? "repo";
+  $("copilot-confirmations").hidden = !preferences || !copilotEnabled();
   for (const [id, key] of [
     ["auto-open", "autoOpen"],
     ["desktop-notifications", "desktopNotifications"],
@@ -232,6 +247,7 @@ function renderSettings() {
       (id === "desktop-notifications" && !preferences.desktopStatus?.supported);
   }
   const select = $("desktop-sound");
+  $("desktop-sound-setting").hidden = !preferences?.desktopNotifications;
   select.disabled = settingsBusy || !preferences?.desktopNotifications || !preferences?.desktopStatus?.supported;
   if (preferences) {
     const choices = [...(preferences.desktopStatus?.sounds ?? [])];
@@ -274,14 +290,15 @@ function renderSettings() {
     $("development-api-reload").hidden = !api.requiresReload;
   }
   renderSettingsError();
-  positionSettings();
+  renderRefinements();
+  positionPopover("settings");
 }
 
 async function settingsRequest(input, quiet = false, path = "settings") {
   if (!visible()) return;
   const active = document.activeElement;
   // Settings must not restore a row action's focus while that action is pending.
-  const previousFocus = $("settings").contains(active) || $("desktop-recommendation").contains(active)
+  const previousFocus = $("settings").contains(active) || $("filters").contains(active) || $("desktop-recommendation").contains(active)
     ? active?.closest("select") ?? active : null;
   if (settingsBusy) {
     if (input && !pendingSettings) {
@@ -292,8 +309,8 @@ async function settingsRequest(input, quiet = false, path = "settings") {
   }
   // WebKit can retain a picker's option focus through disabling and re-enabling its select.
   if (input && previousFocus && previousFocus !== active) previousFocus.focus({ preventScroll: true });
-  let refreshInbox = false;
   settingsBusy = true;
+  renderRefinements();
   if (!quiet) {
     settingsError = "";
     renderSettings();
@@ -302,7 +319,8 @@ async function settingsRequest(input, quiet = false, path = "settings") {
   }
   try {
     if (input && ["copilotIntegration", "confirmCopilotActions"].some(key => Object.hasOwn(input, key))) await pollPromise;
-    preferences = await api(path, input);
+    const saved = await api(path, input);
+    if (!preferences || (saved.revision ?? 0) >= (preferences.revision ?? 0)) preferences = saved;
     settingsError = "";
     if (state) {
       state.settingsError = null;
@@ -310,7 +328,6 @@ async function settingsRequest(input, quiet = false, path = "settings") {
       state.confirmCopilotActions = preferences.confirmCopilotActions;
     }
     render();
-    refreshInbox = input && Object.hasOwn(input, "matchGitHubInbox");
     $("settings-status").textContent = "";
   } catch (error) {
     $("settings-status").textContent = `${error.message || "Settings request failed."} Close and reopen Settings to retry.`;
@@ -319,39 +336,46 @@ async function settingsRequest(input, quiet = false, path = "settings") {
     settingsBusy = false;
     $("settings-status").hidden = !$("settings-status").textContent;
     renderSettings();
-    restoreFocus(previousFocus, $("desktop-recommendation").hidden && $("desktop-recommendation").contains(previousFocus)
-      ? $("search") : undefined);
+    let fallbackFocus;
+    if ($("copilot-confirmations").hidden && previousFocus === $("copilot-confirmations")) {
+      fallbackFocus = $("copilot-integration");
+    } else if ($("desktop-sound-setting").hidden && previousFocus === $("desktop-sound")) {
+      fallbackFocus = $("desktop-notifications");
+    } else if ($("desktop-recommendation").hidden && $("desktop-recommendation").contains(previousFocus)) {
+      fallbackFocus = $("search");
+    }
+    restoreFocus(previousFocus, fallbackFocus);
     if (pendingSettings && visible()) {
       const next = pendingSettings;
       pendingSettings = undefined;
       restoreFocus(next.focus);
       void settingsRequest(next.input, false, next.path);
     }
-    if (refreshInbox) void update("refresh", {});
-    else if (input && ["copilotIntegration", "confirmCopilotActions"].some(key => Object.hasOwn(input, key))) void update();
+    if (input && ["copilotIntegration", "confirmCopilotActions"].some(key => Object.hasOwn(input, key))) void update();
   }
 }
 
-function positionSettings() {
-  if (!$("settings").open) return;
-  const panel = $("settings-panel");
-  const { top, bottom } = $("settings-toggle").getBoundingClientRect();
+function positionPopover(id) {
+  if (!$(id).open) return;
+  const panel = $(`${id}-panel`);
+  const { top, bottom } = $(`${id}-toggle`).getBoundingClientRect();
   const height = window.innerHeight;
-  if (bottom <= 0 || top >= height) return closeSettings();
+  if (bottom <= 0 || top >= height) return closePopover(id);
   // Reserve an 8px button gap and an 8px viewport margin.
   const below = Math.max(0, height - bottom - 16);
   const above = Math.max(0, top - 16);
-  const preferred = Math.min(height * 0.6, panel.scrollHeight + 2);
+  const maximum = id === "settings" ? height : height * 0.6;
+  const preferred = Math.min(maximum, panel.scrollHeight + 2);
   const useAbove = below < preferred && above > below;
   panel.dataset.placement = useAbove ? "above" : "below";
-  panel.style.maxHeight = `${Math.min(height * 0.6, useAbove ? above : below)}px`;
+  panel.style.maxHeight = `${Math.min(maximum, useAbove ? above : below)}px`;
 }
 
-function closeSettings(focus = false) {
-  $("settings").open = false;
-  $("settings-toggle").setAttribute("aria-expanded", "false");
-  $("settings-toggle").dataset.tooltipDismissed = "true";
-  if (focus && document.hasFocus()) $("settings-toggle").focus();
+function closePopover(id, focus = false) {
+  $(id).open = false;
+  $(`${id}-toggle`).setAttribute("aria-expanded", "false");
+  $(`${id}-toggle`).dataset.tooltipDismissed = "true";
+  if (focus && document.hasFocus()) $(`${id}-toggle`).focus();
 }
 
 async function markThread(id, action, focusRow = false) {
@@ -500,7 +524,8 @@ function focusSearchResult() {
 function openShortcuts() {
   if ($("shortcuts-dialog").open) return;
   shortcutReturnFocus = document.activeElement;
-  closeSettings();
+  closePopover("settings");
+  closePopover("filters");
   dismissTooltips();
   $("shortcuts-dialog").showModal();
 }
@@ -508,7 +533,7 @@ function openShortcuts() {
 function handleShortcut(event) {
   if (!visible() || !document.hasFocus() || !preferences?.keyboardShortcuts || event.defaultPrevented ||
       event.isComposing || event.keyCode === 229 || event.ctrlKey || event.metaKey || event.altKey ||
-      $("settings").open || $("shortcuts-dialog").open || $("copilot-dialog").open ||
+      $("settings").open || $("filters").open || $("shortcuts-dialog").open || $("copilot-dialog").open ||
       event.target?.closest("input, textarea, select, [contenteditable], [role=textbox]")) return;
   if (event.key === "?") {
     event.preventDefault();
@@ -723,6 +748,10 @@ async function performUpdate(path, input) {
     if (path === "refresh") actionError = "";
     return true;
   } catch (error) {
+    if (path === "filters" && changesSharedFilters(input)) {
+      filterSyncError = `Could not sync filters. ${error.name === "AbortError"
+        ? "The request was interrupted." : error.message || "The settings request failed."} Check the current selection and change it again to retry.`;
+    }
     if (!visible() && error.name === "AbortError") return false;
     connectionError = error.name === "AbortError"
       ? "The canvas request timed out. This view retries automatically while visible; reopen it if it stays disconnected."
@@ -740,6 +769,7 @@ async function performUpdate(path, input) {
 
 function update(path = "state", input) {
   if (path === "filters") {
+    if (changesSharedFilters(input)) filterSyncError = "";
     pendingFilters = { ...pendingFilters, ...input };
     return flushPendingUpdates();
   }
@@ -759,26 +789,33 @@ async function blockingUpdate(path, input) {
   if (busy || !visible() || (path !== "filters" && (batchBusy || marking.size || batchLocked()))) return;
   const previousFocus = document.activeElement;
   let succeeded = false;
+  let attempted = false;
   busy = true;
   refreshing = path === "refresh";
-  inFlightAttention = path === "filters" ? input.attention : undefined;
+  inFlightFilters = path === "filters" ? input : undefined;
   renderControls();
   try {
     await pollPromise;
     if (path === "filters" && searchComposing) return;
     if (path === "filters" && pendingFilters) {
       input = { ...input, ...pendingFilters };
-      inFlightAttention = input.attention;
+      inFlightFilters = input;
       pendingFilters = undefined;
       clearTimeout(searchTimer);
     }
-    if (visible()) succeeded = await performUpdate(path, input);
+    if (visible()) {
+      attempted = true;
+      succeeded = await performUpdate(path, input);
+    }
   } finally {
     busy = false;
     refreshing = false;
-    inFlightAttention = undefined;
+    inFlightFilters = undefined;
     if (!succeeded && path === "filters") {
-      pendingFilters = { ...input, ...pendingFilters };
+      // Replaying an uncertain shared save could overwrite a newer canvas edit.
+      const retry = attempted ? Object.fromEntries(Object.entries(input).filter(([key]) => !sharedFilterKeys.has(key))) : input;
+      pendingFilters = { ...retry, ...pendingFilters };
+      if (!Object.keys(pendingFilters).length) pendingFilters = undefined;
       searchFocusRequested = false;
     }
     render();
@@ -853,7 +890,8 @@ function tooltipAnchors() {
 }
 
 function positionOverlays() {
-  positionSettings();
+  positionPopover("settings");
+  positionPopover("filters");
   for (const anchor of tooltipAnchors()) {
     if (!anchor.dataset.tooltipDismissed && (anchor.dataset.tooltipKeyboard === "true" && anchor.contains(document.activeElement) || anchor.matches(":hover"))) {
       positionTooltip(anchor);
@@ -977,7 +1015,7 @@ function renderControls() {
     if (view) renderBatchView(batch, view);
   }
   $("groups").setAttribute("aria-busy", String(busy || state?.status === "loading"));
-  renderNotificationView();
+  renderRefinements();
   $("shortcuts-control").hidden = preferences?.keyboardShortcuts === false;
   for (const [control, keys] of [
     [$("groups"), "j k"], [$("search"), "/"], [$("shortcuts-toggle"), "?"],
@@ -1222,7 +1260,8 @@ async function requestCopilot(input) {
 function openCopilot(id, button) {
   button.focus({ preventScroll: true });
   copilotReturnFocus = button.dataset.focusKey;
-  closeSettings();
+  closePopover("settings");
+  closePopover("filters");
   dismissTooltips();
   const direct = !copilotConfirmations();
   if (!direct) {
@@ -1445,7 +1484,8 @@ function render(fallbackFocusKey) {
   const error = actionError || rowError || pendingRowError || state?.error?.message || connectionError;
   const loading = state?.status === "idle" || state?.status === "loading";
   const countsKnown = state?.lastFetchedAt != null;
-  const filtered = Boolean(state?.filters.query || (state && state.filters.attention !== "all"));
+  const refined = refinementFilters.some(({ key }) => (state?.filters[key] ?? "all") !== "all");
+  const filtered = Boolean(state?.filters.query || (state && state.filters.attention !== "all") || refined);
   const cleared = Boolean(state && !state.loaded && state.hasMore);
   const caughtUp = Boolean(state && !error && !loading && !filtered && !state.groups.length && !cleared);
   const attention = state?.filters.attention ?? "all";
@@ -1460,7 +1500,7 @@ function render(fallbackFocusKey) {
   ].filter(Boolean).join(" ");
   $("authorship-status").hidden = attention !== "mine" || !incompleteAuthorship;
   setControlText($("authorship-status"), authorshipStatus);
-  const requestedAttention = pendingFilters?.attention ?? inFlightAttention;
+  const requestedAttention = pendingFilters?.attention ?? inFlightFilters?.attention;
   let focusedTab = [...attentionTabs.values()].find(tab => tab === document.activeElement);
   let tabsChanged = false;
   for (const { value, label } of attentionFilters) {
@@ -1532,6 +1572,7 @@ function render(fallbackFocusKey) {
     ? " Refresh to check for more notifications." : " Load more to search older notifications." : "";
   $("empty-description").textContent = error ? "Resolve the message above. This view retries automatically while visible when the retry time arrives." :
     loading ? "Using your existing GitHub CLI sign-in." :
+    refined ? `Change or clear Filters, or try another attention tab or search.${moreHelp}` :
     attention !== "all" ? `Try another attention filter or search.${moreHelp}` :
     state.filters.query ? `Try another title, number or repository.${moreHelp}` :
     cleared ? state.needsRefresh ? "Refresh to check for remaining notifications." : "Load more to continue through your notifications." :
@@ -1540,7 +1581,8 @@ function render(fallbackFocusKey) {
     "New notifications will appear here in GitHub inbox order.";
   $("empty-refresh").hidden = !cleared || !state.needsRefresh || Boolean(error) || loading;
   renderBatch();
-  positionSettings();
+  positionPopover("settings");
+  positionPopover("filters");
   renderedSnapshotVersion = state.snapshotVersion;
 }
 
@@ -1618,14 +1660,34 @@ for (const filter of attentionFilters) {
   $("attention-tabs").append(tab);
 }
 
-$("settings").addEventListener("toggle", () => {
-  const open = $("settings").open;
-  $("settings-toggle").setAttribute("aria-expanded", String(open));
-  if (open) {
-    positionSettings();
-    void settingsRequest();
+for (const id of ["settings", "filters"]) {
+  $(id).addEventListener("toggle", () => {
+    const open = $(id).open;
+    $(`${id}-toggle`).setAttribute("aria-expanded", String(open));
+    if (open) {
+      closePopover(id === "settings" ? "filters" : "settings");
+      positionPopover(id);
+      if (id === "settings") void settingsRequest();
+    }
+  });
+}
+for (const { key, options } of refinementFilters) {
+  const select = $(`filter-${key}`);
+  for (const { value, label } of options) {
+    const option = element("option", "", label);
+    option.value = value;
+    select.append(option);
+  }
+  select.addEventListener("change", () => {
+    if (!select.disabled) return update("filters", { [key]: select.value });
+  });
+}
+$("filters-reset").addEventListener("click", () => {
+  if ($("filters-reset").getAttribute("aria-disabled") !== "true") {
+    return update("filters", Object.fromEntries(refinementFilters.map(({ key }) => [key, "all"])));
   }
 });
+renderRefinements();
 $("settings-toggle").addEventListener("click", () => {
   $("settings-toggle").dataset.tooltipDismissed = "true";
 });
@@ -1638,12 +1700,6 @@ $("development-api-save").addEventListener("click", () => {
 });
 $("auto-open").addEventListener("click", () => {
   if (preferences) void settingsRequest({ autoOpen: !preferences.autoOpen });
-});
-$("show-notifications").addEventListener("change", () => {
-  if (preferences && !$("show-notifications").disabled) {
-    const views = { all: true, unread: false };
-    void settingsRequest({ matchGitHubInbox: views[$("show-notifications").value] });
-  }
 });
 $("desktop-notifications").addEventListener("click", () => {
   if (preferences && !$("desktop-notifications").disabled) {
@@ -1718,10 +1774,14 @@ $("shortcuts-dialog").addEventListener("close", () => {
   shortcutReturnFocus = undefined;
 });
 document.addEventListener("click", event => {
-  if ($("settings").open && !$("settings").contains(event.target)) closeSettings();
+  for (const id of ["settings", "filters"]) {
+    if ($(id).open && !$(id).contains(event.target)) closePopover(id);
+  }
 });
 document.addEventListener("focusin", event => {
-  if ($("settings").open && !$("settings").contains(event.target)) closeSettings();
+  for (const id of ["settings", "filters"]) {
+    if ($(id).open && !$(id).contains(event.target)) closePopover(id);
+  }
 });
 document.addEventListener("keydown", event => {
   pointerInteraction = false;
@@ -1760,11 +1820,13 @@ document.addEventListener("keydown", event => {
     $("shortcuts-dialog").close();
     return;
   }
-  // Let the browser dismiss an open picker before closing its Settings panel.
+  // Let the browser dismiss an open picker before closing its containing panel.
   if (window.CSS?.supports("selector(select:open)") && document.querySelector("select:open")) return;
-  if ($("settings").open) {
-    event.preventDefault();
-    closeSettings(true);
+  for (const id of ["settings", "filters"]) {
+    if ($(id).open) {
+      event.preventDefault();
+      closePopover(id, true);
+    }
   }
   dismissTooltips();
 });
@@ -1853,7 +1915,8 @@ function visibilityChanged() {
     updateNotice.invalidateCopy();
     dismissTooltips();
     for (const controller of requestControllers) controller.abort();
-    closeSettings();
+    closePopover("settings");
+    closePopover("filters");
     if (subjectSelectionFrame !== undefined) cancelAnimationFrame(subjectSelectionFrame);
     subjectSelectionFrame = undefined;
   }
@@ -1881,6 +1944,7 @@ layoutObserver.observe($("attention-navigation"));
 for (const tab of attentionTabs.values()) layoutObserver.observe(tab);
 layoutObserver.observe($("inbox-header"));
 layoutObserver.observe($("settings-panel"));
+layoutObserver.observe($("filters-panel"));
 systemTheme.addEventListener("change", renderTheme);
 renderTheme();
 window.addEventListener("pagehide", () => {

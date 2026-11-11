@@ -325,6 +325,37 @@ test("turning integration off removes a prepared dialog's start action", async t
   assert.match(ui.ids.get("copilot-status").textContent, /integration is off/);
 });
 
+test("confirmation settings follow integration without changing the saved choice or losing settings focus", async t => {
+  for (const confirmCopilotActions of [true, false]) {
+    const storedSettings = { copilotIntegration: false, confirmCopilotActions };
+    const ui = await setup(t, { storedSettings });
+    const confirmations = ui.ids.get("copilot-confirmations");
+    const toggle = ui.ids.get("copilot-integration");
+    assert.equal(confirmations.hidden, true);
+    assert.equal(confirmations.disabled, true);
+    await toggle.events.click();
+    await settle();
+    assert.equal(confirmations.hidden, false);
+    assert.equal(confirmations.disabled, false);
+    assert.equal(confirmations.getAttribute("aria-checked"), String(confirmCopilotActions));
+    confirmations.focus();
+    storedSettings.copilotIntegration = false;
+    storedSettings.revision++;
+    await runInContext("settingsRequest(undefined, true)", ui.context);
+    assert.equal(confirmations.hidden, true);
+    assert.equal(confirmations.disabled, true);
+    assert.equal(ui.document.activeElement, toggle);
+    storedSettings.copilotIntegration = true;
+    storedSettings.revision++;
+    await runInContext("settingsRequest(undefined, true)", ui.context);
+    assert.equal(confirmations.hidden, false);
+    assert.equal(confirmations.getAttribute("aria-checked"), String(confirmCopilotActions));
+    assert.equal(storedSettings.confirmCopilotActions, confirmCopilotActions);
+    assert.deepEqual(ui.calls.filter(call => call.path === "/api/settings" && call.options.body)
+      .map(call => JSON.parse(call.options.body)), [{ copilotIntegration: true }]);
+  }
+});
+
 test("the popup opt-out is submitted only with Start, not when cancelling", async t => {
   const requests = [];
   const ui = await setup(t, { onCopilot: input => {

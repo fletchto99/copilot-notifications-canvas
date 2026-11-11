@@ -151,7 +151,10 @@ test("development API saves preserve preferences and unknown data without changi
   await service.update({ baseUrl: baseUrl + "/" });
   assert.deepEqual(await service.snapshot(), { baseUrl: DEFAULT_API_BASE_URL, savedBaseUrl: baseUrl, requiresReload: true });
   await preferences.update({ darkMode: true });
-  assert.deepEqual(JSON.parse(await readFile(preferences.path, "utf8")), {
+  const { revision, updatedAt, ...saved } = JSON.parse(await readFile(preferences.path, "utf8"));
+  assert.equal(revision, 2);
+  assert.equal(new Date(updatedAt).toISOString(), updatedAt);
+  assert.deepEqual(saved, {
     autoOpen: false, desktopNotifications: true, futureSetting: { keep: true }, developmentApiBaseUrl: baseUrl, darkMode: true,
   });
   assert.equal(Object.hasOwn(await preferences.read(), "developmentApiBaseUrl"), false);

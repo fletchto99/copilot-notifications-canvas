@@ -7,16 +7,15 @@ across sessions and preserved during packaged upgrades.
 
 | Setting | Default | Options and behavior |
 | --- | --- | --- |
-| Show notifications | All | **All** shows read and unread inbox items, excluding Done. **Unread only** shows unread items. Switching reloads the first page. No per-notification state is saved locally. |
 | Group By | Repository | **Repository**: preserve GitHub's API order, grouping repositories by first appearance. **All notifications**: one collapsible group in API order. **Date**: newest local calendar day first, using REST update times for buckets and API order for rows. |
 | Copilot integration | On | Shows contextual Copilot actions on eligible notifications. Closed and merged PRs offer **Summarize Changes**; closed, unmerged PRs also ask whether you want help reopening after the summary. Releases with a specific linked ID offer **Summarize Release Notes**. Merge-queued PRs show disabled controls explaining their state. Turn off to hide the buttons and block new handoffs; sessions already started are left alone. |
-| Confirm Copilot actions | On | Shows the routine handoff popup. Turn off to start from a row click when no matching session exists. Cloning, inferred CI matches, and choosing an existing or new session still require confirmation. |
+| Confirm Copilot actions | On | Visible only while Copilot integration is on. Shows the routine handoff popup. Turn off to start from a row click when no matching session exists. Cloning, inferred CI matches, and choosing an existing or new session still require confirmation. |
 | Hide empty tabs | On | Hides attention tabs with zero loaded notifications. **All**, the selected tab, and **Mine** with incomplete authorship checks stay visible. Counts ignore search; tabs reappear when matching notifications are loaded. Saved choices are preserved. |
 | Theme | Match Copilot | **Match Copilot** uses Copilot's theme colors, falling back to the OS theme when opened outside Copilot. **Dark** and **Light** use fixed palettes. |
 | Keyboard shortcuts | On | Enables J/K navigation, I Read, Shift+E Done, / search, and ? help inside the focused canvas. Turn off to disable character shortcuts and hide the toolbar help icon; native Tab/Enter remain available. |
 | Auto-open | Off | Opens a missing Notifications panel when its provider attaches to a new or resumed session, unless you previously closed it in that session. Existing panels are left alone. |
 | Desktop notifications | Off | Enables native alerts while a Notifications canvas is open and its extension process is running. |
-| Sound | System default | System-specific sounds for desktop alerts; see the platform table below. |
+| Sound | System default | Visible only while Desktop notifications is on. The saved sound is preserved when hidden. System-specific sounds for desktop alerts; see the platform table below. |
 
 With **Match Copilot** selected, the canvas inherits Copilot's theme colors and
 typography, including custom palettes such as Fox, and follows theme changes
@@ -35,14 +34,18 @@ The saved grouping values remain `repo`, `none`, and `date`; the display labels
 do not change existing preferences. Press Escape, click outside Settings, or move
 keyboard focus outside it to close the panel. When a dropdown is open, Escape
 dismisses that picker first; press it again to close Settings.
-Settings stays within the canvas viewport, scrolling internally when needed.
+Settings uses the available vertical space with an 8px viewport margin, scrolling
+internally only when its content cannot fit.
 It opens above its button when that offers more space and closes if the button
 scrolls out of view. Labels and dropdowns stack when needed to accommodate wider
 text, and the panel adjusts when typography or header content changes.
+Source builds keep API configuration in a collapsed **Development** section.
+Expanding or collapsing it does not change settings or discard an unsaved API URL.
 
 The Copilot preference is stored as the `copilotIntegration` boolean and defaults
-to `true` when absent. Its switch and **Confirm Copilot actions** appear above
-**Hide empty tabs**. Other panels
+to `true` when absent. Its switch appears above **Hide empty tabs**.
+**Confirm Copilot actions** appears directly below it only while integration is on;
+turning integration off hides that switch without changing its saved choice. Other panels
 apply changes on their next poll; handoffs recheck the saved preference before
 launching work. Turning it off invalidates prepared confirmations and stops
 additional handoff steps, but cannot undo a host action already in flight or
@@ -51,7 +54,7 @@ stop a session that has started. See [Copilot actions](copilot.md#confirmations-
 `confirmCopilotActions` also defaults to `true`. **Skip routine confirmations**
 in the handoff popup saves `false` only when you confirm; cancelling leaves the
 preference unchanged. The preference is user-wide, and the Settings switch can
-restore confirmation at any time. Changing it or polling an open panel never
+restore confirmation while integration is on. Changing it or polling an open panel never
 starts work: a fresh row click is required. Native permissions, repository trust,
 summary-first behavior, and review-skill selection are unchanged.
 
@@ -61,16 +64,53 @@ validation rules as other preferences. No focused-row or navigation history is
 persisted. See [keyboard controls](usage.md#keyboard-and-preferences) for the full
 shortcut list and action safeguards.
 
-The dropdown stores `matchGitHubInbox` in the user-wide settings file:
-`true` means **All** and `false` means **Unread only**. Existing
-choices are preserved without migration. Other open panels apply changes on
-their next poll, without interrupting an active batch.
+Read/unread selection now lives in **Filters > Read state**, not Settings.
+Every panel fetches the full read-and-unread inbox, excluding Done, and filters
+only loaded items without resetting pagination or saving per-notification state.
+The four dropdowns save automatically and sync across canvases sharing this
+user-wide settings directory. The `filterDefaults` object holds their current
+`type`, `readState`, `reason`, and `age` choices; its historical name is retained
+for compatibility with saved files. **Clear filters** clears these shared choices.
+Search text and attention tabs remain local and are never saved. Different
+dropdown edits merge under the existing settings lock; the last successful save
+wins for the same dropdown. A busy, failed, or interrupted save is reported
+without automatically replaying an old edit over another canvas's newer choice.
+Visible panels normally pick up changes within five seconds; hidden panels
+apply them when visible again. This is local settings sharing, not cloud sync.
+
+Every successful settings write, including a filter edit, atomically updates
+two metadata fields alongside the preferences:
+
+```json
+{
+  "revision": 7,
+  "updatedAt": "2026-01-10T12:00:00.000Z"
+}
+```
+
+`updatedAt` is the UTC wall-clock time of the save. `revision` increases under
+the settings lock even when writes share a timestamp or the clock moves
+backwards; providers ignore older revisions rather than restoring stale filters.
+Callers cannot supply these fields through the settings API. Old files without
+metadata are read as revision zero and remain untouched until an explicit save.
+Malformed metadata is reported, not reset. Keep metadata valid and advance
+`revision` when editing manually; reload the provider if restoring an older revision.
+
+The legacy `matchGitHubInbox` boolean is preserved in existing settings files:
+when no `filterDefaults` exists, `false` initializes a new panel's read-state filter
+to **Unread**; `true` or an absent value initializes it to **Read and unread**. Explicit opening filters
+take precedence for the initial view only; a subsequent shared-settings update
+replaces initial dropdown overrides without changing local search or attention.
+The legacy field remains readable and writable for compatibility with older
+providers; new filter choices never rewrite it.
 If settings become unreadable or invalid, an open inbox keeps its last applied
-view and displays a settings warning rather than stopping refreshes or pagination.
+filter and displays a settings warning rather than stopping refreshes or pagination.
 The settings file is not reset or rewritten; repair it to restore preference
-changes. A panel that has not read valid settings uses the default view with
-the same warning. API-target validation at provider startup remains unchanged.
-Desktop alerts still poll unread notifications only; this setting does not change
+changes. A panel that has not read valid settings uses the default filter with
+the same warning; its first successful settings read respects explicit opening
+choices. Invalid shared filters are reported, never reset or silently migrated.
+API-target validation at provider startup remains unchanged.
+Desktop alerts still poll unread notifications only; display filters do not change
 their baseline, enable alerts, or replay read or completed activity.
 
 Auto-open is a user-wide preference, but dismissal belongs to each session.
@@ -160,11 +200,11 @@ have delivered it. Removing the helper restores the fallback for future alerts.
 
 ### Polling and delivery
 
-Desktop alerts poll the unread-only feed, normally every 60 seconds. With
-**All** selected, the canvas uses a separate cache entry and cannot supply
-a desktop baseline or include read/completed items in alert scans. Selecting
-**Unread only**, or explicitly selecting the agent's unread view, lets the canvas
-share unread results with the watcher.
+Desktop alerts poll the unread-only feed, normally every 60 seconds. The canvas
+always uses a separate full-inbox cache entry and cannot supply a desktop baseline
+or include read/completed items in alert scans. Read-state filters do not change
+that separation. Forcing a panel refresh does not bypass the unread feed's
+polling deadline.
 The watcher follows every unread page before checkpointing activity,
 independent of search or how many pages the canvas has loaded. An older REST
 update timestamp does not stop the scan because those timestamps do not define

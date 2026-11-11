@@ -103,8 +103,12 @@ for (const packaged of [false, true]) {
           }
           expect(previousRight).toBe(width - 12);
           const search = await page.getByRole("searchbox").boundingBox();
+          const filters = await page.locator("#filters-toggle").boundingBox();
           const tabs = await page.locator(".attention-navigation").boundingBox();
-          expect(search.width).toBe(width - 24);
+          expect(search.width + filters.width + 8).toBeCloseTo(width - 24, 1);
+          expect(filters.x).toBeCloseTo(search.x + search.width + 8, 1);
+          expect(filters.y).toBe(search.y);
+          expect(filters.height).toBe(search.height);
           expect(search.height).toBe(38);
           expect(search.y).toBe(toolbar.y + toolbar.height + 8);
           expect(tabs.y).toBe(search.y + search.height + gap);
@@ -116,12 +120,12 @@ for (const packaged of [false, true]) {
       });
     }
 
-    test("keyboard order follows the utility row, search and attention tabs", async ({ page, canvas }) => {
+    test("keyboard order follows the utility row, search, Filters and attention tabs", async ({ page, canvas }) => {
       canvas.rows.splice(1);
       await page.goto(canvas.url);
       await expect(page.locator(".row")).toHaveCount(1);
       await focusToolbarWithKeyboard(page, "#open-inbox");
-      for (const selector of ["#force-refresh", "#shortcuts-toggle", "#settings-toggle", "#search", "#attention-all"]) {
+      for (const selector of ["#force-refresh", "#shortcuts-toggle", "#settings-toggle", "#search", "#filters-toggle", "#attention-all"]) {
         await page.keyboard.press("Tab");
         await expect(page.locator(selector)).toBeFocused();
       }
@@ -1014,8 +1018,10 @@ test("Settings supports keyboard dismissal and persists theme and auto-open acro
   await expect(theme).toHaveValue("dark");
   await expect(autoOpen).toHaveAttribute("aria-checked", "true");
   await expect(page.getByRole("switch", { name: "Desktop notifications", exact: true })).toHaveAttribute("aria-checked", "false");
-  await expect(page.getByRole("combobox", { name: "Sound", exact: true })).toHaveValue("default");
+  await expect(page.getByRole("combobox", { name: "Sound", exact: true })).toBeHidden();
+  await expect(page.locator("#desktop-sound")).toHaveValue("default");
   expect(await canvas.preferences.read()).toEqual({
+    revision: expect.any(Number), updatedAt: expect.any(String),
     matchGitHubInbox: true, autoOpen: true, darkMode: true, desktopNotifications: false, terminalNotifierHintDismissed: false, desktopSound: "default", groupBy: "repo", copilotIntegration: true, confirmCopilotActions: true, hideEmptyTabs: true, keyboardShortcuts: true,
   });
   await theme.selectOption("system");

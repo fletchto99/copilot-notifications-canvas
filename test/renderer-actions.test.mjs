@@ -464,12 +464,13 @@ test("repository toggle focus is inset inside the clipped card", () => {
   assert.match(styles, /\.repo-toggle:focus-visible \{\s+outline-offset: -3px;\s+\}/);
 });
 
-test("compact toolbar aligns the title and utility icons above full-width search", () => {
+test("compact toolbar aligns the title and utility icons above search and filters", () => {
   assert.match(styles, /\.toolbar \{\s+display: flex;\s+align-items: center;[^}]*\}/);
-  assert.match(styles, /\.search \{\s+display: block;\s+min-width: 0;[^}]*\}/);
+  assert.match(styles, /\.search-controls \{\s+display: flex;[^}]*\}/);
+  assert.match(styles, /\.search \{\s+display: block;\s+flex: 1;\s+min-width: 0;[^}]*\}/);
   assert.match(styles, /\.search input \{\s+height: 38px;\s+\}/);
   assert.match(styles, /\.icon-button \{[^}]*flex-shrink: 0;[^}]*width: 38px;\s+height: 38px;[^}]*color: var\(--canvas-text\);/);
-  assert.match(styles, /\.settings \{[^}]*flex-shrink: 0;/);
+  assert.match(styles, /\.settings,\s+\.filters \{[^}]*flex-shrink: 0;/);
   assert.doesNotMatch(styles.match(/(?:^|\n)\.toolbar \{[^}]*\}/)[0], /flex-wrap: wrap/);
   assert.match(styles, /@media \(max-width: 360px\) \{\s+\.toolbar \{\s+flex-wrap: wrap;\s+justify-content: flex-end;\s+gap: 4px;\s+\}\s+\.toolbar h1 \{\s+flex-basis: 100%;/);
 });

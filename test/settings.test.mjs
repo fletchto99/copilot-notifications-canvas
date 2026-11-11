@@ -13,6 +13,7 @@ import { DesktopNotifications } from "../src/provider/desktop.mjs";
 import { InboxError } from "../src/shared/model.mjs";
 
 const defaults = { matchGitHubInbox: true, autoOpen: false, darkMode: null, desktopNotifications: false, terminalNotifierHintDismissed: false, desktopSound: "default", groupBy: "repo", copilotIntegration: true, confirmCopilotActions: true, hideEmptyTabs: true, keyboardShortcuts: true };
+const settingsOnly = ({ revision, updatedAt, ...settings }) => settings;
 
 async function setup(t, io) {
   const directory = await fs.mkdtemp(join(tmpdir(), "notification-settings-test-"));
@@ -46,7 +47,7 @@ test("the optional macOS hint is read-only until dismissal, persists across inst
   assert.equal((await response.json()).terminalNotifierHintDismissed, true);
   const other = new Preferences({ directory: preferences.directory });
   assert.equal((await other.read()).terminalNotifierHintDismissed, true);
-  assert.deepEqual(await other.document(), { future: 42, autoOpen: true, terminalNotifierHintDismissed: true });
+  assert.deepEqual(settingsOnly(await other.document()), { future: 42, autoOpen: true, terminalNotifierHintDismissed: true });
   installed = "/opt/homebrew/bin/terminal-notifier";
   const settings = await read();
   assert.equal(settings.desktopStatus.backend, "terminal-notifier");
@@ -59,29 +60,29 @@ test("the optional macOS hint is read-only until dismissal, persists across inst
 
 test("settings default to auto-open off, app theme and repo grouping, persist across instances and preserve unknown keys", async t => {
   const preferences = await setup(t);
-  assert.deepEqual(await preferences.read(), defaults);
+  assert.deepEqual(settingsOnly(await preferences.read()), defaults);
   await fs.writeFile(preferences.path, '{"future":{"theme":"custom"},"autoOpen":false}');
   await preferences.update({ autoOpen: true });
   const other = new Preferences({ directory: preferences.directory });
-  assert.deepEqual(await other.read(), { ...defaults, autoOpen: true });
+  assert.deepEqual(settingsOnly(await other.read()), { ...defaults, autoOpen: true });
   assert.deepEqual(JSON.parse(await fs.readFile(preferences.path, "utf8")).future, { theme: "custom" });
   await other.update({ autoOpen: false });
-  assert.deepEqual(await preferences.read(), defaults);
+  assert.deepEqual(settingsOnly(await preferences.read()), defaults);
   if (process.platform !== "win32") assert.equal((await fs.stat(preferences.path)).mode & 0o777, 0o600);
 });
 
 test("dark mode persists across instances without replacing auto-open or unknown preferences", async t => {
   const preferences = await setup(t);
   await fs.writeFile(preferences.path, '{"autoOpen":true,"future":42}');
-  assert.deepEqual(await preferences.update({ darkMode: true }), { ...defaults, autoOpen: true, darkMode: true });
+  assert.deepEqual(settingsOnly(await preferences.update({ darkMode: true })), { ...defaults, autoOpen: true, darkMode: true });
   const other = new Preferences({ directory: preferences.directory });
-  assert.deepEqual(await other.read(), { ...defaults, autoOpen: true, darkMode: true });
-  assert.deepEqual(await other.update({ autoOpen: false }), { ...defaults, darkMode: true });
-  assert.deepEqual(await preferences.update({ darkMode: false }), { ...defaults, darkMode: false });
-  assert.deepEqual(await other.read(), { ...defaults, darkMode: false });
+  assert.deepEqual(settingsOnly(await other.read()), { ...defaults, autoOpen: true, darkMode: true });
+  assert.deepEqual(settingsOnly(await other.update({ autoOpen: false })), { ...defaults, darkMode: true });
+  assert.deepEqual(settingsOnly(await preferences.update({ darkMode: false })), { ...defaults, darkMode: false });
+  assert.deepEqual(settingsOnly(await other.read()), { ...defaults, darkMode: false });
   assert.equal(JSON.parse(await fs.readFile(preferences.path, "utf8")).future, 42);
-  assert.deepEqual(await preferences.update({ autoOpen: true, darkMode: null }), { ...defaults, autoOpen: true });
-  assert.deepEqual(await other.read(), { ...defaults, autoOpen: true });
+  assert.deepEqual(settingsOnly(await preferences.update({ autoOpen: true, darkMode: null })), { ...defaults, autoOpen: true });
+  assert.deepEqual(settingsOnly(await other.read()), { ...defaults, autoOpen: true });
 });
 
 test("inbox matching defaults on, preserves the former local setting, and saves only the new boolean", async t => {
@@ -91,10 +92,97 @@ test("inbox matching defaults on, preserves the former local setting, and saves 
   assert.equal(Object.hasOwn(await preferences.read(), "showDone"), false);
   await assert.rejects(preferences.update({ showDone: false }), { code: "invalid_settings" });
   await preferences.update({ matchGitHubInbox: false });
-  assert.deepEqual(await preferences.document(), { showDone: true, future: 42, matchGitHubInbox: false });
+  assert.deepEqual(settingsOnly(await preferences.document()), { showDone: true, future: 42, matchGitHubInbox: false });
   assert.equal((await new Preferences({ directory: preferences.directory }).read()).matchGitHubInbox, false);
   await preferences.update({ matchGitHubInbox: true });
   assert.equal((await preferences.read()).matchGitHubInbox, true);
+});
+
+test("filter defaults persist only the four supported choices and preserve unrelated settings", async t => {
+  const preferences = await setup(t);
+  const original = { matchGitHubInbox: false, desktopNotifications: false, future: { preserved: true } };
+  await fs.writeFile(preferences.path, JSON.stringify(original));
+  const filterDefaults = { type: "PullRequest", readState: "all", reason: "review_requested", age: "last_7d" };
+  await preferences.update({ filterDefaults });
+  const other = new Preferences({ directory: preferences.directory });
+  assert.deepEqual((await other.read()).filterDefaults, filterDefaults);
+  assert.deepEqual(settingsOnly(await other.document()), { ...original, filterDefaults });
+  await other.update({ groupBy: "date" });
+  assert.deepEqual(settingsOnly(await preferences.document()), { ...original, filterDefaults, groupBy: "date" });
+  assert.equal((await preferences.read()).desktopNotifications, false);
+  assert.deepEqual(await fs.readdir(preferences.directory), ["settings.json"]);
+});
+
+test("invalid or content-bearing filter defaults fail without rewriting saved preferences", async t => {
+  const preferences = await setup(t);
+  const valid = { type: "all", readState: "unread", reason: "all", age: "all" };
+  const original = JSON.stringify({ filterDefaults: valid, future: 42 });
+  for (const value of [null, [], "unread", {}, { ...valid, age: undefined }, { ...valid, type: "Unknown" },
+    { ...valid, readState: false }, { ...valid, reason: "unsupported" }, { ...valid, age: "yesterday" },
+    { ...valid, query: "Synthetic title" }, { ...valid, attention: "mine" }, { ...valid, mode: "inbox" }]) {
+    await fs.writeFile(preferences.path, original);
+    await assert.rejects(preferences.update({ filterDefaults: value }), { code: "invalid_settings" });
+    assert.equal(await fs.readFile(preferences.path, "utf8"), original);
+    const invalid = JSON.stringify({ filterDefaults: value });
+    await fs.writeFile(preferences.path, invalid);
+    await assert.rejects(preferences.read(), { code: "settings_read" });
+    await assert.rejects(preferences.update({ darkMode: true }), { code: "settings_read" });
+    assert.equal(await fs.readFile(preferences.path, "utf8"), invalid);
+  }
+});
+
+test("shared filter patches merge under the lock and atomically stamp every settings write", async t => {
+  const preferences = await setup(t);
+  let now = Date.parse("2026-01-10T12:00:00Z");
+  preferences.now = () => now;
+  const other = new Preferences({ directory: preferences.directory, now: () => now });
+  await fs.writeFile(preferences.path, '{"matchGitHubInbox":false,"future":42}');
+  assert.equal((await preferences.read()).revision, 0);
+  assert.equal((await preferences.read()).updatedAt, null);
+  const one = await preferences.update({ darkMode: true });
+  assert.equal(one.revision, 1);
+  assert.equal(one.updatedAt, "2026-01-10T12:00:00.000Z");
+  const two = await other.updateFilters({ type: "PullRequest" });
+  assert.equal(two.revision, 2);
+  assert.equal(two.updatedAt, one.updatedAt, "Same-millisecond writes are ordered by revision");
+  now -= 5000;
+  const three = await preferences.updateFilters({ reason: "mention", age: "last_7d" });
+  assert.equal(three.revision, 3);
+  assert.equal(three.updatedAt, "2026-01-10T11:59:55.000Z");
+  assert.deepEqual(three.filterDefaults, { type: "PullRequest", readState: "unread", reason: "mention", age: "last_7d" });
+  const before = await fs.readFile(preferences.path, "utf8");
+  assert.deepEqual(JSON.parse(before), { matchGitHubInbox: false, future: 42, darkMode: true,
+    revision: 3, updatedAt: three.updatedAt, filterDefaults: three.filterDefaults });
+  const failing = new Preferences({ directory: preferences.directory, io: {
+    ...fs, rename: async () => { throw Object.assign(new Error("Synthetic atomic replacement failure"), { code: "EIO" }); },
+  } });
+  await assert.rejects(failing.updateFilters({ type: "Release" }), { code: "settings_write" });
+  assert.equal(await fs.readFile(preferences.path, "utf8"), before);
+  assert.deepEqual(await fs.readdir(preferences.directory), ["settings.json"]);
+});
+
+test("metadata cannot be supplied by callers, overflow never wraps, and invalid metadata is preserved", async t => {
+  const preferences = await setup(t);
+  for (const input of [{ revision: 1 }, { updatedAt: "2026-01-10T12:00:00.000Z" },
+    { type: "Issue", query: "Synthetic title" }, {}, { age: "yesterday" }, { readState: null }]) {
+    await assert.rejects(preferences.updateFilters(input), { code: "invalid_filters" });
+  }
+  for (const input of [{ revision: 1 }, { updatedAt: "2026-01-10T12:00:00.000Z" }]) {
+    await assert.rejects(preferences.update(input), { code: "invalid_settings" });
+  }
+  for (const metadata of [{ revision: -1 }, { revision: 1.5 }, { revision: "1" },
+    { revision: Number.MAX_SAFE_INTEGER + 1 }, { updatedAt: null }, { updatedAt: "invalid" },
+    { updatedAt: "2026-01-10" }]) {
+    const data = JSON.stringify({ future: 42, ...metadata });
+    await fs.writeFile(preferences.path, data);
+    await assert.rejects(preferences.read(), { code: "settings_read" });
+    await assert.rejects(preferences.updateFilters({ type: "Issue" }), { code: "settings_read" });
+    assert.equal(await fs.readFile(preferences.path, "utf8"), data);
+  }
+  const exhausted = JSON.stringify({ revision: Number.MAX_SAFE_INTEGER });
+  await fs.writeFile(preferences.path, exhausted);
+  await assert.rejects(preferences.updateFilters({ type: "Issue" }), { code: "settings_write" });
+  assert.equal(await fs.readFile(preferences.path, "utf8"), exhausted);
 });
 
 test("all grouping choices persist across instances and survive unrelated settings updates", async t => {
@@ -102,10 +190,10 @@ test("all grouping choices persist across instances and survive unrelated settin
   await fs.writeFile(preferences.path, '{"autoOpen":true,"darkMode":false,"future":42}');
   const other = new Preferences({ directory: preferences.directory });
   for (const groupBy of ["none", "date", "repo"]) {
-    assert.deepEqual(await preferences.update({ groupBy }), { ...defaults, autoOpen: true, darkMode: false, groupBy });
-    assert.deepEqual(await other.read(), { ...defaults, autoOpen: true, darkMode: false, groupBy });
+    assert.deepEqual(settingsOnly(await preferences.update({ groupBy })), { ...defaults, autoOpen: true, darkMode: false, groupBy });
+    assert.deepEqual(settingsOnly(await other.read()), { ...defaults, autoOpen: true, darkMode: false, groupBy });
     await other.update({ darkMode: true });
-    assert.deepEqual(await preferences.read(), { ...defaults, autoOpen: true, darkMode: true, groupBy });
+    assert.deepEqual(settingsOnly(await preferences.read()), { ...defaults, autoOpen: true, darkMode: true, groupBy });
     await other.update({ darkMode: false });
     assert.equal(JSON.parse(await fs.readFile(preferences.path, "utf8")).future, 42);
   }
@@ -117,10 +205,10 @@ test("hiding empty tabs defaults on and persists without replacing unrelated or 
   assert.equal((await preferences.read()).hideEmptyTabs, true);
   const other = new Preferences({ directory: preferences.directory });
   for (const hideEmptyTabs of [false, true]) {
-    assert.deepEqual(await preferences.update({ hideEmptyTabs }), { ...defaults, groupBy: "date", hideEmptyTabs });
+    assert.deepEqual(settingsOnly(await preferences.update({ hideEmptyTabs })), { ...defaults, groupBy: "date", hideEmptyTabs });
     assert.equal((await other.read()).hideEmptyTabs, hideEmptyTabs);
     await other.update({ darkMode: null });
-    assert.deepEqual(await preferences.document(), { groupBy: "date", future: 42, hideEmptyTabs, darkMode: null });
+    assert.deepEqual(settingsOnly(await preferences.document()), { groupBy: "date", future: 42, hideEmptyTabs, darkMode: null });
   }
 });
 
@@ -163,7 +251,7 @@ test("Copilot integration defaults on and persists across instances without losi
     await preferences.update({ copilotIntegration });
     await other.update({ darkMode: null });
     assert.equal((await other.read()).copilotIntegration, copilotIntegration);
-    assert.deepEqual(await preferences.document(), { groupBy: "date", future: 42, copilotIntegration, darkMode: null });
+    assert.deepEqual(settingsOnly(await preferences.document()), { groupBy: "date", future: 42, copilotIntegration, darkMode: null });
   }
 });
 
@@ -176,7 +264,7 @@ test("character shortcuts default on and can be disabled across instances withou
     await preferences.update({ keyboardShortcuts });
     await other.update({ darkMode: null });
     assert.equal((await other.read()).keyboardShortcuts, keyboardShortcuts);
-    assert.deepEqual(await preferences.document(), { groupBy: "date", future: 42, keyboardShortcuts, darkMode: null });
+    assert.deepEqual(settingsOnly(await preferences.document()), { groupBy: "date", future: 42, keyboardShortcuts, darkMode: null });
   }
 });
 
@@ -188,7 +276,7 @@ test("Copilot confirmations default on and their opt-out survives unrelated upda
   const other = new Preferences({ directory: preferences.directory });
   await other.update({ groupBy: "date" });
   assert.equal((await other.read()).confirmCopilotActions, false);
-  assert.deepEqual(await preferences.document(), {
+  assert.deepEqual(settingsOnly(await preferences.document()), {
     copilotIntegration: true, future: 42, confirmCopilotActions: false, groupBy: "date",
   });
   await other.update({ confirmCopilotActions: true });
@@ -199,7 +287,7 @@ test("missing settings use defaults but explicit undefined and unknown patches a
   const preferences = await setup(t);
   const stored = JSON.parse('{"future":42,"constructor":"opaque","__proto__":{"keep":true},"desktopGeneration":"retained"}');
   await fs.writeFile(preferences.path, JSON.stringify(stored));
-  assert.deepEqual(await preferences.read(), defaults);
+  assert.deepEqual(settingsOnly(await preferences.read()), defaults);
   for (const key of Object.keys(defaults)) {
     await assert.rejects(preferences.update({ [key]: undefined }), { code: "invalid_settings" });
     const input = Object.defineProperty({ autoOpen: false, groupBy: "repo" }, key, { value: undefined, enumerable: false });
@@ -209,7 +297,7 @@ test("missing settings use defaults but explicit undefined and unknown patches a
     await assert.rejects(preferences.update({ [key]: true }), { code: "invalid_settings" });
   }
   await preferences.update({ groupBy: "date" });
-  assert.deepEqual(await preferences.document(), { ...stored, groupBy: "date" });
+  assert.deepEqual(settingsOnly(await preferences.document()), { ...stored, groupBy: "date" });
 });
 
 test("storage errors and concurrent-writer locks are actionable, not success-shaped", async t => {
@@ -278,7 +366,9 @@ test("live settings writers and legacy ownerless locks are never removed", async
 
 test("settings size limits include the final newline and preserve oversized updates", async t => {
   const preferences = await setup(t);
-  const overhead = Buffer.byteLength(`${JSON.stringify({ future: "", autoOpen: true }, null, 2)}\n`);
+  preferences.now = () => 0;
+  const overhead = Buffer.byteLength(`${JSON.stringify({ future: "", autoOpen: true,
+    revision: 1, updatedAt: "1970-01-01T00:00:00.000Z" }, null, 2)}\n`);
   for (const bytes of [16_383, 16_384, 16_385]) {
     const future = "x".repeat(bytes - overhead);
     const before = JSON.stringify({ future });
@@ -321,7 +411,7 @@ test("settings HTTP routes require capability/origin and persist only permitted 
   const url = new URL(server.url);
   const headers = { Authorization: `Bearer ${url.hash.slice(1)}`, Origin: url.origin, "Content-Type": "application/json" };
   assert.equal((await fetch(`${url.origin}/api/settings`)).status, 403);
-  assert.deepEqual(await (await fetch(`${url.origin}/api/settings`, { headers })).json(), {
+  assert.deepEqual(settingsOnly(await (await fetch(`${url.origin}/api/settings`, { headers })).json()), {
     ...defaults,
     desktopStatus: { supported: false, state: "off", message: "Desktop notifications are unavailable." },
   });
@@ -346,8 +436,8 @@ test("settings HTTP routes require capability/origin and persist only permitted 
       });
     }
   }
-  assert.deepEqual(await preferences.read(), { ...defaults, autoOpen: true, darkMode: true, groupBy: "date" });
-  assert.deepEqual(await (await fetch(`${url.origin}/api/settings`, { headers })).json(), {
+  assert.deepEqual(settingsOnly(await preferences.read()), { ...defaults, autoOpen: true, darkMode: true, groupBy: "date" });
+  assert.deepEqual(settingsOnly(await (await fetch(`${url.origin}/api/settings`, { headers })).json()), {
     ...defaults, autoOpen: true, darkMode: true, groupBy: "date",
     desktopStatus: { supported: false, state: "off", message: "Desktop notifications are unavailable." },
   });
@@ -365,7 +455,7 @@ test("desktop preference patches preserve other settings and create a fresh gene
   await preferences.update({ desktopSound: "Ping" });
   await preferences.update({ desktopNotifications: true });
   assert.equal((await preferences.document()).desktopGeneration, initial);
-  assert.deepEqual(await preferences.read(), { ...defaults, autoOpen: true, desktopNotifications: true, desktopSound: "Ping", groupBy: "none" });
+  assert.deepEqual(settingsOnly(await preferences.read()), { ...defaults, autoOpen: true, desktopNotifications: true, desktopSound: "Ping", groupBy: "none" });
   await preferences.update({ desktopNotifications: false });
   await preferences.update({ desktopNotifications: true });
   assert.notEqual((await preferences.document()).desktopGeneration, initial);

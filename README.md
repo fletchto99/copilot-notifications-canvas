@@ -7,13 +7,13 @@
 [![Node.js runtime: >=22](https://img.shields.io/badge/Node.js%20runtime-%3E%3D22-166534?style=flat&logo=nodedotjs&logoColor=white)](#prerequisites)
 
 Your GitHub inbox in the GitHub Copilot app, grouped by repository or date, or
-shown as a single newest-first list. **Show notifications** defaults to **All**,
-showing read and unread inbox items; choose **Unread only** to narrow the view. Completed items
-stay hidden in both views. Search, mark rows
+shown as a single newest-first list. The canvas loads read and unread inbox
+items; use **Filters > Read state** to narrow the view. Completed items
+stay hidden. Search, mark rows
 or groups as read or done, start a focused Copilot investigation, review, or discussion summary,
 and opt into desktop notifications or auto-open.
 
-![GitHub Notifications canvas with search and attention tabs including Mine, italic mine markers on authored items among ten synthetic notifications, seven unread, across three example repositories, issue, PR and discussion status icons, a failed check run, and fixed Copilot, read, and done columns with summary actions on closed issues, discussions, merged PRs, and releases, a disabled Copilot icon on queued PRs, and dimmed envelopes on already-read rows](docs/images/github-notifications.png)
+![GitHub Notifications canvas with search, a Filters popover control, and attention tabs including Mine, italic mine markers on authored items among ten synthetic notifications, seven unread, across three example repositories, issue, PR and discussion status icons, a failed check run, and fixed Copilot, read, and done columns with summary actions on closed issues, discussions, merged PRs, and releases, a disabled Copilot icon on queued PRs, and dimmed envelopes on already-read rows](docs/images/github-notifications.png)
 
 ## Prerequisites
 
@@ -54,11 +54,13 @@ full procedure, verification requirements, and troubleshooting.
 ## Usage
 
 - **Find:** Filter with attention tabs or search by title, issue/PR number, or
-  repository. **Mine** shows issues, PRs, and discussions you authored.
+  repository. **Filters** combines type, read state, reason, and age, synced
+  across canvases. Search and attention tabs stay local.
+  **Mine** shows issues, PRs, and discussions you authored.
 - **Choose a view:** In **Settings**, group by repository or date, or use one
-  flat list. Show all inbox items or unread only.
+  flat list.
 - **Read or done:** Use the envelope to mark read or the checkmark to mark done.
-  Group headers offer the same actions for loaded tab/search matches.
+  Group headers offer the same actions for loaded tab/search/filter matches.
 - **Work with Copilot:** Investigate, review, continue, or summarize a supported
   item. New sessions summarize first and stay read-only until you approve changes;
   existing sessions open without interruption.

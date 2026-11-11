@@ -42,9 +42,10 @@ test("unreadable or invalid preferences warn without disabling a loaded inbox", 
       const { origin, headers } = await setup(subtest, async args => {
         assert.ok(args.includes("GET"));
         const url = new URL(args.at(-1), "https://api.github.com");
-        assert.equal(url.searchParams.get("all"), "false");
+        assert.equal(url.searchParams.get("all"), "true");
+        assert.equal(url.searchParams.get("is_done"), "false");
         const page = Number(url.searchParams.get("page"));
-        const selected = rows.filter(row => row.unread);
+        const selected = rows;
         url.searchParams.set("page", String(page + 1));
         return http(selected.slice((page - 1) * 50, page * 50),
           selected.length > page * 50 ? { link: `<${url.href}>; rel="next"` } : {});
@@ -65,8 +66,8 @@ test("unreadable or invalid preferences warn without disabling a loaded inbox", 
         assert.equal(status, 200, path);
         assert.equal(data.settingsError.code, "settings_read", path);
         assert.equal(data.error, null);
-        assert.equal(data.matchGitHubInbox, false);
-        assert.equal(data.unread, data.loaded);
+        assert.equal(data.filters.readState, "unread");
+        assert.equal(data.matching, data.unread);
       }
       const settings = await call("settings", "GET");
       assert.equal(settings.status, 500);
@@ -77,7 +78,7 @@ test("unreadable or invalid preferences warn without disabling a loaded inbox", 
       const repaired = await call("state", "GET");
       assert.equal(repaired.status, 200);
       assert.equal(repaired.data.settingsError, null);
-      assert.equal(repaired.data.loaded, 52);
+      assert.equal(repaired.data.loaded, 53);
     });
   }
 });
@@ -244,25 +245,33 @@ test("methods, paths, origins, hosts, JSON, filter input and oversized bodies ar
   assert.equal(hostStatus, 403);
 });
 
-test("HTTP filters combine attention and search without fetching or writing GitHub state", async t => {
+test("HTTP filters combine refinements, attention and search without fetching or writing GitHub state", async t => {
   const calls = [];
+  const directory = await mkdtemp(join(tmpdir(), "notification-http-filters-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const preferences = new Preferences({ directory });
   const { origin, headers } = await setup(t, async args => {
     calls.push(args);
     return http([thread("1", { reason: "review_requested" }), thread("2", { reason: "mention" })]);
-  });
+  }, { preferences });
   const options = { method: "POST", headers: { ...headers, "Content-Type": "application/json" } };
   await fetch(`${origin}/api/refresh`, { ...options, body: "{}" });
   const response = await fetch(`${origin}/api/filters`, {
-    ...options, body: JSON.stringify({ attention: "review_requested", query: "widgets" }),
+    ...options, body: JSON.stringify({ attention: "review_requested", query: "widgets",
+      type: "PullRequest", readState: "unread", reason: "review_requested", age: "all" }),
   });
   assert.equal(response.status, 200);
   const state = await response.json();
-  assert.deepEqual(state.filters, { mode: "inbox", query: "widgets", attention: "review_requested" });
+  assert.deepEqual(state.filters, { query: "widgets", attention: "review_requested",
+    type: "PullRequest", readState: "unread", reason: "review_requested", age: "all" });
   assert.equal(state.loaded, 2);
   assert.equal(state.matching, 1);
   assert.deepEqual(state.groups[0].items.map(item => item.id), ["1"]);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].includes("PATCH"), false);
+  const invalid = await fetch(`${origin}/api/filters`, { ...options, body: '{"age":"yesterday"}' });
+  assert.equal(invalid.status, 400);
+  assert.equal((await invalid.json()).error.code, "invalid_filters");
 });
 
 test("every API route keeps its method policy behind capability checks", async t => {
@@ -438,7 +447,7 @@ test("all HTTP notification request paths inherit another client's server deadli
     const blockedState = await blocked.json();
     await finish();
     const queued = ["batch/start", "read", "done"].includes(path);
-    assert.equal(blocked.status, path === "state" ? 200 : queued ? 202 : 429, path);
+    assert.equal(blocked.status, ["state", "filters"].includes(path) ? 200 : queued ? 202 : 429, path);
     if (queued) {
       const batch = inbox.batch.snapshot();
       assert.equal(batch.error.code, "rate_limited");
@@ -446,6 +455,8 @@ test("all HTTP notification request paths inherit another client's server deadli
       assert.equal(batch.notAttempted, 1, "a blocked write was never in flight");
     } else if (path === "state") {
       assert.equal(readerClient.subjectSnapshot(inbox.loadedItems()[0]).subjectStateError.includes("rate limit"), true);
+    } else if (path === "filters") {
+      assert.equal(blockedState.filters.readState, "unread");
     } else assert.equal(blockedState.error.code, "rate_limited");
     assert.equal(calls.length, before, `${path} must not start an uncached request`);
     now = writerClient.serverBlockedUntil;
@@ -459,7 +470,7 @@ test("all HTTP notification request paths inherit another client's server deadli
     if (["read", "done"].includes(path)) assert.equal(inbox.batch.snapshot().status, "completed");
     if (path === "done") assert.equal(inbox.snapshot().loaded, 0);
     if (path === "state") assert.equal(readerClient.subjectSnapshot(inbox.loadedItems()[0]).subjectState, "open");
-    assert.equal(calls.length, before + (path === "state" ? 2 : 1));
+    assert.equal(calls.length, before + (path === "state" ? 2 : path === "filters" ? 0 : 1));
     await reader.foregroundPending;
   }
 });
@@ -603,6 +614,9 @@ test("activation during an in-flight foreground request establishes a fresh gene
         rows = [thread("3", { updated_at: new Date(now).toISOString() }), ...rows];
         await post("/api/refresh", { force: true });
         await desktop.foregroundPending;
+        assert.deepEqual(deliveries, [], "Panel refreshes do not bypass the separate unread feed's polling deadline");
+        now += POLL_MS;
+        await desktop.check();
         assert.deepEqual(deliveries.map(message => message.body), ["#42 Synthetic notification 3"]);
       });
     }

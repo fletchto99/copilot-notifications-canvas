@@ -6,6 +6,117 @@ const baseUrl = "https://git.example.com/api/v3";
 test.describe("development API selection", () => {
   test.use({ developmentApiBaseUrl: "https://api.github.com" });
 
+  test("Development text is vertically centered like neighboring Settings controls", async ({ page, canvas }) => {
+    canvas.rows.splice(1);
+    await page.goto(canvas.url);
+    await page.locator("#settings-toggle").click();
+    await expect(page.locator("#development-toggle")).toBeVisible();
+    for (const [width, fontSize, lineHeight] of [[480, 14, 20], [320, 16, 24]]) {
+      await page.setViewportSize({ width, height: 900 });
+      const style = await page.addStyleTag({ content: `
+        :root { --text-body-medium: ${fontSize}px; --leading-body-medium: ${lineHeight}px; }
+      ` });
+      for (const open of [false, true]) {
+        await page.locator("#development-settings").evaluate((node, open) => { node.open = open; }, open);
+        const offsets = await page.evaluate(() => ["development-toggle", "check-updates"].map(id => {
+          const node = document.getElementById(id);
+          const box = node.getBoundingClientRect();
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          const text = range.getBoundingClientRect();
+          return text.y + text.height / 2 - (box.y + box.height / 2);
+        }));
+        expect(Math.abs(offsets[0] - offsets[1])).toBeLessThanOrEqual(0.5);
+      }
+      await style.evaluate(node => node.remove());
+    }
+    expect(canvas.writes).toEqual([]);
+    expect(canvas.deliveries).toEqual([]);
+  });
+
+  test("Development starts collapsed and preserves draft API input across toggles and polls", async ({ page, canvas }) => {
+    canvas.rows.splice(1);
+    const saved = await canvas.preferences.read();
+    let settingsReads = 0;
+    page.on("request", request => {
+      if (new URL(request.url()).pathname === "/api/settings") settingsReads++;
+    });
+    await page.goto(canvas.url);
+    await page.locator("#settings-toggle").click();
+    await expect(page.locator("#theme")).toBeEnabled();
+    const development = page.locator("#development-settings");
+    const toggle = page.locator("#development-toggle");
+    const api = page.getByLabel("Development API", { exact: true });
+    await expect(toggle).toHaveText("Development");
+    await expect(development).not.toHaveAttribute("open");
+    await expect(api).toBeHidden();
+    await toggle.focus();
+    await toggle.press("Tab");
+    await expect(page.locator("#check-updates")).toBeFocused();
+    await toggle.focus();
+    await toggle.press("Enter");
+    await expect(api).toBeVisible();
+    await toggle.press("Tab");
+    await expect(api).toBeFocused();
+    await api.selectOption("custom");
+    const url = page.getByLabel("REST API base URL");
+    await url.fill(baseUrl);
+    await toggle.focus();
+    await toggle.press("Space");
+    await expect(url).toBeHidden();
+    const beforePoll = settingsReads;
+    await expect.poll(() => settingsReads, { timeout: 10_000 }).toBeGreaterThan(beforePoll);
+    await expect(development).not.toHaveAttribute("open");
+    await expect(toggle).toBeFocused();
+    await toggle.press("Enter");
+    await expect(api).toHaveValue("custom");
+    await expect(url).toHaveValue(baseUrl);
+    expect(await canvas.preferences.read()).toEqual(saved);
+    expect(await canvas.preferences.readDevelopmentAPI()).toBe("https://api.github.com");
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+    await page.reload();
+    await page.locator("#settings-toggle").click();
+    await expect(toggle).toBeVisible();
+    await expect(development).not.toHaveAttribute("open");
+    expect(canvas.writes).toEqual([]);
+    expect(canvas.deliveries).toEqual([]);
+  });
+
+  test("development Settings uses available height before scrolling", async ({ page, canvas }) => {
+    canvas.rows.splice(1);
+    await page.setViewportSize({ width: 480, height: 2000 });
+    await page.goto(canvas.url);
+    await expect(page.locator(".row")).toHaveCount(1);
+    await page.locator("#settings-toggle").click();
+    await expect(page.locator("#development-settings")).toBeVisible();
+    await expect(page.locator("#theme")).toBeEnabled();
+    await page.locator("#development-toggle").click();
+    await expect(page.getByLabel("Development API", { exact: true })).toBeVisible();
+    const panel = page.locator("#settings-panel");
+    const overflow = () => panel.evaluate(node => node.scrollHeight > node.clientHeight);
+    await expect.poll(overflow).toBe(false);
+    const naturalHeight = (await panel.boundingBox()).height;
+    const toggle = await page.locator("#settings-toggle").boundingBox();
+    const height = Math.ceil(toggle.y + toggle.height + naturalHeight + 24);
+    await page.setViewportSize({ width: 480, height });
+    await expect.poll(overflow).toBe(false);
+    const expanded = await panel.boundingBox();
+    expect(expanded.height).toBeGreaterThan(height * 0.6);
+    expect(expanded.y + expanded.height).toBeLessThanOrEqual(height - 8);
+    await page.setViewportSize({ width: 480, height: 320 });
+    await expect.poll(overflow).toBe(true);
+    await expect(panel).toHaveCSS("overflow-y", "auto");
+    const updates = page.locator("#check-updates");
+    await updates.focus();
+    await expect(updates).toBeFocused();
+    const control = await updates.boundingBox();
+    expect(control.y).toBeGreaterThanOrEqual(8);
+    expect(control.y + control.height).toBeLessThanOrEqual(312);
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+    expect(canvas.writes).toEqual([]);
+    expect(canvas.deliveries).toEqual([]);
+  });
+
   for (const [name, platform, userAgentData, shortcut] of [
     ["Windows", "Win32", undefined, "Ctrl+K"],
     ["Linux", "Linux x86_64", undefined, "Ctrl+K"],
@@ -21,6 +132,7 @@ test.describe("development API selection", () => {
       await page.setViewportSize({ width: 320, height: 720 });
       await page.goto(canvas.url);
       await page.getByLabel("Settings", { exact: true }).click();
+      await page.locator("#development-toggle").click();
       await expect(page.locator("#development-api-help")).toHaveText(
         `Source builds only. Reload extension after saving with ${shortcut} -> refresh canvas.`,
       );
@@ -39,6 +151,7 @@ test.describe("development API selection", () => {
     await page.goto(canvas.url);
     await expect(page.locator(".row")).toHaveCount(1);
     await page.getByLabel("Settings", { exact: true }).click();
+    await page.locator("#development-toggle").click();
     await page.getByLabel("Development API", { exact: true }).selectOption("custom");
     await page.getByLabel("REST API base URL").fill(baseUrl);
     await page.getByRole("button", { name: "Save API", exact: true }).click();

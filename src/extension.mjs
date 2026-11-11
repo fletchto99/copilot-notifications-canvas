@@ -52,7 +52,7 @@ session = await joinSession({
   canvases: [createCanvas({
     id: "github-notifications",
     displayName: "GitHub Notifications",
-    description: "GitHub inbox or unread-only notifications, with read/done actions limited to shown, loaded items.",
+    description: "Filter your GitHub inbox, with read/done actions limited to shown, loaded items.",
     inputSchema: filterSchema,
     actions: [
       {
@@ -63,7 +63,7 @@ session = await joinSession({
       },
       {
         name: "get_settings",
-        description: "Read the saved notification view, grouping, theme, auto-open and desktop notification settings and status. Settings are changed through the panel.",
+        description: "Read shared filters, grouping, theme, auto-open and desktop notification settings, including their revision and last-updated timestamp.",
         inputSchema: emptySchema,
         handler: ctx => action(ctx, async () => ({
           ...await preferences.read(), desktopStatus: desktop?.snapshot() ?? {
@@ -85,9 +85,9 @@ session = await joinSession({
       },
       {
         name: "set_filters",
-        description: "Choose inbox or unread notifications, then filter loaded items by authorship, attention reason or search; return aggregate status.",
+        description: "Change shared type, read state, reason and age filters across canvases. Search and attention stay local. Returns aggregate status and never fetches more items.",
         inputSchema: filterSchema,
-        handler: ctx => action(ctx, inbox => inbox.setFilters(ctx.input), true),
+        handler: ctx => action(ctx, inbox => inbox.syncFilters(ctx.input, preferences), true),
       },
       {
         name: "load_more",

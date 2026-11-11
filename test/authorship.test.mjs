@@ -105,7 +105,7 @@ test("cached authorship selections follow pagination and triage while requests a
   const client = new GitHubClient({ run: async args => {
     const endpoint = args.at(-1);
     if (endpoint.startsWith("/notifications?")) return endpoint.includes("page=2")
-      ? http([row("51"), row("52")]) : http(rows, { link: inboxNext.replace("all=true&is_done=false", "all=false") });
+      ? http([row("51"), row("52")]) : http(rows, { link: inboxNext });
     if (endpoint === "/user") return http({ id: 100 });
     requested.push(endpoint);
     if (requested.length === 20) entered();
@@ -132,7 +132,7 @@ test("cached authorship selections follow pagination and triage while requests a
     inbox.onThreadUpdated("22", "done");
     release();
     await loading;
-    const expected = [...rows.map(item => item.id), "51", "52"].filter(id => !["21", "22"].includes(id))
+    const expected = [...rows.map(item => item.id), "51", "52"].filter(id => id !== "22")
       .map(id => `/repos/example/widgets/issues/${id}`);
     assert.deepEqual(requested, expected);
     assert.equal(inbox.snapshot().attentionCounts.mine, 50);

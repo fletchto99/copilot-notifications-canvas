@@ -147,10 +147,9 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
   let authorshipRetryAt = 0;
   let authorshipSelection;
   const loadedAuthorship = () => {
-    const inboxMode = inbox.filters.mode === "inbox" && inbox.matchGitHubInbox;
-    // Inbox mutations replace pages; query and grouping changes do not.
-    if (authorshipSelection?.pages !== inbox.pages || authorshipSelection.inboxMode !== inboxMode) {
-      authorshipSelection = { pages: inbox.pages, inboxMode, items: inbox.loadedItems() };
+    // Inbox mutations replace pages; display filter and grouping changes do not.
+    if (authorshipSelection?.pages !== inbox.pages) {
+      authorshipSelection = { pages: inbox.pages, items: inbox.loadedItems() };
     }
     return authorshipSelection.items;
   };
@@ -393,7 +392,8 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         throw new InboxError("invalid_grouping", "Choose a supported notification grouping.", 400);
       }
       if (timeZone !== null || groupBy === "date") groupThreadsByDate([], timeZone);
-      const settings = preferences && ["/api/state", "/api/refresh", "/api/more"].includes(path)
+      const settings = preferences && ["/api/state", "/api/refresh", "/api/more", "/api/filters",
+        "/api/batch/start", "/api/batch/retry"].includes(path)
         ? await inbox.syncSettings(preferences) : null;
       if (settings) copilot?.setSettings(settings);
       setSubjectView({ groupBy: groupBy ?? settings?.groupBy ?? subjectView.groupBy, timeZone });
@@ -404,7 +404,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
         }
         if (path === "/api/settings") {
           const settings = await preferences.read();
-          inbox.setMatchGitHubInbox(settings.matchGitHubInbox);
+          inbox.applySettings(settings);
           setSubjectView({ groupBy: settings.groupBy ?? subjectView.groupBy, timeZone });
           return json(200, await settingsSnapshot(settings));
         }
@@ -433,7 +433,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
           if (input.force) inbox.client.invalidateSubjects(inbox.loadedItems());
         }
         if (path === "/api/more") await inbox.more();
-        if (path === "/api/filters") await inbox.setFilters(input);
+        if (path === "/api/filters") await inbox.syncFilters(input, preferences);
         if (path === "/api/settings") {
           if (input.desktopNotifications === true && !desktop?.supported) {
             throw new InboxError("desktop_unsupported", "Desktop notifications are supported on macOS, Windows and Linux.", 400);
@@ -442,7 +442,7 @@ export async function startServer(inbox, { log = () => {}, preferences, desktop,
             throw new InboxError("desktop_sound", "Choose a notification sound supported by this operating system.", 400);
           }
           const settings = await preferences.update(input);
-          inbox.setMatchGitHubInbox(settings.matchGitHubInbox);
+          inbox.applySettings(settings);
           setSubjectView({ groupBy: settings.groupBy ?? subjectView.groupBy, timeZone });
           desktop?.wake(settings);
           return json(200, await settingsSnapshot(settings));

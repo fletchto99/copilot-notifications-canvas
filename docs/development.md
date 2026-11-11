@@ -88,7 +88,7 @@ separate raster asset described under [native notification coverage](#native-not
 
 ### Selecting a development API
 
-In a source-loaded canvas, open **Settings > Development API**, choose
+In a source-loaded canvas, expand **Settings > Development**, then use **Development API** to choose
 **Custom**, enter an HTTPS REST base URL such as `https://git.example.com/api/v3`,
 then **Save API** and reload extensions. Choose **GitHub.com** and save/reload to
 switch back. The reload shortcut follows the renderer's platform: **Ctrl+K** on
@@ -120,8 +120,9 @@ for automation, never live notification writes.
 
 ### Inbox API contract
 
-All (the default) uses `all=true&is_done=false`; Unread only, agent
-`mode: "unread"`, and desktop polling use `all=false` without `is_done`.
+The canvas always uses `all=true&is_done=false`; read-state filters, including
+legacy agent `mode: "unread"` inputs, only narrow loaded items. Desktop polling
+uses its separate `all=false` feed without `is_done`.
 Both views use `per_page=50`, explicit pagination, and separate caches.
 Unfiltered `all=true` is rejected so Done items stay hidden.
 

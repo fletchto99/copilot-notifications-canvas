@@ -5,6 +5,8 @@ import { runInContext } from "node:vm";
 import { http, inboxNext as next, thread } from "./fixtures.mjs";
 import { finishRows, renderer, script, html, styles, settle } from "./renderer-fixtures.mjs";
 
+const settingsOnly = ({ revision, updatedAt, ...settings }) => settings;
+
 test("the macOS recommendation appears on first load, dismisses durably, and never enables alerts", async t => {
   const storedSettings = { desktopNotifications: false, future: 42 };
   const ui = await renderer({ storedSettings, desktopStatus: { backend: "osascript" } });
@@ -18,7 +20,7 @@ test("the macOS recommendation appears on first load, dismisses durably, and nev
   await settle();
   assert.equal(ui.ids.get("desktop-recommendation").hidden, true);
   assert.equal(ui.document.activeElement, ui.ids.get("search"));
-  assert.deepEqual(storedSettings, { desktopNotifications: false, future: 42, terminalNotifierHintDismissed: true });
+  assert.deepEqual(settingsOnly(storedSettings), { desktopNotifications: false, future: 42, terminalNotifierHintDismissed: true });
   const reopened = await renderer({ storedSettings, desktopStatus: { backend: "osascript" } });
   t.after(() => { reopened.window.events.pagehide(); reopened.inbox.close(); });
   assert.equal(reopened.ids.get("desktop-recommendation").hidden, true);
@@ -67,7 +69,7 @@ test("the per-panel Web Audio option is replaced by the native notification soun
 });
 
 test("Sound is a single settings row with a labeled native select and matching focus and disabled styling", async () => {
-  const row = [...html.matchAll(/<div class="select-setting">([\s\S]*?)<\/div>/g)]
+  const row = [...html.matchAll(/<div\b[^>]*class="select-setting"[^>]*>([\s\S]*?)<\/div>/g)]
     .find(([, content]) => content.includes('for="desktop-sound"'));
   assert.ok(row);
   assert.match(row[1], /<label for="desktop-sound">Sound<\/label>/);
@@ -141,11 +143,10 @@ test("inbox, keyboard shortcuts and Settings tooltips share hover, focus and Esc
   ui.window.events.pagehide();
 });
 
-test("notification view uses a labeled native select directly before grouping without help text or a tooltip", () => {
-  assert.match(html, /<label for="show-notifications">Show notifications<\/label>\s*<select id="show-notifications" disabled>/);
-  assert.match(html, /<option value="all" selected>All<\/option>\s*<option value="unread">Unread only<\/option>/);
-  assert.match(html, /<select id="show-notifications"[^>]*>(?:\s*<option\b[^>]*>[^<]*<\/option>)+\s*<\/select>\s*<\/div>\s*<div class="select-setting">\s*<label for="group-by">/);
-  assert.doesNotMatch(html, /id="match-github-inbox|id="show-notifications-(?:tooltip|help)"/);
+test("Settings starts with grouping and leaves read state to the Filters popover", () => {
+  assert.match(html, /id="settings-panel"[^>]*>\s*<div class="select-setting">\s*<label for="group-by">/);
+  assert.match(html, /<label for="filter-readState">Read state<\/label>/);
+  assert.doesNotMatch(html, /id="(?:match-github-inbox|show-notifications|inbox-mode)"/);
 });
 
 test("hiding empty tabs defaults on, saves only its preference, and preserves both choices on reopen", async t => {
@@ -165,7 +166,7 @@ test("hiding empty tabs defaults on, saves only its preference, and preserves bo
     await settle();
     assert.equal(ui.document.activeElement, toggle);
     assert.equal(toggle.getAttribute("aria-checked"), String(hideEmptyTabs));
-    assert.deepEqual(storedSettings, { groupBy: "date", future: 42, hideEmptyTabs });
+    assert.deepEqual(settingsOnly(storedSettings), { groupBy: "date", future: 42, hideEmptyTabs });
     const reopened = await renderer({ initialRows: [], storedSettings });
     t.after(() => { reopened.window.events.pagehide(); reopened.inbox.close(); });
     assert.equal(reopened.ids.get("hide-empty-tabs").getAttribute("aria-checked"), String(hideEmptyTabs));
@@ -217,7 +218,7 @@ test("Settings fits the available viewport and moves above only when that provid
   toggle.bounds = { top: 10, bottom: 48 };
   ui.window.events.scroll();
   assert.equal(panel.dataset.placement, "below");
-  assert.equal(panel.style.maxHeight, "192px");
+  assert.equal(panel.style.maxHeight, "256px");
   toggle.bounds = { top: -50, bottom: -12 };
   ui.window.events.scroll();
   assert.equal(settings.open, false);
@@ -370,7 +371,7 @@ test("saving a focused picker option returns focus to its select, including fail
 });
 
 test("background settings polls preserve focus for disabled and untouched picker options", async t => {
-  for (const id of ["show-notifications", "theme", "group-by"]) {
+  for (const id of ["theme", "group-by"]) {
     const ui = await renderer();
     t.after(() => { ui.window.events.pagehide(); ui.inbox.close(); });
     ui.ids.get("settings").open = true;
@@ -382,7 +383,7 @@ test("background settings polls preserve focus for disabled and untouched picker
     option.focus();
     await ui.fireTimer();
     assert.equal(select.disabled, false);
-    assert.equal(ui.document.activeElement, id === "show-notifications" ? select : option);
+    assert.equal(ui.document.activeElement, option);
     assert.equal(ui.ids.get("settings").open, true);
     assert.equal(ui.calls.some(call => call.path === "/api/settings" && call.options.body), false);
   }
@@ -427,7 +428,7 @@ test("background picker focus restoration does not steal focus moved during the 
   ui.ids.get("settings").open = true;
   ui.ids.get("settings").events.toggle();
   await settle();
-  const select = ui.ids.get("show-notifications");
+  const select = ui.ids.get("group-by");
   const option = ui.document.createElement("option");
   select.append(option);
   option.focus();
@@ -566,12 +567,14 @@ test("desktop controls persist independently, preserve focus and are disabled on
   assert.equal(desktop.disabled, false);
   assert.equal(desktop.attributes["aria-checked"], "false");
   assert.equal(sound.disabled, true);
+  assert.equal(ui.ids.get("desktop-sound-setting").hidden, true);
   desktop.focus();
   desktop.events.click();
   await settle();
   assert.equal(desktop.attributes["aria-checked"], "true");
   assert.equal(ui.document.activeElement, desktop);
   assert.equal(sound.disabled, false);
+  assert.equal(ui.ids.get("desktop-sound-setting").hidden, false);
   sound.focus();
   sound.value = "Ping";
   sound.events.change();
@@ -583,6 +586,12 @@ test("desktop controls persist independently, preserve focus and are disabled on
   desktop.events.click();
   await settle();
   assert.equal(sound.disabled, true);
+  assert.equal(sound.value, "Ping");
+  assert.equal(ui.ids.get("desktop-sound-setting").hidden, true);
+  assert.equal(ui.document.activeElement, desktop);
+  desktop.events.click();
+  await settle();
+  assert.equal(ui.ids.get("desktop-sound-setting").hidden, false);
   assert.equal(sound.value, "Ping");
   const unsupported = await renderer({ desktopPlatform: "freebsd" });
   unsupported.ids.get("settings").open = true;
@@ -793,7 +802,7 @@ test("inbox settings warnings stay visible with Settings closed and clear after 
 test("Group By is a labeled select above development settings and defaults to repo", async () => {
   assert.match(html, /<div class="select-setting">\s*<label for="group-by">Group By<\/label>\s*<select id="group-by" disabled>/);
   assert.match(html, /<option value="none">All notifications<\/option>\s*<option value="repo" selected>Repository<\/option>\s*<option value="date">Date<\/option>/);
-  assert.match(html, /<select id="group-by"[^>]*>[\s\S]*?<\/select>\s*<\/div>\s*<section id="development-settings"/);
+  assert.match(html, /<select id="group-by"[^>]*>[\s\S]*?<\/select>\s*<\/div>\s*<details id="development-settings"/);
   assert.match(html, /<button id="auto-open"[\s\S]*?<\/button>\s*<button id="keyboard-shortcuts"[\s\S]*?<\/button>\s*<button id="desktop-notifications"/);
   const ui = await renderer();
   assert.equal(ui.ids.get("group-by").value, "repo");
@@ -888,7 +897,7 @@ test("grouping changes apply immediately, persist across panels and restore repo
     await settle();
     assert.equal(select.disabled, false);
     assert.equal(ui.document.activeElement, select);
-    assert.deepEqual(storedSettings, { autoOpen: true, darkMode: false, groupBy });
+    assert.deepEqual(settingsOnly(storedSettings), { autoOpen: true, darkMode: false, groupBy });
     const reopened = await renderer({ storedSettings });
     assert.equal(reopened.ids.get("group-by").value, groupBy);
     assert.equal(reopened.ids.get("collapse").hidden, false);
@@ -973,7 +982,7 @@ test("a grouping change during a background settings read is queued without chan
   assert.equal(ui.document.activeElement, select);
   assert.equal(select.value, "none");
   assert.equal(ui.ids.get("groups").querySelectorAll(".repo-name")[0].textContent, "All notifications");
-  assert.deepEqual(storedSettings, { groupBy: "none", desktopNotifications: true, desktopSound: "Ping" });
+  assert.deepEqual(settingsOnly(storedSettings), { groupBy: "none", desktopNotifications: true, desktopSound: "Ping" });
   assert.deepEqual(ui.calls.filter(call => call.path === "/api/settings" && call.options.body)
     .map(call => JSON.parse(call.options.body)), [{ groupBy: "none" }]);
 });
@@ -1148,7 +1157,7 @@ test("Dark, Light and Match Copilot choices persist across panels without changi
     assert.equal(select.value, theme);
     assert.equal(select.disabled, false);
     assert.equal(ui.document.activeElement, select);
-    assert.deepEqual(storedSettings, { autoOpen: true, darkMode, groupBy: "date", desktopNotifications: true, desktopSound: "Ping" });
+    assert.deepEqual(settingsOnly(storedSettings), { autoOpen: true, darkMode, groupBy: "date", desktopNotifications: true, desktopSound: "Ping" });
     assert.equal(ui.ids.get("settings-status").hidden, true);
     for (const mode of ["dark", "light"]) {
       ui.setAppTheme(mode);

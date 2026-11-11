@@ -6,12 +6,11 @@
 [Views](#choose-a-view) | [Read / Done](#mark-read-or-done) | [Copilot](#work-with-copilot) |
 [Refresh](#refresh-and-recover) | [Keyboard](#keyboard-and-preferences)
 
-The canvas shows GitHub's read and unread inbox items by default. Choose
-**Settings > Show notifications > Unread only** to narrow the view.
-An **Unread only** indicator above the list identifies that view, including when
-the **All** attention tab is selected. It describes the loaded view; a failed
-view change keeps the previous view and indicator.
-Done notifications are excluded in both views. Pages contain up to 50 items.
+The canvas loads GitHub's read and unread inbox items, excluding Done.
+Choose **Filters > Read state > Unread** or **Read** to narrow the view, or
+**Read and unread** to show both. Read state applies even when the **All**
+attention tab is selected. Pages contain up to 50
+items, which can include both read and unread notifications.
 **Search, counts, and bulk actions cover loaded items only.** Use **Load more**
 to include older notifications.
 
@@ -30,7 +29,59 @@ and [exact-commit preparation](copilot.md#exact-commit-preparation).
 ## Find notifications
 
 Search by **title, issue/PR number, or repository**, then combine it with an
-attention tab. The toolbar opens GitHub's inbox, refreshes, or opens Settings.
+attention tab and the **Filters** popover beside search. The toolbar opens
+GitHub's inbox, refreshes, or opens Settings.
+
+| Filter | Options |
+| --- | --- |
+| Read state | Read and unread, unread, or read |
+| Type | Issues, pull requests, discussions, checks, releases, commits, vulnerability alerts, Dependabot alerts, security advisories, repository invitations, workflow runs, agent sessions, or other types |
+| Reason | One exact GitHub notification reason, including review requested, mention, team mention, subscribed, or CI activity; unrecognized reasons appear under Other reasons |
+| Age | Any time, past 24 hours / 7 days / 30 days, or older than 7 / 30 days |
+
+All selected filters must match, along with search and the attention tab.
+The button shows the number of active filters; open the popover to see their values.
+Active dropdowns use the same blue border as the Filters button. Returning a
+dropdown to its unfiltered default restores the normal border.
+**Clear filters** clears these four controls across canvases, keeping each
+canvas's search and attention tab unchanged. It is dimmed when none of the four
+dropdown filters are active. Dropdown edits save automatically
+and other visible canvases pick them up on their next local poll, normally within
+five seconds. Hidden canvases catch up when visible again. These preferences are
+shared by canvases using the same user settings directory, not across machines.
+Changing filters never marks items read or done.
+
+There is no separate Save action. Each edit merges only the changed dropdowns
+into the current shared choices; editing Age in one canvas does not overwrite
+a Type change in another. The last successful save wins when the same dropdown
+is changed in two canvases. A failed or interrupted shared save is reported and
+is not replayed automatically: check the shown selection and choose again to retry.
+Sync progress is announced to screen readers without resizing the menu; failures
+remain visible.
+Each canvas retains its own loaded pages, so matching rows and counts can differ.
+Running batches keep their original targets. If another canvas changes filters
+before a new batch or retry starts, review the updated selection rather than
+acting on a stale count.
+
+Age uses GitHub's notification `updated_at`, not creation time or unread time,
+in rolling 24-hour days rather than calendar dates. The exact cutoff is included
+in **Past** and excluded from **Older than**. Matches update as time passes.
+Unknown types and reasons remain available under **All** and **Other**; no
+issue/PR status lookup is needed for these filters.
+
+Read state only narrows loaded items: switching it never refetches or resets
+pagination. A mixed page may contain fewer unread items than the old unread-only
+API view; use **Load more** to find older unread matches. Empty filtered results
+mean **No matches in loaded notifications**, not that the whole inbox is clear.
+When no shared filters have been saved, an existing unread-only preference
+initializes a new panel to **Unread**; otherwise it starts with **Read and unread**.
+Saved shared filters take precedence over that legacy preference. Explicit
+opening filters can override the initial view without saving, but the next
+shared-settings update replaces those dropdown overrides. Search and attention
+are always local. Changes never rewrite the legacy preference or affect desktop alerts.
+
+Escape closes Filters and returns focus to its button; outside clicks or focus
+also dismiss it. An open native select picker closes before its containing panel.
 
 | Tab | Includes |
 | --- | --- |
@@ -47,10 +98,12 @@ can overlap. Participating includes comments, authorship, mentions, assignments,
 manual subscriptions, state changes, invitations, review requests, and security
 advisory credit.
 
-Tab counts ignore search; the status line combines the selected tab and search.
+Tab counts reflect the four popover filters but ignore text search and the selected
+tab; the status line combines all filters, the selected tab, and search.
 Refresh, Load more, and clearing search preserve the tab. **Hide empty tabs**
-defaults on, but **All** and the selected tab remain visible. Search does not
-change tab visibility.
+defaults on, but **All** and the selected tab remain visible. Text search does not
+change tab visibility; popover filters can change the counts
+and therefore which empty tabs are hidden.
 
 Mine checks the item's actual author rather than the notification reason, which
 can change after a mention or other activity. It covers loaded notifications,
@@ -79,12 +132,13 @@ read/done request from the extension, though GitHub may mark it read on arrival.
 Read/Done actions and retries wait while search results catch up, so they cannot
 act on an old selection. Input-method composition finishes before search applies.
 
-Changing **Show notifications** reloads the first page while retaining filters;
-a failed reload preserves the previous view and shows an error. GitHub owns
-completion state; the canvas stores no local completion history.
-An agent's explicit `mode: "unread"` locks the selector to Unread only without
-changing the saved preference or resetting pagination when it changes elsewhere.
-Returning to `mode: "inbox"` restores that preference.
+GitHub owns completion state; the canvas stores no local completion history.
+Agent inputs should use `readState: "all"`, `"read"`, or `"unread"`. For
+compatibility, `mode: "unread"` selects the unread filter and `mode: "inbox"`
+selects read and unread. An explicit `readState` takes precedence over `mode`.
+Neither alias changes the fetched inbox or locks the controls. Explicit
+`set_filters` actions sync dropdown changes across canvases just like the controls;
+search and attention inputs remain local.
 
 ### Status icons
 
@@ -202,12 +256,13 @@ controls wrap while row actions stay beside their content.
 Read rows keep a dimmed, disabled envelope labeled **Already read**, alongside
 Done. The disabled envelope is skipped by Tab navigation and sends no request
 when clicked. Its **Already read** tooltip remains available on hover.
-After a confirmed Read in **All**, the row stays and focus moves from Read to
+After a confirmed Read in **Read and unread**, the row stays and focus moves from Read to
 Done; a second click on the disabled envelope cannot open the row.
 A status update can unlock Done and move focus before the
 Read acknowledgement arrives, without overriding focus moved elsewhere.
-In **Unread only**, Read removes the row.
-Done removes it in either view.
+With the **Unread** filter, Read hides the row but retains it in the loaded inbox;
+choosing **Read** or **Read and unread** shows it again.
+Done removes it from the inbox regardless of the filter.
 
 A pending row action locks only that row and group actions that include it.
 Other rows remain actionable, including rows in the same group.
@@ -228,7 +283,7 @@ Headers have the same Read/Done buttons; hover or focus for **Mark N as read/don
 They act directly, with no dropdown. Read targets unread matches; Done includes
 read and unread. Read hides when none are eligible without moving or activating Done.
 
-**Only that group's loaded tab/search matches are included**, even when collapsed.
+**Only that group's loaded tab/search/popover-filter matches are included**, even when collapsed.
 Filtered-out and unloaded items are excluded; date actions cover just the selected
 day. The group button and every targeted row show a busy spinner immediately,
 including rows waiting for a shared request slot, without adding progress text
@@ -294,13 +349,13 @@ pages remain; automatic refresh continues. Otherwise, refresh before loading mor
 | Tab | Visit row links and separate Read/Done controls; empty-state panels remain focusable |
 | Hover / focus a button | Show its action tooltip |
 | Escape | Close the shortcut guide and restore focus, or dismiss a tooltip or open menu; dismissal survives row updates |
-| Click or focus outside Settings | Close Settings |
+| Click or focus outside Settings or Filters | Close that popover |
 | Hold Enter | Does not repeat Read/Done/batch actions after focus moves; release and press again |
 
 Character shortcuts are enabled by default and can be disabled in
 **Settings > Keyboard shortcuts**. They work only while the canvas has focus,
 not while typing in search, editing text, composing with an input method, or
-using Settings or the shortcut guide. Ctrl/Command/Alt combinations and native
+using Settings, Filters, or the shortcut guide. Ctrl/Command/Alt combinations and native
 Tab, arrow, and Enter behavior on links and buttons are left alone. Enter in
 search also works with character shortcuts disabled. The toolbar help icon is hidden
 when shortcuts are disabled; re-enable them in Settings to bring it back.

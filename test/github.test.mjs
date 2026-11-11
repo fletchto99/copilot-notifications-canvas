@@ -626,7 +626,7 @@ test("later-page failures back off exponentially despite earlier-page successes,
   let now = 0;
   let fail = false;
   const client = new GitHubClient({ now: () => now, run: async args => {
-    if (args.at(-1).includes("page=1")) return http([thread("1")], { link: next });
+    if (args.at(-1).includes("page=1")) return http([thread("1")], { link: next.replace("all=false", "all=true&is_done=false") });
     return fail ? http({ message: "secondary rate limit" }, {}, 403) : http([thread("2")]);
   } });
   const inbox = new Inbox(client, { mode: "unread" });

@@ -37,13 +37,6 @@
           </summary>
           <div id="settings-panel" class="settings-panel" role="group" aria-label="Notification settings">
             <div class="select-setting">
-              <label for="show-notifications">Show notifications</label>
-              <select id="show-notifications" disabled>
-                <option value="all" selected>All</option>
-                <option value="unread">Unread only</option>
-              </select>
-            </div>
-            <div class="select-setting">
               <label for="group-by">Group By</label>
               <select id="group-by" disabled>
                 <option value="none">All notifications</option>
@@ -55,7 +48,7 @@
               <span>Copilot integration</span>
               <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
             </button>
-            <button id="copilot-confirmations" class="switch-toggle" type="button" role="switch" aria-checked="true" disabled>
+            <button id="copilot-confirmations" class="switch-toggle" type="button" role="switch" aria-checked="true" hidden disabled>
               <span>Confirm Copilot actions</span>
               <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
             </button>
@@ -75,7 +68,7 @@
               <span>Desktop notifications</span>
               <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
             </button>
-            <div class="select-setting">
+            <div id="desktop-sound-setting" class="select-setting" hidden>
               <label for="desktop-sound">Sound</label>
               <select id="desktop-sound" aria-describedby="desktop-status" disabled><option value="default">System default</option></select>
             </div>
@@ -90,24 +83,27 @@
                 <option value="light">Light</option>
               </select>
             </div>
-            <section id="development-settings" aria-label="Development API settings" hidden>
-              <div class="select-setting">
-                <label for="development-api">Development API</label>
-                <select id="development-api" aria-describedby="development-api-help development-api-auth">
-                  <option value="github">GitHub.com</option>
-                  <option value="custom">Custom</option>
-                </select>
+            <details id="development-settings" hidden>
+              <summary id="development-toggle">Development</summary>
+              <div class="development-settings-content">
+                <div class="select-setting">
+                  <label for="development-api">Development API</label>
+                  <select id="development-api" aria-describedby="development-api-help development-api-auth">
+                    <option value="github">GitHub.com</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                </div>
+                <div id="development-api-custom" class="development-api-custom" hidden>
+                  <label for="development-api-url">REST API base URL</label>
+                  <input id="development-api-url" type="url" maxlength="2048" placeholder="https://git.example.com/api/v3" autocomplete="off" spellcheck="false" aria-describedby="development-api-help development-api-auth">
+                </div>
+                <button id="development-api-save" type="button">Save API</button>
+                <p id="development-api-active" class="settings-help"></p>
+                <p id="development-api-help" class="settings-help">Source builds only. Reload extension after saving with <span id="development-api-shortcut">Ctrl+K</span> -> refresh canvas.</p>
+                <p id="development-api-auth" class="settings-help">Authenticate the selected host with gh; never enter tokens here. Custom APIs use the same host for website links and may share production data.</p>
+                <p id="development-api-reload" class="settings-help" role="status" hidden>Saved. Reload extensions to apply this API. The current API is unchanged.</p>
               </div>
-              <div id="development-api-custom" class="development-api-custom" hidden>
-                <label for="development-api-url">REST API base URL</label>
-                <input id="development-api-url" type="url" maxlength="2048" placeholder="https://git.example.com/api/v3" autocomplete="off" spellcheck="false" aria-describedby="development-api-help development-api-auth">
-              </div>
-              <button id="development-api-save" type="button">Save API</button>
-              <p id="development-api-active" class="settings-help"></p>
-              <p id="development-api-help" class="settings-help">Source builds only. Reload extension after saving with <span id="development-api-shortcut">Ctrl+K</span> -> refresh canvas.</p>
-              <p id="development-api-auth" class="settings-help">Authenticate the selected host with gh; never enter tokens here. Custom APIs use the same host for website links and may share production data.</p>
-              <p id="development-api-reload" class="settings-help" role="status" hidden>Saved. Reload extensions to apply this API. The current API is unchanged.</p>
-            </section>
+            </details>
             <button id="check-updates" type="button">Check for updates</button>
             <p class="settings-help"><span id="installed-version">Canvas version loading...</span><span id="update-status" role="status" aria-live="polite" hidden></span></p>
           </div>
@@ -144,10 +140,35 @@
           <button id="dismiss-terminal-notifier" type="button">Don't show again</button>
         </div>
       </section>
-      <label class="search">
-        <span class="sr-only">Search loaded notification titles, issue or PR numbers, and repositories</span>
-        <input id="search" type="search" maxlength="200" placeholder="Search loaded notifications..." autocomplete="off" spellcheck="false">
-      </label>
+      <div class="search-controls">
+        <label class="search">
+          <span class="sr-only">Search loaded notification titles, issue or PR numbers, and repositories</span>
+          <input id="search" type="search" maxlength="200" placeholder="Search loaded notifications..." autocomplete="off" spellcheck="false">
+        </label>
+        <details id="filters" class="filters">
+          <summary id="filters-toggle" class="filters-toggle" aria-controls="filters-panel" aria-expanded="false">Filters</summary>
+          <div id="filters-panel" class="filters-panel" role="group" aria-label="Notification filters">
+            <div class="select-setting">
+              <label for="filter-readState">Read state</label>
+              <select id="filter-readState" disabled></select>
+            </div>
+            <div class="select-setting">
+              <label for="filter-type">Type</label>
+              <select id="filter-type" disabled></select>
+            </div>
+            <div class="select-setting">
+              <label for="filter-reason">Reason</label>
+              <select id="filter-reason" disabled></select>
+            </div>
+            <div class="select-setting">
+              <label for="filter-age">Age</label>
+              <select id="filter-age" disabled></select>
+            </div>
+            <button id="filters-reset" type="button" aria-disabled="true">Clear filters</button>
+            <p id="filter-sync-status" class="sr-only" role="status" aria-live="polite" hidden></p>
+          </div>
+        </details>
+      </div>
       <div id="attention-navigation" class="attention-navigation">
         <button id="attention-previous" class="attention-scroll" type="button" aria-label="Scroll attention tabs left" aria-controls="attention-tabs" aria-disabled="true" hidden>
           <svg id="attention-previous-icon" width="18" height="18" aria-hidden="true" focusable="false"></svg>
@@ -159,7 +180,6 @@
       </div>
       <div class="status-line">
         <div class="inbox-status">
-          <span id="inbox-mode" class="inbox-mode" role="status" hidden>Unread only</span>
           <span id="count" role="status" aria-live="polite" title="Counts include loaded notifications only." hidden></span>
         </div>
         <button id="collapse" class="text-button" type="button">Collapse all</button>
@@ -224,7 +244,7 @@
         <h2 id="shortcuts-title">Keyboard shortcuts</h2>
         <button id="shortcuts-close" type="button" autofocus>Close</button>
       </div>
-      <p id="shortcuts-description">Shortcuts work while this panel has focus, outside text fields and Settings.</p>
+      <p id="shortcuts-description">Shortcuts work while this panel has focus, outside text fields, Settings, and Filters.</p>
       <dl class="shortcuts-list">
         <dt><kbd>j</kbd> / <kbd>k</kbd></dt><dd>Next / previous visible notification</dd>
         <dt><kbd>Enter</kbd></dt><dd>From search, focus the first result; on a link, open it</dd>
@@ -232,7 +252,7 @@
         <dt><kbd>Shift</kbd> + <kbd>E</kbd></dt><dd>Mark the focused notification as done</dd>
         <dt><kbd>/</kbd></dt><dd>Focus search</dd>
         <dt><kbd>?</kbd></dt><dd>Show this guide</dd>
-        <dt><kbd>Esc</kbd></dt><dd>Close this guide or Settings</dd>
+        <dt><kbd>Esc</kbd></dt><dd>Close this guide, Settings, or Filters</dd>
       </dl>
       <p>Navigation skips collapsed groups and stops at the ends. Read/Done affect only the focused row, never a group.</p>
       <p>Turn off <strong>Keyboard shortcuts</strong> in Settings to disable character shortcuts and hide the toolbar help icon. Tab and Enter still work.</p>

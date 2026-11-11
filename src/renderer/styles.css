@@ -125,6 +125,7 @@ summary:hover,
 }
 
 button:disabled,
+#filters-reset[aria-disabled="true"],
 .repo-actions button[aria-disabled="true"] {
   opacity: 0.55;
   cursor: default;
@@ -275,20 +276,24 @@ button:disabled,
   color: var(--accent);
 }
 
-.settings {
+.settings,
+.filters {
   position: relative;
   flex-shrink: 0;
 }
 
-.settings > summary {
+.settings > summary,
+.filters > summary {
   list-style: none;
 }
 
-.settings > summary::-webkit-details-marker {
+.settings > summary::-webkit-details-marker,
+.filters > summary::-webkit-details-marker {
   display: none;
 }
 
-.settings-panel {
+.settings-panel,
+.filters-panel {
   position: absolute;
   z-index: 2;
   right: 0;
@@ -297,7 +302,7 @@ button:disabled,
   flex-direction: column;
   gap: 8px;
   width: min(290px, calc(100vw - 36px));
-  max-height: 60vh;
+  max-height: calc(100vh - 16px);
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 14px;
@@ -307,12 +312,18 @@ button:disabled,
   box-shadow: 0 8px 24px #0002;
 }
 
-.settings-panel[data-placement="above"] {
+.filters-panel {
+  max-height: 60vh;
+}
+
+.settings-panel[data-placement="above"],
+.filters-panel[data-placement="above"] {
   top: auto;
   bottom: calc(100% + 8px);
 }
 
-.settings-panel button {
+.settings-panel button,
+.filters-panel button {
   width: 100%;
   text-align: left;
   white-space: normal;
@@ -336,10 +347,6 @@ button:disabled,
   flex-shrink: 0;
   max-width: 100%;
   overflow-wrap: anywhere;
-}
-
-.select-setting:has(#show-notifications) {
-  column-gap: 8px;
 }
 
 .select-setting select {
@@ -508,11 +515,30 @@ button:disabled,
   margin-bottom: 0;
 }
 
-.settings-panel .settings-help {
+.settings-panel .settings-help,
+.filters-panel .settings-help {
   margin: 0;
 }
 
-#development-settings,
+#development-settings {
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+#development-settings > summary {
+  min-height: 38px;
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-weight: 400;
+  line-height: 22px;
+}
+
+.development-settings-content {
+  padding-top: 8px;
+}
+
+.development-settings-content,
 .development-api-custom {
   display: flex;
   flex-direction: column;
@@ -525,10 +551,37 @@ button:disabled,
   overflow-wrap: anywhere;
 }
 
+.search-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
 .search {
   display: block;
+  flex: 1;
   min-width: 0;
-  margin-top: 8px;
+}
+
+.filters-toggle {
+  display: flex;
+  align-items: center;
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.filters-toggle[data-active="true"] {
+  color: var(--accent);
+}
+
+.filters-toggle[data-active="true"],
+.filters-panel .select-setting:has(select[data-active="true"]) {
+  border-color: var(--accent);
 }
 
 .search input {
@@ -566,14 +619,6 @@ input::placeholder {
   align-items: center;
   gap: 4px 8px;
   min-width: 0;
-}
-
-.inbox-mode {
-  padding: 0 6px;
-  border: 1px solid var(--border);
-  border-radius: 20px;
-  white-space: nowrap;
-  color: var(--canvas-text);
 }
 
 .retry-status {
