@@ -144,6 +144,65 @@ test("a new PR preparation uses its current head even after cached metadata and 
   assert.equal(f.calls.find(call => call.name === "create_session").args.base_branch, updated);
 });
 
+test("PR head changes after confirmation or during checkout require a fresh action", async t => {
+  for (const boundary of ["confirmation", "checkout"]) await t.test(boundary, async t => {
+    const updated = "c".repeat(40);
+    const pull = { head: { sha: prSha } };
+    const f = await fixture(t, { type: "PullRequest", pull,
+      preferences: handoffPreferences(boundary === "confirmation"),
+      onGit: args => {
+        if (boundary === "checkout" && args.includes("--verify")) pull.head.sha = updated;
+      },
+    });
+    if (boundary === "confirmation") {
+      await prepare(f);
+      pull.head.sha = updated;
+      await start(f);
+      assert.deepEqual(f.gitCalls, []);
+    } else {
+      f.handoff.request({ id: "1", direct: true });
+      await f.handoff.pending;
+    }
+    assert.equal(f.handoff.snapshot().status, "error");
+    assert.match(f.handoff.snapshot().message, /head commit changed/);
+    assert.equal(f.calls.some(call => ["create_session", "navigate_to"].includes(call.name)), false);
+    assert.equal(f.host.reservations.size, 0);
+    await prepare(f);
+    assert.equal((await start(f)).status, "started");
+    assert.equal(f.calls.find(call => call.name === "create_session").args.base_branch, updated);
+  });
+});
+
+test("PR changes during the final queue request cannot authorize a stale session", async t => {
+  for (const change of ["head", "closed", "merged"]) await t.test(change, async t => {
+    const entered = deferred();
+    const held = deferred();
+    t.after(() => held.resolve());
+    const pull = { state: "open", merged: false, head: { sha: prSha } };
+    const f = await fixture(t, { type: "PullRequest", pull, onGitHub: async args => {
+      if (args.at(-1) !== "graphql") return;
+      if (f.calls.filter(call => call.name === "list_sessions_and_chats").length === 3) {
+        entered.resolve();
+        await held.promise;
+      }
+      return http({ data: { repository: { pullRequest: {
+        isInMergeQueue: false, state: pull.merged ? "MERGED" : pull.state.toUpperCase(), headRefOid: pull.head.sha,
+      } } } });
+    } });
+    await prepare(f);
+    const starting = start(f);
+    await entered.promise;
+    if (change === "head") pull.head.sha = "c".repeat(40);
+    else Object.assign(pull, { state: "closed", merged: change === "merged" });
+    held.resolve();
+    const result = await starting;
+    assert.equal(result.status, "error");
+    assert.match(result.message, change === "head" ? /head commit changed/ : /state changed/);
+    assert.equal(f.calls.some(call => ["create_session", "navigate_to"].includes(call.name)), false);
+    assert.equal(f.host.reservations.size, 0);
+  });
+});
+
 test("missing PR commits are fetched and verified only after confirmation and before session creation", async t => {
   let present = false;
   const f = await fixture(t, { type: "PullRequest", onGit: args => {
@@ -627,6 +686,77 @@ test("merge-queued PR actions are disabled and cannot use an earlier confirmatio
   assert.equal(f.calls.some(call => call.name === "create_session"), false);
 });
 
+test("PRs entering the merge queue after confirmation, checkout, or discovery cannot start", async t => {
+  for (const boundary of ["confirmation", "checkout", "discovery"]) await t.test(boundary, async t => {
+    let queued = false;
+    let queries = 0;
+    const f = await fixture(t, { type: "PullRequest",
+      preferences: handoffPreferences(boundary === "confirmation"),
+      onGitHub: args => {
+        if (args.at(-1) === "graphql") {
+          return http({ data: { repository: { pullRequest: {
+            isInMergeQueue: queued, state: "OPEN", headRefOid: prSha,
+          } } } });
+        }
+      },
+      onGit: args => {
+        if (boundary === "checkout" && args.includes("--verify")) queued = true;
+      },
+      onExecute: name => {
+        if (name === "list_sessions_and_chats" && ++queries === 3 && boundary === "discovery") queued = true;
+      },
+    });
+    if (boundary === "confirmation") {
+      await prepare(f);
+      queued = true;
+      await start(f);
+      assert.deepEqual(f.gitCalls, []);
+    } else {
+      f.handoff.request({ id: "1", direct: true });
+      await f.handoff.pending;
+    }
+    assert.equal(queued, true);
+    assert.equal(f.handoff.snapshot().status, "error");
+    assert.match(f.handoff.snapshot().message, /merge-queued/);
+    assert.equal(f.calls.some(call => ["create_session", "navigate_to"].includes(call.name)), false);
+    assert.equal(f.host.reservations.size, 0);
+  });
+});
+
+test("PRs entering the merge queue during setup or checkout inspection never fetch", async t => {
+  for (const boundary of ["setup", "inspection"]) await t.test(boundary, async t => {
+    let queued = false;
+    let present = false;
+    const f = await fixture(t, { type: "PullRequest",
+      ...(boundary === "setup" ? { repositories: [] } : {}),
+      onExecute: name => {
+        if (name === "add_repository") queued = true;
+      },
+      onGitHub: args => {
+        if (args.at(-1) === "graphql") return http({ data: { repository: { pullRequest: {
+          isInMergeQueue: queued, state: "OPEN", headRefOid: prSha,
+        } } } });
+      },
+      onGit: args => {
+        if (args.includes("--verify") && !present) {
+          if (boundary === "inspection") queued = true;
+          throw Object.assign(new Error("Missing synthetic commit"), { code: 1 });
+        }
+        if (args.includes("fetch")) present = true;
+      },
+    });
+    await prepare(f);
+    const result = await start(f, boundary === "setup" ? { clone: true } : {});
+    assert.equal(queued, true);
+    assert.equal(f.gitCalls.some(call => call.args.includes("fetch")), false);
+    if (boundary === "setup") assert.deepEqual(f.gitCalls, []);
+    assert.equal(result.status, "error");
+    assert.match(result.message, /merge-queued/);
+    assert.equal(f.calls.some(call => ["create_session", "navigate_to"].includes(call.name)), false);
+    assert.equal(f.host.reservations.size, 0);
+  });
+});
+
 test("a PR that changes state during checkout cannot start a stale task", async t => {
   for (const [initial, next] of [["open", "merged"], ["open", "closed"], ["closed", "open"], ["closed", "merged"]]) {
     await t.test(`${initial} to ${next}`, async t => {
@@ -685,19 +815,21 @@ test("PR handoffs await a pending merge-queue lookup before preparing or startin
   });
 });
 
-test("PR confirmations fail closed when previously verified queue status can no longer be checked", async t => {
+test("PR confirmations recheck warm queue results without bypassing failure or rate-limit backoff", async t => {
   for (const blocked of [false, true]) await t.test(blocked ? "rate limited" : "lookup failure", async t => {
     let checks = 0;
     const f = await fixture(t, { type: "PullRequest", onGitHub: args => {
       if (args.at(-1) === "graphql" && ++checks > 1) return http({}, {}, 403);
     } });
     await prepare(f);
-    const item = f.inbox.loadedItems()[0];
-    f.client.invalidateSubjects([item]);
     if (blocked) f.client.graphqlBlockedUntil = f.client.now() + RETRY_MS;
     assert.equal((await start(f)).status, "error");
     assert.equal(f.calls.some(call => call.name === "create_session"), false);
     assert.equal(checks, blocked ? 1 : 2);
+    f.handoff.request({ id: "1" });
+    await f.handoff.pending;
+    assert.equal(f.handoff.snapshot().status, "error");
+    assert.equal(checks, blocked ? 1 : 2, "A fresh action must still respect the failed queue lookup's backoff");
   });
 });
 

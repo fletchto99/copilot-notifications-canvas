@@ -61,6 +61,23 @@ test("closed, merged, draft, or unavailable PRs never query merge queue membersh
   }
 });
 
+test("handoff queue checks reject incomplete PR context and retain failure backoff", async () => {
+  for (const context of [
+    {}, { state: "UNKNOWN", headRefOid: "b".repeat(40) }, { state: "OPEN" },
+    { state: "OPEN", headRefOid: "main" },
+  ]) {
+    let queries = 0;
+    const client = new GitHubClient({ now: () => 0, run: async args => {
+      queries++;
+      assert.match(args.find(arg => arg.startsWith("query=")), /isInMergeQueue state headRefOid/);
+      return http({ data: { repository: { pullRequest: { isInMergeQueue: false, ...context } } } });
+    } });
+    await assert.rejects(client.copilotContext("pull-queue", item()), { code: "copilot_context" });
+    await assert.rejects(client.copilotContext("pull-queue", item()), { code: "copilot_context" });
+    assert.equal(queries, 1);
+  }
+});
+
 test("foreground requests can run between a PR state lookup and its merge queue lookup", async () => {
   let release;
   let started;
