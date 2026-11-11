@@ -318,6 +318,59 @@ test("storage errors and concurrent-writer locks are actionable, not success-sha
   await assert.rejects(denied.update({ autoOpen: true }), { code: "settings_read" });
 });
 
+test("transient Windows replacement failures keep the original settings and lock until one atomic save", async t => {
+  const preferences = await setup(t);
+  const before = '{"autoOpen":false,"revision":7,"future":{"keep":true}}';
+  await fs.writeFile(preferences.path, before);
+  const sources = new Set();
+  let attempts = 0;
+  const writer = new Preferences({ directory: preferences.directory, platform: "win32", io: {
+    ...fs,
+    rename: async (source, destination) => {
+      sources.add(source);
+      assert.equal(await fs.readFile(preferences.path, "utf8"), before);
+      await assert.rejects(preferences.update({ autoOpen: true }), { code: "settings_busy" });
+      if (++attempts < 3) throw Object.assign(new Error("Synthetic sharing violation"), { code: "EPERM" });
+      return fs.rename(source, destination);
+    },
+  } });
+  const saved = await writer.update({ darkMode: true });
+  assert.equal(attempts, 3);
+  assert.equal(sources.size, 1);
+  assert.equal(saved.revision, 8);
+  assert.equal(saved.autoOpen, false);
+  assert.equal(saved.darkMode, true);
+  assert.deepEqual((await preferences.document()).future, { keep: true });
+  assert.deepEqual(await fs.readdir(preferences.directory), ["settings.json"]);
+});
+
+test("replacement retries are bounded and limited to Windows EPERM without deleting saved settings", async t => {
+  for (const [platform, code, expectedAttempts] of [
+    ["win32", "EPERM", 5], ["win32", "EIO", 1], ["linux", "EPERM", 1],
+  ]) {
+    await t.test(`${platform} ${code}`, async t => {
+      const preferences = await setup(t);
+      await preferences.update({ autoOpen: true });
+      const before = await fs.readFile(preferences.path, "utf8");
+      let attempts = 0;
+      const writer = new Preferences({ directory: preferences.directory, platform, io: {
+        ...fs,
+        rename: async () => {
+          attempts++;
+          throw Object.assign(new Error("Synthetic replacement failure"), { code });
+        },
+      } });
+      await assert.rejects(writer.update({ darkMode: true }), error =>
+        error.code === "settings_write" && !error.message.includes("Synthetic"));
+      assert.equal(attempts, expectedAttempts);
+      assert.equal(await fs.readFile(preferences.path, "utf8"), before);
+      assert.deepEqual(await fs.readdir(preferences.directory), ["settings.json"]);
+      await preferences.update({ darkMode: true });
+      assert.equal((await preferences.read()).revision, 2);
+    });
+  }
+});
+
 test("a crashed settings writer releases ownership on the next save without losing preferences", async t => {
   const preferences = await setup(t);
   await fs.writeFile(preferences.path, '{"autoOpen":false,"future":{"keep":true}}');

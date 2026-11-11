@@ -3,10 +3,10 @@ import { createCanvasFixture } from "../canvas-fixtures.mjs";
 
 export { expect };
 
-export async function openSettings(page) {
-  const settings = page.locator("#settings-toggle");
-  await settings.click();
-  await expect(settings).toHaveAttribute("aria-expanded", "true");
+export async function openSettings(page, activate = () => page.locator("#settings-toggle").click()) {
+  await activate();
+  // The toggle handler updates aria-expanded before starting the settings read.
+  await expect(page.locator("#settings-toggle")).toHaveAttribute("aria-expanded", "true");
   await expect(page.locator("#theme")).toBeEnabled();
 }
 

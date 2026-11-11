@@ -1,5 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
-import { test, expect } from "./fixtures.mjs";
+import { test, expect, openSettings } from "./fixtures.mjs";
 import { CURRENT_VERSION } from "../../src/provider/updates.mjs";
 
 const searchName = "Search loaded notification titles, issue or PR numbers, and repositories";
@@ -992,8 +992,7 @@ test("Settings supports keyboard dismissal and persists theme and auto-open acro
   await page.goto(canvas.url);
   const settings = page.getByLabel("Settings", { exact: true });
   await settings.focus();
-  await settings.press("Enter");
-  await expect(settings).toHaveAttribute("aria-expanded", "true");
+  await openSettings(page, () => settings.press("Enter"));
   const theme = page.getByRole("combobox", { name: "Theme", exact: true });
   await expect(theme).toBeEnabled();
   await expect(theme.locator("option")).toHaveText(["Match Copilot", "Dark", "Light"]);

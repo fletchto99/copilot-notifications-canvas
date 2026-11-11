@@ -1,5 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
-import { test, expect } from "./fixtures.mjs";
+import { test, expect, openSettings } from "./fixtures.mjs";
 import { http, staticSubjectTypes, thread } from "../fixtures.mjs";
 import { octicons } from "../../src/renderer/octicons.mjs";
 
@@ -24,7 +24,7 @@ for (const packaged of [false, true]) {
           await page.goto(canvas.url);
           const fields = page.locator(".notification-subject");
           await expect(fields).toHaveCount(types.length);
-          await page.locator("#settings-toggle").click();
+          await openSettings(page);
           await page.locator("#theme").selectOption(theme);
           await page.locator("#group-by").selectOption(groupBy);
           await page.keyboard.press("Escape");
@@ -147,7 +147,7 @@ for (const packaged of [false, true]) {
       expect(new Set(shapes).size).toBe(5);
       for (const theme of ["light", "dark"]) {
         for (const groupBy of ["repo", "none", "date"]) {
-          await page.locator("#settings-toggle").click();
+          await openSettings(page);
           await page.locator("#theme").selectOption(theme);
           await page.locator("#group-by").selectOption(groupBy);
           await page.keyboard.press("Escape");

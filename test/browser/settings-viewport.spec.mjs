@@ -1,5 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
-import { test, expect } from "./fixtures.mjs";
+import { test, expect, openSettings } from "./fixtures.mjs";
 
 async function expectPanelInViewport(page) {
   await expect.poll(async () => {
@@ -16,8 +16,7 @@ for (const packaged of [false, true]) {
       canvas.rows.splice(1);
       await canvas.preferences.update({ desktopSound: "none" });
       await page.goto(canvas.url);
-      await page.locator("#settings-toggle").click();
-      await expect(page.locator("#theme")).toBeEnabled();
+      await openSettings(page);
       const desktop = page.getByRole("switch", { name: "Desktop notifications", exact: true });
       const sound = page.locator("#desktop-sound");
       await expect(sound).toBeHidden();
@@ -35,8 +34,7 @@ for (const packaged of [false, true]) {
       await expect(page.locator("#settings-panel")).toBeVisible();
       expect((await canvas.preferences.read()).desktopSound).toBe("none");
       await page.reload();
-      await page.locator("#settings-toggle").click();
-      await expect(desktop).toBeEnabled();
+      await openSettings(page);
       await expect(sound).toBeHidden();
       await desktop.click();
       await expect(sound).toBeVisible();
@@ -120,10 +118,11 @@ for (const packaged of [false, true]) {
       await expect(page.locator(".row")).toHaveCount(6);
       const toggle = page.locator("#settings-toggle");
       const panel = page.locator("#settings-panel");
-      await toggle.click();
+      await openSettings(page);
       // Layout changes can queue a new WebKit hover over a stationary pointer.
       await page.mouse.move(0, 0);
       await expect(page.locator("#theme")).toBeEnabled();
+      const supportsOverscroll = await page.evaluate(() => CSS.supports("overscroll-behavior", "contain"));
       for (const [width, height] of [[320, 480], [320, 320], [480, 640]]) {
         await page.setViewportSize({ width, height });
         await expect(panel).toHaveAttribute("data-placement", "below");
@@ -132,7 +131,7 @@ for (const packaged of [false, true]) {
           return box.y >= 8 && box.y + box.height <= height - 8 && box.x >= 0 && box.x + box.width <= width;
         }).toBe(true);
         await expect(panel).toHaveCSS("overflow-y", "auto");
-        await expect(panel).toHaveCSS("overscroll-behavior", "contain");
+        if (supportsOverscroll) await expect(panel).toHaveCSS("overscroll-behavior", "contain");
         const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
         expect(results.violations).toEqual([]);
       }

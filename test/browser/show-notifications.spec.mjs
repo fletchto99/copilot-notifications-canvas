@@ -1,5 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
-import { test, expect } from "./fixtures.mjs";
+import { test, expect, openSettings } from "./fixtures.mjs";
 
 for (const packaged of [false, true]) {
   test.describe(`read-state filtering (${packaged ? "packaged" : "source"})`, () => {
@@ -18,8 +18,7 @@ for (const packaged of [false, true]) {
           await page.getByRole("searchbox").focus();
           await page.keyboard.press("Shift+Tab");
           await expect(settings).toBeFocused();
-          await page.keyboard.press("Enter");
-          await expect(settings).toHaveAttribute("aria-expanded", "true");
+          await openSettings(page, () => page.keyboard.press("Enter"));
           await expect(grouping).toBeEnabled();
           await expect(page.locator("#show-notifications, #inbox-mode")).toHaveCount(0);
           await page.keyboard.press("Tab");
