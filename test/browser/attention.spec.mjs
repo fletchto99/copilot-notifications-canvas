@@ -1,5 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
-import { test, expect } from "./fixtures.mjs";
+import { test, expect, openSettings } from "./fixtures.mjs";
 import { http } from "../fixtures.mjs";
 
 test.beforeEach(async ({ canvas }) => {
@@ -530,12 +530,7 @@ for (const packaged of [false, true]) {
       await page.goto(canvas.url);
       const tabs = page.getByRole("tablist", { name: "Attention filters" }).getByRole("tab");
       await expect(tabs).toHaveText(["All (1)", "Participating (1)", "Mentioned (1)"]);
-      await Promise.all([
-        page.evaluate(() => new Promise(resolve => {
-          document.getElementById("settings").addEventListener("toggle", () => resolve(), { once: true });
-        })),
-        page.getByLabel("Settings", { exact: true }).click(),
-      ]);
+      await openSettings(page);
       const toggle = page.getByRole("switch", { name: "Hide empty tabs", exact: true });
       await expect(toggle).toBeEnabled();
       await expect(toggle).toBeChecked();
