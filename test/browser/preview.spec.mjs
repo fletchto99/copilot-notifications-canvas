@@ -93,6 +93,9 @@ test.describe("rate-limited preview", () => {
     await expect(page.locator("#notice")).toContainText("GitHub rate limit reached");
     await expect(page.locator("#empty-title")).toHaveText("Your inbox is unavailable");
     await expect(page.locator(".row")).toHaveCount(0);
+    await expect(page.locator("#count")).toBeHidden();
+    await expect(page.getByRole("tab", { name: "All", exact: true })).toBeVisible();
+    await expect(page.getByRole("tab", { name: /\(\d/ })).toHaveCount(0);
     const reads = () => preview.requests.filter(path => path.startsWith("/notifications?")).length;
     expect(reads()).toBe(1);
     const refresh = page.getByRole("button", { name: "Force refresh", exact: true });
@@ -117,6 +120,8 @@ test.describe("stale preview", () => {
     await expect(page.locator("#notice")).toContainText("Showing previously loaded notifications.");
     await expect(page.locator("#notice")).toContainText("HTTP 503");
     await expect(page.locator(".row")).toHaveCount(50);
+    await expect(page.locator("#count")).toHaveText("50 loaded \u00b7 50 unread");
+    await expect(page.locator("#count")).toBeVisible();
     expect(await page.locator(".row .title").allTextContents()).toEqual(initial);
     await page.getByRole("searchbox").fill("Needle");
     await expect(page.locator(".row")).toHaveCount(3);

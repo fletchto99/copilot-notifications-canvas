@@ -185,6 +185,8 @@ function renderTheme() {
 function renderNotificationView() {
   const unreadOnly = state?.filters.mode === "unread";
   $("show-notifications").value = unreadOnly || preferences?.matchGitHubInbox === false ? "unread" : "all";
+  const matchGitHubInbox = state?.lastFetchedAt != null ? state.matchGitHubInbox : preferences?.matchGitHubInbox;
+  $("inbox-mode").hidden = !unreadOnly && matchGitHubInbox !== false;
   $("show-notifications").disabled = settingsBusy || !preferences || unreadOnly ||
     busy || state?.status === "loading" || batchBusy || batchLocked() || marking.size > 0;
 }
@@ -1279,7 +1281,7 @@ function renderGroups(groups, fallbackFocusKey, completedRows = []) {
     disclosure.setAttribute("aria-controls", rows.id);
     disclosure.setAttribute("aria-expanded", String(!rows.hidden));
     disclosure.append(element("span", "repo-name", group.label),
-      element("span", "repo-count", `${group.items.length} total \u00b7 ${group.unread} unread`));
+      element("span", "repo-count", `${group.items.length} loaded \u00b7 ${group.unread} unread`));
     disclosure.addEventListener("click", () => {
       rows.hidden = !rows.hidden;
       if (rows.hidden) collapsed.add(group.key);
@@ -1437,6 +1439,7 @@ function render(fallbackFocusKey) {
   const pendingRowError = [...marking.values()].map(operation => operation.error).filter(Boolean).join(" ");
   const error = actionError || rowError || pendingRowError || state?.error?.message || connectionError;
   const loading = state?.status === "idle" || state?.status === "loading";
+  const countsKnown = state?.lastFetchedAt != null;
   const filtered = Boolean(state?.filters.query || (state && state.filters.attention !== "all"));
   const cleared = Boolean(state && !state.loaded && state.hasMore);
   const caughtUp = Boolean(state && !error && !loading && !filtered && !state.groups.length && !cleared);
@@ -1458,9 +1461,9 @@ function render(fallbackFocusKey) {
   for (const { value, label } of attentionFilters) {
     const tab = attentionTabs.get(value);
     const incomplete = value === "mine" && incompleteAuthorship;
-    const text = state ? `${label} (${state.attentionCounts[value]}${incomplete ? "+" : ""})` : label;
+    const text = countsKnown ? `${label} (${state.attentionCounts[value]}${incomplete ? "+" : ""})` : label;
     const selected = String(value === attention);
-    const hidden = Boolean(preferences?.hideEmptyTabs && state?.attentionCounts[value] === 0 &&
+    const hidden = Boolean(countsKnown && preferences?.hideEmptyTabs && state.attentionCounts[value] === 0 &&
       !incomplete && value !== "all" && value !== attention && value !== requestedAttention);
     if (tab.textContent !== text || tab.getAttribute("aria-selected") !== selected || tab.hidden !== hidden) tabsChanged = true;
     setControlText(tab, text);
@@ -1482,7 +1485,7 @@ function render(fallbackFocusKey) {
   panel.setAttribute("aria-labelledby", `attention-${attention}`);
   panel.tabIndex = state?.groups.length ? -1 : 0;
   $("empty-symbol").hidden = caughtUp;
-  $("count").hidden = caughtUp;
+  $("count").hidden = !countsKnown || caughtUp;
   $("notice").hidden = !error && !subjectSelectionError;
   $("notice").textContent = error ? `${state?.loaded ? "Showing previously loaded notifications. " : ""}${error}` : subjectSelectionError;
   if (!state) {
@@ -1493,7 +1496,8 @@ function render(fallbackFocusKey) {
     return;
   }
   if (document.activeElement !== $("search") && pendingFilters?.query === undefined) $("search").value = state.filters.query;
-  $("count").textContent = `${state.loaded} total \u00b7 ${state.unread} unread${filtered ? ` \u00b7 ${state.matching} matching` : ""}`;
+  $("count").textContent = countsKnown
+    ? `${state.loaded} loaded \u00b7 ${state.unread} unread${filtered ? ` \u00b7 ${state.matching} matching` : ""}` : "";
   $("more").hidden = !state.hasMore;
   setControlText($("more"), "Load more (up to 50)");
   $("more").title = state.needsRefresh ? "Refresh notifications before loading more." : "";

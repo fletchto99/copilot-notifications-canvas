@@ -120,13 +120,13 @@ for (const packaged of [false, true]) {
         await expect.poll(() => requested().sort()).toEqual(Array.from({ length: 20 }, (_, index) => `/repos/example/widgets/actions/runs/${index + 1}`).sort());
         const selected = page.waitForResponse(response => new URL(response.url()).pathname === "/api/subjects" &&
           response.request().postDataJSON().complete && response.request().postDataJSON().positions.length === 20);
-        await page.getByRole("button", { name: /example\/tools.*total/ }).click();
+        await page.locator('[data-focus-key="repo:example/tools"]').click();
         await selected;
         release();
         await expect(page.locator(".subject-success")).toHaveCount(20);
         await expect(page.locator(".subject-loading:visible")).toHaveCount(0);
         expect(requested()).toHaveLength(20);
-        await page.getByRole("button", { name: /example\/tools.*total/ }).click();
+        await page.locator('[data-focus-key="repo:example/tools"]').click();
         await expect(page.locator(".subject-success")).toHaveCount(40);
         expect(requested()).toHaveLength(40);
         expect(canvas.writes).toEqual([]);

@@ -526,6 +526,59 @@ for (const packaged of [false, true]) {
       });
     }
 
+    test("confirmation details stay readable on narrow panels without hiding consent or moving focus", async ({ page, canvas }) => {
+      canvas.copilotHost.repositories.splice(0);
+      canvas.rows.splice(1);
+      canvas.rows[0].subject.url = "https://api.github.com/repos/example/widgets/issues/1";
+      await page.goto(canvas.url);
+      const action = page.getByRole("button", { name: /^Investigate with Copilot:/ });
+      await action.click();
+      const dialog = page.locator("#copilot-dialog");
+      const start = page.getByRole("button", { name: "Clone repository and start", exact: true });
+      await expect(start).toBeVisible();
+      for (const width of [320, 480]) {
+        await page.setViewportSize({ width, height: 640 });
+        for (const colorScheme of ["light", "dark"]) {
+          await page.emulateMedia({ colorScheme });
+          await page.locator("#copilot-close").focus();
+          for (const id of ["copilot-status", "copilot-reference", "copilot-clone", "copilot-privacy", "copilot-confirmation-help"]) {
+            const text = page.locator(`#${id}`);
+            await text.scrollIntoViewIfNeeded();
+            await expect(text).toBeInViewport();
+            const box = await text.boundingBox();
+            expect(box.x).toBeGreaterThanOrEqual(16);
+            expect(box.x + box.width).toBeLessThanOrEqual(width - 16);
+          }
+          const clone = await page.locator("#copilot-clone").boundingBox();
+          const privacy = await page.locator("#copilot-privacy").boundingBox();
+          expect(clone.y + clone.height).toBeLessThan(privacy.y);
+          await expect(dialog).toContainText("significant disk space");
+          await expect(dialog).toContainText("retained in its session history");
+          await expect(dialog).toContainText("Read/Done stays unchanged");
+          await expect(dialog).toContainText("Saved when you confirm, not when you cancel");
+          await page.locator("#copilot-close").focus();
+          await page.keyboard.press("Tab");
+          await expect(page.locator("#copilot-skip-confirmation")).toBeFocused();
+          await page.keyboard.press("Tab");
+          await expect(start).toBeFocused();
+          await expect(start).toBeInViewport();
+          const bounds = await dialog.boundingBox();
+          expect(bounds.y).toBeGreaterThanOrEqual(16);
+          expect(bounds.y + bounds.height).toBeLessThanOrEqual(624);
+          expect(await dialog.evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
+          expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+        }
+      }
+      await page.keyboard.press("Escape");
+      await expect(dialog).toBeHidden();
+      await expect(action).toBeFocused();
+      expect((await canvas.preferences.read()).confirmCopilotActions).toBe(true);
+      expect(canvas.copilotHost.calls.filter(call =>
+        !["list_repositories", "list_sessions_and_chats"].includes(call.name))).toEqual([]);
+      expect(canvas.writes).toEqual([]);
+      expect(canvas.deliveries).toEqual([]);
+    });
+
     test("repository setup is an explicit, accessible second confirmation", async ({
       page,
       canvas,
@@ -948,6 +1001,19 @@ for (const packaged of [false, true]) {
         await page.goto(canvas.url);
         const rows = page.locator(".row");
         await expect(rows).toHaveCount(4);
+        if (width === 320) {
+          expect((await rows.first().boundingBox()).y).toBeLessThanOrEqual(290);
+          await expect(page.locator("h1")).toHaveCSS("font-size", "24px");
+          for (const selector of ["#force-refresh", "#settings-toggle"]) {
+            await expect(page.locator(selector)).toHaveCSS("width", "38px");
+            await expect(page.locator(selector)).toHaveCSS("height", "38px");
+          }
+          const header = await page.locator(".repo-header").boundingBox();
+          expect(header.height).toBeLessThanOrEqual(60);
+          const actions = await page.locator(".repo-actions").boundingBox();
+          const toggle = await page.locator(".repo-toggle").boundingBox();
+          expect(actions.y + actions.height).toBeLessThanOrEqual(toggle.y + toggle.height);
+        }
         await expect(rows.nth(1).locator(".copilot-action")).toBeVisible();
         const copilot = await rows.first().locator(".copilot-action").boundingBox();
         const read = await rows.first().locator(".mark-read").boundingBox();

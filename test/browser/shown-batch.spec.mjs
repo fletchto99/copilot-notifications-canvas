@@ -33,7 +33,7 @@ test.describe("All notifications group", () => {
       const root = page.locator(shownGroup);
       await expect(root).toBeVisible();
       await expect(root.locator(".repo-name")).toHaveText("All notifications");
-      await expect(root.locator(".repo-count")).toHaveText("3 total \u00b7 3 unread");
+      await expect(root.locator(".repo-count")).toHaveText("3 loaded \u00b7 3 unread");
       await expect(root.locator(".repo-header .repo-read")).toHaveAccessibleDescription("Mark 3 as read");
       await expect(page.locator(".status-line .repo-actions")).toHaveCount(0);
       await expect(page.locator("#collapse")).toBeVisible();
@@ -74,7 +74,7 @@ test.describe("All notifications group", () => {
         const done = getComputedStyle(node.querySelector(".repo-done")).color;
         return node.isConnected && read !== "" && read === done;
       })).toBe(true);
-      await expect(page.locator("#count")).toHaveText("50 total \u00b7 50 unread \u00b7 3 matching");
+      await expect(page.locator("#count")).toHaveText("50 loaded \u00b7 50 unread \u00b7 3 matching");
       await expect(page.locator("#collapse")).toBeVisible();
       await expect(root.locator(".repo-name")).toHaveText("All notifications");
       await expect(root.locator(".repo-header > .repo-actions")).toHaveCount(1);
@@ -119,13 +119,13 @@ test("the single group keeps collapse state through filtering, refresh and group
   await page.goto(canvas.url);
   const group = page.locator(shownGroup);
   const disclosure = group.locator(".repo-toggle");
-  await expect(disclosure).toHaveAccessibleName(/All notifications 3 total \u00b7 3 unread/);
+  await expect(disclosure).toHaveAccessibleName(/All notifications 3 loaded \u00b7 3 unread/);
   await disclosure.focus();
   await disclosure.press("Enter");
   await expect(disclosure).toBeFocused();
   await expect(disclosure).toHaveAttribute("aria-expanded", "false");
   await page.getByRole("searchbox").fill("Needle widget");
-  await expect(group.locator(".repo-count")).toHaveText("2 total \u00b7 2 unread");
+  await expect(group.locator(".repo-count")).toHaveText("2 loaded \u00b7 2 unread");
   await expect(group.locator(".repo-read")).toHaveAccessibleDescription("Mark 2 as read");
   await expect(group.locator(".row:visible")).toHaveCount(0);
   await page.getByRole("button", { name: "Force refresh", exact: true }).click();

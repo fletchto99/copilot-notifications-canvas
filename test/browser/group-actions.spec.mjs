@@ -100,7 +100,7 @@ for (const action of ["read", "done"]) {
 }
 
 for (const repository of ["example/ui", "example/notifications-and-workflow-tools", `example/${"long-".repeat(30)}repository`]) {
-  test(`repository header wraps by content width for ${repository}`, async ({ page, canvas }, testInfo) => {
+  test(`repository header keeps narrow actions inline and wraps wider layouts by content for ${repository}`, async ({ page, canvas }, testInfo) => {
     canvas.rows.splice(2);
     for (const row of canvas.rows) row.repository.full_name = repository;
     await page.goto(canvas.url);
@@ -129,14 +129,15 @@ for (const repository of ["example/ui", "example/notifications-and-workflow-tool
           available: header.width - paddingLeft - paddingRight, gap: parseFloat(style.columnGap),
           actionsWidth: actions.width, actionsRight: actions.right, headerRight: header.right - paddingRight,
           actionsLeft: actions.left, headerLeft: header.left + paddingLeft,
-          wrapped: actions.top >= toggle.bottom, toggleWidth: toggle.width,
+          wrapped: actions.top >= toggle.bottom, toggleWidth: toggle.width, toggleRight: toggle.right,
         };
       });
-      expect(layout.wrapped).toBe(intrinsicWidth + layout.actionsWidth + layout.gap > layout.available + 0.5);
+      expect(layout.wrapped).toBe(width > 480 && intrinsicWidth + layout.actionsWidth + layout.gap > layout.available + 0.5);
+      if (width <= 480) expect(layout.toggleRight + layout.gap).toBeLessThanOrEqual(layout.actionsLeft + 0.5);
       expect(layout.actionsRight).toBeCloseTo(layout.headerRight);
       expect(layout.toggleWidth).toBeLessThanOrEqual(layout.available + 0.5);
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
-      await expect(header.locator(".repo-count")).toHaveText("2 total \u00b7 2 unread");
+      await expect(header.locator(".repo-count")).toHaveText("2 loaded \u00b7 2 unread");
       if (repository === "example/ui" && width >= 400) expect(layout.wrapped).toBe(false);
       if (width === 480 || width === 320) {
         await page.screenshot({ path: testInfo.outputPath(`header-wrap-${width}.png`), fullPage: true });
@@ -164,7 +165,7 @@ test("repository Done honors attention and search filters without changing the s
   const mentioned = page.getByRole("tab", { name: /^Mentioned \(\d+\)$/ });
   await mentioned.click();
   await expect(page.locator(".row")).toHaveCount(3);
-  await expect(page.locator("#count")).toHaveText("50 total \u00b7 50 unread \u00b7 3 matching");
+  await expect(page.locator("#count")).toHaveText("50 loaded \u00b7 50 unread \u00b7 3 matching");
   await page.getByRole("button", { name: doneName, exact: true }).click();
   await expect(page.locator(".row")).toHaveCount(1);
   await expect(mentioned).toHaveAttribute("aria-selected", "true");

@@ -25,7 +25,7 @@ test("the All notifications header offers bounded read and Done actions across r
     assert.equal(controls(ui).root.className, "repo-group");
     assert.equal(controls(ui).read.parentNode.parentNode.parentNode.className, "repo-header");
     assert.equal(controls(ui).root.querySelectorAll(".repo-name")[0].textContent, "All notifications");
-    assert.equal(controls(ui).root.querySelectorAll(".repo-count")[0].textContent, "3 total \u00b7 3 unread");
+    assert.equal(controls(ui).root.querySelectorAll(".repo-count")[0].textContent, "3 loaded \u00b7 3 unread");
     assert.equal(groupActionText(controls(ui).read), "Mark 3 as read");
     assert.equal(ui.ids.get("collapse").hidden, false);
     await runInContext('update("filters", { attention: "mentioned", query: "notification" })', ui.context);
@@ -66,7 +66,7 @@ test("the single group's collapse state survives polls, filtering and grouping c
   await runInContext('update("filters", { attention: "mentioned" })', ui.context);
   assert.equal(controls(ui).root.children[1].hidden, true);
   assert.equal(groupActionText(controls(ui).read), "Mark 2 as read");
-  assert.equal(controls(ui).root.querySelectorAll(".repo-count")[0].textContent, "2 total \u00b7 2 unread");
+  assert.equal(controls(ui).root.querySelectorAll(".repo-count")[0].textContent, "2 loaded \u00b7 2 unread");
   const grouping = ui.ids.get("group-by");
   for (const groupBy of ["date", "repo", "none"]) {
     grouping.focus();

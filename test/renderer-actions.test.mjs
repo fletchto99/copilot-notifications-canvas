@@ -412,12 +412,12 @@ test("single-item repository groups retain direct group actions alongside row ac
   const bulk = () => buttons().filter(button => button.dataset.batchAction === "read");
   const count = () => buttons().find(button => button.dataset.disclosure).children[1].textContent;
   assert.equal(bulk().length, 1);
-  assert.equal(count(), "2 total \u00b7 2 unread");
+  assert.equal(count(), "2 loaded \u00b7 2 unread");
   await runInContext('update("filters", { query: "notification 1" })', ui.context);
   assert.equal(bulk().length, 1);
   assert.equal(groupActionText(bulk()[0]), "Mark 1 as read");
   assert.equal(groupActionText(buttons().find(button => button.dataset.batchAction === "done")), "Mark 1 as done");
-  assert.equal(count(), "1 total \u00b7 1 unread");
+  assert.equal(count(), "1 loaded \u00b7 1 unread");
   assert.equal(buttons().find(button => button.dataset.threadId === "1").disabled, false);
   await runInContext('update("filters", { query: "no match" })', ui.context);
   assert.equal(bulk().length, 0);
@@ -429,7 +429,7 @@ test("single-item repository groups retain direct group actions alongside row ac
   await finishRows(ui);
   assert.equal(bulk().length, 1);
   assert.equal(groupActionText(bulk()[0]), "Mark 1 as read");
-  assert.equal(count(), "2 total \u00b7 1 unread");
+  assert.equal(count(), "2 loaded \u00b7 1 unread");
   assert.equal(ui.document.activeElement.dataset.focusKey, "done:1");
   await buttons().find(button => button.dataset.focusKey === "read:2").events.click();
   await finishRows(ui);
@@ -471,7 +471,7 @@ test("compact toolbar aligns the title and utility icons above full-width search
   assert.match(styles, /\.icon-button \{[^}]*flex-shrink: 0;[^}]*width: 38px;\s+height: 38px;[^}]*color: var\(--canvas-text\);/);
   assert.match(styles, /\.settings \{[^}]*flex-shrink: 0;/);
   assert.doesNotMatch(styles.match(/(?:^|\n)\.toolbar \{[^}]*\}/)[0], /flex-wrap: wrap/);
-  assert.match(styles, /@media \(max-width: 360px\) \{\s+\.toolbar \{\s+flex-wrap: wrap;\s+justify-content: flex-end;\s+\}\s+\.toolbar h1 \{\s+flex-basis: 100%;/);
+  assert.match(styles, /@media \(max-width: 360px\) \{\s+\.toolbar \{\s+flex-wrap: wrap;\s+justify-content: flex-end;\s+gap: 4px;\s+\}\s+\.toolbar h1 \{\s+flex-basis: 100%;/);
 });
 
 test("notification metadata, counts and action tooltips use 12px text", () => {
