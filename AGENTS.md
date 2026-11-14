@@ -367,9 +367,12 @@ unprivileged `ubuntu-slim` runner; source lint remains on `ubuntu-slim`.
 Preserve the image's ShellCheck and Pyflakes integrations and read-only permissions.
 
 Browser CI uses a digest-pinned Playwright image with browsers and system
-libraries already installed. When updating Playwright, update the image's
-version and verified digest in `.github/workflows/tests.yml` together with the
-locked npm dependency. Preserve both browser engines and packaged checks.
+libraries already installed. The `browser-image` job validates and reads
+`ci/playwright/Dockerfile`; browser jobs consume its output directly.
+Dependabot's weekly `development` multi-ecosystem group updates that Dockerfile
+and npm development dependencies together. When updating Playwright, update the
+Dockerfile's version and verified digest with the locked npm dependency.
+Preserve the alignment test, both browser engines, and packaged checks.
 
 Documentation-only changes do not need runtime tests unless they affect a
 tested contract. Check paths, commands, and consistency; report which checks

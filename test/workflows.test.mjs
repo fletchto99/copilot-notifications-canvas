@@ -24,15 +24,18 @@ test("CI runs lint and generated icon checks without allowing warnings or stale 
 });
 
 test("browser CI pins the locked Playwright version without installing browsers or system packages", async () => {
-  const [workflow, lock] = await Promise.all([
-    readFile(new URL("../.github/workflows/tests.yml", import.meta.url), "utf8"),
+  const [workflow, dockerfile, lock] = await Promise.all([
+    readFile(new URL("../.github/workflows/tests.yml", import.meta.url), "utf8").then(text => text.replaceAll("\r\n", "\n")),
+    readFile(new URL("../ci/playwright/Dockerfile", import.meta.url), "utf8").then(text => text.replaceAll("\r\n", "\n")),
     readFile(new URL("../package-lock.json", import.meta.url), "utf8").then(JSON.parse),
   ]);
   const browser = workflow.match(/\n {2}browser:\n([\s\S]*?)(?=\n {2}[a-z][\w-]*:|$)/)?.[1];
   assert.ok(browser);
   assert.match(browser, /runs-on: ubuntu-latest/);
   assert.match(browser, /^\s+timeout-minutes: 15$/m);
-  const image = browser.match(/^\s+image: mcr\.microsoft\.com\/playwright:v(\d+\.\d+\.\d+)-noble@sha256:[a-f0-9]{64}$/m);
+  assert.match(browser, /^\s+needs: browser-image$/m);
+  assert.match(browser, /^\s+image: \$\{\{ needs\.browser-image\.outputs\.image \}\}$/m);
+  const image = dockerfile.match(/^FROM mcr\.microsoft\.com\/playwright:v(\d+\.\d+\.\d+)-noble@sha256:[a-f0-9]{64}\n?$/);
   assert.ok(image, "Browser CI must use a version- and digest-pinned Playwright image");
   assert.equal(image[1], lock.packages["node_modules/@playwright/test"].version);
   assert.match(browser, /git config --global --add safe\.directory "\$GITHUB_WORKSPACE"/);
@@ -40,6 +43,59 @@ test("browser CI pins the locked Playwright version without installing browsers 
   assert.match(browser, /browser: \[chromium, webkit\]/);
   assert.match(browser, /npm run test:browser -- --project="\$\{\{ matrix\.browser \}\}"/);
   assert.doesNotMatch(browser, /playwright install|apt-get/);
+});
+
+test("browser image resolution emits only a validated pinned image from the Dependabot-managed Dockerfile", async t => {
+  const [workflow, dockerfile] = await Promise.all([
+    readFile(new URL("../.github/workflows/tests.yml", import.meta.url), "utf8"),
+    readFile(new URL("../ci/playwright/Dockerfile", import.meta.url), "utf8"),
+  ].map(promise => promise.then(text => text.replaceAll("\r\n", "\n"))));
+  const job = workflow.match(/\n {2}browser-image:\n([\s\S]*?)(?=\n {2}[a-z][\w-]*:|$)/)?.[1];
+  assert.ok(job);
+  assert.match(job, /runs-on: ubuntu-slim/);
+  assert.match(job, /outputs:\n\s+image: \$\{\{ steps\.image\.outputs\.image \}\}/);
+  assert.match(job, /uses: actions\/checkout@[a-f0-9]{40}/);
+  assert.match(job, /persist-credentials: false/);
+  assert.match(job, /id: image/);
+  const script = job.match(/ {8}run: \|\n([\s\S]+)$/)?.[1].replace(/^ {10}/gm, "");
+  assert.ok(script);
+  const directory = await mkdtemp(join(tmpdir(), "browser-image-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await mkdir(join(directory, "ci", "playwright"), { recursive: true });
+  const output = join(directory, "output");
+  const run = () => execFileSync("bash", ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script], {
+    cwd: directory, env: { ...process.env, GITHUB_OUTPUT: output }, encoding: "utf8", stdio: "pipe",
+  });
+  for (const declaration of [dockerfile, "", dockerfile.replace(/@sha256:[a-f0-9]{64}/, ""),
+    dockerfile.replace("mcr.microsoft.com", "untrusted.example"), `${dockerfile}${dockerfile}`]) {
+    await writeFile(join(directory, "ci", "playwright", "Dockerfile"), declaration);
+    await writeFile(output, "");
+    if (declaration === dockerfile) {
+      run();
+      assert.equal(await readFile(output, "utf8"), `image=${dockerfile.trim().slice(5)}\n`);
+    } else {
+      assert.throws(run, error => error.status === 1 && /Invalid pinned Playwright image/.test(error.stderr));
+      assert.equal(await readFile(output, "utf8"), "");
+    }
+  }
+});
+
+test("Dependabot groups the browser image with npm development updates on one weekly schedule", async () => {
+  const dependabot = (await readFile(new URL("../.github/dependabot.yml", import.meta.url), "utf8"))
+    .replaceAll("\r\n", "\n");
+  const updates = [...dependabot.matchAll(/\n {2}- package-ecosystem: (\S+)\n([\s\S]*?)(?=\n {2}- package-ecosystem:|$)/g)];
+  const docker = updates.find(([, ecosystem, options]) => ecosystem === "docker" && /directory: \/ci\/playwright\n/.test(options))?.[2];
+  const npm = updates.find(([, ecosystem]) => ecosystem === "npm")?.[2];
+  assert.ok(docker, "Dependabot must update the Dockerfile read by the browser image job");
+  assert.ok(npm);
+  assert.match(docker, /patterns: \["playwright"\]/);
+  assert.match(npm, /patterns: \["\*"\]/);
+  assert.match(npm, /allow:\n\s+- dependency-type: development/);
+  const group = docker.match(/multi-ecosystem-group: (\S+)/)?.[1];
+  assert.equal(group, "development");
+  assert.equal(npm.match(/multi-ecosystem-group: (\S+)/)?.[1], group);
+  assert.match(dependabot, /multi-ecosystem-groups:\n {2}development:\n {4}schedule:\n {6}interval: weekly\n/);
+  for (const options of [docker, npm]) assert.doesNotMatch(options, /^\s+(?:schedule|groups):/m);
 });
 
 test("browser CI runs four shards per engine with distinct reports and packaging checks", async () => {

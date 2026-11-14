@@ -1097,12 +1097,18 @@ for (const width of [320, 480, 960]) {
       await expect(page.locator("html")).toHaveAttribute("data-notification-theme", theme);
       const search = page.getByRole("searchbox", { name: searchName });
       await expect(search).toHaveAttribute("placeholder", "Search loaded notifications...");
-      expect(await search.evaluate(node => {
+      const placeholder = await search.evaluate(node => {
         const style = getComputedStyle(node);
         const context = document.createElement("canvas").getContext("2d");
         context.font = `${style.fontSize} ${style.fontFamily}`;
-        return context.measureText(node.placeholder).width <= node.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
-      })).toBe(true);
+        return {
+          textWidth: context.measureText(node.placeholder).width,
+          availableWidth: node.getBoundingClientRect().width
+            - parseFloat(style.borderLeftWidth) - parseFloat(style.borderRightWidth)
+            - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
+        };
+      });
+      expect(placeholder.textWidth).toBeLessThanOrEqual(placeholder.availableWidth);
       await expect(page.locator(".repo-count")).toHaveText(["3 loaded \u00b7 3 unread", "1 loaded \u00b7 1 unread"]);
       await expect(page.getByRole("button", { name: "Mark 1 as read in example/tools; 1 shown, loaded notifications", exact: true })).toBeVisible();
       await expect(page.getByRole("button", { name: "Mark 3 as read in example/widgets; 3 shown, loaded notifications", exact: true })).toBeVisible();
