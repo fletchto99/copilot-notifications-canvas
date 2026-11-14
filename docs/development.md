@@ -400,6 +400,8 @@ Advancing Playwright's clock does not finish in-flight HTTP requests. For eventu
 polling assertions, advance the clock inside `expect.poll` and assert rendered
 state; a held old response may reschedule the next poll after the first advance.
 Keep exact polling-cadence checks in tests with explicitly settled requests.
+Foreground interval tests retain the no-refresh-before-deadline assertion, then
+keep advancing timers while waiting for the due refresh to reach the renderer.
 Check optional CSS support with `CSS.supports` before asserting computed values;
 Windows WebKit lacks `overscroll-behavior`. Keep its viewport, scrolling, focus,
 and accessibility checks running rather than skipping the layout test.
