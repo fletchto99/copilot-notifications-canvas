@@ -353,6 +353,8 @@ report uploads; Playwright's per-test timeout remains 30 seconds.
 Static-icon checks run as separate tests per theme and grouping, each retaining
 all viewport widths, accessibility checks, and source/packaged coverage. This
 keeps the full matrix from sharing one test timeout and lets shards distribute it.
+Search-placeholder fit checks measure the border box minus borders and padding:
+Chromium's search-input `clientWidth` can already exclude padding, unlike WebKit.
 After `npm run build`, reproduce a shard locally with
 `npm run test:browser -- --project=chromium --shard=1/4 --workers=2`, substituting
 the browser and shard number. Omit `--shard` to run the full selected suite.
