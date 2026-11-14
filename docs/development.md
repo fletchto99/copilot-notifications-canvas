@@ -390,6 +390,8 @@ Use the browser fixture's `openSettings` helper before interacting with Settings
 It waits for the toggle handler's `aria-expanded` update and enabled controls:
 the panel can be visible before that deferred handler starts loading settings.
 For keyboard coverage, pass the activation callback as its second argument.
+Wait for Settings to be positioned inside the viewport before programmatically
+focusing lower controls; early focus can scroll the page and dismiss the panel.
 Do not install a DOM event listener concurrently with the activation: Playwright
 can dispatch the input before `page.evaluate` installs the listener, leaving
 the test waiting for an event that already fired. Prefer retrying assertions
