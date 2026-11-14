@@ -390,6 +390,8 @@ Use the browser fixture's `openSettings` helper before interacting with Settings
 It waits for the toggle handler's `aria-expanded` update and enabled controls:
 the panel can be visible before that deferred handler starts loading settings.
 For keyboard coverage, pass the activation callback as its second argument.
+Wait for Settings to be positioned inside the viewport before programmatically
+focusing lower controls; early focus can scroll the page and dismiss the panel.
 Do not install a DOM event listener concurrently with the activation: Playwright
 can dispatch the input before `page.evaluate` installs the listener, leaving
 the test waiting for an event that already fired. Prefer retrying assertions
@@ -398,6 +400,8 @@ Advancing Playwright's clock does not finish in-flight HTTP requests. For eventu
 polling assertions, advance the clock inside `expect.poll` and assert rendered
 state; a held old response may reschedule the next poll after the first advance.
 Keep exact polling-cadence checks in tests with explicitly settled requests.
+Foreground interval tests retain the no-refresh-before-deadline assertion, then
+keep advancing timers while waiting for the due refresh to reach the renderer.
 Check optional CSS support with `CSS.supports` before asserting computed values;
 Windows WebKit lacks `overscroll-behavior`. Keep its viewport, scrolling, focus,
 and accessibility checks running rather than skipping the layout test.

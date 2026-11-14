@@ -170,8 +170,8 @@ for (const packaged of [false, true]) {
       const toggle = page.locator("#settings-toggle");
       const tooltip = page.locator("#settings-tooltip");
       await toggle.focus();
-      await toggle.press("Enter");
-      await expect(page.locator("#theme")).toBeEnabled();
+      await openSettings(page, () => toggle.press("Enter"));
+      await expectPanelInViewport(page);
       await page.locator("#check-updates").focus();
       await page.keyboard.press("Escape");
       await expect(page.locator("#settings-panel")).toBeHidden();

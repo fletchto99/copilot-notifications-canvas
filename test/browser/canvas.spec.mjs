@@ -941,8 +941,10 @@ test("foreground checks use a 60-second interval, pause while hidden, and refres
   await expect.poll(() => pending.size).toBe(0);
   expect(notificationRequests()).toBe(2);
   canvas.advance(2000);
-  await page.clock.runFor(5001);
-  await expect(page.getByRole("link", { name: "Updated on the next foreground check" })).toBeVisible();
+  await expect.poll(async () => {
+    await page.clock.runFor(5001);
+    return page.getByRole("link", { name: "Updated on the next foreground check" }).isVisible();
+  }).toBe(true);
   expect(notificationRequests()).toBe(3);
   expect(canvas.writes).toEqual([]);
 });
