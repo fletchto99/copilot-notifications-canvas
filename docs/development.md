@@ -192,7 +192,7 @@ Capture waits for rows, resolved icons, and fonts; disables animations/carets;
 parks the pointer outside content; and omits the development footer.
 **Identical pixels require the same locked browser, OS/architecture, and system
 fonts.** The renderer's normal font stack is preserved. For a shared Linux
-environment, use the exact digest-pinned image in [browser CI](../.github/workflows/tests.yml);
+environment, use the exact digest-pinned [browser image](../ci/playwright/Dockerfile);
 do not expect cross-platform byte equality.
 
 Use `-- --output=readme-preview.png` to keep the README image unchanged (the parent
@@ -331,8 +331,16 @@ The CI image does not provision agent tools. Administrators must update
 required-check rules separately if workflow check names change.
 
 **Browser CI:** both engines run in a version/digest-pinned Playwright image
-with browsers and libraries preinstalled. Update its version and verified digest
-with the locked `@playwright/test` dependency; alignment is tested.
+with browsers and libraries preinstalled. The `browser-image` job reads and
+validates [ci/playwright/Dockerfile](../ci/playwright/Dockerfile), then passes
+the upstream image directly to the browser jobs without building another image.
+Dependabot tracks that Dockerfile and npm development dependencies in one weekly
+`development` multi-ecosystem group, so image tags/digests and npm updates share
+a PR. Its GitHub Actions updater does not track `container.image` references.
+Update the image version and verified digest with the locked `@playwright/test`
+dependency; alignment remains tested, including when registry releases arrive
+at different times. Dependabot configuration takes effect after merging to the
+default branch.
 Each engine runs in four parallel shards, for eight browser jobs total, with two
 Playwright workers per job. With `fullyParallel` enabled, Playwright distributes
 individual tests across shards by count, not duration; new tests are included

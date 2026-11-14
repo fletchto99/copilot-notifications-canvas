@@ -1,4 +1,8 @@
 version: 2
+multi-ecosystem-groups:
+  development:
+    schedule:
+      interval: weekly
 updates:
   - package-ecosystem: github-actions
     directory: /
@@ -11,12 +15,13 @@ updates:
     directory: /ci/actionlint
     schedule:
       interval: weekly
+  - package-ecosystem: docker
+    directory: /ci/playwright
+    patterns: ["playwright"]
+    multi-ecosystem-group: development
   - package-ecosystem: npm
     directory: /
-    schedule:
-      interval: weekly
+    patterns: ["*"]
+    multi-ecosystem-group: development
     allow:
       - dependency-type: development
-    groups:
-      development:
-        patterns: ["*"]
